@@ -198,7 +198,7 @@ int main(int argc, char** argv)
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
     pSetTitle(pUGC, hUpdate, "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)");
     pSetDesc(pUGC, hUpdate, desc.c_str());
-    pSetVis(pUGC, hUpdate, 0 /* Public */);
+    pSetVis(pUGC, hUpdate, 2 /* k_ERemoteStoragePublishedFileVisibilityPrivate */);
     pSetContent(pUGC, hUpdate, contentDir.c_str());
     pSetPreview(pUGC, hUpdate, previewFile.c_str());
 

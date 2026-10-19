@@ -148,7 +148,7 @@ jobs:
               "publishedfileid"  "$pubId"
               "contentfolder"    "$contentDir"
               "previewfile"      "$previewFile"
-              "visibility"       "0"
+              "visibility"       "2"
               "title"            "RepublicMP - Co-op Multiplayer (One State / Two States)"
               "description"      "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep sync, Steam P2P, One State & Two States modes, 30x30 km maps, GitHub Releases auto-updater)."
               "changenote"       "$note"
