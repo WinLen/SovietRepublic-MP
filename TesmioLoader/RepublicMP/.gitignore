@@ -1,0 +1,27 @@
+# Visual Studio IDE cache/database - machine-specific, huge, regenerated on open
+.vs/
+*.user
+*.suo
+out/
+x64/
+x86/
+Debug/
+Release/
+
+# vcpkg
+vcpkg_installed/
+vcpkg/buildtrees/
+vcpkg/downloads/
+vcpkg/packages/ 
+
+# Build intermediates and outputs
+obj/
+x64/
+Debug/
+Release/
+
+# Per-user project settings (debugger command line, etc.)
+*.vcxproj.user
+
+# Local network config - contains whatever host IP you're testing with.
+mp_config.h

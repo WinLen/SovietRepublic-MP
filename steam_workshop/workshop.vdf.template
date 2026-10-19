@@ -1,0 +1,11 @@
+"workshopitem"
+{
+	"appid"		"784150"
+	"publishedfileid"		"0"
+	"contentfolder"		"__CONTENT_FOLDER__"
+	"previewfile"		"__PREVIEW_FILE__"
+	"visibility"		"0"
+	"title"		"RepublicMP — Co-op Multiplayer (One State / Two States)"
+	"description"		"Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep sync, Steam P2P networking, One State & Two States modes, 30x30 km maps, GitHub Releases auto-updater)."
+	"changenote"		"Release v1.0.0"
+}

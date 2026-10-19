@@ -1,0 +1,164 @@
+name: Build, Release & Publish to Steam Workshop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза (например, 1.0.0)'
+        required: true
+        default: '1.0.0'
+      changenote:
+        description: 'Описание изменений для Steam Workshop'
+        required: false
+        default: 'Co-op multiplayer update (Lockstep + Steam P2P + Two States)'
+      publish_steam:
+        description: 'Опубликовать / обновить в Steam Workshop (если заданы секреты STEAM_*)'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine Version and Inject into core/version.h
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+            $ver = $tag.TrimStart('v', 'V')
+          } else {
+            $ver = "${{ inputs.version }}".TrimStart('v', 'V')
+            if (-not $ver) { $ver = "1.0.0" }
+            $tag = "v$ver"
+          }
+          $repo = "${{ github.repository }}"
+          Write-Host "Building RepublicMP version=$ver (tag=$tag) for repo=$repo"
+          "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_TAG=$tag"     | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $verHeader = Join-Path $env:GITHUB_WORKSPACE "TesmioLoader\RepublicMP\core\version.h"
+          $content = Get-Content $verHeader -Raw
+          $content = $content -replace '#define REPUBLICMP_VERSION "[^"]*"', "#define REPUBLICMP_VERSION `"$ver`""
+          $content = $content -replace '#define REPUBLICMP_GITHUB_REPO "[^"]*"', "#define REPUBLICMP_GITHUB_REPO `"$repo`""
+          Set-Content -Path $verHeader -Value $content -Encoding UTF8
+
+      - name: Build TesmioLoader & RepublicMP.dll (x64 Release)
+        shell: cmd
+        run: call "TesmioLoader\build.bat"
+
+      - name: Package Release & Stage Steam Workshop Content
+        shell: pwsh
+        run: |
+          & ".\steam_workshop\make_preview.ps1"
+          & ".\pack_friend.ps1" -Version "$env:RELEASE_VERSION" -GithubRepo "${{ github.repository }}"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RepublicMP-${{ env.RELEASE_TAG }}
+          path: |
+            RepublicMP_Friend_Pack.zip
+            TesmioLoader/build/plugins/RepublicMP.dll
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "RepublicMP ${{ env.RELEASE_TAG }} — Co-op Multiplayer"
+          generate_release_notes: true
+          files: |
+            RepublicMP_Friend_Pack.zip
+            TesmioLoader/build/plugins/RepublicMP.dll
+
+      - name: Upload to Steam Workshop (AppID 784150)
+        if: ${{ inputs.publish_steam != false }}
+        shell: pwsh
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_SHARED_SECRET: ${{ secrets.STEAM_SHARED_SECRET }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_WORKSHOP_ID: ${{ secrets.STEAM_WORKSHOP_ID }}
+          CHANGENOTE: ${{ inputs.changenote || github.event.head_commit.message || 'Release update' }}
+        run: |
+          if (-not $env:STEAM_USERNAME -or -not $env:STEAM_PASSWORD) {
+            Write-Host "[Steam Workshop] Секреты STEAM_USERNAME / STEAM_PASSWORD ещё не добавлены в настройки репозитория. Пропускаем шаг загрузки в Steam Workshop (GitHub Release уже опубликован!)."
+            exit 0
+          }
+
+          $steamcmdDir = Join-Path $env:RUNNER_TEMP "steamcmd"
+          New-Item -ItemType Directory -Path $steamcmdDir -Force | Out-Null
+          $zipPath = Join-Path $steamcmdDir "steamcmd.zip"
+          Invoke-WebRequest -Uri "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip" -OutFile $zipPath -UseBasicParsing
+          Expand-Archive -Path $zipPath -DestinationPath $steamcmdDir -Force
+
+          # Restore config.vdf if provided
+          if ($env:STEAM_CONFIG_VDF) {
+            $cfgDir = Join-Path $steamcmdDir "config"
+            New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+            $bytes = [Convert]::FromBase64String($env:STEAM_CONFIG_VDF)
+            [System.IO.File]::WriteAllBytes((Join-Path $cfgDir "config.vdf"), $bytes)
+          }
+
+          # Generate Steam Guard TOTP code from STEAM_SHARED_SECRET if provided
+          $guardCode = ""
+          if ($env:STEAM_SHARED_SECRET) {
+            $secretBytes = [Convert]::FromBase64String($env:STEAM_SHARED_SECRET)
+            $epoch = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() / 30)
+            $timeBytes = New-Object byte[] 8
+            for ($i = 7; $i -ge 0; $i--) {
+              $timeBytes[$i] = [byte]($epoch -band 0xFF)
+              $epoch = $epoch -shr 8
+            }
+            $hmac = New-Object System.Security.Cryptography.HMACSHA1(,$secretBytes)
+            $hash = $hmac.ComputeHash($timeBytes)
+            $offset = $hash[$hash.Length - 1] -band 0x0F
+            $codeInt = (($hash[$offset] -band 0x7F) -shl 24) -bor
+                       (($hash[$offset + 1] -band 0xFF) -shl 16) -bor
+                       (($hash[$offset + 2] -band 0xFF) -shl 8) -bor
+                       ($hash[$offset + 3] -band 0xFF)
+            $chars = "23456789BCDFGHJKMNPQRTVWXY"
+            for ($i = 0; $i -lt 5; $i++) {
+              $guardCode += $chars[$codeInt % $chars.Length]
+              $codeInt = [int][Math]::Floor($codeInt / $chars.Length)
+            }
+            Write-Host "[Steam Workshop] Generated Steam Guard TOTP code."
+          }
+
+          $pubId = if ($env:STEAM_WORKSHOP_ID) { $env:STEAM_WORKSHOP_ID.Trim() } else { "0" }
+          $contentDir = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\content")
+          $previewFile = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\preview.png")
+          $vdfPath = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\workshop_ci.vdf")
+          $note = "$($env:CHANGENOTE) ($($env:RELEASE_TAG))" -replace '"', "'"
+
+          $vdf = @"
+          "workshopitem"
+          {
+              "appid"            "784150"
+              "publishedfileid"  "$pubId"
+              "contentfolder"    "$contentDir"
+              "previewfile"      "$previewFile"
+              "visibility"       "0"
+              "title"            "RepublicMP - Co-op Multiplayer (One State / Two States)"
+              "description"      "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep sync, Steam P2P, One State & Two States modes, 30x30 km maps, GitHub Releases auto-updater)."
+              "changenote"       "$note"
+          }
+          "@
+          [System.IO.File]::WriteAllText($vdfPath, $vdf, [System.Text.Encoding]::ASCII)
+
+          $steamcmdExe = Join-Path $steamcmdDir "steamcmd.exe"
+          if ($guardCode) {
+            & $steamcmdExe +login $env:STEAM_USERNAME $env:STEAM_PASSWORD $guardCode +workshop_build_item $vdfPath +quit
+          } else {
+            & $steamcmdExe +login $env:STEAM_USERNAME $env:STEAM_PASSWORD +workshop_build_item $vdfPath +quit
+          }

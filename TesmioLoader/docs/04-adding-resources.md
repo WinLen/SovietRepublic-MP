@@ -1,0 +1,591 @@
+# Adding a resource
+
+> **How many fit: as many as `[list]` declares.** The engine allocates 63
+> records and fills 57, so six fit in its own buffer; past that the plugin
+> reallocates the vector the way `reserve()` would — a bigger block from the
+> process heap, the records copied in, the vector's three pointers repointed,
+> the old block deliberately left allocated (`RelocateResourceArray`). **The
+> size is worked out from `[list]`**, not configured; `resource_capacity` is
+> only a floor, and `-1` turns the growth off. See
+> [Growing the array](#growing-the-array).
+>
+> What that does *not* lift is everything else sized against the base game's
+> fixed set of resources. See the purchase bucket in
+> [07-pitfalls.md](07-pitfalls.md), which a modded good walked into the first
+> time one was ever bought.
+
+A resource that does not exist in the base game, usable in `$PRODUCTION`,
+`$CONSUMPTION` and `$STORAGE` lines exactly like a stock one.
+
+**A plugin**: `plugins/resources/resources.cpp` builds to
+`build/plugins/resources.dll`, and deleting that DLL removes mod resources
+entirely. Everything it reads is in `build/plugins/resources.ini`: `[list]` is
+what exists, `[resources]` is the wiring — the hook mode and the three RVAs. See
+[09-plugins.md](09-plugins.md).
+
+## How it works
+
+The engine keeps its resources in one `std::vector` of 832-byte records, 57 of
+them, with room for 63. the plugin claims the slot after the last live
+record: it fills the empty one, overwrites the name and the caption id, and moves
+the vector's `end` pointer forward by one. From that moment the game's own
+resolver finds the new resource by itself — nothing else has to be intercepted.
+
+**There are two ways to fill it, and both are supported for good.**
+
+| | |
+|---|---|
+| `<name> = rawiron, Copper Ore` | **clone.** Copy a base-game record and correct it |
+| `<name> = custom, Hydrogen` | **from scratch.** A zeroed record, filled from `[custom:<name>]` |
+
+A clone is the short way to a resource that behaves like an existing one; from
+scratch is the way to one that behaves like nothing in the game. See
+[A resource with no template](#a-resource-with-no-template).
+
+Three things make it work in practice:
+
+**Cloning, not zeroing.** A freshly claimed record is all zeroes and the
+resource is inert. Copying a template gives it a transport class, densities and
+display data that the engine already knows how to handle — or, without a
+template, the plugin writes those 30 bytes itself.
+
+**Cloning, then correcting.** What a clone must *not* keep is the template's
+assets. The five mesh pointers in the record's tail are replaced with meshes
+loaded from this resource's own files, and the icon at `+0x48` is refilled by
+the engine's own by-name pass on the next world load. The template still decides
+the *shape* — whether there are four pile stages or one open-cargo mesh — which
+is read straight off the clone unless `cargo =` says otherwise.
+
+**Arming is retried, not done once.** The engine is still filling the vector
+while building types are being parsed. The loader watches for the slot to become
+the next free one and claims it then.
+
+**Re-arming on map load.** The array is rebuilt every time a map loads —
+sometimes at a new address, and sometimes **in the same block**, which is why
+`begin` changing is not the test. Before skipping an armed entry the loader
+checks that its name is still at its index inside the current `end`; anything
+else and it re-arms. See [07-pitfalls.md](07-pitfalls.md) for what the latched
+version looked like from the outside.
+
+## Steps
+
+### 1. Register it
+
+`plugins/resources/resources.ini`, section `[list]`, UTF-8, no BOM:
+
+```ini
+[list]
+copper_ore         = rawiron, Copper Ore
+copper_concentrate = bauxite, Copper Ore Concentrate
+```
+
+The plugin's own settings live in `[resources]`, further down the same file.
+
+`<name> = [<slot>,] <template | custom>[, <caption>]`
+
+- **slot** — optional, and better left out. Omitted, the loader waits until
+  every base-game record has landed and then claims the slots after them, in
+  the order the entries appear. Written as a number it is pinned, and refused
+  unless it is exactly the next free one — which is what makes a hard-coded 57
+  break the moment anything else claims it first. A leading field that is not a
+  number is read as the template, so both forms parse unambiguously.
+- **template** — an existing resource to copy. **Match the transport class to
+  what you intend.** A storage whose class differs from the resource's reports
+  zero capacity, which shows up as `0.00 of 0.00 t` in the building window. Ores
+  want `rawiron`, `rawcoal`, `rawbauxite`; processed ores want `bauxite`,
+  `alumina`; liquids want `oil`, `alcohol`. Open cargo — anything that travels
+  the way steel and boards do — wants `steel` or `aluminium`.
+
+  Or the word **`custom`** (`none` works too), which means there is no donor: the
+  record is built from zero out of `[custom:<name>]`. A leading field that is
+  neither a number nor a base-game resource name — a typo — is treated the same
+  way and says so in the log, because that is strictly better than what it used to
+  do, which was publish an all-zero record and one line about an unknown template.
+- **caption** — the display name. The loader mints a private localisation id
+  from **1 000 000** up, writes it into the record, and answers
+  `C3D_LANGUAGE::GetString` for that id itself. No language file is touched.
+  Omit it and the template's caption is inherited — which is why an early
+  attempt showed "iron ore" everywhere. On a `custom` entry there is nothing to
+  inherit, so an id is minted anyway and the resource is called by its own name.
+
+  That base has to stay clear of every id the game uses, because the hook
+  answers **everything** at or above it and never falls through. The game's
+  highest is 580231; see [07-pitfalls.md](07-pitfalls.md) for how that was
+  measured and what it looked like when the base was too low.
+
+### 2. Provide the assets
+
+All named after the resource, all served through the VFS from
+`tesmioloader/vfs/media_soviet/resources/`:
+
+**The engine only looks the icon up by name.** Every mesh path in its own
+resource table is a literal in `.rdata`, so a cloned record would otherwise be
+drawn with the template's geometry however the files are named. `tesmioloader`
+closes that gap: after cloning, it makes the same three calls the table makes —
+`CreateManagedMesh`, `LoadFromFile`, `LoadMaterial` — against this resource's own
+files and writes the results into the record's five mesh slots. The files below
+are therefore genuinely used, and a missing one leaves that slot showing the
+template's mesh.
+
+**`LoadFromFile` returns an error code, not a bool — every real mesh was being
+discarded.** A whole session reported every resource with files on disk as
+`0 of N replaced`, drawn as the template, even though the `.nmf`s were
+byte-identical to their donors' own working meshes and the VFS log showed
+every read succeeding. The cause was the check itself:
+`?LoadFromFile@C3D_MESH@@QEAA H PEBD PEAVC3D_MIDDLEPOINT@@ _N @Z` returns `H`
+(`int`), not `_N` (`bool`) — confirmed by disassembling `C3DDLL64.dll` at
+rva `0xA84C0`, where the full-parse success path ends in `xor eax,eax` (0) and
+the one failure path found (`fopen` itself returning null) returns 1. Zero
+means no error, the opposite of what `if (!loaded)` assumed. Fixed to
+`if (rc != 0)`. **Confirmed the mechanism, not yet the mesh on screen** — the
+next thing to check is a resource with real files showing its own geometry in
+game rather than the template's.
+
+**Which files depends on the transport class**, and the split is visible in the
+stock folder. Bulk resources — `rawiron`, `coal`, `gravel`, `bauxite`,
+`uranium`, `asphalt` — ship four pile stages plus a vehicle load:
+
+| File | Notes |
+|---|---|
+| `<name>.png` | 48×48 RGBA, matching the stock icons |
+| `<name>1.nmf` … `<name>4.nmf` | cargo pile, four fill stages |
+| `<name>_vehicle.nmf` | load carried on a vehicle |
+| `<name>.mtl` | material; its `$TEXTURE 0` may point at a stock `.dds` |
+
+**Open-transport resources ship one mesh instead.** `steel`, `aluminium`,
+`boards`, `bricks`, `prefabpanels` and `wood` have exactly `<name>.nmf`,
+`<name>.mtl`, `<name>.dds` and `<name>.png` — no numbered stages, no `_vehicle`.
+The single mesh is one unit of cargo and the game lays it out on a grid, which
+is what `numstepx` / `numstept` in a `$RESOURCE_VISUALIZATION` block control. A
+record cloned from `steel` or `aluminium` takes that path, so mirror the donor:
+give it the four files and nothing else.
+
+Copy a donor set and rename. The `.mtl` may reference the donor's texture
+directly — paths inside `.mtl` are relative to `media_soviet/`, so
+`resources/rawiron.dds` works without duplicating a 350 KB file.
+
+**Check the submaterial name in the `.nmf` you copied.** It is the first
+identifier-looking string in the file. `aluminium.nmf` calls its material
+`lambert1`, which is what `aluminium.mtl` declares — but `steel.nmf` calls its
+`____Default1` while `steel.mtl` still says `lambert1`, so the engine clearly
+falls back when the name does not match. Declaring both names in the `.mtl` is
+free and removes the question.
+
+### Recolouring a donor texture
+
+A copper version of `steel.dds` needs no image editor. DXT1 stores each 4×4
+block as two RGB565 endpoints and sixteen 2-bit indices, so **recolouring is
+rewriting the endpoints and leaving every index alone** — about thirty lines of
+Python over the whole payload, mip chain included, since every block has the
+same shape wherever it sits.
+
+The one invariant to preserve is `color0 > color1`, which is what selects
+4-colour opaque mode over 3-colour-plus-transparent. A tint that collapses two
+near-identical endpoints past each other turns opaque texels transparent; nudge
+one endpoint instead of swapping them, because swapping would invert all
+sixteen indices.
+
+Mapping each endpoint through its own luminance onto a target hue keeps the
+brushed-metal detail intact — `raw_copper.dds` and `copper.dds` are `steel.dds`
+and `aluminium.dds` put through exactly that.
+
+**Do not skip the cargo models.** A resource whose icon loads but whose meshes
+are missing crashed the asset worker thread with a null dereference. While the
+icon was also missing the resource was never processed that far, which made the
+crash look unrelated to the icon.
+
+### 3. Use it
+
+In any `building.ini`:
+
+```ini
+$CONSUMPTION copper_ore 5.00
+$PRODUCTION copper_concentrate 3.00
+$STORAGE_IMPORT RESOURCE_TRANSPORT_GRAVEL 50.00
+$STORAGE_EXPORT RESOURCE_TRANSPORT_GRAVEL 50.00
+```
+
+The storage class must match the resource's own.
+
+## A resource with no template
+
+A clone is a good default and a bad ceiling: it can only ever produce a resource
+that behaves like one the game already has. **The whole record is now known**, so
+a resource can be declared outright — see
+[Record layout](02-findings.md#record-layout) for where every figure lives and
+how it was read.
+
+```ini
+[list]
+hydrogen = custom, Hydrogen
+
+[custom:hydrogen]
+transport  = oil
+kind       = 1
+price      = 180, 150
+market_rub = 400, 600
+market_usd = 500, 700
+family     = none
+cargo      = none
+```
+
+That is a gas that travels in a tanker, is worth something, produces no waste and
+has no cargo model. Nothing is cloned: every figure either comes from that section
+or from the plugin's own defaults.
+
+### What the section holds
+
+The one line that matters is **`transport`**. Without it nothing can carry the
+resource, and every storage that names it reports `0.00 of 0.00 t` — the same
+symptom a mismatched template gives, for the same reason.
+
+| Key | Record | Notes |
+|---|---|---|
+| `transport = <class>[, <factor>[, <f1>, <f2>[, <flag>]]]` | `+0xCC + class*0x20` | the primary class. Bare, its figures come from what the base game uses for that class |
+| `class = ...` | the same | a second, third… class, repeatable. `general` bare mirrors the primary — what ten of the twelve base-game two-class resources do |
+| `kind = 0` | `+0x44` | price kind: 0 raw, 1 manufactured, 2 food, 3 meat and components, 4 electronics |
+| `price = <rub>[, <usd>]` | `+0x58`/`+0x5C` | a starting value — the engine's pass overwrites it. `[price]` is what survives |
+| `base_price = <rub>[, <usd>]` | `+0x78`/`+0x7C` | likewise, against `[base_price]` |
+| `trade_mult = 0.95, 1.05` | `+0x88`/`+0x8C` and `+0xA8`/`+0xAC` | what the trade window multiplies the price by |
+| `market_rub = 200, 350[, 0.5]` | `+0x98`/`+0x9C`/`+0xA0` | the base game ranges 25/30 to 40000/60000 |
+| `market_usd = 500, 500[, 0.5]` | `+0xB8`/`+0xBC`/`+0xC0` | the second block |
+| `packed = auto` | `+0xC8` | `auto` is 1 for a primary class of covered, cooler, nuclear1 or nuclear2 |
+| `family = none` | `+0x30C` | `gravel`, `steel`, `aluminium`, `plastic`, `bio`, `food`, `burnable`, `toxic`, `other`, `ash`, a number, or `none` |
+| `cargo = auto` | the mesh slots | `none`, `bulk`, `open`, or `auto` — the files that are there |
+| `field = <off>, f\|i\|b, <v>` | anywhere | a raw write into the 832 bytes |
+
+**Every key is optional but `transport`.** The defaults are the base game's own
+commonest figures — the two market blocks twelve resources including every waste
+carry, a family of `-1` like `water` and `eletric`, and the `0.3` at `+0x310` that
+55 of 57 records have — so a section with one line in it produces a working
+resource.
+
+**`field =` is why the unidentified fields need no invented names.** `+0x50`,
+`+0x54` and `+0x310` are written by the base game and nothing here has found what
+reads them; `field = 0x50, f, 84` is what `waste_toxic` carries there, and the
+offsets are all in [02-findings.md](02-findings.md).
+
+### It also corrects a clone
+
+A `[custom:<name>]` section is read for *any* entry in `[list]`, and it is applied
+after the record has been zeroed **or** cloned. So one line over a clone changes
+one field and leaves the rest of the donor alone:
+
+```ini
+[list]
+copper_ore = rawiron, Copper Ore
+
+[custom:copper_ore]
+kind = 1
+```
+
+Which is the cheap way to fix the one thing a donor got wrong, instead of
+declaring a resource from nothing to change a single number.
+
+### Why it is safe to build from zero
+
+**A record is 832 bytes and only 30 of them are ever per-resource.** The rest is
+zero when the engine pushes its own records and filled at runtime: the icon at
+`+0x48` by the UI pass, the previous price and base by the economy passes, the
+five cargo meshes by the resource table. So a zeroed record plus those 30 bytes is
+not an approximation of a real record — it is one.
+
+That is checked rather than asserted. `tools/pe/restable.py verify` replays the
+engine's own table, rebuilds all 57 records **writing only the fields this plugin
+knows how to write**, and diffs every byte:
+
+```
+57 of 57 records rebuilt byte for byte - the field set is complete
+```
+
+If the engine wrote a field the plugin has no name for, that record would differ.
+Re-run it after a game update before trusting a from-scratch resource.
+
+### The two things a from-scratch record needs that a clone does not
+
+**A caption.** A clone inherits the template's id at `+0x40`; a zeroed record has
+0 there, which would resolve to whatever string id 0 is. So an id is minted for
+every `custom` entry whether `[list]` names a caption or not, and without one the
+resource is called by its own name.
+
+**An icon.** A clone inherits the template's texture pointer and is merely drawn
+wrongly without a `.png` of its own. A from-scratch record has **null** there
+until the UI pass at `0x2960DE` runs. That pass overwrites `+0x48` for every
+record without releasing what was there — `mov [rbx+0x48],rax` at `0x296172`, so
+the pointer is not owned by the record — which is what makes it safe for the
+plugin to seed the field from record 0 and leave a warning in the log. A 48×48
+RGBA PNG is not optional here.
+
+### The log is the whole diagnostic
+
+A `custom` entry always prints the record it produced, because there is no donor
+to compare it against:
+
+```
+resource  "hydrogen" published as index 66 (built from scratch, caption 1000009), vector now 67
+record    "hydrogen" kind 1  price 180.00/150.00  base 0.00/0.00  packed 0  family -1  +310 0.30
+record    "hydrogen" market rub  sell 0.95 buy 1.05  400 / 600  k 0.50
+record    "hydrogen" market usd  sell 0.95 buy 1.05  500 / 700  k 0.50
+record    "hydrogen" class oil       [ 3] factor 1.000  5.00 / 5.00  0.05 / 0.05  flag 0
+```
+
+`custom_report = 1` in `[resources]` adds the same block for the template-based
+entries, which is how to see what a clone really inherited. A record with no
+class at all says so in as many words, because that is the one mistake that makes
+a resource exist and be useless.
+
+## What it costs
+
+**The game does not store a price per resource. It computes one**, at world init
+and again whenever the economy updates, by walking every building type looking
+for one whose `$PRODUCTION` names the resource and adding up what its inputs
+cost. `0x2A92D0` is that pass and `0x2A9470` is the solver behind it; both are
+written up in [02-findings.md](02-findings.md).
+
+Two consequences, and the first is the one that gets reported as a bug:
+
+**A resource nothing produces prices at zero.** The solver's two loops over the
+building types fall through and it returns the register it zeroed on the way in.
+Nothing reads the base price on that path. So `copper_ore`, `copper_concentrate`,
+`raw_copper`, `copper` and `furniture` all price themselves — each has a factory
+or a mine — while a name declared in `[list]` and used by no `$PRODUCTION` line
+anywhere is `0.00` however it is configured.
+
+**A clone inherits the template's money.** `copper_ore` starts life with
+`rawiron`'s base of 4.5 in both currencies because the whole 832-byte record is
+copied, which is why the copper chain looked correctly priced without anyone
+setting anything.
+
+**Both of those are confirmed on a real save**, not read off a decompiler.
+`media_soviet/save/15695 - coppertest2/stats.ini`, written by a game with all
+ten mod resources live:
+
+| Resource | Produced by | `$Economy_BaseUSD` | `$Economy_PurchaseCostUSD` |
+|---|---|---|---|
+| `copper` | electrolysis plant | 0 | 765.40 |
+| `furniture` | furniture factory | 0 | 1408.23 |
+| `medicine` | pharmacy plant | 0 | 1957.99 |
+| `copper_ore` | copper mine | 4.5, from `rawiron` | 7.88 |
+| `gas` | **nothing** | **40, from `oil`** | **0.00** |
+| `sand`, `clay`, `glass` | nothing | 0 | 0.00 |
+
+`gas` is the line that settles it: it carries `oil`'s base of 40 in both
+currencies and still prices at exactly zero, because no building type produces
+it. **A base price is not a floor.**
+
+### The two sections
+
+`plugins/resources.ini`, both taking `<resource> = <rubles>[, <dollars>]`, one
+number setting both. Names may be mod resources or base-game ones — they are
+looked up in the engine's vector by name, so retuning `rawiron` works exactly as
+well as pricing `sand`.
+
+```ini
+[base_price]
+copper_ore = 6.0, 5.0
+
+[price]
+sand = 12.0, 10.0
+```
+
+**`[base_price]` is `$Economy_BaseRUB` / `$Economy_BaseUSD`**, record `+0x78` and
+`+0x7C` — the raw-material value the solver starts from. Fifteen base-game
+resources have one and they are the ones dug out of the ground: `rawiron` 4.5,
+`rawcoal` 5.3, `oil` 40, `uranium` 5.2/4.2, `explosives` 15/13. Raising it on an
+ore makes everything downstream dearer, because the mine's output is priced from
+it and the concentrator's from the mine's. It does **not** lift a resource off
+zero on its own.
+
+**`[price]` is the finished price**, record `+0x58` and `+0x5C` — what the trade
+window quotes, times `1.05` to buy and `0.95` to sell. This is the half that
+fixes a zero, and the only thing that gives a value to a resource no building
+produces. A resource that *is* produced does not need it.
+
+### Where they are written
+
+One inline hook, on the pass itself, and the two halves are on opposite sides of
+it:
+
+- **base before**, because the solver reads `+0x78`/`+0x7C` on its way in;
+- **price after**, because the pass overwrites `+0x58`/`+0x5C` on its way out.
+
+Doing it anywhere else means racing whatever wrote last. A save carries
+`$Economy_Base*` and puts the game's own numbers back into the record on load,
+and a third pass at `0x2FB390` multiplies every non-zero base by a random walk
+twice a period — so a value written once at arm time would be gone by the first
+recompute. Written here it is re-applied every time and is the last word.
+
+The cost of that is worth stating: **a declared base does not drift and a
+declared price does not respond to its chain.** Both are pinned.
+
+### Reading the table
+
+`price_report = 1` in `[resources]` prints every declared resource after each
+recompute:
+
+```
+price     copper_ore                 7.09 RUB       7.88 USD   base 4.50 / 4.50   kind 0
+price     sand                       0.00 RUB       0.00 USD   base 0.00 / 0.00   kind 0
+```
+
+`0.00` with any base at all means no building type produces it. `kind` is the
+record's `+0x44`: `0` raw, `1` manufactured, `2` consumer good, negative for the
+five the pass special-cases.
+
+## Growing the array
+
+Six mod resources fit in the engine's own allocation — slots 57 to 62. **The
+seventh and everything after it come from moving the array**, and the plugin
+does that by itself: `NeededCapacity` is `57 + <entries in [list]>`, and if the
+vector in front of it has less room than that, `RelocateResourceArray` runs.
+
+`resource_capacity` in `plugins/resources.ini` is a **floor**, not the switch it
+used to be:
+
+| Value | Meaning |
+|---|---|
+| `0` | the default — size the array from `[list]` |
+| `N` | the same, but never fewer than `N` records |
+| `-1` | never move the array; the seventh mod resource is refused |
+
+Three things make the move safe, and all three are worth knowing before touching
+this code.
+
+**It happens on the very first lookup of the session.** `EnsureArmed` runs
+*before* the original `ResourceGet`, so the first name the engine ever resolves
+already comes out of the new buffer. Nothing holds a `Resource*` at that moment:
+the resource table at `0x2A1D60` builds each record in a stack buffer and
+pushes it, and the building-type parser has not started.
+
+**The engine's own record cache is carried across.** Immediately after building
+the array, the engine resolves about forty names by hand and stores what it gets
+in `game+0xC2C8`…`+0xC488`, directly behind the vector object — see
+[02-findings.md](02-findings.md). The first entry is `workers`, index 0, so it
+equals `begin` exactly; that is the "second structure holding the array base"
+this document used to warn about. `RebaseResourceCache` walks the block and
+moves any pointer that lands on a record boundary inside the old buffer.
+Normally it moves nothing, because the cache is still zero at that point, and
+the count it logs is a check on the ordering above rather than a repair.
+
+**It happens once per process.** A map load *clears* the vector rather than
+destroying it — `end = begin` — so the raised capacity survives every later
+world, and the 57 base records are pushed straight back into the enlarged block.
+The old buffer is leaked on purpose: tens of kilobytes, once, against any chance
+of freeing memory the engine still believes it owns.
+
+The plugin refuses to move an array that already holds one of its own records,
+because by then the building-type parser has taken pointers into it. That cannot
+happen in the normal order and the guard exists to keep it that way — if the log
+ever shows `not moving the array now`, the ordering has changed and the reason
+is worth finding before raising anything.
+
+## Customhouses
+
+A customhouse's trade storages are plain `$STORAGE` lines, one per transport
+class - confirmed against `media_soviet/buildings_types/zoll_sahy.ini`, whose
+`$STORAGE` lines name no resource at all, unlike a shop's `$STORAGE_DEMAND_*`
+or a pharmacy's `$STORAGE_SPECIAL`. That slot list is built exactly once,
+while `building.ini` is parsed, by walking whatever the resource vector looks
+like at that moment - the same `0xE40F0` [11-needs.md](11-needs.md) already
+documents in full for a shop's storage. **A customhouse already standing on a
+map, or built in an earlier session, freezes its trade list at whatever
+resources existed then.** Every name `[list]` declares afterwards is
+otherwise perfectly tradeable - matching transport class, a computed price,
+trucks that will happily deliver it - but the customhouse's own slot list has
+no entry for it, so nothing there ever sells it. Confirmed empirically before
+the fix went in: demolishing and rebuilding an affected customhouse fixes it
+immediately, no code required.
+
+`[customs]` in this plugin's own `.ini` reruns the same walk against the
+*live* vector, once per customhouse, the first time each one ticks after the
+plugin loads:
+
+```
+rva 0x185470  FUN_140185470(game, building) - the type's own tick
+```
+
+Confirmed by disassembly rather than taken on faith: the building-type
+dispatcher (`rva 0x139A80`) calls it only from
+`cmp dword ptr [rax+0x360],0x14 / jne .. / call 0x185470` at `rva 0x13E30A` -
+`0x14` is `BUILDINGTYPE_CUSTOMHOUSE`, and `rax` there is `building+0x318`, the
+same type-descriptor pointer `TYPEDESC_OFF` names in `needs.cpp`. The function
+also spawns tourists on its own timer and tail-jumps into a second, shared
+function afterwards; neither matters to the hook, which only needs the call
+to happen once per customhouse per tick - the dispatcher already guarantees
+that.
+
+New slots clone an existing slot's shape rather than computing one, the same
+"clone, don't compute" rule `needs.cpp` uses for a shop's slot and for the
+same reason: the `limit` field's real meaning still isn't understood, and
+guessing at it has broken things before. Content starts at zero - a
+customhouse should not wake up owning stock of something it never imported.
+
+**Watched in game, and it cost money the first time.** A newly added slot
+used to clone its `content`/`limit` and the second, parallel array from
+whatever slot happened to sit first in the storage - reasonable for a shop,
+where that pair is a stocking target unrelated to which resource it is, but
+wrong for a customhouse. The script API (`media_soviet/scripts/
+SOVIETInstructions.txt`, `struct Storage`) exposes `bImport`/`bExport` on the
+storage itself, which means the per-slot fields this plugin writes are the
+*trade amount* for that one resource at whatever direction the storage is
+already set to - so a brand-new resource inherited an unrelated, already-
+configured resource's amount and the customhouse started moving it before a
+single truck had arrived, spending money on an import nobody asked for. Fixed
+by starting every new slot at zero - content, limit, and the parallel array -
+which is what an unconfigured resource in a real customhouse already looks
+like: present in the list, tradeable, and inert until the player sets a real
+amount from the trade panel.
+
+`probe = 1` in `[customs]` logs one line per slot added. Still to confirm:
+that a freshly added resource shows in the trade panel with nothing bought or
+sold until configured, and that setting a real buy or sell amount on it there
+behaves like it would for any vanilla resource.
+
+## Other limits
+
+**`[list]` holds 256 names.** `RES_MAX_ENTRIES` in
+`plugins/resources/resources.cpp`, and nothing in the engine chooses it — it is
+the size of the plugin's own registry, about 220 bytes an entry. Past it the
+extra lines are ignored and the log says so. The `.ini` is read whole, however
+long it is.
+
+**Saves are not interchangeable.** The resource count is part of the save
+format. A save written with two mod resources will not load without them.
+
+**The vector is not the only table indexed by resource number.** The icon set is
+another. Growing capacity lets more resources exist; it does not make those
+other tables any larger, and each one is its own ceiling.
+
+## Diagnosing
+
+Everything lands in `tesmioloader.log`:
+
+```
+registry  "copper_ore" -> next free slot, template 18, text id 1000000
+resource  array now at 000001C02B72E020
+resource  name field at +0x0, 57 live records, room for 63
+resource  array moved 000001C02B72E020 -> 000001C02C0A0040, capacity 66 records (57 live)
+resource  "copper_ore" published as index 57 (template 18, caption 1000000), vector now 58
+```
+
+The `array moved` line appears once per session and only when `[list]` needs
+more than the engine's 63 records.
+
+Symptoms and causes:
+
+| Symptom | Cause |
+|---|---|
+| no `registry` lines at all | `plugins\resources.ini` not found, its `[list]` section is missing, or `hook` is not 2 — check the .ini has no BOM |
+| `slot N is taken (M live)` | wrong slot number in `[list]` |
+| `no room at index N` | `resource_capacity` is `-1`, or the reallocation failed — the line says which |
+| `cached record pointer(s) rebased` | the array moved later than it should have. Nothing is broken, but the ordering in `EnsureArmed` has changed and is worth checking |
+| storage shows `0.00 of 0.00 t` | transport class mismatch between storage and template — or, on a `custom` entry, no `transport =` line at all. The log says `can be carried by no transport class at all` |
+| `unknown field "..."` | a misspelt key in a `[custom:]` section. Nothing is guessed and nothing is silently skipped |
+| a `custom` resource prints no `record` lines | the entry never armed. Look for `published as index` first — the record block is printed straight after it |
+| price is `0.00` in the trade table | nothing produces the resource — the solver never reaches the base price. Force it in `[price]` |
+| `[base_price]` changes nothing | the resource is unproduced (see above), or `hook` is not 2, or `price_hook` is 0 |
+| caption is the template's | no caption given, or `GetString` hook failed to install |
+| icon is a random image | icon file missing, or the VFS did not serve it — check for `vfs fopen` in the log |
+| crash on the asset worker thread | cargo models missing |
+| cargo is drawn as the template | the mesh slots were not replaced — look for the `cargo meshes: N of …` line, and check the `.nmf`/`.mtl` names against the table above |
+| icons vanish and hovering crashes after re-entering a world | the entry stayed latched through a rebuild; the log should show `no longer at index N … re-arming` |

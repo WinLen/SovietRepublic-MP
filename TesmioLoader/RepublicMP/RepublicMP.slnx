@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="RepublicMP.vcxproj" Id="3c897d49-770e-43ad-ab25-9031ed655163" />
+</Solution>

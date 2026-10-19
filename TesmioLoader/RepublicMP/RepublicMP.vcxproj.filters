@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resource Files">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <!-- Filters mirror the actual physical folders on disk (core\, session\,
+         world_sync\networks\, third_party\miniz\, ...), not just a logical grouping over a
+         flat file list. -->
+    <Filter Include="save">
+      <UniqueIdentifier>{A1B2C3D4-5555-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="core">
+      <UniqueIdentifier>{B2C3D4E5-0001-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="session">
+      <UniqueIdentifier>{B2C3D4E5-0002-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="determinism">
+      <UniqueIdentifier>{B2C3D4E5-0003-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lockstep">
+      <UniqueIdentifier>{6b1f0c52-7d3e-4c1a-9a5e-3f2b8d4c7e10}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="world_sync">
+      <UniqueIdentifier>{B2C3D4E5-0004-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="world_sync\networks">
+      <UniqueIdentifier>{B2C3D4E5-0005-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="world_sync\buildings">
+      <UniqueIdentifier>{B2C3D4E5-0006-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="world_sync\terrain">
+      <UniqueIdentifier>{B2C3D4E5-0007-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="world_sync\citizens">
+      <UniqueIdentifier>{B2C3D4E5-0008-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="game">
+      <UniqueIdentifier>{B2C3D4E5-0009-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="transport">
+      <UniqueIdentifier>{B2C3D4E5-000A-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party">
+      <UniqueIdentifier>{A1B2C3D4-1111-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\miniz">
+      <UniqueIdentifier>{A1B2C3D4-2222-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ui">
+      <UniqueIdentifier>{A1B2C3D4-6666-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui">
+      <UniqueIdentifier>{A1B2C3D4-7777-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui\backends">
+      <UniqueIdentifier>{A1B2C3D4-8888-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imgui\misc">
+      <UniqueIdentifier>{A1B2C3D4-9999-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\imrad">
+      <UniqueIdentifier>{A1B2C3D4-AAAA-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="core\main.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\local_builds.cpp">
+      <Filter>world_sync</Filter>
+    </ClCompile>
+    <ClCompile Include="game\present_hook.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="session\game_speed.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="session\weather.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="session\money.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="session\settings_sync.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\state_hash.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\determinism.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\sim_patches.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\probe_trace.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\probe_watch.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="session\sync_check.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="save\save_zip.cpp">
+      <Filter>save</Filter>
+    </ClCompile>
+    <ClCompile Include="transport\network.cpp">
+      <Filter>transport</Filter>
+    </ClCompile>
+    <ClCompile Include="session\save_sync.cpp">
+      <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_tdef.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_tinfl.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\miniz\miniz_zip.c">
+      <Filter>third_party\miniz</Filter>
+    </ClCompile>
+    <ClCompile Include="game\save_load.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\buildings\build_sync.cpp">
+      <Filter>world_sync\buildings</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\networks\road_sync.cpp">
+      <Filter>world_sync\networks</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\terrain\terrain_sync.cpp">
+      <Filter>world_sync\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="game\imgui_hook.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\terrain\terrain_hook.cpp">
+      <Filter>world_sync\terrain</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\buildings\demolish_hook.cpp">
+      <Filter>world_sync\buildings</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\buildings\placement_collision.cpp">
+      <Filter>world_sync\buildings</Filter>
+    </ClCompile>
+    <ClCompile Include="game\session_patches.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\view_list_scope.cpp">
+      <Filter>world_sync</Filter>
+    </ClCompile>
+    <ClCompile Include="world_sync\citizens\citizen_destinations.cpp">
+      <Filter>world_sync\citizens</Filter>
+    </ClCompile>
+    <ClCompile Include="game\input_block.cpp">
+      <Filter>game</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\main_menu.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\debug_window.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\ui_log.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\debug_log.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\sync_block.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\misc\cpp\imgui_stdlib.cpp">
+      <Filter>third_party\imgui\misc</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_draw.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_tables.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\imgui_widgets.cpp">
+      <Filter>third_party\imgui</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\imgui\backends\imgui_impl_dx11.cpp">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClCompile>
+    <ClCompile Include="determinism\held_frame.cpp">
+      <Filter>determinism</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\commands.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\purchase.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\route_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\world_refs.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\game_calls.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\line_accept.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\vehicle_switches.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\building_switches.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\brush_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\hover_tools.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\junction_accept.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\cargo_settings.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\source_slots.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\rename.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+    <ClCompile Include="lockstep\lockstep_net.cpp">
+      <Filter>lockstep</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="world_sync\local_builds.h">
+      <Filter>world_sync</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\terrain\terrain_hook.h">
+      <Filter>world_sync\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\buildings\demolish_hook.h">
+      <Filter>world_sync\buildings</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\buildings\placement_collision.h">
+      <Filter>world_sync\buildings</Filter>
+    </ClInclude>
+    <ClInclude Include="game\session_patches.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\view_list_scope.h">
+      <Filter>world_sync</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\citizens\citizen_destinations.h">
+      <Filter>world_sync\citizens</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\replay_menus.h">
+      <Filter>world_sync</Filter>
+    </ClInclude>
+    <ClInclude Include="game\input_block.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="core\version.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="game\present_hook.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="session\game_speed.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="session\weather.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\state_hash.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\determinism.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\sim_patches.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\probe_trace.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\probe_watch.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="session\money.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="session\settings_sync.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="session\sync_check.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="game\window_focus.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="save\save_zip.h">
+      <Filter>save</Filter>
+    </ClInclude>
+    <ClInclude Include="transport\network.h">
+      <Filter>transport</Filter>
+    </ClInclude>
+    <ClInclude Include="session\save_sync.h">
+      <Filter>session</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_common.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_export.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_tdef.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_tinfl.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\miniz\miniz_zip.h">
+      <Filter>third_party\miniz</Filter>
+    </ClInclude>
+    <ClInclude Include="game\save_load.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\buildings\build_sync.h">
+      <Filter>world_sync\buildings</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\networks\road_sync.h">
+      <Filter>world_sync\networks</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\terrain\terrain_sync.h">
+      <Filter>world_sync\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="world_sync\buildings\build_mode.h">
+      <Filter>world_sync\buildings</Filter>
+    </ClInclude>
+    <ClInclude Include="core\host_config.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="game\imgui_hook.h">
+      <Filter>game</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\main_menu.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\debug_window.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\ui_log.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\debug_log.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\sync_block.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\misc\cpp\imgui_stdlib.h">
+      <Filter>third_party\imgui\misc</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imrad\imrad.h">
+      <Filter>third_party\imrad</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imgui_internal.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imconfig.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_rectpack.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_textedit.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\imstb_truetype.h">
+      <Filter>third_party\imgui</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_win32.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\imgui\backends\imgui_impl_dx11.h">
+      <Filter>third_party\imgui\backends</Filter>
+    </ClInclude>
+    <ClInclude Include="determinism\held_frame.h">
+      <Filter>determinism</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\commands.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\purchase.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\route_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\world_refs.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\game_calls.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\line_accept.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\vehicle_switches.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\building_switches.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\brush_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\hover_tools.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\junction_accept.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\cargo_settings.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\source_slots.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\rename.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\lockstep_net.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include=".gitignore">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="LICENSE">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="mp_config.h.example">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="README.md">
+      <Filter>Source Files</Filter>
+    </None>
+  </ItemGroup>
+</Project>

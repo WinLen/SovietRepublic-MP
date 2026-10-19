@@ -1,0 +1,1675 @@
+# Findings — game internals
+
+Everything here was written against **SOVIET64.exe v1.1.1.7, 64-bit DX11.1**,
+PE timestamp 2026-03-25 16:13 UTC, 10 308 096 bytes, and the RVAs quoted
+through this document are still that build's. Addresses are **RVAs**; add the
+runtime module base. ASLR is on, so nothing may be hard-coded as an absolute
+address.
+
+**The project itself has since moved to v1.1.1.9** (regular-branch update,
+2026-08-11, PE timestamp `0x6A3EB6AD`) — every plugin's `#define`d rva is the
+v1.1.1.9 one, re-derived and re-verified byte for byte; v1.1.1.7's addresses
+are not carried anywhere in the source any more. This document was not
+rewritten wholesale for the new build - that would mean re-deriving every RVA
+narrated below by hand with no functional benefit, since the plugins
+themselves are the ones a hook actually checks against. Treat an address
+quoted here as **v1.1.1.7 provenance for how a finding was made**, not as
+what is compiled in today; for the current address, read the `#define` in the
+relevant plugin, which carries its v1.1.1.9 value and an "was 0x..." comment
+back to the one this page still shows. `docs/01-architecture.md`, *Porting
+off v1.1.1.7*, has what actually changed between the two builds - which
+sections shifted, by how much, and the one plugin bug the port's single crash
+turned out to be.
+
+Where something is inferred rather than observed, it says so.
+
+## The binaries
+
+`SOVIET64.exe` — game logic. Plain MSVC build, `.text` uncompressed, imports
+readable. `DllCharacteristics = 0x8160`: high-entropy VA, dynamic base,
+NX. **No Control Flow Guard**, no forced integrity. Leftover PDB path
+`D:\GitLab\soviet-republic\SOVIET64.pdb`.
+
+`C3DDLL64.dll` — the "C3D" engine. **2218 exported symbols with MSVC mangling
+intact**, so full signatures come for free. The executable imports 733 of them.
+
+`steam_api64.dll` is used for 10 functions: stats, achievements, Workshop
+callbacks. No anti-tamper, no anti-cheat, no packer anywhere.
+
+## Resources
+
+### The vector
+
+A `std::vector` of fixed-size records, and **a field of the game object rather
+than a free-standing global**: `ResourceGet` reads it out of `self + 0xC2B0`,
+and the game object is the static at rva `0x9D4F10`, so
+`0x9D4F10 + 0xC2B0 == 0x9E11C0`. That is why no instruction in `.text` computes
+`0x9E11C0` RIP-relatively from inside `ResourceGet` — every access is through
+`rcx`.
+
+| | |
+|---|---|
+| game object | rva `0x9D4F10` — not `0x9941F0`, which is a different object |
+| vector object | rva `0x9E11C0` = `game+0xC2B0` — `{ begin, end, capacity }` |
+| record stride | 832 bytes (`0x340`) |
+| live records | 57 |
+| capacity | 63 — MSVC's growth sequence 1,2,3,4,6,9,13,19,28,42,**63** after 57 `push_back`s |
+
+The array is heap-allocated. **A map load clears it rather than destroying it**
+— `end = begin` at rva `0x25EC7A` — so `begin` and the capacity survive, the 57
+records are pushed back into the same block, and anything that raised the
+capacity once keeps it for the rest of the session. `begin` does change when the
+allocation is replaced, so it is still the thing to watch; it is not the thing
+that changes on every load.
+
+The three pointers are written by exactly one function outside the vector's own
+growth: `0x25D4B0`, which zeroes them at `0x25D79E`/`0x25D7A6` and clears at
+`0x25EC73`.
+
+### The record cache behind the vector
+
+`game+0xC2C8`…`+0xC488` — **57 qwords of `Resource*`, filled one `ResourceGet`
+call at a time** by a straight run of code at rva `0x2A82B0`, immediately after
+the array is built. These are the records the engine wants by hand rather than
+by lookup.
+
+Fifty-three point into the array. The first, `game+0xC2C8` = rva `0x9E11D8`, is
+`workers` — index 0 — so it is **bit-for-bit equal to `begin`**, which is what
+made an earlier memory scan report "two containers holding the array base". It
+is not a container; it is a cached record. The other four —
+`+0xC3B8`, `+0xC3C0`, `+0xC418`, `+0xC420` — are the standalone records
+`ResourceGet` compares against before scanning anything, and never point into
+the array.
+
+Anything that moves the array has to carry this block with it. `resources`
+does, in `RebaseResourceCache`.
+
+### Record layout
+
+**Complete, and none of it guessed.** The resource table below builds each record
+in one stack buffer whose `rbp` is `record + 0xC0`, so replaying every write
+through `rbp` gives the exact contents of all 57 base-game records with the game
+not running. `tools/pe/restable.py` is that replay; `restable.py verify` rebuilds
+every record from the field list here and diffs all 832 bytes, and **57 of 57
+come out byte for byte identical** — which is the check that says nothing is
+missing rather than merely unnoticed.
+
+**Only 30 bytes of the 832 are ever written per resource.** Everything else is
+zero when the record is pushed and filled later at runtime.
+
+| Offset | Meaning |
+|---|---|
+| `+0x00` | name, inline, NUL-terminated, up to 32 bytes |
+| `+0x40` | localisation id of the display caption |
+| `+0x44` | price kind — see [Money](#money) |
+| `+0x48` | the resource's icon texture, `media_soviet/resources/<name>.png` |
+| `+0x50` / `+0x54` | set on nine records only. Unidentified — see below |
+| `+0x58` / `+0x5C` | **price**, RUB and USD |
+| `+0x70` / `+0x74` | the previous price, mirrored by the pass for `eletric` only |
+| `+0x78` / `+0x7C` | **base price**, RUB and USD — `$Economy_Base*` |
+| `+0x80` / `+0x84` | the previous base, mirrored by the drift pass |
+| `+0x88` … `+0xA7` | market block one, below. `+0x88`/`+0x8C` are the sell and buy multipliers |
+| `+0xA8` … `+0xC7` | market block two, the same shape |
+| `+0xC8` | one byte, the packed flag, below |
+| `+0xCC` … `+0x30B` | **eighteen transport-class blocks**, `0x20` bytes each, below |
+| `+0x30C` | material family, below |
+| `+0x310` | `1.0` on `workers` and `eletric`, `0.3` on the other 55. Unidentified |
+| `+0x318` … `+0x338` | the five cargo meshes — see [The mesh slots](#the-mesh-slots) |
+
+`+0x48` is what the minimap button row binds, so any UI that wants a resource's
+icon can take it straight from the record instead of loading its own asset. The
+UI pass at `0x2960DE` **overwrites it for every record without releasing what was
+there** (`mov [rbx+0x48],rax` at `0x296172`), so the pointer is not owned by the
+record and two records may safely share one.
+
+#### The eighteen transport classes
+
+`+0xCC`, stride `0x20`, one per `RESOURCE_TRANSPORT_*` in
+`media_soviet/scripts/SOVIETInstructions.txt` — `COVERED` 0 to `WASTE` 17, with
+`RESOURCE_TRANSPORT_NUM` 18. The count is not inferred from the enum: the table's
+prologue zeroes the array with `mov ecx,0x12`, and `0x2A1B80` — which every
+resource block calls before writing its own classes — clears exactly eighteen
+blocks. A resource declares one class, sometimes two, and the rest stay zero.
+
+| Offset in block | Meaning |
+|---|---|
+| `+0x00` | **capacity factor**. The `building.ini` parser multiplies a `$STORAGE` capacity by it — `mulss xmm0,[rax+rbx+0xCC]` at `0x117B91` — which is why a storage whose class differs from the resource's own reports `0.00 of 0.00 t` |
+| `+0x04`, `+0x08` | two figures set per *class* rather than per resource: `GRAVEL` `0.5`/`30` on nine of thirteen users, `OPEN` `1.25`/`2.5`, `OIL` and `WATER` `5`/`5`, `CONCRETE` `5`/`20`, `ELETRIC` and `HEATING` `1`/`1`. Unidentified |
+| `+0x0C`, `+0x10` | `0.05` on exactly the three classes that move a liquid through a pipe — `OIL`, `WATER`, `SEWAGE` — and zero on the other fifteen |
+| `+0x1C` | a byte. Set only ever on a *second* class: `cement`/`alumina`/`meat` on `GENERAL`, `livestock` on `COVERED` and `GENERAL`. The customhouse sync reads it as "not tradeable in this class", which is the one behaviour that depends on it |
+
+`GENERAL` is the container class, and ten of the twelve resources that declare it
+give it **the same three figures as their primary class**; `cement`, `alumina` and
+`meat` give it lower ones and set the flag.
+
+#### The two market blocks
+
+`+0x88` and `+0xA8`, byte-identical in shape:
+
+| Offset in block | Meaning |
+|---|---|
+| `+0x00` | sell multiplier, `0.95` |
+| `+0x04` | buy multiplier, `1.05` |
+| `+0x10`, `+0x14` | two large figures — `eletric` 40000/60000, `coal` 9500/9500, `iron` 6500/7500, `waste_toxic` 25/30, and 200/350 in the first block with 500/500 in the second on twelve resources including every waste |
+| `+0x18` | `0.5`, or `0.65` on coal, `0.75` on chemicals and bitumen, `0.85` on the liquids |
+| `+0x1C` | `1.0` — **the only field of the whole record that is the same in all 57** |
+
+`+0x88`/`+0x8C` is the pair [Money](#money) identifies: the trade window quotes
+the price times `+0x8C` to buy and times `+0x88` to sell. The second block carries
+the same two multipliers and a different pair of large figures, so **which block
+is which currency is not established** — pairing them with the price pair at
+`+0x58`/`+0x5C` by position is the whole of the argument. `workers`, `vehicles`
+and `trains` are the three untradeable resources and they are exactly the three
+whose blocks are entirely zero but for `+0xA4`/`+0xC4`.
+
+#### The packed flag
+
+`+0xC8`, one byte, and its distribution is exact: 1 on `plants`, `chemicals`,
+`uf6`, `nuclearfuel`, `nuclearfuelburned`, `fabric`, `alcohol`, `food`, `clothes`,
+`meat`, `ecomponents`, `mcomponents`, `plastics`, `eletronics` and `explosives`,
+0 on the other 42.
+
+**Those fifteen are precisely the resources whose primary transport class is
+`COVERED`, `COOLER`, `NUCLEAR1` or `NUCLEAR2`** — and they are also the fifteen
+with no cargo geometry at all under `media_soviet/resources`, the goods a lorry
+carries as a crate or a container. The rule reproduces all 57 records with no
+exception, which is what lets `resources` derive the byte from the class. What
+reads it is not established.
+
+#### The material family
+
+`+0x30C`, an int: `-1` on `workers`, `eletric`, `heat`, `water` and `usagewater` —
+the five with no material form — and 10 to 19 on the other 52. **Each of the ten
+values holds exactly one waste resource:**
+
+| Value | Waste | With |
+|---|---|---|
+| 10 | `waste_gravel` | gravel, rawgravel, prefabpanels, bricks, cement, asphalt, concrete |
+| 11 | `waste_steel` | steel, iron, rawiron, mcomponents |
+| 12 | `waste_aluminium` | aluminium, bauxite, rawbauxite, alumina |
+| 13 | `waste_plastic` | ecomponents, plastics, eletronics |
+| 14 | `waste_bio` | plants, fertiliser_liquid |
+| 15 | `fertiliser` | food, meat, livestock |
+| 16 | `waste_burnable` | wood, boards |
+| 17 | `waste_toxic` | oil, chemicals, bitumen, the whole nuclear chain, fuel, alcohol, explosives |
+| 18 | `waste_other` | vehicles, trains, fabric, clothes |
+| 19 | `waste_ash` | coal, rawcoal |
+
+So it is a material family and the sorted-waste mapping is the obvious thing it
+would be for, but what reads it is not established. `-1` is a value five base
+records carry, which makes it the safe default.
+
+#### `+0x50` and `+0x54`
+
+Two floats, non-zero on nine records: `nuclearfuelburned` 127, `waste_toxic` 84,
+`usagewater` 1, `waste_burnable` 0.3, `waste_other` 0.7, `waste_ash` 0.6 at
+`+0x50`; `waste_gravel` 0.002, `waste_steel` 0.2, `waste_aluminium` 0.15,
+`waste_plastic` 0.03 and the four landfill wastes 1.0 at `+0x54`. Nothing here has
+found what reads them, and a byte-scan for the displacement is useless — 0x50 is
+one of the commonest displacements in the executable. They default to zero, which
+is what 48 of 57 records carry.
+
+#### The name field is not zero-padded
+
+A record the engine pushes carries **garbage after the name's terminator**,
+because every record is built in the same stack buffer and each block writes only
+as many name bytes as its name needs. `nuclearfuelburned` is 17 characters and
+leaves a `d` at `+0x10` of every record built after it. Nothing reads past the
+NUL — the resolver is `strcmp` — but a byte-for-byte comparison has to know.
+
+The earlier note here said `+0x40` was found by diffing four live records and
+that the rest of the 832 bytes was unmapped, which is why cloning was the only
+way to make a new record viable. Reading the table instead settled the whole
+layout, and `resources` can now build a record with no template at all.
+
+### The resource table
+
+`0x2A1D60`, 30 KB of straight-line code with one block per resource, each built
+in a stack buffer at `rsp+0x40` and pushed with `add qword ptr [rbx+8], 0x340`.
+Its prologue is `lea rbp,[rsp-0x290]` before `sub rsp,0x390`, so **`rbp` is
+`record + 0xC0`** and every constant in it reads off directly:
+`mov [rbp-0x80], 0x207` is caption id 519.
+
+**It covers all 57**, in one function, and the note here that said it covered
+only the first 35 was reading one of two commit idioms. Records 0..34 —
+`workers` through `clothes` — are committed inline with
+`add qword ptr [rbx+8],0x340`, 35 of them, the last at `0x2A618A`. Records
+35..56 are committed with `call 0x449350(vector, record)`, an out-of-line
+`push_back`, out of the same stack buffer and through the same `rbp`. Following
+both idioms yields exactly 57 records in the documented index order.
+
+Two things make the replay exact:
+
+- **`0x2A1B80(record)`** is called at the top of every resource's block and
+  clears the eighteen transport-class entries — `[+0x00,+0x14)` and the flag at
+  `+0x1C` of each. Without modelling it, one resource's classes leak into the
+  next, because the buffer is zeroed once for the whole function and never again.
+- The buffer **persists between records**, which is why a record carries the tail
+  of a previous, longer name after its own terminator.
+
+`tools/pe/restable.py` is that replay, and `restable.py verify` is the check that
+the field list in [Record layout](#record-layout) is complete.
+
+Everything the table writes is a *starting* value. The price pass below
+overwrites `+0x58`/`+0x5C` for all but one kind before the first frame.
+
+**Every float constant in the executable may be one ULP low.** The compiler that
+built the base game truncated a decimal literal towards zero where a modern one
+rounds to nearest: `0.05` is `0x3D4CCCCC` in the executable and `0.05f` compiles
+to `0x3D4CCCCD` today, and `0.6` is `0x3F199999` against `0x3F19999A`. It changes
+nothing any of these fields do, but a byte-for-byte comparison has to spell the
+constants exactly — `RES_LIQUID_F` in `plugins/resources/resources.cpp` is that.
+
+### Money
+
+Two float pairs and one integer, and between them they are everything the trade
+window quotes. Confirmed field by field against the `$Economy_*` blocks a save
+writes into `media_soviet/save/<name>/stats.ini`, which is the only place the
+engine's own names for them are visible.
+
+**`+0x44` is the price kind**, and the first thing the pass branches on:
+
+| Value | Resources |
+|---|---|
+| `-1` | `workers` — skipped by the pass entirely, so its constants stand |
+| `-2` | `eletric` |
+| `-3` | `vehicles` |
+| `-4` | `trains` |
+| `-5` | `heat` — pinned to `1.0` in both currencies |
+| `0` | raw: everything mined, pumped, grown or scrapped |
+| `1` | manufactured |
+| `2` | `food`, `clothes`, `livestock` |
+| `3` | `meat`, `asphalt`, `concrete`, `ecomponents`, `mcomponents`, `plastics` |
+| `4` | `eletronics` |
+
+Ten distinct values over the 57 records. The pass only branches on `-1` and `-5`;
+what tells `0` from `4` apart is inside the solver at `0x2A9470`.
+
+**`+0x58`/`+0x5C` is the price.** The trade window's buy figure is this times
+`+0x8C` (`1.05`) and its sell figure this times `+0x88` (`0.95`) — one number
+per currency behind both, which checks out to five figures against any save:
+coal `16.940750` to buy and `15.327346` to sell are `16.133 × 1.05` and
+`16.133 × 0.95`.
+
+**`+0x78`/`+0x7C` is the base price**, `$Economy_BaseRUB` and
+`$Economy_BaseUSD`. It is an *input* to the solver, not a result. Only fifteen
+base-game resources have one and they are the ones that come out of the ground
+or cannot be produced at all: `rawgravel` 1.2, `plants` 1.8, `wood` 7.5, `oil`
+40, `rawcoal` 5.3, `rawiron` 4.5, `rawbauxite` 4.5, `uranium` 5.2/4.2,
+`explosives` 15/13, `water` 0.3/0.2, `usagewater` 40, `waste_toxic` 115/100 and
+four other wastes.
+
+**Which float is which currency was settled on the three that differ** —
+`uranium`, `explosives`, `water` — because every other base pair is the same
+number twice. `+0x78` is RUB in all three. One thing does not fit and is
+recorded here rather than explained away: world init at `0x28ED59` writes
+`workers+0x5C = 9.0` and `+0x58 = 12.0`, while the save calls the workday cost
+`RUB 9.0` and `USD 12.0`. Either the record's worker price is not the workday
+cost, or one of the two identifications is backwards; the base-price evidence is
+three independent resources against that one coincidence.
+
+### The price pass
+
+```
+rva 0x2A92D0   void RecomputeResourcePrices(GameObject*)
+rva 0x2A9470   float ResourcePrice(GameObject*, Resource*, bool rub, bool usd, ...)
+```
+
+`0x2A92D0` walks the whole vector and, per record, reads `+0x44` and then either
+skips it (kind `-1`), pins it to `1.0` (kind `-5`), or calls `0x2A9470` twice and
+stores the results in `+0x5C` and `+0x58`. Called from world init at `0x28ED78`
+and from the economy module at `0x2FBB95`, each time followed by `0x2A9F40`.
+
+`0x2A9470` is where the base price is consumed. Its shape is
+`workers_price × k + resource_base`, once per currency, with the two flags
+selecting `(+0x58, +0x78)` or `(+0x5C, +0x7C)` — the pairing that makes both
+fields the same currency. A handful of resources are special-cased by name
+(`plants`) or against a cached record; everything else falls into two loops over
+the building types at `game+0x11B20`, stride `0xBE8`, looking for one whose
+output list contains this resource and summing what its inputs cost.
+
+**A resource no building type produces prices at zero**, whatever its base is:
+both loops fall through to `0x2A9F0D`, which returns the register zeroed on the
+way in. Nothing consults `+0x78` on that path. This is the whole explanation for
+a modded resource showing `0` in the trade table while another one shows a real
+figure — copper is mined, concentrated, smelted and refined, so all four price
+themselves, and a name declared in `[list]` and used by no `$PRODUCTION` line
+cannot.
+
+A third pass at `0x2FB390` drifts the base prices: for every record whose base is
+non-zero it multiplies `+0x7C` and `+0x78` by two independent random walks, then
+mirrors them into `+0x84` and `+0x80`. That is why a base written once does not
+stay put, and why `resources` writes it again before every recompute.
+
+### The economy vectors
+
+`$Economy_*` in a save is six `std::vector<{Resource*, float value, float mul}>`
+on the economy object, 16 bytes an entry:
+
+| Offset | Section |
+|---|---|
+| `+0x198` | `$Economy_PurchaseCostUSD` |
+| `+0x1B0` | `$Economy_PurchaseCostRUB` |
+| `+0x1C8` | `$Economy_SellCostUSD` |
+| `+0x1E0` | `$Economy_SellCostRUB` |
+| `+0x1F8` | `$Economy_BaseRUB` |
+| `+0x210` | `$Economy_BaseUSD` |
+
+The parser is one strcmp chain at `0x2FFD60` handing each section to `0x301C10`,
+which clears the vector and pushes one entry per line: `ResourceGet` on the name,
+then two floats. **Keyed by `Resource*`, not by index** — so a mod resource
+round-trips through a save without anything being taught about it, and a
+resource the save does not mention simply has no entry.
+
+### Index order
+
+Indices 0–56, exactly the field order of the `Resources` struct in
+`media_soviet/scripts/SOVIETInstructions.txt`:
+
+```
+workers eletric vehicles trains heat gravel rawgravel plants steel aluminium
+prefabpanels bricks wood oil chemicals coal rawcoal iron rawiron bauxite
+rawbauxite bitumen boards uranium yellowcake uf6 nuclearfuel nuclearfuelburned
+fuel fabric alcohol cement alumina food clothes meat livestock asphalt concrete
+ecomponents mcomponents plastics eletronics explosives water usagewater
+fertiliser_liquid waste_gravel waste_steel waste_aluminium waste_plastic
+waste_bio fertiliser waste_burnable waste_toxic waste_other waste_ash
+```
+
+**`waste_mixed` (57) and `service_material` (58) appear in that struct but are
+not in the vector** — they are standalone objects elsewhere. Using either to
+derive the array base yields a bogus address; this caused an infinite re-arm
+loop once. The reserved slots the struct shows after them are padding in the
+script VM's view only, not spare capacity in the engine.
+
+### ResourceGet
+
+```
+rva 0x2AA7C0, 735 bytes
+Resource* ResourceGet(GameObject* self, const char* name, ...)
+```
+
+Two passes, in this order:
+
+1. Four **standalone** records — `self+0xC3B8`, `+0xC3C0`, `+0xC418`, `+0xC420`
+   — gathered into a throwaway vector and compared by name. These are the
+   objects that are in the script VM's `Resources` struct but not in the array:
+   `waste_mixed`, `service_material` and two more.
+2. The array at `self+0xC2B0`, walked with `strcmp` against each record's inline
+   name, stride `0x340`.
+
+So the resolver is a **linear name scan, not a map** — which is exactly why
+appending a record and moving `end` is enough to make a new resource resolvable,
+and why nothing else has to be intercepted.
+
+Returns a pointer to the record, `NULL` when unknown, and logs
+`"ResourceGet - not found %s"` (format string at rva `0x8A6B00`, exactly one
+code reference, at `0x2AAA5C`).
+
+It is called speculatively on every token the .ini parser meets, so failures are
+routine — the stock game asks for `waste` 19 times per load and never finds it.
+That makes it a single choke point through which every resource name resolution
+passes.
+
+### Per-resource assets
+
+**Only the icon is looked up by name.** This was wrong here for a long time and
+the mistake is visible in the game: a mod resource with correctly named meshes
+was still drawn as its template.
+
+| Path | Purpose | How the engine finds it |
+|---|---|---|
+| `media_soviet/resources/<name>.png` | 48×48 RGBA icon | `"resources/%s.png"` at rva `0x899C48`, formatted from the record's name |
+| `media_soviet/resources/<name>1..4.nmf` | cargo pile, four fill stages | **literal path in `.rdata`** |
+| `media_soviet/resources/<name>_vehicle.nmf` | load on a vehicle | **literal path in `.rdata`** |
+| `media_soviet/resources/<name>.mtl` | material for the above | **literal path in `.rdata`** |
+
+The icon is loaded by the UI texture pass at rva `0x2960DE`, which walks the
+whole vector and writes each texture to record `+0x48`. It runs **per world
+load**, after `Initializing resources` and at `Initializing GUI textures`, so a
+record published during the former gets its icon in the latter.
+
+The meshes come from the resource table at rva `0x2A1D60` — 30 KB of
+straight-line code with one block per resource and every path spelled out:
+
+```asm
+mesh = middlepoint->CreateManagedMesh("resources/steel.nmf");
+mesh->LoadFromFile("resources/steel.nmf", middlepoint, true);
+mesh->LoadMaterial("resources/steel.mtl", 0);
+record[+0x318] = mesh;
+```
+
+so a record cloned from a template inherits the template's *mesh objects* and no
+amount of correct file naming changes what is drawn. `tesmioloader` therefore
+makes the same three calls itself — see
+[04-adding-resources.md](04-adding-resources.md).
+
+### The mesh slots
+
+The record's last five qwords, and they end exactly at the record boundary:
+`0x338 + 8 == 0x340`.
+
+| Offset | Contents |
+|---|---|
+| `+0x318` | vehicle load — and the **only** mesh an open-transport resource has |
+| `+0x320` | pile stage 1 |
+| `+0x328` | pile stage 2 |
+| `+0x330` | pile stage 3 |
+| `+0x338` | pile stage 4 |
+
+Read off `0x2A1D60`, which builds each record in one stack buffer at `rsp+0x40`
+and pushes it. Its prologue is `lea rbp,[rsp-0x290]` before `sub rsp,0x390`, so
+**`rbp == record + 0xC0`**, and every block writes its meshes to
+`rbp+0x258`…`+0x278`. The caption id lands at `rbp-0x80`, which is `+0x40` and
+corroborates the offset independently.
+
+A resource with no cargo geometry — `workers`, `eletric` — has all five null,
+which is what makes "does the template have stage 1" a usable test for bulk
+versus open.
+
+The engine calls, all imported by name:
+
+| Symbol | Signature |
+|---|---|
+| `?CreateManagedMesh@C3D_MIDDLEPOINT@@…` | `C3D_MESH* (C3D_MIDDLEPOINT*, const char* path)` |
+| `?LoadFromFile@C3D_MESH@@…` | `int (C3D_MESH*, const char* path, C3D_MIDDLEPOINT*, bool)` |
+| `?LoadMaterial@C3D_MESH@@…` | `int (C3D_MESH*, const char* mtl, int)` |
+
+`CreateManagedMesh` caches by path, so asking for the same file twice is free
+and re-arming after every map load does not leak.
+
+### Transport class
+
+Each record carries one. A building storage declared with a different class
+reports **zero capacity** — the symptom is a storage line showing
+`0.00 of 0.00 t`. Ores cloned from `rawiron` or `bauxite` are
+`RESOURCE_TRANSPORT_GRAVEL`.
+
+## Deposits
+
+### Storage
+
+Two textures per map, `resourcemap.dds` and `resourcemap2.dds`, both
+1024×1024 BGRA — 128-byte DDS header plus 4 194 304 bytes, no mipmaps. Each
+colour channel is one deposit type; the byte value is richness at that point.
+
+Channel usage measured over **every** shipped map — `campaign1`, `campaign2`,
+`terrain3`–`terrain6`, `terrain_svk`, `terrainblank` and all eighteen
+`tutorial_map*` folders — by counting non-zero bytes per channel:
+
+- **`resourcemap2` component 3 is empty on every map.** Copper's channel.
+- **`resourcemap` component 3 holds no spatial data on any map either**: it is
+  all 255 or all 0, never anything between — an unused alpha channel, not a
+  deposit. Usable as a second free channel, but on the maps where it is 255
+  (`terrain3`–`terrain5`, `terrainblank`, every tutorial) a deposit assigned to
+  it reads as maximum richness everywhere until something clears it.
+- `resourcemap2` component 2 carries real data on `terrain3`, `terrain4`,
+  `terrain6` and the tutorials, none on `campaign1`, `campaign2` or
+  `terrain_svk`. It is the layer the minimap has a flag for at `+0x18` and no
+  button. Not spare.
+
+The other five are oil, iron, coal, uranium and bauxite. So of eight channels,
+two are free and six are spoken for. Re-measure after a game update before
+assuming that still holds.
+
+The maps are **only ever textures**. The loader calls
+`C3D_MIDDLEPOINT::CreateManagedTexture`, then `TextureAccessInitTempResource` to
+get a CPU-reachable copy; nothing parses the pixels into another structure. On
+save they are written back with `SaveToDDS`, which is how depletion persists.
+
+### Creating and saving them
+
+Four calls, and there is nothing else to a resource map. The world loader at
+`0x5920` takes the folder in **rdx** and does, per map:
+
+| RVA | Call |
+|---|---|
+| `0x7B1A` | `CreateManagedTexture(*(void**)gameobj, "<folder>/resourcemap.dds")` |
+| `0x7B4E` | `tex->vtbl[2](tex, path, 0, 0, 0, 0)` — `Load2DFromFile` |
+| `0x7B5C` | `tex->vtbl[19](tex)` — `TextureAccessInitTempResource` |
+
+then `[gameobj+0xF00]` or `[gameobj+0xF08]` takes the result. `resourcemap2`
+alone has a fallback: `C3DHelp_CheckIfFileExist` on its path, and the bare
+`resourcemap2default.dds` when it is missing — **so `resourcemap`'s is the only
+one of the two paths that always carries the folder name.**
+
+The saver at `0x7C20` takes the same folder in `rdx` and is four
+`tex->vtbl[36](tex, "<folder>/....dds")` calls — `SaveToDDS` — for `farmap`, the
+emissive map and both deposit maps.
+
+That is the whole contract, which is why a **third** map needs no engine support
+at all: repeat those four calls and hand the pointer to a sampler that already
+takes one. `deposits` does exactly that for `resourcemap3` upward — see
+[05-deposits.md](05-deposits.md).
+
+`resourcemap2default.dds` is **not** a blank: 1024×1024 like the rest, and
+components 0, 1 and 2 carry a stock uranium and bauxite layout. Only its alpha
+is clear.
+
+### Type numbers
+
+From the .ini parser and the type-to-name function:
+
+| Value | Token |
+|---|---|
+| 1 | `$TYPE_MINE_IRON` |
+| 2 | `$TYPE_MINE_COAL` |
+| 3 | `$TYPE_MINE_GRAVEL` |
+| 4 | `$TYPE_MINE_WOOD` |
+| 6 | `$TYPE_MINE_URANIUM` |
+| 7 | `$TYPE_MINE_BAUXITE` |
+| 8 | `$TYPE_MINE_WATER` |
+| 9 | `$TYPE_MINE_WATER_SURFACE` |
+| 10 | `$TYPE_MINE_COPPER` — added by this project |
+
+`$TYPE_MINE_OIL` is assigned from a register the decompiler did not resolve; it
+is 0 or 5. The dispatch chain handles a type 0, so 0 is likely OIL.
+
+Building type 7 means "mine"; water wells are building type 92 (`0x5C`).
+
+### Type to (texture, component)
+
+Compiled as a chain of comparisons inside a 3734-byte function at rva
+`0x1DD190`, chain starting `0x1DD773`:
+
+| Type | Texture | Colour component |
+|---|---|---|
+| 0 | `resourcemap` — the sampler's default, reached by passing `R9 = 0` | 0 |
+| 1 | `resourcemap`, same way | 1 |
+| 2 | `resourcemap`, same way | 2 |
+| 3 | **terrain mask**, `[terrain+0x158]` — the material splat map `C3D_TERRAIN::EditMask` paints, bracketed by `MaskTextureOpen`/`Close` | 2 |
+| 6 | `resourcemap2` | 0 |
+| 7 | `resourcemap2` | 1 |
+| 8, 9 | water — separate path via `FUN_1404D5B60` | — |
+| 10 | `resourcemap2` | 3 — added by this project |
+
+Types 6 and 7 load the texture explicitly from `[gameobj+0xF08]`. Types 0–2 pass
+`R9 = 0` and let the sampler fall back to `[gameobj+0xF00]` — an earlier reading
+of the decompiler's "local" here was wrong; the disassembly at `0x1DD6E1` is a
+plain `XOR R9D,R9D`.
+
+### Sampler
+
+```
+rva 0x8360
+C3DFCOLOR* Sample(void*, C3DFCOLOR* out, float* worldPos, Texture* tex)
+```
+
+Defaults `tex` to `[gameobj+0xF00]` when null. Converts world position through
+`C3D_TERRAIN::GetOffset` and `GetTerrainSize` into texel coordinates, reads a
+2×2 block through the texture vtable and bilinearly interpolates. Returns
+`out`. Out-of-range positions return a zero colour.
+
+The texel read (`TextureAccesGetTexel`, `C3DDLL64.dll` rva `0x19080`) is
+`[(tex+0x158) + (x + (tex+0x160 >> 2)·y)·4]` with **no null check** — the
+caller is expected to have the texture bracketed. `0x1DD190` does so per type:
+`0x1DD458` opens `resourcemap` for types 0–2, `0x1DD474` opens `resourcemap2`
+for 6–7, `0x1DD499` opens the terrain mask for 3; the closes are `0x1DDE08`,
+`0x1DDE25`, `0x1DDE45` in reverse order. A type outside those ranges samples
+through a never-mapped texture, and `tex+0x158` is zero until the first open —
+the crash a mod deposit type produced before the plugin taught the bracket its
+types. See [05-deposits.md](05-deposits.md), *The scan's bracket*.
+
+### Related functions
+
+| RVA | What |
+|---|---|
+| `0x5920`–`0x7C1B` | world loader; creates both deposit map textures. Folder in `rdx` |
+| `0x7C20`–`0x7D1A` | writes `farmap`, `emissivemap` and both deposit maps via `SaveToDDS`. Folder in `rdx` |
+| `0xBFFF4` | deposit type → token name, knows exactly the seven texture-backed types |
+| `0x10E200` | `building.ini` parser, 62 979 bytes; mine-type branches from `0x10EAC8` |
+| `0x1DCA70` | deposit type → **search radius**, 111 bytes, returns in `XMM0` |
+| `0x1DD190` | the big one, 3734 bytes: finds deposits under a building. **Fifteen** comparisons against the type field, not just the dispatch chain |
+| `0x1B3690` | **one mine, one tick** — building type 7. Reached from the dispatcher at `0x139A80` |
+| `0x1B1220` | the same for building type 92, the water well, via `0x188FC0` |
+| `0x139A80` | the building dispatcher, 20 964 bytes: one `if (typeDesc[0x360] == n)` per building type |
+
+### What a mine keeps
+
+`0x1DD190` writes a `std::vector` of **28-byte** sample points into
+`building+0xE90` (`end` at `+0xE98`):
+
+| Offset | Field |
+|---|---|
+| `+0x00` `+0x04` `+0x08` | world x, y, z |
+| `+0x0C` | richness — the sampled colour component |
+| `+0x10` | weight, `1 - distance / radius` |
+| `+0x14` | per-point progress; wood only, zero for everything else |
+| `+0x18` | distance from the building |
+
+Quality of source is `sum(w*r)/sum(w)` over it, kept in `building+0xDF8`, and
+production is `building+0xDDC = workers × quality × max`. **`+0xDF8` is written
+once at construction and never again for an ore mine** — which is exactly why
+deposits are infinite in the base game, and the whole opening for
+[08-depletion.md](08-depletion.md).
+
+`0x1DD190` opens with `vec.clear()`, so calling it a second time is a resample.
+The water branch of both tick functions already does that every 50 seconds.
+
+### Search radius
+
+A separate, much smaller table, and the one that is easy to miss:
+
+```c
+float GetDepositRadius(int type)      // rva 0x1DCA70
+{
+    if (type == 0)                           return [0x90ABFC];
+    if (type == 1 || type == 2 || type == 6) return [0x90AD50];   // iron, coal, uranium
+    if (type == 7)                           return [0x90AA40];   // bauxite
+    if (type == 3)                           return [0x90A9B8];   // gravel
+    if (type == 4)                           return [0x90ADD0];   // wood
+    if (type == 8)                           return [0x90AC9C];   // water
+    if (type == 9)                           return [0x90AC38];   // water surface
+    return 0;                                                     // anything else
+}
+```
+
+Called at the very top of `0x1DD190`:
+
+```c
+radius = GetDepositRadius(building[0x368]) * <scale>;
+```
+
+A type this table does not know gets radius zero, so the mine searches nothing,
+the average over an empty set is NaN, and the building window prints the NaN
+cast to int: **−2147483648 %**. No placement radius is drawn either. A new
+deposit type needs an entry here as well as in the dispatch chain.
+
+## Finding the rest of the type-dependent code
+
+Scanning `.text` for `cmp dword ptr [reg+0x368], imm8` — bytes
+`83 [B8-BF] 68 03 00 00 imm8` — finds every place that branches on deposit type.
+There are 18 such functions. Most compare against 4 (wood) and are
+woodcutting-specific. The ones that matter so far:
+
+| Function | Sites | Note |
+|---|---|---|
+| `0x1DD190` | 15 | radius call, dispatch chain, and more |
+| `0x2BAD70` | 7 | six comparisons against 0, one against 9 — not yet examined |
+| `0x2A9902` | 3 | compares against 5 — not yet examined |
+| `0x786AC0` | 4 | mixed 3 and 4 |
+
+This scan is the fastest way to check whether a new deposit type is missing an
+entry somewhere: add the type, then look for symptoms in whichever of these has
+not been taught about it.
+
+### The red terrain overlay
+
+Painting a deposit in the editor turns the terrain grid red where the channel is
+rich. It is a render pass of its own inside `FUN_14000aee0` (rva `0xAEE0`,
+called from exactly one place, `0x482824`, with no arguments at all), and it is
+driven by **six bytes in the game object**:
+
+| Byte | Deposit | Map | Component | `SelectedResources` |
+|---|---|---|---|---|
+| `+0x23` | coal | `resourcemap` | 2 | (0,0,1,0) at `0x90BDF0` |
+| `+0x24` | iron | `resourcemap` | 1 | (0,1,0,0) at `0x90BDA0` |
+| `+0x25` | oil | `resourcemap` | 0 | (1,0,0,0) at `0x90BD80` |
+| `+0x26` | uranium | `resourcemap2` | 0 | (1,0,0,0) |
+| `+0x27` | bauxite | `resourcemap2` | 1 | (0,1,0,0) |
+| `+0x28` | — | `resourcemap2` | 2 | (0,0,1,0) |
+
+**There is no seventh byte**: component 3 of either map has no flag, which is
+why a copper brush painted a channel nothing drew. The pass takes the *first*
+flag set in each group, swaps the terrain's mask texture (`terrain+0x158`) for
+the map, binds the `Resources` technique and renders. Its pixel shader is four
+instructions:
+
+```hlsl
+float a = dot(SelectedResources, tex.Sample(uv));   // dp4
+o = float4(1,1,1,1) + a * float4(1.5,-1,-1,0);      // white -> red
+```
+
+A `dp4` again, so component 3 was always reachable. `0x2350D0` sets its own byte
+on the way past, which is what makes the overlay appear the moment you paint.
+
+### The terrain material mask
+
+Gravel is not in a resource map. It is component 2 of the **terrain's own mask**
+at `terrain+0x158`, and the editor's Rocks tab paints the same mask:
+
+| Tool | Call | `EditMask` channel | Component |
+|---|---|---|---|
+| `paint_rock` / `erase_rock` | `0x235300(self, mode)` | 3 | 2 — gravel's |
+| `paint_oasis` / `erase_oasis` | `0x235510(self, mode)` | 0 | 3 |
+
+```
+C3D_TERRAIN::EditMask(terrain, &pos, channel, innerR, outerR, delta, limit, true)
+```
+
+Both functions are the same code with one constant changed, and the channel
+encoding is the deposit brush's: `channel = (component + 1) & 3`. The Rocks tab
+itself is `0x22EE30`; the dispatcher entries are at `0x312CE6` and `0x312D08`.
+
+Gravel's dispatch is **not** in the type chain at `0x1DD773`. It is two separate
+sites in the same function:
+
+| RVA | What |
+|---|---|
+| `0x1DD499` | `if (type == 3) MaskTextureOpen(terrain)` — the bracket, once per scan |
+| `0x1DD907` | the sample: `r9 = [terrain+0x158]`, sampler, `movss xmm0,[rax+8]` (component 2) |
+| `0x1DDE08` | a third `cmp type,3` — the close |
+
+Its sample block writes the same `[rsp+0x5C]` the type-6 block does and takes the
+position from `xmm7`/`ebx` rather than `[rsp+0x40]`, but those hold the same
+value — so a mask deposit **can** be emitted as an ordinary case in the
+`0x1DD773` chain with one substitution, `mov r9,[gameobj]; mov r9,[r9+0xED8];
+mov r9,[r9+0x158]`. What it cannot inherit is the bracket, and opening the mask
+per sample point would be a GPU `Map`/`Unmap` per point — the mistake
+[07-pitfalls.md](07-pitfalls.md) already records. A fourth patch site at
+`0x1DD499` is the way in.
+
+### Painting deposits — the engine's own brush
+
+The terrain editor already contains a fully generic deposit brush, and one of
+its channels is unused.
+
+```
+rva 0x238B00, 1101 bytes
+void PaintDeposit(float z, C3DVECTOR3* pos, uint channel,
+                  float innerR, float outerR, int delta, uint limit, bool bracket)
+```
+
+It picks the texture and colour byte out of `channel` alone:
+
+```c
+tex = (unsigned)(channel - 4) < 4 ? resourcemap2 : resourcemap;
+switch (channel & 3) { 0: alpha  1: byte2  2: byte1  3: byte0 }
+```
+
+so `channel = map*4 + component'`, with the falloff between `innerR` and
+`outerR`, `delta` added per tick (negative to erase), and `limit` clamping.
+Texels go through vtable slots 20 and 23, bracketed by 16 and 18.
+
+| channel | Texture | Component | Deposit |
+|---|---|---|---|
+| 1 | `resourcemap` | 0 | oil |
+| 2 | `resourcemap` | 1 | iron |
+| 3 | `resourcemap` | 2 | coal |
+| **0** | **`resourcemap`** | **3** | **free** |
+| 5 | `resourcemap2` | 0 | uranium |
+| 6 | `resourcemap2` | 1 | bauxite |
+| 7 | `resourcemap2` | 2 | no editor tool, no minimap button |
+| **4** | **`resourcemap2`** | **3** | **copper** |
+
+Inverted, `channel = (map == resourcemap2 ? 4 : 0) | ((component + 1) & 3)`,
+which agrees with all six vanilla rows and is what the loader computes.
+
+Its only caller, `0x2350D0`, maps the editor's five paint/erase pairs onto it
+with `if (2 < idx) idx++` then `idx + 1`, which can emit 1, 2, 3, 5, 6 and
+never 0, 4 or 7. Those three are not missing a capability, they are missing a
+caller. See [05-deposits.md](05-deposits.md) for the editor side.
+
+## Electricity, heat, and building storages
+
+Electricity is **not** a special case in the engine. It is an ordinary resource
+in an ordinary storage, moved between buildings by code that does not care what
+kind of building either end is. The same is true of heat.
+
+### A building's storages
+
+`building+0x970`…`+0x978` is a `std::vector` of storages, stride `0xE0`.
+
+| Offset | Contents |
+|---|---|
+| `+0x00` / `+0x08` | `std::vector<Slot>` begin and end, stride 16 — one slot per resource this storage can hold |
+| `+0x8C` | capacity, the figure `$STORAGE` declared |
+| `+0x90` | transport class, `RESOURCE_TRANSPORT_*` |
+| `+0xA8` | what has been handed out through it this tick |
+
+| Slot offset | Contents |
+|---|---|
+| `+0x00` | the resource record |
+| `+0x08` | content |
+| `+0x0C` | quality, 0..1 — a **source** with 0 hands out nothing. For electricity this *is* the node's voltage: `*(float**)(building+0x10E8)` points straight at it, confirmed by every line of a runtime dump agreeing |
+
+**Quality is only ever raised inside a transfer**, and a transfer only happens
+into a shortfall. A storage sitting at capacity with quality 0 therefore stays
+that way — it holds energy and has no way to be told the power is back. That is
+not a bug to route around casually: it is why a branch lights up the moment a
+wire is connected, while the storages are still empty, and goes dark again once
+they fill.
+
+Wire connections are a vector at `building+0xA10`…`+0xA18`, stride `0x60`:
+`+0x00` is the connection type (7 `ELETRIC_HIGH`, 8 `ELETRIC_LOW`), `+0x28` the
+line object. The line's two ends are at `+0x20` and `+0x28`, and each end holds
+a vector of buildings at `+0x70`…`+0x78` whose first entry is the building —
+take whichever end does not lead back where you started, which is how both
+`0x1B8EE0` and `0x1BB700` open.
+
+Built by the `$STORAGE*` parser at rva `0xE40F0`, which writes `+0x8C` and
+`+0x90` from its arguments and pushes one slot per resource whose per-class
+factor at `resourceRecord + 0xCC + class*0x20` is non-zero. **That factor is why
+a storage declared with the wrong transport class reports zero capacity.** A
+companion byte at `resourceRecord + 0xE8 + class*0x20` excludes the pair
+outright. `+0x88` records which `$STORAGE_*` token produced the storage: `-1`
+plain, 0 basic, 1 medium, 2 advanced and mediumadvanced, 3 hotel, 10 carplant,
+50 fuel — and for the `$STORAGE_DEMAND_*` family the four shop goods are named
+in the code rather than looked up, which is the subject of
+[11-needs.md](11-needs.md).
+
+Classes that matter here: **9 `RESOURCE_TRANSPORT_ELETRIC`**, **14
+`RESOURCE_TRANSPORT_HEATING`**. Both come from
+`media_soviet/scripts/SOVIETInstructions.txt`, which also gives every
+`BUILDINGTYPE_*` number: 17 powerplant, 18 substation, 19 transformator, 31/32
+electricity export/import, 70 heating plant, 71 heating substation, 72 heating
+switch.
+
+### Moving it
+
+| RVA | What |
+|---|---|
+| `0x139A80` | the building dispatcher. Collects power plants (17) and transformers (19) into vectors of their own, and heating plants (70) into another |
+| `0x1B8EE0` | `(game, building)` — the power plant's: walk the wires, collect every reachable class-9 storage, hand energy over |
+| `0x1BB700` | `(game, building, what, priority)` — the grid node's, and the one a transformer uses. `what` = 0 hands out **voltage** (slot quality) and no energy, 1 hands out energy; `priority` is matched against `building+0xE22+connIndex`, and only a filtered call reaches a neighbour flagged unpowered at `+0x1130` |
+| `0x1BDD40` | the transfer, reached by both. Receiver's share is `(capacity − content)/shortfall`; the source may give at most `dt × its own capacity × scale`. **Its sixth argument gates the whole transfer**: non-zero runs only the tail, which propagates quality |
+| `0x1B9640` | the substation's version, over the buildings in range at `building+0x10C8` rather than over wires |
+| `0x1BD4C0` | one grid node's update — computes voltage as `2 × wattage/breaker` for types 17–19 and 35 |
+| `0x1D1E10` | the production tick. Sets slot quality to 1 for a power plant's class-9 storage and a heating plant's class-14 one |
+
+Connections are at `building+0xA10`…`+0xA18`, stride `0x60`, with the connection
+type at `+0x00`: 7 is `ELETRIC_HIGH`, 8 is `ELETRIC_LOW`.
+
+The three floats the script VM exposes as `fEletric_Wattage`, `fEletric_Voltage`
+and `fEletric_CurcuitBreakerCapacity` are reached through **pointers** at
+`building+0x10E0`, `+0x10E8` and `+0x10F8`; `+0x1100` is a plain copy of the
+wattage and `+0x1128` is the voltage dial, eased towards its target by
+`0x1BD37C` rather than written outright.
+
+`building+0x1130` is **"the solver did not reach this node"**. One writer,
+`0x13B02E` inside the dispatcher, which sets it on every grid node its walk out
+from the power plants missed; two readers, that same solver on the next tick and
+`0x1BB9BD` inside `0x1BB700`, which refuses to hand energy to a neighbour
+carrying it. Anything that means to act as a source without a plant behind it
+has to clear this for itself — see [10-accumulator.md](10-accumulator.md).
+
+**Building type is checked in exactly one place in the transfer path**, and only
+to keep power plants and electricity importers out of the receiver list
+(`type != 17 && type != 31`). Everything else about the path is generic, which is
+what makes a battery possible without new engine machinery — see
+[10-accumulator.md](10-accumulator.md).
+
+### The building vector
+
+`game+0x11B08`…`+0x11B10`, an array of `Building*`. The dispatcher's own
+argument is the game object, and it walks this several times per tick. A
+building is finished when `+0x604 >= 1.0` and going away when `+0xEA8` is
+non-zero — both are the dispatcher's own tests.
+
+### The building type descriptor
+
+`building+0x318` is the building's **type**, the thing `building.ini` parsed
+into, and the whole game asks it what kind of building this is:
+
+| Type offset | Contents |
+|---|---|
+| `+0x360` | the `BUILDINGTYPE_*` number — 2 living, 3 shop, 6 factory, 7 mine, 8 field, 17 powerplant, 18 substation, 19 transformer, 30 unknown… |
+| `+0x364` | a second, finer number, read widely across `.text` (500+ sites) but never against `1` for the living case specifically - **the `== 1` half of the old claim here was a guess and was wrong**, caught by `easystart`'s building sweep matching zero of 668 buildings in a real save. `+0x360 == 2` alone is BUILDINGTYPE_LIVING per `SOVIETInstructions.txt` and shares its number with nothing else, so it is sufficient on its own |
+| `+0x814` | divisor in the shop's tourist-spending term |
+
+Both are initialised to `0x1E` — 30, `BUILDINGTYPE_UNKNOWN` — at `0x10DFF9`
+and `0x10E003`, in the parser's own state reset, and set from the `$TYPE_*`
+`strcmp` chain inside the parser at `0x10E200`, which writes `parser+0x1E10`.
+`$TYPE_SHOP` is at `0x10EBBD` and each link is eleven instructions:
+`lea rdx,<literal>` / `call 0x84F340` / `test` / `jne next` / `mov eax,<number>`
+/ `mov [rbp+0x1E10],eax` / `jmp done`.
+
+That is the same shape as the deposit-type chain, so a genuinely new `$TYPE_*`
+is the same kind of splice — and the same caveat applies twice over, because
+`0x139A80`, the building dispatcher, decides what a building *does* from
+`+0x360`, and a number it does not know ticks not at all. See
+[13-buildings.md](13-buildings.md).
+
+`media_soviet/scripts/SOVIETInstructions.txt` lists every `BUILDINGTYPE_*` with
+its number and is the authority.
+
+## Citizens
+
+### The person
+
+`operator new(0x750)` inside the constructor at rva `0x823290`, which
+randomises every status float in one run. Live people are a global array of
+`Person*` at `0x9E75B8`…`0x9E75C0`, stride 8.
+
+| Offset | Contents |
+|---|---|
+| `+0x20` | the building the person is in |
+| `+0x70` | a state timer, **not the age** — see below. `0x8368B0` turns it into the eight-step factor every demand is scaled by |
+| `+0xA4` | `C3DRandom_Float(0.9, 1.1)` at birth, never changed: the person's own speed multiplier |
+| `+0x65C` | the walk animation's phase, **not the age** — see below |
+| `+0xC8` | non-zero suppresses every service demand — a foreign worker or a tourist |
+| `+0xD8` | **eleven status floats**, in exactly the order the script VM lists them: happiness, food, health, soviet, alcohol, culture, sport, religion, clothing, electronic, crime |
+| `+0x110` | demand count |
+| `+0x118` | **demand array**, stride `0x80`, capacity **7** |
+| `+0x4F0` | unsatisfied-demand count, capped at 10, then entries at `+0x4F8` of `{ float amount, int kind, Resource* }` |
+| `+0x71C` | 0 citizen, 1 soviet tourist, 2 western tourist |
+| `+0x734` | money spent, in the currency `+0x71C` picks |
+
+One demand, `0x80` bytes: `+0x00` amount still wanted, `+0x04` amount in total,
+`+0x08` kind (`0xF` while being built, **1 and 2 are the two a shop serves**),
+`+0x10` the `Resource*`, then two `0x34`-byte targets at `+0x18` and `+0x4C`.
+
+### Where the age is not
+
+`+0x70` was written down here as the age and is not. The per-person tick at
+`0x832CB0` **zeroes it** at `0x8337C0` and `0x8338F9` and accumulates the frame
+time into it in between, which no age does. What reads it, `0x8368B0`, only
+turns it into an eight-step factor through the thresholds 30, 60, 90, 120, 150,
+180 and 210 — and those are not human ages either.
+
+`+0x65C` is the more convincing near-miss. It grows as
+`dt · person[0xA4] · 30.0 · k` with `k` 5 at `0x832E45` and `0x833CC0`, 2 at
+`0x832E65` and 1 otherwise, which reads exactly like a life running faster under
+strain. It is the **walk animation**: it wraps back to zero the moment it passes
+`record[0x9C] − 1`, it is seeded at birth with
+`C3DRandom_Float(0, record[0x9C] · 0.5)` at `0x822DBA` so nobody moves in
+lockstep, and `record` is a `0xB0`-byte entry reached through the object at
+`person+0x668`. A quantity that loops over a per-object frame count, at 30 a
+second, five times faster while moving, is a frame counter.
+
+**The age itself is still unlocated.** The script API declares
+`Person.fAge` and `Person_SetAge` (instruction 31004), but neither the names nor
+the id appear anywhere in the executable — that file is documentation, not data
+— so there is no string to cross-reference. The constructor at `0x823290` never
+writes an age, and every `dt ·` in the per-frame tick lands in `+0x10`, `+0x28`,
+`+0x48`, `+0x70`, `+0x90`, `+0x65C` or `+0x680`. It is advanced somewhere else.
+
+`plugins/aging` is the probe that settles it: it snapshots whole `Person`
+objects and diffs them across calendar days, which answers *which offset* and
+*how fast* in the same run. See the header of `plugins/aging/aging.cpp`.
+
+The capacity is arithmetic rather than a declared bound: `(0x4F0 - 0x118) /
+0x80 == 7`, and an eighth entry would run over the unsatisfied count. Nothing
+in the game bounds-checks the append, and nothing has to — a food demand is
+kind 1 and the planner clears every "wants a service" flag when it sees one, so
+a hungry citizen carries four demands and a fed one at most seven.
+
+### The daily plan
+
+```
+rva 0x836960   FUN_140836960(game, person)   ~15 KB
+```
+
+Reached from `0x830640` when a person is at home. Copies whatever the old list
+had left over into `+0x4F0`, decays the statuses, resets `+0x110` to zero at
+`0x836F8B`, and rebuilds through **nine** conditional append sites: food
+`0x837757`, meat `0x837F1B`, clothes `0x838573`, electronics `0x838C71`, then
+five resourceless service demands at `0x8392BD`, `0x8396A6`, `0x839A1A`,
+`0x839D8A` and `0x83A1D3`. The four goods are `ResourceGet` calls on literals
+at `0x8FEC70`…`0x8FEC88` — there is no table.
+
+Too large for the decompiler, which dies on it; it was read as disassembly.
+
+### Shopping
+
+```
+rva 0x171DA0   FUN_140171da0(game, building)   building type 3
+```
+
+From the dispatcher at `0x13DE28`. The second half is the sale, and it is
+completely generic: for each customer in `building+0xBD8`…`+0xBE0`, for each of
+their demands of kind 1 or 2, for each storage slot whose resource matches,
+move `min(slot content, demand total × dt)` across and subtract it from both.
+A tourist is additionally charged `resource+0x64` RUB or `resource+0x60` USD.
+
+Read from the decompiler rather than inferred, because a whole building hangs
+on it:
+
+```c
+for (customer in building+0xBD8)
+  for (d in customer+0x118, stride 0x80)
+    if ((unsigned)(d.kind - 1) < 2)                      // kind 1 or 2
+      for (s = 0; s < (building+0x978 - building+0x970) / 0xE0; s++)
+        for (slot in storage s, stride 0x10)
+          if (slot.res == d.resource && slot.content > 0 && d.total*dt < d.amount)
+              move it across
+```
+
+The storage loop is **unconditional**: no test on the `$STORAGE_*` token that
+built the storage, none on its transport class, none on the resource. A
+`$TYPE_SHOP` building therefore sells anything sitting in any of its storages,
+including a `$STORAGE_SPECIAL` holding one named good — which is what the pub
+does with alcohol and what makes a single-purpose shop possible with no patch
+at all. See [13-buildings.md](13-buildings.md).
+
+**Nothing in that path knows what food is**, which is what makes a fifth
+citizen need reachable without a code patch — see
+[11-needs.md](11-needs.md).
+
+**What has not been read** is the other half: which building a citizen walks to
+for a given demand. The choice lands in `*(person+0x688) + 0x4F0`, a
+`Building*` that `0x830640` then looks up in the walking-connection list at
+`+0xCA8` before handing it to `0x82D300`; who *fills* it is unknown. The
+demand's two `0x34`-byte targets at `+0x18` and `+0x4C` open with a place-kind —
+1 for food and meat, 9 for clothes and electronics, `0xE` for none — and whether
+a building answers a place-kind by what it stocks or by what it is decides
+whether a shop stocking only a modded good is ever visited.
+
+### Why happiness and health moved — the game's own ledger
+
+The statistics window itemises every reason happiness or health changed, and the
+two arrays behind it are the **complete enumeration of what a citizen's needs
+can affect**. Both drawers walk a float array immediately followed by an int
+array of the same length, with a base language id incremented once per entry:
+
+| Ledger | Drawer | Entries | Floats | Counts |
+|---|---|---|---|---|
+| happiness | `0x8D490` | 23, ids 54031…54053 | `0x9E5970` | `0x9E59CC` |
+| health | `0x8C3C0` | 12, ids 54003…54014 | `0x9E58B0` | `0x9E58E0` |
+
+`0x8DB95` is `mov r12d,0xD30F` — 54031, the base id — and `0x8DBA2` is
+`lea r13d,[r15+0x17]`, the count. Scanning `.text` for `inc dword ptr [rip+X]`
+landing in either count array then maps every reason to the code that raises it,
+which is far cheaper than reading any of those functions.
+
+The demand-carried nine all land in one function, **`0x83A4F0(game, person)`**,
+called once from `0x8338E0` in the per-person tick `0x832CB0` right after the
+planner. It picks the reason from two fields of the demand and nothing else:
+`demand+0x08` is 3 alcohol, 4 church, 5 culture, 6 sport, 10 hospital; kinds 1
+and 2 compare `demand+0x10` against the four cached records at `game+0xC300`,
+`+0xC310`, `+0xC318`, `+0xC320` — food, meat, clothes, electronics.
+
+The rest that matter come from the building side: `0x1BC1A0` (the living tick:
+*No electricity*, *No water*), `0x488AE0` (interior temperature, both ledgers),
+`0x1B08E0` (drinking-water health), `0x256010`/`0x257170` (crime), `0x4C2150`
+(broadcast, a bonus only). Every one computes its per-person amount **once
+before the loop over inhabitants**, scales it by the "Unsatisfied citizens
+reaction" setting at `game+0x5C8` (×0.8 / ×1.0 / ×1.2), and guards the ledger
+write with `ucomiss amount,0 / je` — so a zeroed amount is invisible to the
+statistics as well as to the citizen. See [16-easystart.md](16-easystart.md).
+
+Two negatives worth writing down: **there is no "no sewage" reason** (a full
+sewage store stops the building drawing water, and the player sees *No water*),
+and **reason 4, "Job", has no writer at all** in this build.
+
+### The world's own settings block
+
+`0x42CBD0`, the world saver, copies them into the header in one run at
+`0x42CE67`…`0x42CF60`, which is what identifies them as a block:
+
+| Offset | What |
+|---|---|
+| `game+0x590` | day of the year |
+| `game+0x594` | the year, absolute — 1970 in a fresh save, `$DATE_YEAR` in `stats.ini` |
+| `game+0x59C` | time into the day, `0..60` |
+| `game+0x5BC` | **Education simulation**, `> 0` = Complex |
+| `game+0x5C8` | **Unsatisfied citizens reaction**, 0 small / 1 reasonable / 2 great |
+
+plus `+0x578`, `+0x5B0`, `+0x5B4`, `+0x5C0`, `+0x5C4`, `+0x5CC`, `+0x5D0`,
+`+0x5D4`, `+0x5D8`, `+0x5DC`, `+0x5E0`, unidentified.
+
+`game+0x5BC` is the single switch behind both *"children must be taught in
+schools"* and *"parents of children under six can work only if they can place
+them in a kindergarten"* — language ids 713 and 714 — and it also gates the
+education requirement on jobs. It is read from a dozen simulation sites
+(`0x1A9CF0`, `0x1A9D60`, `0x1A9DD0`, `0x1AA03F`, `0x1A772A`, `0x1AD827`,
+`0x3BB29A`, `0x831A23`, `0x822FDE`, `0x823129`, `0x825FD4`, `0x8260C6`) and
+separately from the interface (`0x76A7B0`, `0x775180`, `0x7A4870`, `0x76B2F0`),
+which is what makes it possible to relax the simulation without taking the
+buildings out of the build menu.
+
+## Walking and parking connections
+
+A building carries the list of buildings reachable from it on foot, and a second
+one for buildings reachable by personal car. The script API names the first:
+`nWalkingBuildingNum`, with `Building_WalkingBuilding_GetID`/`GetDistance`.
+
+| Building offset | Contents |
+|---|---|
+| `+0xCA8`…`+0xCB0` | `std::vector<WalkingConnection>`, stride `0xF0` |
+| `+0xCC0` | the same vector for parking / personal cars |
+
+| Connection offset | Contents |
+|---|---|
+| `+0x08` | the building at the other end |
+| `+0x98` | the path length found, world units |
+
+**Nothing downstream re-checks the distance.** The job, shop and service code
+only asks whether the pair is in the list, so one number decides the whole of
+walking.
+
+| RVA | What |
+|---|---|
+| `0x12E1D0` | **builds** walking connections for a whole set of buildings: clears `+0xCA8` and fills it in again. Called from the save loader |
+| `0x12E6E0` | the same for **one** building. `0x12EC50` drains twenty per call off the queue at `game+0x11F88` — the path a running game takes |
+| `0x12F830` | the same for parking, `+0xCC0`. Drained from a queue at `game+0x11FA0` by `0x12FD90` |
+| `0x43EF10` / `0x43FEA0` | the **overlay** behind the building window's walking-distance button: runs the search a third time and draws the path polylines and metre labels. Does not read `+0xCA8` at all |
+| `0x441890` | the same for one hovered connection, and for a building that is still a blueprint. Uses 125 (`0x90ABE8`) for type `0x69` |
+| `0x12DE30` / `0x12F480` | **collect**: after a road changes, gather the buildings that need rebuilding and hand them to the builders |
+| `0x12DD00` / `0x12F350` / `0x12D9A0` | wrappers around the collectors, called when something is built |
+| `0x430F20` | the save loader — regenerates both when the save predates the last raise |
+
+Builders and collectors both fill in one path-query object and run it.
+**`query+0x3C` is the longest path the search will accept**, read at
+`0x5799B5`, `0x57A278` and `0x57ABFD`, always as
+
+```c
+if (query[0x3C] > 0.0f && node[0x24] > query[0x3C]) return -1.0f;
+```
+
+where `node+0x24` is the length accumulated so far — so a non-positive limit
+means no limit.
+
+**Which of the four fills it in is the difference between the walking distance
+and a rebuild radius**, and it is easy to get wrong:
+
+| Site | Value | Meaning |
+|---|---|---|
+| `0x12E2DD` | **480**, an immediate | the walking distance, batch builder |
+| `0x12E7AF` → `0x90AF38` | **480** | the walking distance, queued builder |
+| `0x43F04A`, `0x43F835` → `0x90AF38` | **480** | the walking distance, overlay |
+| `0x12F926` → `0x90B11C` | **2500** | the personal-car distance |
+| `0x43FFB3` → `0x90B11C` | **2500** | the same, overlay |
+| `0x12DEA7` → `0x90AF70` | 530 | how far from a changed road walking connections are rebuilt |
+| `0x12F502` → `0x90B120` | 2600 | the same for parking |
+
+The collectors' radii are deliberately a little wider than the limits they
+serve, and **the walking distance is written out separately in four functions**
+— nothing shares a constant. Patching any strict subset changes either nothing
+observable or only half of it: with the builders patched and the overlay not,
+citizens walk the new distance and the button still draws the old one. See
+[07-pitfalls.md](07-pitfalls.md).
+
+`0x90AF70` has sixty-odd unrelated readers — it is the shared literal pool — so
+that constant must be repointed at the instruction, never overwritten.
+
+## Building information panels
+
+The window that opens on a building is built by a family of functions in the
+`0x78xxxx`–`0x7Axxxx` range, one per kind of panel. They share a shape worth
+knowing, because it makes any of them extensible from a post-hook.
+
+| RVA | Panel |
+|---|---|
+| `0x786AC0` | the mine: **Quality of source**, **Current production per workday** |
+| `0x789E10` | transport: **Amount of material transported per second** |
+| `0x79DF00` | a third, not examined |
+
+`FUN_140786ac0(game, window, ...)`:
+
+| Window offset | Contents |
+|---|---|
+| `+0x01` | non-zero while the panel is not drawn; the builder returns immediately |
+| `+0x04`, `+0x08` | panel position |
+| `+0x28`, `+0x2C` | panel offset |
+| `+0x240` | the building the window is about |
+| `+0x250` | **the running Y, written at the very end — the panel's bottom edge** |
+
+Layout is a fixed X and a running Y, both ordinary locals:
+
+```c
+x = DPI*[0x90ABB0] + (window[0x04] - DPI*[0x90A8E4] + window[0x28] + DPI*[0x90A9E4]);
+y = DPI*[0x90AA08] + window[0x08] + window[0x2C];    // first row
+y += DPI*[0x90A9E4];                                 // 35, one row
+```
+
+with `DPI` at `0x992088`. A row is
+`C3D_LANGUAGE::GetString(&[0x997590], id)` for the label and
+`C3D_FONTMANAGER::PrintLeftUnicode(&[0x996FB0], [0x995220], x, y, 0xFF990000,
+L"%ls: ", text)` to draw it; the value is printed again at `x + labelWidth`,
+measured through the font's own vtable slot 5.
+
+**`+0x250` is what makes a row appendable**: read it in a post-hook, draw there,
+write back `y + DPI*35`, and the window grows to fit. Used by the depletion
+plugin — see [08-depletion.md](08-depletion.md).
+
+Label ids resolve through `tools/assets/btf.py`: `0xC82` "Quality of source",
+`0xC83` "Current production per workday", `0x223` "Water quality".
+
+## The terrain editor
+
+Tools are identified by **name string**, not by an enum. The active tool is a
+`char*` at `editorSelf + 0xD428`.
+
+| RVA | What |
+|---|---|
+| `0x233110` | draws the resource tab — five paint/erase pairs |
+| `0x03AAA0` | tool lookup by name over the tool vector |
+| `0x30D100` | tool dispatcher, 42 838 bytes of `strcmp` chain |
+| `0x2F0E70` | decides which tools get the round terrain cursor (`self+0x10F0`) |
+| `0x3826C0` | draws one tool button, returns the next Y in `XMM0` |
+
+The tool vector lives at `editorSelf + 0xD280`..`+0xD288`, **stride 0x2D0**.
+Descriptor fields in use: `+0x00` name, `+0x58` cached icon texture, `+0xB4`
+icon path, `+0x2B4`/`+0x2B5` behaviour flags. The icon path is built from the
+name through `editor/tool_%s.png` at `0x88C580`, so a tool's art is chosen by
+what it is called.
+
+`0x03AAA0` is to tools what `ResourceGet` is to resources: a single choke point
+every by-name lookup passes through, and the obvious place to inject.
+
+## Minimap
+
+| RVA | What |
+|---|---|
+| `0x4BFEA0` | five-icon button row, hover and click |
+| `0x4BDDE0` | the coloured deposit overlay |
+
+Both share a state object whose six tri-state layer flags sit at `+0x04`
+through `+0x18`; only five have buttons. Full table, the shader semantics, and
+the constants in [05-deposits.md](05-deposits.md).
+
+The overlay's colour channel is chosen by the `ResourceVector` float4 through a
+**`dp4`** in the pixel shader of `default_panel2d.inix`, so all four components
+are selectable and nothing in the shader had to change for copper. The overlay
+colour is not in the shader at all — it is the `C3D_PANEL2D` vertex tint at
+`0x9BE30C`, which every vanilla layer sets to the (1,0,0,1) at `0x90C2F0`.
+
+Compiled shader blobs read out with `D3DDisassemble` from
+`d3dcompiler_47.dll` via ctypes; the `.inix` files are a name followed by its
+vertex and pixel `DXBC` blobs, whose lengths are at blob `+0x18`.
+
+## The two clocks, and everything counted in calendar days
+
+The distinction that broke `daynight` 1.x and is worth knowing before touching
+any rate in this game: **there are two ways a quantity advances, and they are
+not interchangeable.**
+
+### The simulation clock
+
+One `C3D_TIMER`, at rva `0x9D4EE0`, inline in `.data`. 337 sites reference it.
+Everything per-frame is integrated from it through three imported methods:
+
+| Import slot | Symbol |
+|---|---|
+| `0x86C028` | `?PowerTime@C3D_TIMER@@QEAAMM_N0@Z` |
+| `0x86C030` | `?Power@C3D_TIMER@@QEAAMM_N0@Z` |
+| `0x86D5C0` | `?PowerKmh@C3D_TIMER@@QEAAMM_N0@Z` — vehicle speeds |
+
+All three are the same four instructions (C3DDLL64 rva `0xFD620`, `0xFD670`,
+`0xFD6B0`):
+
+```c
+if (this[0xC] && !ignorePause) return 0;      // paused
+if (this[0xD] && !realTime)    return 0;      // blocked
+return v * K / (realTime ? this[4] : this[0]);
+```
+
+`this[0]` is the frame rate **game** time is divided by, `this[4]` the real one.
+A caller passing `realTime = true` is asking for wall-clock time deliberately.
+`PowerMs` is exported but not imported by the game.
+
+**The game speed is a multiplication of `this[0]`, nothing more.** `0x105A90`
+calls `C3D_TIMER::Start` on the timer once per frame and then:
+
+| Multiplier | RVA of the constant | Meaning |
+|---|---|---|
+| 0.35 | `0x909D7C` | normal |
+| 0.05 | `0x909C2C` | fast |
+| 0.01 | `0x909BA8` | fastest |
+| 3 / 5 / 1000 | `0x90A45C` / `0x90A6C0` / `0x90B094` | the slow modes |
+
+`0x9D54B4` is the run state — `0` sets `timer[0xC]`, the pause flag PowerTime
+reads. So **scaling that field, or the three `Power*` on that timer, is exactly
+one more speed step**, and the engine already ships a mode dividing the step by
+a thousand.
+
+`MultiplyFPS` (`0x86CF18`) is *not* the speed control: its only two callers are
+in `0x139A80` and they bracket part of the update with a temporary 3× step when
+the frame rate is high enough.
+
+Other timers exist and must not be confused with this one: `0xA558A0` drives the
+lighting cross-fade, `0x9D54A0` is a calendar-free clock with its own day and
+time-in-day.
+
+### The calendar
+
+`0x3346E0`, the day tick, called once per frame from `0x30D100` at `0x30D933`.
+It adds `PowerTime` to `game+0x59C` and rolls over at the `60.0f` at `0x90AA78`
+(this build) into `game+0x590` (day of year) and `game+0x594` (year).
+
+Its prologue reaches 14 bytes only through a RIP-relative `movss`, so it cannot
+be inline-hooked with a straight-`memcpy` trampoline.
+
+### What the day tick fires, once per calendar day
+
+Everything in this list runs **once per date and from nowhere else**, which is
+what makes it fall out of step with anything per-frame:
+
+| RVA (this build) | What |
+|---|---|
+| `0x4D5F50` | **pollution**. Accumulates each residential building's exposure at `building+0x11B0` from a sample capped at `3.0` and clamped to `1.0`, then subtracts a flat `0.06` and `0.005` from every cell of the grid |
+| `0x2552A0` | the fire roll, per building, gated on `game+0x5D0` — not re-verified against this build |
+| `0x4B9660` | **loans**: `0x4B9490` per loan, then drop the ones that are paid off |
+| `0x4CD380` | expiring notifications — a countdown at `+0x10` of each, freed at zero |
+| `0x483880` | the random-event roll, gated on `game+0x5CC` — not re-verified against this build |
+| `0x2FB130` | the price recompute, on days 5/10/15/20/25 and at each month change |
+| `0x1A7720` | per city, gated on `game+0x5BC` |
+| — | the snow-cover clear: on the day after winter ends, every terrain tile's byte buffer at `+0xE8` is zeroed |
+| — | dated events over the `0x9F08`-byte records at `game+0x12840`, matching `(year, day)` at `+0x9B50` and `+0x9B58` |
+
+### The pollution grid
+
+| Where | What |
+|---|---|
+| `game+0x120A8` | base of the grid, 12 bytes per cell |
+| `game+0x120C0` | cell count |
+| `game+0x120B0` / `+0x120B4` | world origin |
+| `game+0x120B8` / `+0x120BC` | width, height in cells |
+| cell `+0x00` | one pollutant, decays `0.005`/day (`0x909B68`) |
+| cell `+0x04` | the other, decays `0.06`/day (`0x909C40`), clamped to 1.0 on emission |
+| `game+0x5D4` | the "pollution enabled" rule; nothing emits or decays without it |
+| `game+0x1444C` | the cheat menu's "speed up pollution" checkbox — **its readers are the emitters**: `0x137B30`, `0x14B930`, `0x1B1220`, `0x1B3690`, `0x1C9FB0`, `0x1CAD50`, `0x1CE930`, `0x1CF520`, `0x1D1E10`, `0x488D92` — this row not re-verified against this build |
+
+The emitter — `(world, position, amount, spread, whichField)`, scattering into
+a random nearby cell — is not re-verified against this build; it was at
+`0x4D56D0` before the daynight 2.1 investigation re-derived its neighbours. The
+sampler, which reads it back bilinearly, is confirmed at `0x4D5C30` (was
+`0x4D5B60`) — the pollution decay pass calls it directly and both were read off
+a fresh, fully re-analysed Ghidra import. The cheat menu's "reset pollution"
+button zeroes both fields of every cell, which is how the layout was read
+originally; its own address is not re-verified either.
+
+### Loans
+
+The list is a `vector` of `0x28`-byte records at `game+0x10BD0`, with the
+selected index at `game+0x10BE8` and the four running totals at `game+0x11718`…
+`+0x11724`. Balances live at `game+0x580` (roubles) and `game+0x588` (dollars).
+
+| Offset | What |
+|---|---|
+| `+0x00` | interest rate, per cent |
+| `+0x08` | currency: `1` is roubles, anything else dollars |
+| `+0x10` | **term remaining, in calendar days.** `0x4B9490` (this build) decrements it |
+| `+0x14` | principal outstanding |
+| `+0x18` | interest outstanding |
+| `+0x24` | total paid so far |
+
+The daily payment is `outstanding / days-left`, so it is entirely driven by the
+day counter; the record is dropped when both `+0x14` and `+0x18` fall below 1.
+
+### Seasons
+
+`0x3343E0` (this build) — `char IsSnowSeason(world)` — reads `world+0x590` and
+the climate at `[[0x9941F0]+0xED8]+0x8EC`, and answers whether that day of the
+year is in the snow part of it. **120 bytes, and it references its argument
+exactly twice, both `[arg+0x590]`** — so it can be asked on a scratch object.
+
+| Climate | Winter when |
+|---|---|
+| 0 | `day <= 52` or `day > 247` |
+| 1 | `day <= 25` or `day > 326` |
+| 2 | `day <= 50` or `day > 326` |
+| 3 | `day <= 128` or `day > 245` |
+
+Every season is therefore at least a hundred days long, which is what makes a
+residue class modulo 13 always have a representative inside the current one.
+
+## Globals
+
+`DAT_1409941F0` — rva `0x9941F0` — the main game object.
+
+| Offset | Contents |
+|---|---|
+| `+0x23`–`+0x27` | "this map has coal / iron / oil / uranium / bauxite", set by the editor brush |
+| `+0xED8` | `C3D_TERRAIN` |
+| `+0xF00` | `resourcemap` texture |
+| `+0xF08` | `resourcemap2` texture |
+| `+0xF10` | `farmap` texture |
+| `+0xF18` | `emissivemap` texture |
+
+Building object: mine type at `+0x368`.
+
+`0x9E9C3C` is the **save format version** of the world just loaded — 124 in
+every save this build writes, and the value a dozen migration steps in
+`0x430F20` compare against. `0x9E9C50` is a byte set at `0x431070` from the
+terrain name: one value for `dlc2/terrains_new/terrain_siberia` and
+`terrain_jungle`, the other for every other map.
+
+`0x9E6A18`…`0x9E6A20` and `0x9E69F0`…`0x9E69F8` are two `vector<Building*>` the
+loader's migration steps walk.
+
+## Engine texture vtable
+
+`C3DAPI_D3D11_TEXTURE`, `C3DDLL64.dll` rva `0x187BF0`. Every entry is an
+exported symbol, so the whole table reads out by name.
+
+| Slot | Offset | Method |
+|---|---|---|
+| 2 | `+0x10` | `Load2DFromFile` |
+| 16 | `+0x80` | `TextureAccessOpen` |
+| 17 | `+0x88` | `TextureAccessOpen2` |
+| 18 | `+0x90` | `TextureAccessClose` |
+| 19 | `+0x98` | `TextureAccessInitTempResource` |
+| 20 | `+0xA0` | `TextureAccesGetTexel(x, y) -> colour` |
+| 21 | `+0xA8` | `TextureAccesGetTexelFloat` |
+| 23 | `+0xB8` | `TextureAccesSetTexel(x, y, colour)` |
+| 36 | `+0x120` | `SaveToDDS(path)` |
+
+`TextureAccesSetTexel` is the obvious route to painting deposits at runtime.
+
+**`TextureAccessOpen` is a D3D11 Map, not a lock.** Disassembled at
+`C3DDLL64.dll` export rva `0x18D40`:
+
+```asm
+call [rax+0x28]    ; ID3D11Device::CreateTexture2D   USAGE_STAGING, CPU read|write
+call [rax+0x178]   ; ID3D11DeviceContext::CopyResource   GPU texture -> staging
+call [r10+0x70]    ; ID3D11DeviceContext::Map
+```
+
+and `TextureAccessClose` (`0x18FC0`) is `Unmap` plus the `CopyResource` back —
+and, with the byte at `tex+0x170` clear, a `Release` of the staging texture and
+`tex+0x168 = 0`. So an open/close pair moves the whole 4 MB map across the bus
+twice and uses the **immediate context**, which is not thread-safe. Nothing may
+bracket a texel read or write from anywhere but the render thread, and it
+should be done once for as much work as possible.
+
+**`TextureAccessClose` never clears `tex+0x158`, the mapped-texel pointer.**
+After a close it still holds the last `Map` result — a dangling pointer into
+staging memory that was just unmapped and, usually, released. Code that reads
+through it keeps "working" on stale (in fact last-copied-back, so often
+*correct*) data. This is exactly how an unbracketed scan of a mod deposit
+disguised itself as working on any map the editor had painted at least once —
+see [07-pitfalls.md](07-pitfalls.md). The staging texture is created lazily at
+`tex+0x168` and kept between calls only when `tex+0x170` is set.
+
+This cost a driver crash — see [07-pitfalls.md](07-pitfalls.md).
+
+## The built-in script VM
+
+The game embeds **Pyrois** (Michal Kuchárik, 2017), a bytecode VM. Its opcode
+and structure definitions ship in `media_soviet/scripts/SOVIETInstructions.txt`
+— 261 opcodes, about 230 of them game-specific, 20 structs, 69 struct methods.
+Scripts are distributable as `WORKSHOP_ITEMTYPE_SCRIPT` and their state is saved
+(`runningScripts.bin`).
+
+It is a scenario and campaign API: read buildings, vehicles, people, resources;
+set money and prices; start fires, epidemics, earthquakes; drive objectives and
+windows. It cannot change simulation rules, add resources, build UI, or hook
+events. That ceiling is why this loader exists.
+
+Its value to reverse engineering is high anyway: the `Resources` struct in that
+file is effectively a header for the engine's resource order, and the
+`Building` struct names 72 fields.
+
+## Language files
+
+`media_soviet/soviet<Language>.btf`, twenty-one of them plus
+`sovietComments.btf`. Big-endian throughout, **the payload included**:
+
+```
+u32 count
+u32 file size in bytes
+u32 payload length in UTF-16 code units
+count * { u32 id, u32 offset, u16 length }        <- 10 bytes on disk
+payload: <payload length> UTF-16BE code units
+```
+
+`file size == 12 + count * 10 + payload length * 2`, exactly, for all
+twenty-one files — there is no padding and no trailing anything.
+
+**Offset and length are in code units, not bytes.** Entry 0 is `{off 0, len 6}`
+and entry 1 is `{off 7, len 5}`: both fields have to be doubled to index the
+payload, and the one unit between two strings is a NUL that `length` excludes.
+Reading them as byte counts gives text that is shifted and truncated, which
+looks like a different header layout and is not. Strings sit back to back in
+entry order with **no de-duplication** — two entries with the same text each get
+their own copy — which is why rebuilding a file from its entries reproduces it
+byte for byte.
+
+That is `C3D_LANGUAGE::Initialize(char *file, char *fallback)`, `C3DDLL64.dll`
+rva `0x96A50`: three `fread(&field, 4, 1, f)`, then `count` iterations of
+`fread(id, 4, 1)` / `fread(off, 4, 1)` / `fread(len, 2, 1)`, then one
+`fread(payload, 2, payloadUnits, f)`. Every field is byte-swapped afterwards by
+hand, the payload one code unit at a time — an open-coded `bswap` chain of
+`sar`/`movzx`/`shl`, which is what makes the file big-endian on a little-endian
+machine. The entry array is `malloc(count * 12)` — 12 in memory, 10 on disk —
+and the payload `malloc(payloadUnits * 2)`, so **nothing caps the entry count**:
+a rebuilt file may carry more entries than the original.
+
+`C3D_LANGUAGE::GetString(int id)` is rva `0x97F10`, and three things in it
+matter when writing a file rather than reading one:
+
+- **The lookup is a linear scan** over the entry array, first match wins. Ids
+  therefore need not be sorted — and in the shipped files they are not — but a
+  duplicate id makes every copy after the first unreachable.
+- **`length` is not used to fetch the text.** `GetString` takes the offset and
+  scans forward to the NUL; `length` is what `GetStringLength` (`0x98080`)
+  returns. A wrong `length` is therefore invisible in most of the UI, which is
+  exactly the kind of thing that stays broken for a year.
+- **An empty string counts as missing.** After the NUL scan `GetString` rejects
+  a zero-length result and falls through to the fallback file — the second
+  argument of `Initialize`, `sovietEnglish.btf` for every language, which is
+  what the `.rdata` pairs at `0x8885C5` are. Blanking an entry does not blank
+  the label, it un-translates it. A missing id ends at `lang+0x266E4`, an empty
+  string, and that is the only way to get one.
+
+Two tables are consulted before the file: a 16-byte-stride vector at
+`lang+0x26740` that `ChangeStringsWithID` fills, and — for a **negative** id —
+`~id` as an index into the runtime custom-string vector at `lang+0x26720`, which
+is what `CustomStringAdd` returns a handle into. Negative ids are never in a
+file.
+
+`sovietEnglish.btf` has 7906 entries. **Ids run 300 to 580231**, sparsely, and
+twenty of the twenty-one full translations end at exactly 580231. Workshop
+buildings that use `$NAME <id>` draw from the same space and stay under 8000.
+
+Anything the loader mints for itself has to sit above 580231 — see
+[07-pitfalls.md](07-pitfalls.md) for what happened when it did not.
+
+`tools/assets/btf.py` reads, unpacks, rebuilds and patches these files;
+`selftest` round-trips all twenty-one byte for byte and is the check to re-run
+after a game update. Because the loader patches `fopen` in **C3DDLL64.dll's own
+import table** as well as the executable's, and `Initialize` opens the file with
+`fopen`, a rebuilt language file ships as
+`tesmioloader/vfs/media_soviet/soviet<Language>.btf` and no game file is
+touched.
+
+## Materials
+
+`C3D_MATERIAL::Load` is `C3DDLL64.dll` rva `0x9CE80`. Two things worth knowing:
+
+- **There is no comment syntax.** The parser matches its keywords wherever they
+  occur in the file, so a `$TEXTURE` inside a `;`-prefixed line is a `$TEXTURE`.
+- `$TEXTURE` paths are relative to `media_soviet/`; `$TEXTURE_MTL` paths are
+  relative to the `.mtl`'s own folder. Stock building materials use both, which
+  matters when one is copied into a Workshop item.
+
+A `$TEXTURE` before any `$SUBMATERIAL` writes through a null submaterial array
+at `material+0x18` and faults at rva `0x9D0AE`.
+
+## Main menu version line
+
+The line along the bottom of the main menu is drawn by a single call at the end
+of the menu builder.
+
+| RVA | What |
+|---|---|
+| `0x28AEF0`–`0x28B5B2` | builds the main menu: `GetString` for each entry, `GAMEPAD_CONFIRM`, `PostQuitMessage`, and the version line last |
+| `0x28B55C` | `lea rax,[rip+0x60A26D]` — computes the format string |
+| `0x8957D0` | `L"v%d.%d.%d.%d (64 bit DX11.1 - GPU: %ls)"` — one code reference, that `lea` |
+| `0x8961E0` | `"v%d.%d.%d.%d (64 bit DX11.1)"`, the narrow variant — **no reference in `.text`** |
+
+The call itself:
+
+```
+mov  [rsp+0x48],7 / [rsp+0x40],1 / [rsp+0x38],1 / [rsp+0x30],1   ; 1.1.1.7
+mov  [rsp+0x28],rax                    ; the format string
+mov  [rsp+0x20],0xFFAA0000             ; colour
+call C3D_FONTMANAGER::PrintLeftUnicode ; IAT slot 0x86C880
+```
+
+so the four version numbers are immediates, not a lookup, and the GPU name is
+the wide string returned by the virtual call on the object at `0x9EACD0` a few
+instructions earlier.
+
+`?PrintLeftUnicode@C3D_FONTMANAGER@@QEAAXPEAVC3D_FONT@@MMKPEB_WZZ` demangles to
+`void PrintLeftUnicode(C3D_FONT*, float x, float y, unsigned long colour,
+const wchar_t* fmt, ...)`. `x` and `y` are passed in **both** `xmm2`/`xmm3` and
+`r8d`/`r9d`, which is what MSVC does for a variadic callee.
+
+## The terrain editor object
+
+`SOVIET64 + 0x9D5F10`, a global rather than a heap object. The per-frame update
+at `0x105E39` passes it to both the cursor decision (`0x2F0E70`) and the tool
+dispatcher (`0x30D100`) as `rcx`, and the resource tab (`0x233110`) gets the
+same pointer.
+
+| Offset | Contents |
+|---|---|
+| `+0xD280`..`+0xD288` | the tool vector, stride `0x2D0` |
+| `+0xD428` | active tool — the descriptor pointer, which is also its name |
+| `+0x10F0` | round terrain cursor, set per frame |
+| `+0x11DB0` | cleared alongside a tool selection |
+
+Selection is a **toggle**, at `0x38302F` inside the button drawer:
+
+```asm
+cmp   qword ptr [rdi+0xD428], r14   ; r14 = the descriptor being drawn
+mov   ecx, 0
+mov   rax, r14
+cmove rax, rcx                      ; clicking the active tool clears it
+mov   qword ptr [rdi+0xD428], rax
+```
+
+`+0x10F0` has exactly two writers, both inside `0x2F0E70` — cleared at
+`0x2F12D0`, then set to 1 at `0x2F14D5` if the active tool's name matched
+anything in the chain — and one reader, at `0x3DB749`.
+
+## Cheat menu
+
+Present in the release build. GUI layer names `cheatsystem`, `cheatgeneral`,
+`cheataction`; actions include `BuyAllResources`, `building_sellallvehicles`,
+`building_callvehicleshome`, `close_all_windows`. It is reachable in game
+already, so its activation path was never traced.
+
+The engine also ships a full frame profiler (`FrameProfiler_StartFrame` /
+`EndFrame` / `StartSection`) and debug drawing (`DebugDrawBox`, `DebugDrawLine`,
+`DebugDrawTerrainCollisionNodes`) — and the game calls into them, so those code
+paths exist in the shipped build.
+
+## Constants worth having by value
+
+Read with `tools/pe/rdata.py`; every one of these shows up as a bare `DAT_` in
+the decompiler.
+
+| RVA | Value | What |
+|---|---|---|
+| `0x909B14` | 0.001 | the argument every `PowerTime` call in the simulation passes |
+| `0x90AA78` | 60 | what a production rate is divided by per tick — this build; `0x90AA90` now holds an unrelated `63` (see `daynight`'s day length, same shift) |
+| `0x909F70` | 1.0 | the one-second rollover, and the general-purpose 1 |
+| `0x90A840` | 10 | deposit sample grid step, world units |
+| `0x90AD50` | 210 | search radius for iron, coal and uranium |
+| `0x90AA40` | 50 | bauxite radius — and the water re-scan period |
+| `0x90A9B8` / `0x90ABFC` / `0x90ADD0` | 30 / 130 / 250 | gravel, oil, wood radius |
+| `0x90AC9C` / `0x90AC38` | 170 / 25 | water, water surface radius |
+| `0x909E6C` | 0.7 | how close another mine has to be to claim a sample point |
+| `0x90AF38` | 480 | longest walking path, as the queued builder reads it — **31 unrelated readers** |
+| `0x90B11C` | 2500 | longest personal-car path — the real limit |
+| `0x90AF70` | 530 | radius walking connections are rebuilt in — **and sixty-odd unrelated readers** |
+| `0x90B120` | 2600 | the same for parking; one reader |
+| `0x9D4EE0` | — | the `C3D_TIMER` the whole simulation steps on, inline in `.data` |
+
+## State
+
+Copper works end to end: the type parses, the mine finds the deposit, quality
+and radius display correctly, the ore feeds the concentrator, a sixth minimap
+button shows the deposits, and the terrain editor has a paint/erase pair for
+them.
+
+Only the deposit type itself needed spliced code. The minimap layer and the
+editor brush are both pure hook-and-append — see [05-deposits.md](05-deposits.md).
+
+None of it is copper-specific any more: `deposits.ini` declares the deposit and
+one registry drives the code patch, the minimap and the editor alike. What is
+scarce is the channel, not the machinery.

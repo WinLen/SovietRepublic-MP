@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Lockstep: window buttons as commands (by SoylentGreed).
+//
+// Some window buttons change the world through one routine call: the vehicle
+// window's send to depot, release, stop / start, clear line and next skin, the
+// line window's launch, copy schedule and replace, the lines list's new line,
+// the building windows' "call all vehicles home". Each such call site (a CALL
+// rel32 in the window's handler) is pointed at a relay. While commands are
+// captured the call is not made on the clicking PC: its arguments become a
+// command (vehicles, buildings and lines by identity, numbers as they are) and
+// every PC makes the same call at the boundary.
+#pragma once
+
+#include "tesmio_plugin.h"
+
+void GameCalls_Bind(const TsmHost* host);
+
+// Startup: points the call sites at their relays. Sites whose bytes differ are left alone.
+bool GameCalls_Install();
+
+// The command (lockstep/commands).
+bool GameCalls_ApplyCommand(const void* data, size_t size);

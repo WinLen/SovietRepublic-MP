@@ -1,0 +1,5 @@
+// Host IP shared by every network module. Copy this file to mp_config.h and
+// set an address both machines can reach (LAN/VPN) before building.
+#pragma once
+
+#define REPUBLICMP_HOST_IP ""

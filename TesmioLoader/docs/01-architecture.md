@@ -1,0 +1,495 @@
+# Architecture
+
+`tesmioloader` is a DLL injected into `SOVIET64.exe` at startup by a launcher.
+It never modifies a file on disk.
+
+It is a **host, not a mod**. The loader itself contains only infrastructure: the
+VFS, the log, the hooking techniques, the crash handler and the plugin host.
+Every feature — resources, deposit types, depletion — is a DLL in `plugins/`
+that the loader hands a versioned table of what it knows how to do. See
+[09-plugins.md](09-plugins.md).
+
+Everything either of them does to the game is one of four things, listed here in
+the order you should reach for them — the earlier ones survive game updates far
+better.
+
+## The four techniques
+
+### 1. Import table entry swap — first choice
+
+The game imports 733 named functions from `C3DDLL64.dll` and a few dozen from
+the CRT and KERNEL32. Every one of those is a pointer in a table that can be
+rewritten at runtime. No trampolines, no disassembly, no fixed addresses.
+
+`FindIatSlot(module, dll, name)` walks `IMAGE_DIRECTORY_ENTRY_IMPORT`, matches
+the DLL name case-insensitively, then walks `OriginalFirstThunk` for names in
+lockstep with `FirstThunk` for addresses and hands back the slot.
+
+**Both modules have their own import tables.** Patching only the executable
+leaves everything the engine does for itself invisible — this cost several
+sessions when texture loads went unseen. Hook `SOVIET64.exe` *and*
+`C3DDLL64.dll`.
+
+### 2. Virtual table slot swap
+
+Anything the game calls through a C++ interface never appears in an import
+table. `C3DAPI_D3D11_TEXTURE` is the case that matters: its vtable is an
+exported symbol, so the slot can be located without guessing.
+
+### 3. Data pointer swap
+
+The resource vector is three pointers in `.data`. Rewriting `end` publishes a
+new record; rewriting all three relocates the array. No code is touched.
+
+### 3½. Rewriting one instruction's operand
+
+Between a data pointer swap and real spliced code. When the pointer to redirect
+is not in a table but in a `lea`'s displacement, four bytes of operand is still
+a data redirect in every way that matters: no cave, no trampoline, no change to
+what the instruction *does*.
+
+The main menu's version line is the case. It is one
+`lea rax,[rip+disp32]` at rva `0x28B55C` computing
+`L"v%d.%d.%d.%d (64 bit DX11.1 - GPU: %ls)"`, and repointing it at a longer copy
+of the same format string is the whole feature — see
+[02-findings.md](02-findings.md) for the site.
+
+The alternative was hooking `C3D_FONTMANAGER::PrintLeftUnicode` through the
+import table, which is normally the first choice and here is the wrong one: it
+is a **variadic** that every label in the game goes through, and a `va_list`
+cannot be forwarded to a variadic callee, so the hook would have to re-format
+every string in the UI through its own CRT to pass anything on. Prefer the
+operand when only one call site is meant to change.
+
+The replacement string is placed by `AllocNear`, because a `rip`-relative
+displacement is 32 bits and the loader's own image is not guaranteed to be
+within ±2 GB of the executable.
+
+The `walking` plugin is the second case, and it shows why the operand rather
+than the constant: its rebuild radius is `530.0f` at `0x90AF70`, in the shared
+literal pool with sixty-odd unrelated readers. Writing over it would move panel
+widths as well; repointing the one `movss` that fills in the path query moves
+exactly walking. The walking distance itself, in the same plugin, is a bare
+`imm32` with nothing to share and is simply replaced — see
+[12-walking.md](12-walking.md).
+
+### 4. Spliced code — last resort
+
+Only when a decision is compiled into a chain of comparisons and there is no
+data to redirect. Used for exactly one thing in the whole project, the deposit
+type — and even there the emitted code is generated from a config table rather
+than written out per deposit. It lives in the `deposits` plugin; see
+[05-deposits.md](05-deposits.md).
+
+## Injection
+
+`tesmiolauncher.exe` creates the game suspended, allocates the DLL path in the
+target, and calls `LoadLibraryW` through `CreateRemoteThread`, then resumes.
+
+The ordering matters and is not accidental. In a suspended process the loader
+has not run, but a remote thread triggers `LdrInitializeThunk` first, so by the
+time `LoadLibraryW` executes the executable's imports are fully resolved — while
+no game code has run yet. Hooks are therefore installed from `DllMain` against a
+complete import table, ahead of the first file the game opens.
+
+`kernel32.dll` sits at the same base in every process of a boot session, so the
+launcher's own `LoadLibraryW` address is valid in the target.
+
+The working directory is set to the game folder: the game uses relative paths
+like `media_soviet/...` throughout.
+
+### Finding the game
+
+The launcher used to assume one path, `<self>\..\..\SOVIET64.exe`, which is only
+right when `tesmioloader\build\` is inside the game folder. Putting the folder
+anywhere else — a common enough mistake — produced `game not found` and nothing
+else to go on. Four strategies now run in order, and the first one that yields a
+believable install wins:
+
+| Order | Strategy | Catches |
+|---|---|---|
+| 1 | `--game <exe or folder>` | someone who knows where it is |
+| 2 | `game_exe` in `tesmioloader.ini` | the path the window saved last time |
+| 3 | walk up from the launcher, looking one folder deep at each level | the folder put beside the game rather than inside it |
+| 4 | Steam: registry `SteamPath` → `libraryfolders.vdf` → `appmanifest_784150.acf` → `installdir` | the folder put anywhere at all |
+
+**A folder is only believed when `SOVIET64.exe` is in it beside `C3DDLL64.dll` or
+`media_soviet`.** The exe name alone would also match a stray copy in someone's
+Downloads, and injecting into that fails in a way nobody can read. Two acceptable
+witnesses rather than one, because a Steam verify can be mid-flight.
+
+Strategy 3 walks up at most 8 levels and looks exactly **one** level down at
+each. One level is what the "beside instead of inside" case needs; a recursive
+scan would be a way to walk someone's whole drive while they wait.
+
+Strategy 4 never guesses the folder name — it finds the library that holds the
+game's app manifest and reads `installdir` out of it, falling back to a scan of
+that library's `steamapps\common` if the manifest is there but the folder moved.
+
+`--find` runs all of it, prints what resolved, and exits without writing or
+starting anything. It is the only way to see the losing strategies, since the
+winner is the only one that leaves a trace once the game is up.
+
+### The version gate
+
+Every address in this project belongs to **v1.1.1.9**, PE `TimeDateStamp`
+`0x6A3EB6AD` (2026-06-26) — the build the regular branch updated to on
+2026-08-11, from v1.1.1.7 (`0x69C4098C`). The update's own notes called it
+content-only; it was not, at the byte level — see *Porting off v1.1.1.7*
+below — and every address in this project was re-derived against the new
+build rather than kept as a second table entry. A patch site verifies its own
+bytes and refuses on a mismatch, so a future update makes each hook decline
+rather than corrupt the process — but that is a dozen separate refusals in a
+log file nobody reads, after the game is already running. The launcher asks
+once, before the process exists, and refuses to inject at all.
+
+**`SOVIET64.exe` has no `VERSIONINFO` resource** — `FileVersion` is `0.0.0.0` —
+so there is nothing to ask the shell. The version is read out of the only place
+the game keeps it: the arguments it formats its own main-menu line from. The
+exe is parsed as **data**, never loaded as a module; the launcher is about to
+inject into that file and must not map it first.
+
+| Step | What |
+|---|---|
+| 1 | find `"v%d.%d.%d.%d (64 bit DX11.1)"` in `.rdata` |
+| 2 | scan `.text` for the one rip-relative `lea` that resolves to it — nothing here is hard-coded, which is exactly why this step alone survived the port unchanged |
+| 3 | read the four immediates out of the 64 bytes in front of it |
+
+Those bytes are `mov [rsp+0x20], build` / `mov edx, major` / `mov r9d, edx` /
+`mov r8d, edx` — so `major.minor.patch` comes from a single immediate and the
+build number from the fifth argument's stack slot. The scan is not a
+disassembler: it looks for the exact encodings that can put a small constant
+in each of those four argument slots and takes the last write to each.
+**Anything it does not recognise leaves the numbers unread rather than
+wrong**, and the `TimeDateStamp` then decides alone.
+
+`kSupportedVersions` in `tesmiolauncher.cpp` is a table of one entry rather
+than a bare pair of constants, checked in full:
+
+| Numbers | Stamp | Verdict |
+|---|---|---|
+| match the entry | matches its stamp | supported |
+| match the entry | differs from its stamp | supported, *"a different build of it"* — a hotfix that left the printed version alone. Allowed, and said out loud |
+| match nothing | — | **refused** |
+| unreadable | matches the stamp | supported — the stamp is the stronger fact and this exe is byte-identical to the one it names |
+| unreadable | does not match | **refused** |
+
+Both facts are shown in the window and printed by `--find`, which exits `2` when
+the game it found would not be launched. `version_check = 0` in
+`tesmioloader.ini`, or `--ignore-version`, turns the refusal into a warning —
+that switch is for whoever is porting the addresses to a build the table does
+not name, not for playing on one.
+
+The supported version is **compiled in**, not configurable. It is not a
+preference: it is a statement about which addresses this binary was built with,
+and a config key for it would only produce a launcher that injects confidently
+into a game it cannot patch. During the v1.1.1.7 → v1.1.1.9 port the table
+briefly held both builds, which is the whole reason it is a table and not a
+pair of `#define`s — a future update can add a row the same way, and drop the
+old one once its addresses are gone from the tree, exactly as v1.1.1.7's were.
+
+### Porting off v1.1.1.7
+
+What the port actually found, kept here because it is the one thing worth
+knowing before trusting an update's own description of itself:
+
+- **`.text` did not shift by one constant.** It grew in steps as the update's
+  content pulled in more code ahead of a given point: `+0`, `-0x10`, `+0x70`,
+  `+0xA0`, `+0xD0`, `+0x120`, `+0x1E0`, increasing the further into `.text` a
+  site sat. A single global delta would have found nothing past the first
+  step.
+- **`.rdata`'s float-literal pool moved too** — by a uniform `-0x18` across
+  the cluster every layout constant and rate this project reads sits in, and
+  by `-0x20` in a second cluster further along (three UI tint colours, one
+  overlay-shader vector). Two different shifts fifteen hundred bytes apart in
+  the same section, confirmed independently by the *value* now at each
+  candidate address, not assumed from the first one that worked.
+- **`.data` did not move at all.** The game object, the resource vector, the
+  simulation timer, every static this project reads by absolute address —
+  unchanged, confirmed by the `lea` sites that resolve them still landing on
+  the same targets.
+- **A game constant changed value, not just address**: `daynight`'s day
+  length went from `60.0` to `63.0`. Genuinely content, and indistinguishable
+  from an address problem until checked — a stale `RVA_DAY_LENGTH` would have
+  refused to install with no other symptom.
+- **The method**: a prologue/pattern scanner over the byte arrays every hook
+  already records as its expected prologue, filtered against the PE's own
+  `.pdata` `RUNTIME_FUNCTION` table so a match had to be a genuine function
+  start rather than a coincidental byte run inside one. Where a pattern alone
+  was ambiguous - several candidates, or none - the tie-break was the code
+  itself: what a function's body still reads (`+0xC300` for easystart's
+  cached shop-goods records, `+0x11B08` for accumulator's building vector),
+  what a `movss` still resolves to, which `.pdata` candidate's *size* looked
+  like the right kind of function.
+- **One crash, and it was a plugin-contract bug the port exposed rather than
+  a wrong address**: `resources` installed a `C3D_LANGUAGE::GetString` import
+  hook before its `ResourceGet` inline hook, and when the latter's address
+  turned out to have moved, the host freed `resources.dll` with that import
+  hook still live in it. See `docs/09-plugins.md` and the fix in
+  `resources.cpp`.
+
+### The window
+
+`tesmiolauncher.exe` is `/SUBSYSTEM:WINDOWS` and shows a small dialog: the
+resolved game path with a Browse button, two lines about the game version, a
+checkbox per plugin, and Launch. `--nogui` skips it and behaves exactly as the
+program did before — the version gate included.
+
+Plain Win32, controls created by hand. Themed controls come from a
+`MANIFESTDEPENDENCY` on Common-Controls v6 declared in the source and embedded
+with `/MANIFEST:EMBED`; the metrics are written at 96 dpi and scaled through one
+`S()`, with `SetProcessDpiAwarenessContext` called on the **first line of
+`wWinMain`** — the first dpi-sensitive call in a process fixes its awareness for
+good, and doing it later silently leaves the window bitmap-stretched.
+
+The title-bar icon is `logo.ico` — the same resource `src/tesmiolauncher.rc`
+gives the exe, loaded again by hand at both `SM_CXICON` and `SM_CXSMICON`. **A
+window's icon comes from its class, not from the executable**: without this the
+exe has the logo in Explorer and on the taskbar and shows the default in its own
+title bar. A build made without `rc.exe` has no icon resource and falls back to
+the game's own icon, which is what this used to show.
+
+#### The plugin list
+
+Two columns in a child window of their own, scrolled with `WS_VSCROLL`. The
+loader takes up to 32 plugins, and a column of 32 rows is taller than the work
+area of a laptop screen — the old layout grew the window to fit the count, which
+put Launch off the bottom edge for anyone who had that many. Row-major, so the
+two halves of a scrolled list never slide past each other; `LIST_MAXROW` rows on
+screen, and fewer when the work area will not take that many.
+
+Scrolling is `ScrollWindowEx` with `SW_SCROLLCHILDREN`, so the OS moves the
+checkboxes and nothing is repositioned by hand. A child window costs three
+things and all three are paid: its children's `WM_COMMAND` and
+`WM_CTLCOLORSTATIC` arrive at it rather than at the dialog and are forwarded,
+tab traversal only descends into it because it is `WS_EX_CONTROLPARENT`, and the
+wheel goes to whatever has the focus so the dialog forwards `WM_MOUSEWHEEL`
+down. The checkboxes carry `BS_NOTIFY` for one reason: without it a button never
+sends `BN_SETFOCUS`, and tabbing would park the focus on a row scrolled out of
+sight.
+
+**The group box is the only control here with `WS_CLIPSIBLINGS`, and it needs
+it.** A group box paints its whole rectangle, everything in the group sits
+inside that rectangle, and without the style it wipes the list on every repaint —
+the checkboxes are then still there, still enumerable and still clickable, and
+invisible, because they are grandchildren and painting over their parent never
+asks them to draw. The style must go on the container and nowhere else: it
+excludes every overlapping sibling from that window's own painting, so putting
+it on the controls as well makes each of them clip the group box out of itself,
+and the group box's rectangle covers all of them. Both mistakes were made in
+that order; the second looks like the first.
+
+A console is not opened. When output has somewhere to go it uses it: an inherited
+`stdout` handle first, for a caller that redirected to a pipe or a file, and the
+parent's console only when nothing was inherited. Reopening `CONOUT$` in the
+first case would write past the redirection to a console nobody is reading.
+
+## What is hooked
+
+### Engine, through the executable's import table
+
+| Symbol | Why |
+|---|---|
+| `C3DHelp_ReadFileIntoBuffer` | universal asset read — VFS |
+| `C3DHelp_CheckIfFileExist` | existence must agree with the VFS |
+| `C3DLog_PrintInfo` / `Warning` / `Error` | mirrors the game's own log into ours |
+
+`C3D_LANGUAGE::GetString(int)` is hooked too, for mod resource captions, but by
+the `resources` plugin rather than by the loader.
+
+The log functions are variadic. A `va_list` cannot be forwarded to a variadic
+callee, so the hook formats the text itself and passes the result on as `"%s"`.
+
+### File opening, through **both** import tables
+
+`fopen`, `fopen_s`, `_wfopen`, `_wfopen_s`, `fread`, `CreateFileA`,
+`CreateFileW`, `CreateFile2`.
+
+That list grew one entry at a time, each after an asset was found slipping past.
+Assume it is still incomplete: when something is not being redirected, the first
+question is which opener it used.
+
+### Inline hooks
+
+The loader installs none. It provides the mechanism — `installInlineHook`
+relocates the prologue into a trampoline, writes `jmp qword ptr [rip+0]` over
+it, and compares the site against the caller's expected bytes first so a game
+update makes a hook refuse rather than corrupt the process — and the plugins use
+it: `ResourceGet` (1), the minimap (2), the terrain editor (4), the mine tick
+(1), the building dispatcher and the production tick (2).
+
+That jump is **14 bytes**, and a prologue shorter than that cannot host it: the
+jump would overrun into the next instruction while the trampoline returned into
+the middle of the jump's own address operand. `installInlineHook` refuses below
+14 rather than trusting the caller's byte count — the one site that got this
+wrong crashed every save and logged `hook ok`, in
+[07-pitfalls.md](07-pitfalls.md). Prologues that begin
+`mov [rsp+8],rbx / push / sub rsp,imm32` are 13 bytes and are followed by a
+rip-relative stack-cookie load, so they cannot be stolen at 13 *or* extended;
+those sites are patched at the call instead.
+
+Nine of the ten are additive — the original runs through the trampoline and the
+plugin's work is appended. The exception is `accumulator`'s hook on the
+production tick, which exists to **suppress** the original for one building for
+the length of one call; see [10-accumulator.md](10-accumulator.md).
+
+### Virtual table
+
+`C3DAPI_D3D11_TEXTURE` vtable at `C3DDLL64.dll` rva `0x187BF0`, slots 2
+(`Load2DFromFile`) and 20 (`TextureAccesGetTexel`). Load identifies which
+texture object is which file; GetTexel observes deposit sampling.
+
+## Subsystems
+
+### Virtual file system
+
+Any read whose path resolves under `tesmioloader/vfs/<same relative path>` is
+served from there instead. Absolute paths are refused deliberately — the game
+uses them for Workshop content, and redirecting those has never been wanted.
+
+This is how mod resources get icons and cargo models, and how a terrain's
+deposit map is replaced without touching the shipped file.
+
+### Plugins
+
+`build/plugins/*.dll` are scanned at startup and handed `TsmHost`, a versioned
+table of what the loader knows how to do: where the executable is, how to swap
+an import, how to splice a hook, how to log, how to read a config key, and a
+noticeboard for publishing interfaces to each other. The contract is
+`src/tesmio_api.h`; the mechanism and the two-phase init are in
+[09-plugins.md](09-plugins.md).
+
+Not a sandbox. A plugin is in the same address space and can corrupt the process
+exactly as easily as the loader can. What it buys is that a feature can be
+written, rebuilt and removed without touching this file, and that shipping one
+is copying a DLL.
+
+Six ship with the project:
+
+| Plugin | What | Doc |
+|---|---|---|
+| `resources` | resources the base game does not have | [04](04-adding-resources.md) |
+| `deposits` | deposit types, the minimap layer, the editor brush | [05](05-deposits.md) |
+| `depletion` | deposits that run out | [08](08-depletion.md) |
+| `accumulator` | batteries for the electric grid | [10](10-accumulator.md) |
+| `needs` | resources the citizens buy in a shop | [11](11-needs.md) |
+| `walking` | how far a citizen walks | [12](12-walking.md) |
+| `buildings` | new buildings, written out of a config file | [13](13-buildings.md) |
+
+Plugins load **last**, after every import swap, so each sees a fully built
+loader. `plugins = 0` skips the folder.
+
+`buildings` is the one that patches nothing at all: it writes a Workshop item
+into `media_soviet\workshop_wip\` from `plugins\buildings.ini` and then does
+nothing for the rest of the process. It is a plugin because it is a feature, not
+because it needs anything from the host but the log and the config reader.
+
+### Save manifest
+
+A save written with mod content does not load without it — the resource count
+is part of the save format — and the game dies halfway through such a load
+without a word. So the loader leaves a note in every save it sees written:
+`tesmioloader.save.ini` next to `stats.ini`, listing the mod resources, mod
+deposits and declared buildings in effect at save time, and the plugins that
+were on.
+
+When the game reads a `stats.ini` back — browsing the load menu counts — the
+manifest beside it is compared against what is enabled now. Anything missing
+is logged, and a warning box lists it before the game can die on it: the one
+moment that information is still useful is before the load, not in the crash
+report after. The check lives in the host because it has to fire exactly when
+the plugin is off; one warning per save per session. `save_manifest = 0`
+turns the whole thing off.
+
+The buildings half checks the one thing the game itself checks: the folder
+under `workshop_wip`. A plugin switched off but a folder written last launch
+still loads, so the plugin's state is never asked.
+
+### Crash reporting
+
+A vectored exception handler logs the faulting address as `module + rva`, the
+accessed address, registers, and return addresses found on the stack.
+
+Two details are load-bearing. The stack walk is bounded by `VirtualQuery` on
+`RSP` — an earlier version read past the end and faulted inside the handler,
+burying the original crash. And exceptions raised inside `tesmioloader.dll`
+itself are skipped, because the memory scanner walks off region ends routinely
+and its `__except` handles that.
+
+### Guard-page probe
+
+Optional. Finds a buffer in memory by a marker, turns its pages into guard
+pages, and records who faults on them. Written to find the deposit sampler; it
+proved the pixels are never read by game code, which is what sent the search to
+Ghidra. Off by default — see [03-reverse-engineering.md](03-reverse-engineering.md).
+
+## Configuration
+
+`tesmioloader.ini`, read once at startup, next to the DLL. It is short now:
+everything a feature needs lives in that plugin's own ini.
+
+| Key | Meaning |
+|---|---|
+| `trace_reads` | 0 off, 1 paths containing `trace_filter`, 2 everything |
+| `trace_filter` | substring filter for the trace |
+| `log_game` | mirror the game's own log |
+| `vfs` | enable file redirection |
+| `probe_map` | guard-page probe for the deposit map |
+| `probe_texel` | watch texel reads of the deposit maps |
+| `save_manifest` | write `tesmioloader.save.ini` into saves and warn on missing mods |
+| `plugins` | scan `plugins\` and load what is there |
+| `menu_patch` | append `menu_tag` to the main menu's version line |
+| `version` | this build's version, shown in the launcher's title bar |
+| `version_check` | **launcher only.** 0 injects into a game that is not v1.1.1.9. Absent means 1 |
+
+`menu_tag` also lives in this section, but it is not a setting: tesmiolauncher's
+SaveConfig derives it from `version` (`"tesmioloader v. " + version`) and
+rewrites it here before every launch, so it is always in step with `version`
+and never worth hand-editing. ASCII only - it is read through the ANSI profile
+API, so anything past 0x7F would arrive as its raw bytes - and empty leaves the
+menu's version line untouched, which is what a build that has never been
+launched through tesmiolauncher will see.
+
+**One file per plugin, beside its DLL, and it holds everything that plugin
+needs** — both its wiring and whatever content it declares:
+
+| File | Holds |
+|---|---|
+| `pluginsesources.ini` | the ResourceGet hook mode and the three RVAs it needs |
+| `plugins\deposits.ini` | which of the three deposit subsystems may touch the game |
+| `plugins\depletion.ini` | whether deposits run out, and how fast |
+| `plugins\accumulator.ini` | what counts as a battery, and how fast it charges |
+| `plugins\needs.ini` | what the citizens buy, and which shops stock it |
+| `plugins\walking.ini` | how far a citizen walks, and whether a load rebuilds the connections |
+| `plugins\buildings.ini` | the buildings that do not exist yet, one section each |
+
+The first two carry their content in the same file: `[list]` names the
+resources, and every section of `plugins\deposits.ini` that is not `[deposits]`
+is a deposit. Content and wiring used to live apart, in a `resources.ini` and a
+`deposits.ini` in the loader's own folder, from before there were plugins at
+all. They are merged now, because "where is this feature configured" should have
+one answer per feature, and deleting a plugin should not leave a stray file
+behind.
+
+Those two content sections are parsed by their own plugin rather than through
+the profile API, so display names and comments may hold anything UTF-8; every
+settings section goes through `configString` and stays ASCII.
+
+Every one of these is UTF-8 **without a BOM** and read through the ANSI profile
+API. Writing one back with PowerShell's `-Encoding UTF8` adds a BOM, the section
+header stops matching, and every setting in the file silently falls back to its
+default. This has already cost one debugging session; see
+[07-pitfalls.md](07-pitfalls.md).
+
+## Logs
+
+Written next to the DLL, in `build/`.
+
+| File | Contents | Written by |
+|---|---|---|
+| `tesmioloader.log` | hooks, VFS hits, plugins, patches, the game's own log, crashes | the loader, and every plugin through `TsmHost::log` |
+| `tesmioloader.reads.log` | file access trace | the loader |
+| `tesmioloader.resources.log` | resource enum and record hex dumps | the `resources` plugin |
+
+The game holds these open. Reading them while it runs needs
+`FileShare.ReadWrite`; `Get-Content` alone will report an empty file.

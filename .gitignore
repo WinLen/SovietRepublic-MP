@@ -1,0 +1,30 @@
+# Never commit proprietary game files, local test instances, or build outputs
+local/
+games/
+coop-anything/
+*.zip
+*.7z
+
+# Build & intermediate directories
+TesmioLoader/build/
+TesmioLoader/RepublicMP/obj/
+TesmioLoader/RepublicMP/x64/
+TesmioLoader/RepublicMP/.vs/
+.vs/
+*.user
+*.suo
+*.pdb
+*.iobj
+*.ipdb
+*.exp
+*.lib
+*.obj
+*.res
+
+# Staged workshop content & local secrets
+steam_workshop/content/
+steam_workshop/workshop_ci.vdf
+steam_workshop/workshop_local.vdf
+steam_workshop/STEAM_CONFIG_VDF.txt
+steam_workshop/published_file_id.txt
+TesmioLoader/tools/signing/tsm_private.bin
