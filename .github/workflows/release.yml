@@ -135,7 +135,7 @@ jobs:
             Write-Host "[Steam Workshop] Generated Steam Guard TOTP code."
           }
 
-          $pubId = if ($env:STEAM_WORKSHOP_ID) { $env:STEAM_WORKSHOP_ID.Trim() } else { "0" }
+          $pubId = if ($env:STEAM_WORKSHOP_ID) { $env:STEAM_WORKSHOP_ID.Trim() } else { "3822972914" }
           $contentDir = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\content")
           $previewFile = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\preview.png")
           $vdfPath = (Join-Path $env:GITHUB_WORKSPACE "steam_workshop\workshop_ci.vdf")
