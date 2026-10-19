@@ -15,6 +15,9 @@ New-Item -ItemType Directory -Path (Join-Path $stage 'TesmioLoader\build\plugins
 Copy-Item (Join-Path $root 'TesmioLoader\build\tesmiolauncher.exe') (Join-Path $stage 'TesmioLoader\build\') -Force
 Copy-Item (Join-Path $root 'TesmioLoader\build\tesmioloader.dll')   (Join-Path $stage 'TesmioLoader\build\') -Force
 Copy-Item (Join-Path $root 'TesmioLoader\build\plugins\RepublicMP.dll') (Join-Path $stage 'TesmioLoader\build\plugins\') -Force
+if (Test-Path (Join-Path $root 'TesmioLoader\build\dinput8.dll')) {
+    Copy-Item (Join-Path $root 'TesmioLoader\build\dinput8.dll') (Join-Path $stage 'dinput8.dll') -Force
+}
 if (Test-Path (Join-Path $root 'README-RU.txt')) {
     Copy-Item (Join-Path $root 'README-RU.txt') (Join-Path $stage 'README-RU.txt') -Force
 }
@@ -97,6 +100,8 @@ $batLines = @(
     '  exit /b 1',
     ')',
     'echo Found game: !GAME_EXE!',
+    'for %%G in ("!GAME_EXE!") do set "GAME_DIR=%%~dpG"',
+    'if exist "%HERE%\dinput8.dll" copy /y "%HERE%\dinput8.dll" "!GAME_DIR!dinput8.dll" >nul 2>&1',
     '(',
     'echo [tesmioloader]',
     'echo version = b0.3.6',

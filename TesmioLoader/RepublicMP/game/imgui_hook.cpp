@@ -51,12 +51,14 @@ static void CleanupRenderTarget()
     }
 }
 
+static bool g_topBtnHovered = false;
+
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    // The sync-block screen and Mini-HUD buttons keep receiving mouse input even while
+    // The sync-block screen and Mini-HUD / Top Co-op button keep receiving mouse input even while
     // the main menu is hidden with INSERT.
     bool syncBlocking = SyncBlock_IsActive();
-    bool miniHudMouse = TwoStates_MiniHudWantsMouse();
+    bool miniHudMouse = TwoStates_MiniHudWantsMouse() || g_topBtnHovered;
     bool effectiveVisible = g_imguiVisible || syncBlocking || miniHudMouse;
 
     ImGuiIO& io = ImGui::GetIO();
@@ -148,7 +150,7 @@ void ImGuiHook_NewFrameAndRender()
     g_insertWasDown = insertDown;
 
     bool syncBlocking = SyncBlock_IsActive();
-    bool miniHudMouse = TwoStates_MiniHudWantsMouse();
+    bool miniHudMouse = TwoStates_MiniHudWantsMouse() || g_topBtnHovered;
 
     // Refresh the cursor flag for frames where hover changed without a message.
     ImGuiIO& io = ImGui::GetIO();
@@ -162,8 +164,29 @@ void ImGuiHook_NewFrameAndRender()
     TwoStates_DrawOverlay();
 
     if (g_imguiVisible) {
+        g_topBtnHovered = false;
         g_mainMenu.Draw();
         g_debug_window.Draw();
+    } else if (!syncBlocking) {
+        // Floating top-right button so the player can always open the Co-op menu with the mouse
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 16.0f, vp->Pos.y + 42.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.82f);
+        ImGuiWindowFlags btnFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                    ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+        if (ImGui::Begin("##RepublicMPTopToggle", nullptr, btnFlags)) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.16f, 0.16f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Кооператив / Сервер (INSERT)")) {
+                g_imguiVisible = true;
+            }
+            ImGui::PopStyleColor(2);
+            g_topBtnHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) || ImGui::IsItemHovered();
+        }
+        ImGui::End();
+    } else {
+        g_topBtnHovered = false;
     }
     SyncBlock_Draw(); // drawn last (on top), independent of g_imguiVisible
 

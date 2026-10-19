@@ -514,12 +514,51 @@ static void SessionButtons(std::string& hostIp)
         if (ImGui::Checkbox("Проверять совпадение DLC (Check DLCs)", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
         ImGui::Spacing();
 
-        ImGui::BeginDisabled(!world);
-        if (ImGui::Button("Создать сервер (Host: Steam + IP)", ImVec2(half, 0)))
-            SaveSync_StartHost();
+        static std::vector<std::string> s_localSaves;
+        static int s_selectedSave = 0;
+        static ULONGLONG s_lastSavesScan = 0;
+        if (!world) {
+            ULONGLONG now = GetTickCount64();
+            if (s_localSaves.empty() || now - s_lastSavesScan > 5000) {
+                SaveSync_ListLocalSaves(s_localSaves);
+                if (s_selectedSave >= (int)s_localSaves.size()) s_selectedSave = 0;
+                s_lastSavesScan = now;
+            }
+            if (!s_localSaves.empty()) {
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextColored(kYellow, "Сохранение для сервера:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-90.0f);
+                if (ImGui::BeginCombo("##saveCombo", s_localSaves[s_selectedSave].c_str())) {
+                    for (int i = 0; i < (int)s_localSaves.size(); ++i) {
+                        bool sel = (i == s_selectedSave);
+                        if (ImGui::Selectable(s_localSaves[i].c_str(), sel))
+                            s_selectedSave = i;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Обновить##saves")) {
+                    SaveSync_ListLocalSaves(s_localSaves);
+                    if (s_selectedSave >= (int)s_localSaves.size()) s_selectedSave = 0;
+                }
+            }
+        }
+
+        bool canStartHost = world || !s_localSaves.empty();
+        bool pendingLoadHost = SaveSync_IsPendingHostAfterLoad();
+        ImGui::BeginDisabled(!canStartHost || pendingLoadHost);
+        const char* hostBtnLabel = pendingLoadHost
+            ? "Загрузка города и запуск сервера..."
+            : (world ? "Создать сервер (Host: Steam + IP)" : "Загрузить и Создать сервер (Host)");
+        if (ImGui::Button(hostBtnLabel, ImVec2(half, 0))) {
+            if (world) SaveSync_StartHost();
+            else if (!s_localSaves.empty()) SaveSync_LoadAndStartHost(s_localSaves[s_selectedSave].c_str());
+        }
         ImGui::EndDisabled();
-        if (!world && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Сначала загрузите город/карту.");
+        if (!canStartHost && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Создайте новую игру или загрузите город, чтобы запустить сервер.");
         ImGui::SameLine();
         ImGui::BeginDisabled(hostIp.empty());
         if (ImGui::Button("Подключиться (Connect)", ImVec2(half, 0)))
@@ -535,7 +574,10 @@ static void SessionButtons(std::string& hostIp)
         }
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
-        if (!world) Wrapped(kGrey, "Загрузите карту или сохранение, чтобы создать сервер (Host).");
+        if (!world && !s_localSaves.empty())
+            Wrapped(kGrey, "Вы можете сразу нажать «Загрузить и Создать сервер» прямо из главного меню или подключиться к другу из списка выше.");
+        else if (!world)
+            Wrapped(kGrey, "Начните новую игру или подключитесь к другу из списка Steam выше.");
         return;
     }
 

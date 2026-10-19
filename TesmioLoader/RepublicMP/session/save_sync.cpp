@@ -1294,9 +1294,70 @@ static void CheckStillInWorld()
     SetSessionError(host ? "hosting stopped: you left the world" : "disconnected: you left the world");
 }
 
+static volatile bool g_pendingHostAfterLoad = false;
+static volatile ULONGLONG g_pendingHostStartTick = 0;
+
+void SaveSync_ListLocalSaves(std::vector<std::string>& outSaves)
+{
+    outSaves.clear();
+    char saveRoot[MAX_PATH] = {};
+    if (!GetGameSaveDir(saveRoot, sizeof(saveRoot), "")) return;
+
+    struct Entry {
+        std::string name;
+        std::filesystem::file_time_type mtime;
+    };
+    std::vector<Entry> entries;
+    std::error_code ec;
+    for (auto const& dirEntry : std::filesystem::directory_iterator(saveRoot, ec)) {
+        if (!dirEntry.is_directory(ec)) continue;
+        std::string folder = dirEntry.path().filename().string();
+        if (folder.empty() || folder[0] == '.') continue;
+        if (folder.find("mp_syncsave_") == 0) continue;
+        if (folder.find("_received") != std::string::npos) continue;
+        auto headerFile = dirEntry.path() / "header.bin";
+        if (!std::filesystem::exists(headerFile, ec)) continue;
+        auto ft = std::filesystem::last_write_time(headerFile, ec);
+        entries.push_back({ folder, ft });
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        return a.mtime > b.mtime;
+    });
+    for (const auto& e : entries) {
+        outSaves.push_back(e.name);
+    }
+}
+
+void SaveSync_LoadAndStartHost(const char* saveName)
+{
+    if (g_state != SESSION_IDLE || !saveName || !saveName[0]) return;
+    if (SaveSync_IsWorldLoaded()) {
+        SaveSync_StartHost();
+        return;
+    }
+    SaveStatus("[HOST] Загрузка сохранения '%s' и автоматический запуск сервера...", saveName);
+    g_pendingHostAfterLoad = true;
+    g_pendingHostStartTick = GetTickCount64();
+    TriggerLoadSave(saveName);
+}
+
+bool SaveSync_IsPendingHostAfterLoad()
+{
+    return g_pendingHostAfterLoad;
+}
+
 void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
+    if (g_pendingHostAfterLoad) {
+        bool loadPending = *(volatile BYTE*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) != 0;
+        if (SaveSync_IsWorldLoaded() && !loadPending) {
+            g_pendingHostAfterLoad = false;
+            SaveSync_StartHost();
+        } else if (GetTickCount64() - g_pendingHostStartTick > 180000) {
+            g_pendingHostAfterLoad = false;
+        }
+    }
     if (g_state == SESSION_IDLE) {
         char steamJoinTarget[64] = {};
         if (SteamP2P_ConsumePendingJoin(steamJoinTarget, sizeof(steamJoinTarget))) {

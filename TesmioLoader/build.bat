@@ -30,6 +30,14 @@ cl /nologo /O2 /MT /W3 /EHsc /LD ^
    src\tesmioloader.cpp /link kernel32.lib
 if errorlevel 1 ( echo [build] tesmioloader.dll FAILED & exit /b 1 )
 
+if exist src\dinput8_proxy.cpp (
+    echo [build] dinput8.dll ^(Steam direct launch proxy^)
+    cl /nologo /O2 /MT /W3 /EHsc /LD ^
+       /Fo"build\\" /Fd"build\\" /Fe"build\dinput8.dll" ^
+       src\dinput8_proxy.cpp /link kernel32.lib
+    if errorlevel 1 ( echo [build] dinput8.dll FAILED & exit /b 1 )
+)
+
 rem A windowed program: wWinMain, and /SUBSYSTEM:WINDOWS so double-clicking it
 rem does not open a console behind the window. It attaches to the parent console
 rem when there is one, so --nogui from a terminal still prints.

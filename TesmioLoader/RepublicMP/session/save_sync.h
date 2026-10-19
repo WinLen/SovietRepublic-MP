@@ -50,8 +50,18 @@ void SaveSync_Bind(const TsmHost* host);
 // Writes to tesmioloader.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...);
 
+#include <vector>
+#include <string>
+
 // True while a world is loaded (not the main menu, not mid-load).
 bool SaveSync_IsWorldLoaded();
+
+// Lists local save folders from media_soviet\save\ (newest first, excluding mp_syncsave_*).
+void SaveSync_ListLocalSaves(std::vector<std::string>& outSaves);
+
+// Loads the given save from the main menu and automatically starts hosting once loaded.
+void SaveSync_LoadAndStartHost(const char* saveName);
+bool SaveSync_IsPendingHostAfterLoad();
 
 // Refused (no-op) while a session is active. Hosting needs a loaded world;
 // leaving the world ends the session (SaveSync_Tick).
