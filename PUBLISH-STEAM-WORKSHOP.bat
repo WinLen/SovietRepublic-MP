@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo =================================================================
-echo   Building ^& Updating Steam Workshop Item 3822972914 (ISteamUGC)
+echo   Building ^& Updating Steam Workshop Item 3823543010 (ISteamUGC)
 echo =================================================================
 
 call "TesmioLoader\build.bat"
@@ -19,5 +19,5 @@ if not exist "local\upload_ugc.exe" (
     cl /nologo /O2 /MT /EHsc /utf-8 /Folocal\ /Felocal\upload_ugc.exe steam_workshop\upload_ugc.cpp
 )
 
-"local\upload_ugc.exe" 3822972914
+"local\upload_ugc.exe" 3823543010
 pause

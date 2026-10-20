@@ -158,8 +158,12 @@ int main(int argc, char** argv)
         publishedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
     }
     if (argc > 1 && argv[1][0]) {
-        uint64_t argId = _strtoui64(argv[1], nullptr, 10);
-        if (argId > 0) publishedId = argId;
+        if (strcmp(argv[1], "new") == 0 || strcmp(argv[1], "0") == 0) {
+            publishedId = 0;
+        } else {
+            uint64_t argId = _strtoui64(argv[1], nullptr, 10);
+            if (argId > 0) publishedId = argId;
+        }
     }
 
     if (publishedId == 0) {
@@ -198,10 +202,11 @@ int main(int argc, char** argv)
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
     bool bTitle = pSetTitle(pUGC, hUpdate, "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)");
     bool bDesc = pSetDesc(pUGC, hUpdate, desc.c_str());
+    bool bVis = pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */);
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
     bool bPreview = pSetPreview(pUGC, hUpdate, previewFile.c_str());
-    printf("[UGC] SetItem: title=%d desc=%d content=%d preview=%d\n",
-           (int)bTitle, (int)bDesc, (int)bContent, (int)bPreview);
+    printf("[UGC] SetItem: title=%d desc=%d vis=%d content=%d preview=%d\n",
+           (int)bTitle, (int)bDesc, (int)bVis, (int)bContent, (int)bPreview);
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
