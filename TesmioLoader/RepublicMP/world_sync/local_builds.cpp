@@ -901,6 +901,20 @@ void HookedRoadCommit(__int64 manager,
                 }
             }
         } else {
+            if (TwoStates_IsActive()) {
+                bool allowed = true;
+                __try {
+                    __int64 thisPtr = GetPlacementManagerThisPtr();
+                    float cx = *(float*)(thisPtr + CURSOR_X_OFFSET);
+                    float cz = *(float*)(thisPtr + CURSOR_Z_OFFSET);
+                    if (IsDemolishToolActive())
+                        allowed = TwoStates_CheckDemolishAllowed(cx, cz, "снос инфраструктуры");
+                    else
+                        allowed = TwoStates_CheckBuildAllowed(cx, cz, "строительство дороги/сети");
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                }
+                if (!allowed) return;
+            }
             bool demolish = false;
             __try {
                 if (IsDemolishToolActive())
@@ -1172,6 +1186,13 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
     bool lmbDown = false;
     __try {
         lmbDown = *(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA);
+        if (lmbDown && TwoStates_IsActive() && !BuildSync_IsApplyingRemote()) {
+            if (!TwoStates_CheckBuildAllowed(cursorX, cursorZ, "строительство здания")) {
+                *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
+                *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;
+                lmbDown = false;
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     bool scoped = BuildSync_IsConnected() && (lmbDown || s_lmbWasDown) &&

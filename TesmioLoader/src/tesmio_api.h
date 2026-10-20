@@ -290,6 +290,21 @@ typedef int      (*TsmPluginStartFn)(void);
 #define TSM_EXPORT_APIVERSION "TsmPluginApiVersion"
 #define TSM_EXPORT_INIT       "TsmPluginInit"
 #define TSM_EXPORT_START      "TsmPluginStart"
+#define TSM_EXPORT_RELOAD     "TsmPluginReload"
+typedef void (*TsmPluginReloadFn)(int enabled);
+
+#define TSM_SERVICE_PLUGINS "plugin_manager"
+#define TSM_PLUGINS_VERSION 1u
+
+typedef struct TsmPluginManagerApi
+{
+    int  (*count)(void);
+    int  (*getInfo)(int index, char* idOut, int idMax, char* iniPathOut, int iniMax,
+                    int* localEnabledOut, int* effectiveEnabledOut);
+    int  (*setLocalEnabled)(const char* id, int enabled);
+    int  (*setSessionOverride)(const char* sessionIniDir, const char* enabledCsv);
+    void (*clearSessionOverride)(void);
+} TsmPluginManagerApi;
 
 #ifdef __cplusplus
 }

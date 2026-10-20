@@ -4,6 +4,7 @@
 #include "version.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
+#include "../session/mod_sync.h"
 #include "../session/updater.h"
 #include "../determinism/determinism.h"
 #include "../determinism/state_hash.h"
@@ -14,16 +15,11 @@
 #include "../world_sync/terrain/terrain_sync.h"
 
 #include <windows.h>
-#include <shlobj.h>
-#include <shellapi.h>
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
 #include <string>
 #include <vector>
-
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")
 
 static CRITICAL_SECTION g_diagLock;
 static bool g_diagLockInit = false;
@@ -33,6 +29,17 @@ static char g_gameDir[MAX_PATH] = "";
 static const TsmHost* g_origHost = nullptr;
 static TsmHost g_wrappedHost = {};
 static PVOID g_vehHandle = nullptr;
+static thread_local int t_safeSehDepth = 0;
+
+void DiagLog_BeginSafeSeh(void)
+{
+    ++t_safeSehDepth;
+}
+
+void DiagLog_EndSafeSeh(void)
+{
+    if (t_safeSehDepth > 0) --t_safeSehDepth;
+}
 
 static void EnsureDiagLock()
 {
@@ -110,7 +117,7 @@ static void FormatAddressModule(uintptr_t addr, char* out, size_t outSize)
 
 static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
 {
-    if (!ep || !ep->ExceptionRecord || !ep->ContextRecord)
+    if (!ep || !ep->ExceptionRecord || !ep->ContextRecord || t_safeSehDepth > 0)
         return EXCEPTION_CONTINUE_SEARCH;
 
     DWORD code = ep->ExceptionRecord->ExceptionCode;
@@ -294,6 +301,11 @@ static void DumpLiveSnapshot(const char* tag)
                    TwoStates_GetRubles(1), TwoStates_GetDollars(1),
                    TwoStates_GetRubles(2), TwoStates_GetDollars(2));
 
+    // ModSync status
+    DiagLog_Printf(tag, "ModSync: PackMode=%d | CatalogMods=%d | ActiveServerMods=%d",
+                   (int)ModSync_GetPackMode(), ModSync_GetModCount(),
+                   ModSync_GetActiveServerModCount());
+
     // Lockstep metrics if active
     if (lockstep || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME) {
         bool paused = true;
@@ -339,66 +351,4 @@ void DiagLog_FrameTick(void)
         s_lastHeartbeat = now;
         DumpLiveSnapshot("HEARTBT");
     }
-}
-
-bool DiagLog_ExportToDesktop(std::string* outDesktopPath)
-{
-    DumpLiveSnapshot("EXPORT");
-
-    char desktopDir[MAX_PATH] = {};
-    if (FAILED(SHGetFolderPathA(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, desktopDir)) || !desktopDir[0]) {
-        return false;
-    }
-
-    char destPath[MAX_PATH] = {};
-    _snprintf_s(destPath, sizeof(destPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.log", desktopDir);
-
-    EnsureDiagLock();
-    EnterCriticalSection(&g_diagLock);
-    if (g_hDiagFile != INVALID_HANDLE_VALUE) {
-        FlushFileBuffers(g_hDiagFile);
-    }
-    BOOL ok = CopyFileA(g_diagFilePath, destPath, FALSE);
-    LeaveCriticalSection(&g_diagLock);
-
-    if (ok) {
-        if (outDesktopPath) *outDesktopPath = destPath;
-        char param[MAX_PATH + 32] = {};
-        _snprintf_s(param, sizeof(param), _TRUNCATE, "/select,\"%s\"", destPath);
-        ShellExecuteA(nullptr, "open", "explorer.exe", param, nullptr, SW_SHOWNORMAL);
-        return true;
-    }
-    return false;
-}
-
-std::string DiagLog_GetClipboardReport(size_t maxBytes)
-{
-    DumpLiveSnapshot("CLIPBRD");
-
-    EnsureDiagLock();
-    EnterCriticalSection(&g_diagLock);
-    if (g_hDiagFile != INVALID_HANDLE_VALUE) {
-        FlushFileBuffers(g_hDiagFile);
-    }
-    LeaveCriticalSection(&g_diagLock);
-
-    FILE* f = nullptr;
-    if (fopen_s(&f, g_diagFilePath, "rb") != 0 || !f) return "";
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    if (sz <= 0) {
-        fclose(f);
-        return "";
-    }
-    long readLen = (sz > (long)maxBytes) ? (long)maxBytes : sz;
-    fseek(f, sz - readLen, SEEK_SET);
-    std::string out((size_t)readLen, '\0');
-    fread(&out[0], 1, (size_t)readLen, f);
-    fclose(f);
-    return out;
-}
-
-const char* DiagLog_GetLogFilePath(void)
-{
-    return g_diagFilePath;
 }

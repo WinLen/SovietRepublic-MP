@@ -2,15 +2,18 @@
 // See two_states.h.
 #include "two_states.h"
 #include "save_sync.h"
+#include "mod_sync.h"
+#include "../core/diag_log.h"
 #include "../game/save_load.h"
-#include "../game/imgui_hook.h"
 #include "../game/window_focus.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../determinism/determinism.h"
 #include "../ui/lang.h"
+#include "../ui/native_menu.h"
 #include "imgui.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <unordered_map>
@@ -18,6 +21,9 @@
 #include <sstream>
 #include <vector>
 #include <deque>
+#include <filesystem>
+#include <system_error>
+#include <algorithm>
 
 #define WORLD_RVA 0x9D4F10
 #define WORLD_USD_OFFSET 0x580
@@ -62,16 +68,17 @@ static volatile bool g_inSession = false;
 static volatile bool g_isHost = true;
 static float g_borderHalfWidth = 250.0f; // [-250m .. +250m] = 500m shared border zone
 static bool g_fullStartingCapital = true;
-static volatile bool g_expandBorders = true; // unlock 2km restricted edge buffer by default
+static volatile bool g_expandBorders = false; // default: standard 20x20 km map with borders (16x16 km playable zone)
 static bool g_show3DBorder = true;
-static bool g_showMiniHud = true;
-static bool g_miniHudHovered = false;
 
 static double g_stateRub[2] = { 0.0, 0.0 };
 static double g_stateUsd[2] = { 0.0, 0.0 };
 static double g_netTradeRub[2] = { 0.0, 0.0 };
 static double g_netTradeUsd[2] = { 0.0, 0.0 };
 static bool g_treasuryInitialized = false;
+static bool g_loadedFromCoopSave = false;
+static volatile bool g_importingSpSave = false;
+static char g_savedJoinAddress[64] = "";
 
 static CRITICAL_SECTION g_ownerLock;
 static bool g_ownerLockReady = false;
@@ -117,12 +124,12 @@ static double* WorldDollars() { return (double*)(g_exeBase + WORLD_RVA + WORLD_U
 // ---------------------------------------------------------------------------
 
 typedef float (__fastcall* TerrainBoundaryFn)(BYTE* terrain);
-typedef float (__fastcall* SampleHeightmapFn)(BYTE* terrain, float x, float z);
+typedef float (__fastcall* CollisionTerrainHeightFn)(BYTE* terrain, const float pos3[3]);
 static TerrainBoundaryFn o_getBoundaryXMin = nullptr;
 static TerrainBoundaryFn o_getBoundaryXMax = nullptr;
 static TerrainBoundaryFn o_getBoundaryZMin = nullptr;
 static TerrainBoundaryFn o_getBoundaryZMax = nullptr;
-static SampleHeightmapFn g_sampleHeightmap = nullptr;
+static CollisionTerrainHeightFn g_collisionTerrainHeight = nullptr;
 
 #define EXPANDED_BOUNDARY_MARGIN 150.0f
 
@@ -180,6 +187,8 @@ static float __fastcall H_GetTerrainBoundaryZMax(BYTE* terrain)
 #define RVA_CUSTOMS_VEHICLE 0x1B9A40
 #define RVA_CONSTRUCT_STEP  0x159070
 #define RVA_VEHICLE_SALE    0x3E0730
+#define RVA_MASTER_SAVE     0x42CC70
+#define RVA_MASTER_SAVE_AUTOSAVE_JE 0x42CCD9
 
 static const BYTE kBldEconExpect[19] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48,
@@ -201,16 +210,25 @@ static const BYTE kVehicleSaleExpect[19] = {
     0x48, 0x8B, 0xC4, 0x44, 0x88, 0x48, 0x20, 0x44, 0x88, 0x40,
     0x18, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56, 0x57
 };
+static const BYTE kMasterSaveExpect[19] = {
+    0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x0A, 0x00, 0x00
+};
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building);
 typedef __int64 (__fastcall* ConstructStepFn)(BYTE* world, BYTE* building, float dt, unsigned char flag);
 typedef __int64 (__fastcall* VehicleSaleFn)(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4);
+typedef void (__fastcall* MasterSaveFn)(BYTE* world);
 
 static BldEconFn o_bldEcon = nullptr;
 static BldEconFn o_customsBorder = nullptr;
 static BldEconFn o_customsVehicle = nullptr;
 static ConstructStepFn o_constructStep = nullptr;
 static VehicleSaleFn o_vehicleSale = nullptr;
+static MasterSaveFn o_masterSave = nullptr;
+
+static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
+static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize);
 
 static volatile bool g_inSimStep = false;
 static volatile DWORD g_simStepThread = 0;
@@ -334,11 +352,117 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
     return r;
 }
 
+static void __fastcall H_MasterSave(BYTE* world)
+{
+    bool isCoopSave = g_inSession || NativeMenu_IsHostOnNextLoad() || TwoStates_IsCoopBankMounted();
+    bool twoStates  = TwoStates_IsActive() ||
+                      (isCoopSave && g_treasuryInitialized &&
+                       (g_inSession ? g_sessionMode : g_chosenMode) == COOP_MODE_TWO_STATES);
+
+    char saveRel[128] = {};
+    char fullSaveDir[MAX_PATH] = {};
+    double prevRub = 0.0, prevUsd = 0.0;
+    bool moneySwapped = false;
+    BYTE prevFc90 = 0;
+    bool fc90Patched = false;
+    BYTE* autosaveJeAddr = g_exeBase ? (g_exeBase + RVA_MASTER_SAVE_AUTOSAVE_JE) : nullptr;
+    BYTE prevAutosaveJe = 0x74;
+    DWORD oldProt = 0;
+    bool autosaveJePatched = false;
+
+    __try {
+        if (world) {
+            strncpy_s(saveRel, (const char*)(world + SAVE_NAME_FIELD_OFFSET), _TRUNCATE);
+            if (isCoopSave && _stricmp(saveRel, "saved_last") == 0) {
+                // Redirect engine's automatic save-on-exit ("saved_last") into the Co-op save bank
+                // so exiting a Co-op session never overwrites Singleplayer's saved_last and always
+                // appears in "Continue Co-op" / "Co-op Saves".
+                strncpy_s((char*)(world + SAVE_NAME_FIELD_OFFSET), SAVE_NAME_FIELD_MAX_LEN, "save/coop_last_session", _TRUNCATE);
+                strncpy_s(saveRel, "save/coop_last_session", _TRUNCATE);
+                prevFc90 = *(BYTE*)(world + 0xFC90);
+                *(BYTE*)(world + 0xFC90) = 1;
+                fc90Patched = true;
+            }
+            if (saveRel[0] && BuildFullSaveDir(saveRel, fullSaveDir, sizeof(fullSaveDir))) {
+                CreateDirectoryA(fullSaveDir, nullptr);
+                char scriptPath[MAX_PATH] = {};
+                _snprintf_s(scriptPath, sizeof(scriptPath), _TRUNCATE, "%s\\script.ini", fullSaveDir);
+                if (!fc90Patched && GetFileAttributesA(scriptPath) == INVALID_FILE_ATTRIBUTES) {
+                    prevFc90 = *(BYTE*)(world + 0xFC90);
+                    *(BYTE*)(world + 0xFC90) = 1; // force C3D_TERRAIN::Save to write script.ini & terrain files
+                    fc90Patched = true;
+                }
+            }
+            if (isCoopSave) {
+                *(BYTE*)(world + SAVE_ZIP_AFTER_FLAG_OFFSET) = 0;
+                if (autosaveJeAddr && *autosaveJeAddr == 0x74) {
+                    if (VirtualProtect(autosaveJeAddr, 2, PAGE_EXECUTE_READWRITE, &oldProt)) {
+                        prevAutosaveJe = *autosaveJeAddr;
+                        *autosaveJeAddr = 0xEB; // always skip AUTOSAVE_TO_ZIP so Co-op saves remain folders
+                        autosaveJePatched = true;
+                    }
+                }
+            }
+            if (twoStates) {
+                prevRub = *WorldRubles();
+                prevUsd = *WorldDollars();
+                *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+                *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+                moneySwapped = true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+
+    if (o_masterSave) {
+        o_masterSave(world);
+    }
+
+    __try {
+        if (autosaveJePatched && autosaveJeAddr) {
+            *autosaveJeAddr = prevAutosaveJe;
+            VirtualProtect(autosaveJeAddr, 2, oldProt, &oldProt);
+        }
+        if (fc90Patched && world) {
+            *(BYTE*)(world + 0xFC90) = prevFc90;
+        }
+        if (moneySwapped) {
+            *WorldRubles()  = prevRub;
+            *WorldDollars() = prevUsd;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+
+    if (isCoopSave && fullSaveDir[0]) {
+        if (g_expandBorders) {
+            TwoStates_PatchSaveScriptIni(fullSaveDir, 0.0f);
+        }
+        WriteCoopSaveMetaInternal(fullSaveDir);
+        if (strstr(saveRel, "mp_syncsave_") == nullptr) {
+            int mode = g_inSession ? (int)g_sessionMode : (int)g_chosenMode;
+            if (mode == COOP_MODE_TWO_STATES) {
+                char msg[240];
+                _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                            Tr("Кооп-сохранение записано (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",
+                               "Co-op save written (West: %.0f RUB / %.0f $, East: %.0f RUB / %.0f $)"),
+                            g_stateRub[0], g_stateUsd[0], g_stateRub[1], g_stateUsd[1]);
+                TwoStates_AddToast(msg, 1);
+            } else {
+                TwoStates_AddToast(Tr("Кооп-сохранение успешно записано", "Co-op save written"), 1);
+            }
+        }
+    }
+}
+
 bool TwoStates_Install()
 {
     EnsureOwnerLock();
+    TwoStates_LoadSettings();
+    TwoStates_MountSaveBank(false);
+
     if (g_engine) {
-        g_sampleHeightmap = (SampleHeightmapFn)GetProcAddress(g_engine, "?SampleHeightmap@C3D_TERRAIN@@QEAAMMM@Z");
+        g_collisionTerrainHeight = (CollisionTerrainHeightFn)GetProcAddress(
+            g_engine, "?CollisionTerrainHeightOverPoint@C3D_TERRAIN@@QEAAMVC3DVECTOR3@@@Z");
     }
     int ok = 0;
     ok += PatchIat(g_exe, DLL_C3D, "?GetTerrainBoundaryXMin@C3D_TERRAIN@@QEAAMXZ",
@@ -361,9 +485,11 @@ bool TwoStates_Install()
                                 kConstructStepExpect, sizeof(kConstructStepExpect), "republicmp two_states construct_step");
     econOk += InstallInlineHook(g_exeBase + RVA_VEHICLE_SALE, (void*)&H_VehicleSale, (void**)&o_vehicleSale,
                                 kVehicleSaleExpect, sizeof(kVehicleSaleExpect), "republicmp two_states vehicle_sale");
+    int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
+                                   kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy attribution hooks (%d/5), heightmap=%p",
-         ok, econOk, (void*)g_sampleHeightmap);
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy attribution hooks (%d/5), master_save=%d, heightFn=%p",
+         ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
 
@@ -428,7 +554,7 @@ void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
         double worldRub = *WorldRubles();
         double worldUsd = *WorldDollars();
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
-            if (!isResync || !g_treasuryInitialized) {
+            if (!isResync && !g_treasuryInitialized) {
                 if (g_fullStartingCapital) {
                     g_stateRub[0] = worldRub;
                     g_stateRub[1] = worldRub;
@@ -444,7 +570,14 @@ void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
                 }
                 g_treasuryInitialized = true;
             } else {
-                // Re-sync: ensure the world object carries the exact sum before saving.
+                // Already initialized (either from republicmp_coop.ini or while hosting/re-syncing):
+                // attribute any local host delta to State 1.
+                double diffRub = worldRub - (g_stateRub[0] + g_stateRub[1]);
+                double diffUsd = worldUsd - (g_stateUsd[0] + g_stateUsd[1]);
+                if (!Determinism_IsActive() && !g_loadedFromCoopSave) {
+                    g_stateRub[0] += diffRub;
+                    g_stateUsd[0] += diffUsd;
+                }
                 *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
                 *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
             }
@@ -464,10 +597,14 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
                                const double stateRub[2], const double stateUsd[2])
 {
     EnsureOwnerLock();
-    EnterCriticalSection(&g_ownerLock);
-    g_buildingOwners.clear();
-    g_vehicleOwners.clear();
-    LeaveCriticalSection(&g_ownerLock);
+    if (!g_loadedFromCoopSave) {
+        EnterCriticalSection(&g_ownerLock);
+        g_buildingOwners.clear();
+        g_vehicleOwners.clear();
+        LeaveCriticalSection(&g_ownerLock);
+        g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
+        g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
+    }
 
     g_isHost = isHost;
     g_sessionMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
@@ -478,10 +615,9 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
     g_stateRub[1] = stateRub[1];
     g_stateUsd[0] = stateUsd[0];
     g_stateUsd[1] = stateUsd[1];
-    g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
-    g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
     g_treasuryInitialized = true;
     g_inSession = true;
+    g_loadedFromCoopSave = false;
 
     if (g_sessionMode == COOP_MODE_TWO_STATES) {
         __try {
@@ -526,6 +662,7 @@ void TwoStates_OnSessionEnded()
     g_inSession = false;
     g_inSimStep = false;
     g_treasuryInitialized = false;
+    ModSync_EndSession();
 }
 
 // ---------------------------------------------------------------------------
@@ -560,20 +697,6 @@ double TwoStates_LocalRubles()
 double TwoStates_LocalDollars()
 {
     return TwoStates_GetDollars(TwoStates_LocalState());
-}
-
-double TwoStates_GetNetTradeRub(int state)
-{
-    if (state == 1) return g_netTradeRub[0];
-    if (state == 2) return g_netTradeRub[1];
-    return g_netTradeRub[0] + g_netTradeRub[1];
-}
-
-double TwoStates_GetNetTradeUsd(int state)
-{
-    if (state == 1) return g_netTradeUsd[0];
-    if (state == 2) return g_netTradeUsd[1];
-    return g_netTradeUsd[0] + g_netTradeUsd[1];
 }
 
 static int g_cmdOwner = 1;
@@ -1056,16 +1179,22 @@ bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ)
 
 static float SampleTerrainHeight(float wx, float wz)
 {
-    if (!g_sampleHeightmap) return 20.0f;
+    if (!g_collisionTerrainHeight || !SaveSync_IsWorldLoaded()) return 20.0f;
+    float h = 20.0f;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
         BYTE* terrain = engine ? *(BYTE**)(engine + ENGINE_TERRAIN_OFFSET) : nullptr;
-        if (!terrain) return 20.0f;
-        float h = g_sampleHeightmap(terrain, wx, wz);
-        return isfinite(h) ? h : 20.0f;
+        if (terrain && *(BYTE**)(terrain + 0x840) != nullptr) {
+            float pos3[3] = { wx, 0.0f, wz };
+            float sampled = g_collisionTerrainHeight(terrain, pos3);
+            if (isfinite(sampled)) h = sampled;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 20.0f;
+        h = 20.0f;
     }
+    DiagLog_EndSafeSeh();
+    return h;
 }
 
 bool TwoStates_JumpCameraTo(float wx, float wz)
@@ -1112,8 +1241,8 @@ bool TwoStates_JumpCameraToPartner()
     if (TwoStates_JumpCameraTo(tx, tz)) {
         char msg[160];
         _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                    Tr("📷 Камера перемещена к партнёру (X=%.0f м, Z=%.0f м)",
-                       "📷 Camera jumped to partner (X=%.0f m, Z=%.0f m)"),
+                    Tr("[КАМЕРА] Перемещена к партнёру (X=%.0f м, Z=%.0f м)",
+                       "[CAMERA] Jumped to partner (X=%.0f m, Z=%.0f m)"),
                     tx, tz);
         TwoStates_AddToast(msg, 0);
         return true;
@@ -1123,9 +1252,6 @@ bool TwoStates_JumpCameraToPartner()
 
 void TwoStates_SetShow3DBorder(bool on) { g_show3DBorder = on; }
 bool TwoStates_GetShow3DBorder()         { return g_show3DBorder; }
-void TwoStates_SetShowMiniHud(bool on)  { g_showMiniHud = on; }
-bool TwoStates_GetShowMiniHud()          { return g_showMiniHud; }
-bool TwoStates_MiniHudWantsMouse()       { return g_miniHudHovered; }
 
 void TwoStates_PingAtCursor()
 {
@@ -1141,8 +1267,8 @@ void TwoStates_PingAtCursor()
     }
     char msg[160];
     _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                Tr("📍 Сигнал отправлен на карту (X=%.0f м, Z=%.0f м)",
-                   "📍 Ping sent on map (X=%.0f m, Z=%.0f m)"),
+                Tr("[СИГНАЛ] Отправлен на карту (X=%.0f м, Z=%.0f м)",
+                   "[PING] Sent on map (X=%.0f m, Z=%.0f m)"),
                 cx, cz);
     TwoStates_AddToast(msg, 1);
     SaveStatus(Tr("[КАРТА] Отправлен сигнал партнёру: X=%.0f м, Z=%.0f м",
@@ -1240,25 +1366,14 @@ static void Draw3DBorderLines(ImDrawList* dl, const ImVec2& displaySize)
         }
     }
 
-    // 3. Floating 3D labels near camera lookAt Z
+    // 3. Single clean 3D badge on the main border (no side badges that collide when zoomed out)
     float labelY = SampleTerrainHeight(0.0f, lz) + 24.0f;
     ImVec2 centerScreen;
     if (WorldToScreen(0.0f, labelY, lz, displaySize, &centerScreen)) {
         Draw3DTextBadge(dl, centerScreen,
-                        Tr("◄ ЗАПАДНАЯ ССР (Хост)  |  ГОСУДАРСТВЕННАЯ ГРАНИЦА (X=0)  |  ВОСТОЧНАЯ ССР (Игрок 2) ►",
-                           "◄ WEST SSR (Host)  |  STATE BORDER (X=0)  |  EAST SSR (Player 2) ►"),
+                        Tr("<< ЗАПАДНАЯ ССР  |  ГРАНИЦА  |  ВОСТОЧНАЯ ССР >>",
+                           "<< WEST SSR  |  BORDER  |  EAST SSR >>"),
                         IM_COL32(20, 22, 28, 220), IM_COL32(255, 200, 60, 230), IM_COL32(255, 235, 140, 255));
-    }
-    ImVec2 westEdgeScreen, eastEdgeScreen;
-    if (WorldToScreen(-g_borderHalfWidth, SampleTerrainHeight(-g_borderHalfWidth, lz) + 14.0f, lz, displaySize, &westEdgeScreen)) {
-        char buf[96];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE, Tr("Пограничная зона (-%.0f м)", "Border Zone (-%.0f m)"), g_borderHalfWidth);
-        Draw3DTextBadge(dl, westEdgeScreen, buf, IM_COL32(18, 28, 40, 195), IM_COL32(80, 190, 255, 200), IM_COL32(160, 225, 255, 255));
-    }
-    if (WorldToScreen(g_borderHalfWidth, SampleTerrainHeight(g_borderHalfWidth, lz) + 14.0f, lz, displaySize, &eastEdgeScreen)) {
-        char buf[96];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE, Tr("Пограничная зона (+%.0f м)", "Border Zone (+%.0f m)"), g_borderHalfWidth);
-        Draw3DTextBadge(dl, eastEdgeScreen, buf, IM_COL32(40, 26, 16, 195), IM_COL32(255, 170, 70, 200), IM_COL32(255, 215, 150, 255));
     }
 }
 
@@ -1274,8 +1389,8 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
         s_lastPingSeq = pc.pingSeq;
         char toast[200];
         _snprintf_s(toast, sizeof(toast), _TRUNCATE,
-                    Tr("📍 Сигнал от партнёра на карте (X=%.0f м, Z=%.0f м) — нажмите F6 для перехода!",
-                       "📍 Map ping from partner (X=%.0f m, Z=%.0f m) — press F6 to jump!"),
+                    Tr("[СИГНАЛ] От партнёра на карте (X=%.0f м, Z=%.0f м) — нажмите F6 для перехода!",
+                       "[PING] Map ping from partner (X=%.0f m, Z=%.0f m) — press F6 to jump!"),
                     pc.pingX, pc.pingZ);
         TwoStates_AddToast(toast, 2);
     }
@@ -1314,7 +1429,7 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
                 dl->AddLine(basePt, beamTopPt, IM_COL32(255, 220, 60, 220), 3.5f);
                 char pingText[128];
                 _snprintf_s(pingText, sizeof(pingText), _TRUNCATE,
-                            Tr("📍 СИГНАЛ ПАРТНЁРА (X=%.0f, Z=%.0f) [F6]", "📍 PARTNER PING (X=%.0f, Z=%.0f) [F6]"),
+                            Tr("[СИГНАЛ ПАРТНЁРА] (X=%.0f, Z=%.0f) [F6]", "[PARTNER PING] (X=%.0f, Z=%.0f) [F6]"),
                             pc.pingX, pc.pingZ);
                 Draw3DTextBadge(dl, ImVec2(beamTopPt.x, beamTopPt.y - 14.0f), pingText,
                                 IM_COL32(45, 30, 10, 235), IM_COL32(255, 210, 50, 255), IM_COL32(255, 240, 150, 255));
@@ -1325,7 +1440,6 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
 
 void TwoStates_DrawOverlay()
 {
-    g_miniHudHovered = false;
     bool worldLoaded = SaveSync_IsWorldLoaded();
     bool focused = IsGameWindowFocused();
 
@@ -1340,6 +1454,7 @@ void TwoStates_DrawOverlay()
     bool f7Down = focused && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
     if (f7Down && !s_f7WasDown) {
         g_show3DBorder = !g_show3DBorder;
+        TwoStates_SaveSettings();
         TwoStates_AddToast(g_show3DBorder
             ? Tr("3D-граница государств: ВКЛЮЧЕНА [F7]", "3D State Border: ON [F7]")
             : Tr("3D-граница государств: СКРЫТА [F7]", "3D State Border: OFF [F7]"), 0);
@@ -1385,95 +1500,27 @@ void TwoStates_DrawOverlay()
         DrawPartnerCursorAndPing(bg, displaySize);
     }
 
-    // Draw Compact Top-Center Mini-HUD when in session or when Two States mode is active
+    // While Host is waiting for Player 2 (before Lockstep starts), keep State 1 treasury synced with world balance
     SessionState st = SaveSync_GetState();
-    bool inActiveGame = (st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
-    if (g_showMiniHud && (inActiveGame || TwoStates_IsActive())) {
-        ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, 8.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.10f, 0.13f, 0.88f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 7.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 5.0f));
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                                 ImGuiWindowFlags_NoNav;
-        if (ImGui::Begin("##RepublicMP_MiniHUD", nullptr, flags)) {
-            if (TwoStates_IsActive()) {
-                int me = TwoStates_LocalState();
-                ImGui::TextColored(me == 1 ? ImVec4(0.4f, 0.85f, 1.0f, 1.0f) : ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
-                                   "%s", me == 1 ? Tr("★ Западная ССР", "★ West SSR") : Tr("★ Восточная ССР", "★ East SSR"));
-                ImGui::SameLine();
-                ImGui::TextDisabled("|");
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f),
-                                   Tr("Ваша казна: %.0f ₽ / %.0f $", "Your Treasury: %.0f RUB / %.0f USD"),
-                                   TwoStates_LocalRubles(), TwoStates_LocalDollars());
-                ImGui::SameLine();
-                ImGui::TextDisabled("|");
-                ImGui::SameLine();
-                int other = (me == 1) ? 2 : 1;
-                ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.0f),
-                                   Tr("%s: %.0f ₽ / %.0f $", "%s: %.0f RUB / %.0f USD"),
-                                   other == 1 ? Tr("Запад", "West") : Tr("Восток", "East"),
-                                   TwoStates_GetRubles(other), TwoStates_GetDollars(other));
-
-                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-                if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
-                    int zone = TwoStates_GetZoneAt(cx, cz);
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("|");
-                    ImGui::SameLine();
-                    if (zone == 0)
-                        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), Tr("Погранзона", "Border Zone"));
-                    else if (zone == me)
-                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), Tr("Своя земля", "Own Land"));
-                    else
-                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), Tr("Чужая земля", "Partner's Land"));
-                }
-            } else {
-                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f),
-                                   Tr("★ Одно государство (Кооп)", "★ One State (Co-op)"));
-            }
-
-            unsigned long long rtt = 0;
-            if (LockstepNet_RoundTrip(&rtt)) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("|");
-                ImGui::SameLine();
-                ImGui::TextColored(rtt < 80 ? ImVec4(0.4f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                                   Tr("%llu мс", "%llu ms"), rtt);
-            }
-
-            ImGui::SameLine();
-            ImGui::TextDisabled("|");
-            ImGui::SameLine();
-            if (ImGui::SmallButton(Tr("К другу [F6]", "To Partner [F6]"))) TwoStates_JumpCameraToPartner();
-            ImGui::SameLine();
-            if (ImGui::SmallButton(Tr("Сигнал [Alt+ЛКМ]", "Ping [Alt+LMB]"))) TwoStates_PingAtCursor();
-            if (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton(g_show3DBorder ? Tr("Граница: ВКЛ [F7]", "Border: ON [F7]") : Tr("Граница: ВЫКЛ [F7]", "Border: OFF [F7]")))
-                    g_show3DBorder = !g_show3DBorder;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton(g_imguiVisible ? Tr("Скрыть [Ins]", "Hide [Ins]") : Tr("Меню [Ins]", "Menu [Ins]")))
-                g_imguiVisible = !g_imguiVisible;
-
-            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
-                g_miniHudHovered = true;
+    if (st == SESSION_HOST_LISTENING && TwoStates_IsActive() && !g_inSimStep && !g_inCommand) {
+        __try {
+            double curRub = *WorldRubles();
+            double curUsd = *WorldDollars();
+            double sumRub = g_stateRub[0] + g_stateRub[1];
+            double sumUsd = g_stateUsd[0] + g_stateUsd[1];
+            if (fabs(curRub - sumRub) > 0.01) g_stateRub[0] += (curRub - sumRub);
+            if (fabs(curUsd - sumUsd) > 0.01) g_stateUsd[0] += (curUsd - sumUsd);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor();
     }
 
-    // Draw Toast notifications (top-center below Mini-HUD)
+    // Draw Toast notifications (top-center below the game's resource bar)
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
     while (!g_toasts.empty() && now - g_toasts.front().createdMs > g_toasts.front().durationMs) {
         g_toasts.pop_front();
     }
-    float toastY = 48.0f;
+    float toastY = 58.0f;
     for (size_t i = 0; i < g_toasts.size(); ++i) {
         const ToastMessage& tm = g_toasts[i];
         ImU32 borderCol = IM_COL32(90, 180, 255, 230);
@@ -1595,65 +1642,656 @@ bool TwoStates_PatchSaveScriptIni(const char* saveDir, float customWorldSizeMete
     return true;
 }
 
-static volatile bool g_creatingMap = false;
-static int g_targetMapKm = 30;
+// ---------------------------------------------------------------------------
+// Persistent Global Co-op Settings (republicmp_settings.ini)
+// ---------------------------------------------------------------------------
 
-static DWORD WINAPI CreateExpandedMapThread(LPVOID)
+static bool GetExeDir(char* outDir, size_t outSize)
 {
-    int km = g_targetMapKm;
-    char saveName[64] = {};
-    _snprintf_s(saveName, sizeof(saveName), _TRUNCATE, "TwoStates_%dx%dkm", km, km);
-
+    if (!outDir || outSize == 0) return false;
+    outDir[0] = '\0';
     char exePath[MAX_PATH] = {};
-    GetModuleFileNameA(g_exe, exePath, MAX_PATH);
-    char* slash = strrchr(exePath, '\\');
-    if (slash) *slash = 0;
+    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) return false;
+    char* lastSlash = strrchr(exePath, '\\');
+    if (!lastSlash) return false;
+    *lastSlash = '\0';
+    strncpy_s(outDir, outSize, exePath, _TRUNCATE);
+    return true;
+}
 
-    char saveDir[MAX_PATH] = {};
-    _snprintf_s(saveDir, sizeof(saveDir), _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName);
-    CreateDirectoryA(saveDir, nullptr);
+static std::string GetSettingsIniPath()
+{
+    char path[MAX_PATH] = {};
+    HMODULE hMod = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)&TwoStates_LoadSettings, &hMod)) {
+        GetModuleFileNameA(hMod, path, MAX_PATH);
+    }
+    std::string dll(path);
+    size_t pos = dll.find_last_of("\\/");
+    if (pos == std::string::npos) return "republicmp_settings.ini";
+    return dll.substr(0, pos + 1) + "republicmp_settings.ini";
+}
 
-    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 1/3: Сохранение текущего мира в «%s»...",
-                  "[MAP %dx%d KM] Step 1/3: Saving current world to '%s'..."), km, km, saveName);
-    TriggerSaveGame(saveName);
-    if (!WaitForSaveToFinish(120000)) {
-        SaveStatus(Tr("[КАРТА %dx%d КМ] Ошибка: превышено время ожидания сохранения",
-                      "[MAP %dx%d KM] Error: save timed out"), km, km);
-        g_creatingMap = false;
-        return 0;
+void TwoStates_LoadSettings()
+{
+    std::string ini = GetSettingsIniPath();
+    if (GetFileAttributesA(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+
+    int mode = GetPrivateProfileIntA("coop", "mode", (int)g_chosenMode, ini.c_str());
+    g_chosenMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
+    if (!g_inSession) g_sessionMode = g_chosenMode;
+
+    int fullCap = GetPrivateProfileIntA("coop", "full_starting_capital", g_fullStartingCapital ? 1 : 0, ini.c_str());
+    g_fullStartingCapital = (fullCap != 0);
+
+    int bw = GetPrivateProfileIntA("coop", "border_half_width_m", (int)(g_borderHalfWidth + 0.5f), ini.c_str());
+    if (bw >= 50 && bw <= 2000) g_borderHalfWidth = (float)bw;
+
+    int expB = GetPrivateProfileIntA("coop", "expand_borders", g_expandBorders ? 1 : 0, ini.c_str());
+    g_expandBorders = (expB != 0);
+
+    int show3d = GetPrivateProfileIntA("coop", "show_3d_border", g_show3DBorder ? 1 : 0, ini.c_str());
+    g_show3DBorder = (show3d != 0);
+
+    int dlc = GetPrivateProfileIntA("coop", "dlc_check", SaveSync_GetDlcCheck() ? 1 : 0, ini.c_str());
+    SaveSync_SetDlcCheck(dlc != 0);
+
+    char addr[64] = {};
+    GetPrivateProfileStringA("coop", "last_join_address", "", addr, sizeof(addr), ini.c_str());
+    if (addr[0]) {
+        strncpy_s(g_savedJoinAddress, addr, _TRUNCATE);
     }
 
-    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 2/3: Расширение границ и масштаба карты до %dx%d км (%d км²)...",
-                  "[MAP %dx%d KM] Step 2/3: Expanding borders and map scale to %dx%d km (%d km²)..."),
-               km, km, km, km, km * km);
-    if (!TwoStates_PatchSaveScriptIni(saveDir, (float)km * 1000.0f)) {
-        SaveStatus(Tr("[КАРТА %dx%d КМ] Ошибка: не удалось обновить script.ini",
-                      "[MAP %dx%d KM] Error: failed to patch script.ini"), km, km);
-        g_creatingMap = false;
-        return 0;
+    ModSync_LoadSettingsFromIni(ini.c_str());
+
+    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, dlc=%d, addr='%s')",
+         ini.c_str(), (int)g_chosenMode, g_fullStartingCapital ? 1 : 0, (int)g_borderHalfWidth,
+         g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, SaveSync_GetDlcCheck() ? 1 : 0, g_savedJoinAddress);
+}
+
+void TwoStates_SaveSettings()
+{
+    std::string ini = GetSettingsIniPath();
+    char buf[32] = {};
+
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", (int)g_chosenMode);
+    WritePrivateProfileStringA("coop", "mode", buf, ini.c_str());
+
+    WritePrivateProfileStringA("coop", "full_starting_capital", g_fullStartingCapital ? "1" : "0", ini.c_str());
+
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", (int)(g_borderHalfWidth + 0.5f));
+    WritePrivateProfileStringA("coop", "border_half_width_m", buf, ini.c_str());
+
+    WritePrivateProfileStringA("coop", "expand_borders", g_expandBorders ? "1" : "0", ini.c_str());
+    WritePrivateProfileStringA("coop", "show_3d_border", g_show3DBorder ? "1" : "0", ini.c_str());
+    WritePrivateProfileStringA("coop", "dlc_check", SaveSync_GetDlcCheck() ? "1" : "0", ini.c_str());
+
+    if (g_savedJoinAddress[0]) {
+        WritePrivateProfileStringA("coop", "last_join_address", g_savedJoinAddress, ini.c_str());
+    }
+    ModSync_SaveSettingsToIni(ini.c_str());
+}
+
+const char* TwoStates_GetSavedJoinAddress()
+{
+    return g_savedJoinAddress;
+}
+
+void TwoStates_SetSavedJoinAddress(const char* addr)
+{
+    if (!addr || !addr[0]) return;
+    strncpy_s(g_savedJoinAddress, addr, _TRUNCATE);
+}
+
+// ---------------------------------------------------------------------------
+// Separate Singleplayer vs Co-op Save Banks (media_soviet\save <-> save_sp / save_coop)
+// ---------------------------------------------------------------------------
+
+#define COOP_BANK_MARKER_NAME ".republicmp_coop_bank"
+#define COOP_SAVE_META_NAME   "republicmp_coop.ini"
+
+static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize)
+{
+    if (!saveRel || !saveRel[0] || !outFullDir || outSize == 0) return false;
+    char exeDir[MAX_PATH] = {};
+    if (!GetExeDir(exeDir, sizeof(exeDir))) return false;
+    char normRel[160] = {};
+    strncpy_s(normRel, saveRel, _TRUNCATE);
+    for (char* p = normRel; *p; ++p) {
+        if (*p == '/') *p = '\\';
+    }
+    return _snprintf_s(outFullDir, outSize, _TRUNCATE, "%s\\media_soviet\\%s", exeDir, normRel) >= 0;
+}
+
+bool TwoStates_IsCoopBankMounted()
+{
+    char exeDir[MAX_PATH] = {};
+    if (!GetExeDir(exeDir, sizeof(exeDir))) return false;
+    char markerPath[MAX_PATH] = {};
+    _snprintf_s(markerPath, sizeof(markerPath), _TRUNCATE, "%s\\media_soviet\\save\\%s", exeDir, COOP_BANK_MARKER_NAME);
+    return GetFileAttributesA(markerPath) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void CleanStagingFilesInDir(const std::filesystem::path& dirPath)
+{
+    if (SaveSync_GetState() != SESSION_IDLE || SaveSync_IsWorldLoaded()) return;
+    std::error_code ec;
+    if (!std::filesystem::exists(dirPath, ec)) return;
+    for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
+        std::string name = entry.path().filename().string();
+        if (_strnicmp(name.c_str(), "mp_syncsave_", 12) == 0 ||
+            (name.size() > 15 && _stricmp(name.c_str() + name.size() - 15, ".republicmp.zip") == 0)) {
+            std::error_code rmEc;
+            std::filesystem::remove_all(entry.path(), rmEc);
+        }
+    }
+}
+
+static bool MoveOrMergeDir(const std::filesystem::path& src, const std::filesystem::path& dst)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(src, ec)) return true;
+    if (!std::filesystem::exists(dst, ec)) {
+        std::filesystem::rename(src, dst, ec);
+        if (!ec) return true;
+    }
+    std::filesystem::create_directories(dst, ec);
+    for (const auto& entry : std::filesystem::directory_iterator(src, ec)) {
+        std::filesystem::path target = dst / entry.path().filename();
+        std::error_code rmEc;
+        if (std::filesystem::exists(target, rmEc)) {
+            std::filesystem::remove_all(target, rmEc);
+        }
+        std::filesystem::rename(entry.path(), target, rmEc);
+        if (rmEc) {
+            std::filesystem::copy(entry.path(), target,
+                                  std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                                  rmEc);
+            std::filesystem::remove_all(entry.path(), rmEc);
+        }
+    }
+    std::filesystem::remove_all(src, ec);
+    return true;
+}
+
+bool TwoStates_MountSaveBank(bool wantCoop)
+{
+    char exeDir[MAX_PATH] = {};
+    if (!GetExeDir(exeDir, sizeof(exeDir))) return false;
+
+    std::filesystem::path mediaDir = std::filesystem::path(exeDir) / "media_soviet";
+    std::filesystem::path saveDir  = mediaDir / "save";
+    std::filesystem::path spDir    = mediaDir / "save_sp";
+    std::filesystem::path coopDir  = mediaDir / "save_coop";
+    std::filesystem::path marker   = saveDir / COOP_BANK_MARKER_NAME;
+
+    std::error_code ec;
+    std::filesystem::create_directories(saveDir, ec);
+
+    bool curCoop = std::filesystem::exists(marker, ec);
+    if (curCoop == wantCoop) {
+        CleanStagingFilesInDir(saveDir);
+        return true;
     }
 
-    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 3/3: Загрузка увеличенной карты «%s»...",
-                  "[MAP %dx%d KM] Step 3/3: Loading expanded map '%s'..."), km, km, saveName);
-    TriggerLoadSave(saveName);
-    WaitForLoadToFinish(180000);
-    SaveStatus(Tr("[КАРТА %dx%d КМ] Готово! Карта %dx%d км (%d км²) успешно загружена.",
-                  "[MAP %dx%d KM] Done! Map %dx%d km (%d km²) loaded."), km, km, km, km, km * km);
-    g_creatingMap = false;
-    return 0;
+    if (wantCoop) {
+        // Switching from Singleplayer bank (currently in `save`) -> Co-op bank (`save_coop` -> `save`)
+        CleanStagingFilesInDir(saveDir);
+        MoveOrMergeDir(saveDir, spDir);
+        if (std::filesystem::exists(coopDir, ec)) {
+            MoveOrMergeDir(coopDir, saveDir);
+        } else {
+            std::filesystem::create_directories(saveDir, ec);
+        }
+        FILE* f = nullptr;
+        if (fopen_s(&f, marker.string().c_str(), "wb") == 0 && f) {
+            const char* txt = "REPUBLICMP_COOP_SAVE_BANK\n";
+            fwrite(txt, 1, strlen(txt), f);
+            fclose(f);
+        }
+        // Automatically migrate any pre-existing Co-op saves (folders with republicmp_coop.ini or coop_ prefix) from save_sp -> save
+        if (std::filesystem::exists(spDir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(spDir, ec)) {
+                if (!entry.is_directory(ec)) continue;
+                std::string folderName = entry.path().filename().string();
+                bool isCoopFolder = (_strnicmp(folderName.c_str(), "coop_", 5) == 0) ||
+                                    std::filesystem::exists(entry.path() / COOP_SAVE_META_NAME, ec);
+                if (isCoopFolder) {
+                    std::filesystem::path dst = saveDir / folderName;
+                    if (!std::filesystem::exists(dst, ec)) {
+                        std::filesystem::rename(entry.path(), dst, ec);
+                    }
+                }
+            }
+        }
+        CleanStagingFilesInDir(saveDir);
+        Logf("republicmp  SAVE_BANK: mounted CO-OP save bank at [%s]", saveDir.string().c_str());
+    } else {
+        // Switching from Co-op bank (currently in `save`) -> Singleplayer bank (`save_sp` -> `save`)
+        ModSync_EndSession();
+        CleanStagingFilesInDir(saveDir);
+        MoveOrMergeDir(saveDir, coopDir);
+        if (std::filesystem::exists(spDir, ec)) {
+            MoveOrMergeDir(spDir, saveDir);
+        } else {
+            std::filesystem::create_directories(saveDir, ec);
+        }
+        if (std::filesystem::exists(marker, ec)) {
+            std::filesystem::remove(marker, ec);
+        }
+        CleanStagingFilesInDir(saveDir);
+        Logf("republicmp  SAVE_BANK: mounted SINGLEPLAYER save bank at [%s]", saveDir.string().c_str());
+    }
+    return true;
 }
 
-void TwoStates_RequestCreateExpandedMap(int sizeKm)
+bool TwoStates_GetLatestCoopSaveName(char* outName, size_t outSize)
 {
-    if (g_creatingMap || SaveSync_IsBusy() || !SaveSync_IsWorldLoaded()) return;
-    if (sizeKm < 20) sizeKm = 20;
-    if (sizeKm > 60) sizeKm = 60;
-    g_targetMapKm = sizeKm;
-    g_creatingMap = true;
-    CreateThread(nullptr, 0, CreateExpandedMapThread, nullptr, 0, nullptr);
+    if (!outName || outSize == 0) return false;
+    outName[0] = '\0';
+
+    char exeDir[MAX_PATH] = {};
+    if (!GetExeDir(exeDir, sizeof(exeDir))) return false;
+
+    std::filesystem::path mediaDir = std::filesystem::path(exeDir) / "media_soviet";
+    std::filesystem::path coopBank = TwoStates_IsCoopBankMounted() ? (mediaDir / "save") : (mediaDir / "save_coop");
+
+    std::error_code ec;
+    if (!std::filesystem::exists(coopBank, ec)) return false;
+
+    std::string bestName;
+    std::filesystem::file_time_type bestTime{};
+    bool found = false;
+
+    for (const auto& entry : std::filesystem::directory_iterator(coopBank, ec)) {
+        if (!entry.is_directory(ec)) continue;
+        std::string name = entry.path().filename().string();
+        if (_strnicmp(name.c_str(), "mp_syncsave_", 12) == 0) continue;
+        std::filesystem::path headerBin = entry.path() / "header.bin";
+        std::filesystem::path statsIni  = entry.path() / "stats.ini";
+        if (!std::filesystem::exists(headerBin, ec) || !std::filesystem::exists(statsIni, ec)) continue;
+        auto mtime = std::filesystem::last_write_time(headerBin, ec);
+        if (!found || mtime > bestTime) {
+            bestTime = mtime;
+            bestName = name;
+            found = true;
+        }
+    }
+
+    if (!found) return false;
+    strncpy_s(outName, outSize, bestName.c_str(), _TRUNCATE);
+    return true;
 }
 
-bool TwoStates_IsCreatingExpandedMap()
+void TwoStates_SetImportingSpSave(bool importing)
 {
-    return g_creatingMap;
+    g_importingSpSave = importing;
 }
+
+bool TwoStates_IsImportingSpSave()
+{
+    return g_importingSpSave;
+}
+
+// ---------------------------------------------------------------------------
+// Per-Save Co-op Metadata (republicmp_coop.ini) & World Load/Save Hooks
+// ---------------------------------------------------------------------------
+
+static bool SafeReadWorldMoney(double* outRub, double* outUsd)
+{
+    __try {
+        *outRub = *WorldRubles();
+        *outUsd = *WorldDollars();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void SafeWriteWorldMoney(double rub, double usd)
+{
+    __try {
+        *WorldRubles()  = rub;
+        *WorldDollars() = usd;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static bool SafeReadPendingLoadInfo(BYTE* outTerrainFlag, char* outSaveRel, size_t outSaveRelSize)
+{
+    if (!g_exeBase) return false;
+    __try {
+        *outTerrainFlag = *(BYTE*)(g_exeBase + TERRAIN_FLAG_DAT_RVA);
+        strncpy_s(outSaveRel, outSaveRelSize, (const char*)(g_exeBase + SAVE_NAME_DAT_RVA), _TRUNCATE);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
+{
+    if (!fullSaveDir || !fullSaveDir[0]) return;
+    char metaPath[MAX_PATH] = {};
+    _snprintf_s(metaPath, sizeof(metaPath), _TRUNCATE, "%s\\%s", fullSaveDir, COOP_SAVE_META_NAME);
+
+    int mode = g_inSession ? (int)g_sessionMode : (int)g_chosenMode;
+    double rub0 = g_stateRub[0];
+    double rub1 = g_stateRub[1];
+    double usd0 = g_stateUsd[0];
+    double usd1 = g_stateUsd[1];
+
+    if (!g_treasuryInitialized) {
+        double wRub = 0.0, wUsd = 0.0;
+        if (SafeReadWorldMoney(&wRub, &wUsd)) {
+            if (mode == COOP_MODE_TWO_STATES) {
+                if (g_fullStartingCapital) {
+                    rub0 = wRub; rub1 = wRub;
+                    usd0 = wUsd; usd1 = wUsd;
+                } else {
+                    rub0 = wRub * 0.5; rub1 = wRub - rub0;
+                    usd0 = wUsd * 0.5; usd1 = wUsd - usd0;
+                }
+            } else {
+                rub0 = wRub; rub1 = 0.0;
+                usd0 = wUsd; usd1 = 0.0;
+            }
+        }
+    }
+
+    std::ostringstream out;
+    out << "[republicmp_coop]\r\n";
+    out << "version=1\r\n";
+    out << "coop_mode=" << mode << "\r\n";
+    out << "border_half_width_m=" << (int)(g_borderHalfWidth + 0.5f) << "\r\n";
+    out << "expand_borders=" << (g_expandBorders ? 1 : 0) << "\r\n";
+    out << "state1_rub_cents=" << (long long)llround(rub0 * 100.0) << "\r\n";
+    out << "state2_rub_cents=" << (long long)llround(rub1 * 100.0) << "\r\n";
+    out << "state1_usd_cents=" << (long long)llround(usd0 * 100.0) << "\r\n";
+    out << "state2_usd_cents=" << (long long)llround(usd1 * 100.0) << "\r\n";
+    out << "net_trade1_rub_cents=" << (long long)llround(g_netTradeRub[0] * 100.0) << "\r\n";
+    out << "net_trade2_rub_cents=" << (long long)llround(g_netTradeRub[1] * 100.0) << "\r\n";
+    out << "net_trade1_usd_cents=" << (long long)llround(g_netTradeUsd[0] * 100.0) << "\r\n";
+    out << "net_trade2_usd_cents=" << (long long)llround(g_netTradeUsd[1] * 100.0) << "\r\n";
+
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    out << "building_owners=";
+    bool first = true;
+    for (const auto& kv : g_buildingOwners) {
+        if (!first) out << ",";
+        out << kv.first << ":" << kv.second;
+        first = false;
+    }
+    out << "\r\n";
+
+    out << "vehicle_owners=";
+    first = true;
+    for (const auto& kv : g_vehicleOwners) {
+        if (!first) out << ",";
+        out << kv.first << ":" << kv.second;
+        first = false;
+    }
+    out << "\r\n";
+    LeaveCriticalSection(&g_ownerLock);
+
+    std::string data = out.str();
+    FILE* f = nullptr;
+    if (fopen_s(&f, metaPath, "wb") == 0 && f) {
+        fwrite(data.data(), 1, data.size(), f);
+        fclose(f);
+        Logf("republicmp  COOP_META: saved [%s] (mode=%d, rub=[%.0f, %.0f], usd=[%.0f, %.0f], blds=%zu, vehs=%zu)",
+             metaPath, mode, rub0, rub1, usd0, usd1, g_buildingOwners.size(), g_vehicleOwners.size());
+    }
+}
+
+static void ParseOwnersList(const std::string& val, std::unordered_map<int, int>& outMap)
+{
+    outMap.clear();
+    size_t pos = 0;
+    while (pos < val.size()) {
+        size_t comma = val.find(',', pos);
+        if (comma == std::string::npos) comma = val.size();
+        std::string token = val.substr(pos, comma - pos);
+        size_t colon = token.find(':');
+        if (colon != std::string::npos) {
+            int id = atoi(token.substr(0, colon).c_str());
+            int owner = atoi(token.substr(colon + 1).c_str());
+            if (id >= 0 && (owner == 1 || owner == 2)) {
+                outMap[id] = owner;
+            }
+        }
+        pos = comma + 1;
+    }
+}
+
+static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgetsAndMode)
+{
+    if (!fullSaveDir || !fullSaveDir[0]) return false;
+    char metaPath[MAX_PATH] = {};
+    _snprintf_s(metaPath, sizeof(metaPath), _TRUNCATE, "%s\\%s", fullSaveDir, COOP_SAVE_META_NAME);
+
+    FILE* f = nullptr;
+    if (fopen_s(&f, metaPath, "rb") != 0 || !f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > 16 * 1024 * 1024) {
+        fclose(f);
+        return false;
+    }
+    std::string content((size_t)sz, '\0');
+    fread(&content[0], 1, (size_t)sz, f);
+    fclose(f);
+
+    int mode = (int)g_chosenMode;
+    int bw = (int)(g_borderHalfWidth + 0.5f);
+    int expB = g_expandBorders ? 1 : 0;
+    long long rubCents[2] = { 0, 0 };
+    long long usdCents[2] = { 0, 0 };
+    long long tradeRubCents[2] = { 0, 0 };
+    long long tradeUsdCents[2] = { 0, 0 };
+    bool haveRub = false, haveUsd = false;
+
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    g_buildingOwners.clear();
+    g_vehicleOwners.clear();
+
+    std::istringstream in(content);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '[' || line[0] == ';' || line[0] == '#') continue;
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        if (key == "coop_mode") mode = atoi(val.c_str());
+        else if (key == "border_half_width_m") bw = atoi(val.c_str());
+        else if (key == "expand_borders") expB = atoi(val.c_str());
+        else if (key == "state1_rub_cents") { rubCents[0] = _strtoi64(val.c_str(), nullptr, 10); haveRub = true; }
+        else if (key == "state2_rub_cents") { rubCents[1] = _strtoi64(val.c_str(), nullptr, 10); haveRub = true; }
+        else if (key == "state1_usd_cents") { usdCents[0] = _strtoi64(val.c_str(), nullptr, 10); haveUsd = true; }
+        else if (key == "state2_usd_cents") { usdCents[1] = _strtoi64(val.c_str(), nullptr, 10); haveUsd = true; }
+        else if (key == "net_trade1_rub_cents") tradeRubCents[0] = _strtoi64(val.c_str(), nullptr, 10);
+        else if (key == "net_trade2_rub_cents") tradeRubCents[1] = _strtoi64(val.c_str(), nullptr, 10);
+        else if (key == "net_trade1_usd_cents") tradeUsdCents[0] = _strtoi64(val.c_str(), nullptr, 10);
+        else if (key == "net_trade2_usd_cents") tradeUsdCents[1] = _strtoi64(val.c_str(), nullptr, 10);
+        else if (key == "building_owners") ParseOwnersList(val, g_buildingOwners);
+        else if (key == "vehicle_owners")  ParseOwnersList(val, g_vehicleOwners);
+    }
+    size_t bldCount = g_buildingOwners.size();
+    size_t vehCount = g_vehicleOwners.size();
+    LeaveCriticalSection(&g_ownerLock);
+
+    g_netTradeRub[0] = (double)tradeRubCents[0] / 100.0;
+    g_netTradeRub[1] = (double)tradeRubCents[1] / 100.0;
+    g_netTradeUsd[0] = (double)tradeUsdCents[0] / 100.0;
+    g_netTradeUsd[1] = (double)tradeUsdCents[1] / 100.0;
+
+    if (updateBudgetsAndMode) {
+        g_chosenMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
+        g_sessionMode = g_chosenMode;
+        if (bw >= 50 && bw <= 2000) g_borderHalfWidth = (float)bw;
+        g_expandBorders = (expB != 0);
+        if (haveRub) {
+            g_stateRub[0] = (double)rubCents[0] / 100.0;
+            g_stateRub[1] = (double)rubCents[1] / 100.0;
+        }
+        if (haveUsd) {
+            g_stateUsd[0] = (double)usdCents[0] / 100.0;
+            g_stateUsd[1] = (double)usdCents[1] / 100.0;
+        }
+        g_treasuryInitialized = true;
+        g_loadedFromCoopSave = true;
+
+        if (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd)) {
+            SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
+        }
+    }
+
+    Logf("republicmp  COOP_META: loaded [%s] (updateBudgets=%d, mode=%d, rub=[%.0f, %.0f], usd=[%.0f, %.0f], blds=%zu, vehs=%zu)",
+         metaPath, updateBudgetsAndMode ? 1 : 0, (int)g_chosenMode,
+         g_stateRub[0], g_stateRub[1], g_stateUsd[0], g_stateUsd[1], bldCount, vehCount);
+    return true;
+}
+
+void TwoStates_BeforeAnyWorldLoad()
+{
+    if (!g_exeBase) return;
+    bool wantCoopHost = NativeMenu_IsHostOnNextLoad() || g_importingSpSave;
+
+    BYTE terrainFlag = 0;
+    char saveRel[128] = {};
+    if (!SafeReadPendingLoadInfo(&terrainFlag, saveRel, sizeof(saveRel))) {
+        return;
+    }
+
+    if (!wantCoopHost) {
+        ModSync_BeforeWorldLoad(false, nullptr);
+        return;
+    }
+
+    if (!TwoStates_IsCoopBankMounted()) {
+        // User is importing a Singleplayer save into Co-op!
+        bool isSaveFolder = (_strnicmp(saveRel, "save\\", 5) == 0 || _strnicmp(saveRel, "save/", 5) == 0);
+        if (terrainFlag == 0 && isSaveFolder) {
+            char spFullDir[MAX_PATH] = {};
+            char exeDir[MAX_PATH] = {};
+            if (BuildFullSaveDir(saveRel, spFullDir, sizeof(spFullDir)) && GetExeDir(exeDir, sizeof(exeDir))) {
+                std::error_code ec;
+                std::filesystem::path srcPath(spFullDir);
+                std::string folderName = srcPath.filename().string();
+                std::filesystem::path coopCopy = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / folderName;
+                if (std::filesystem::exists(srcPath, ec) && std::filesystem::is_directory(srcPath, ec)) {
+                    std::filesystem::create_directories(coopCopy.parent_path(), ec);
+                    if (std::filesystem::exists(coopCopy, ec)) {
+                        std::filesystem::remove_all(coopCopy, ec);
+                    }
+                    std::filesystem::copy(srcPath, coopCopy,
+                                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                                          ec);
+                    // Remove any old republicmp_coop.ini on a fresh SP import so menu capital settings apply cleanly
+                    std::filesystem::remove(coopCopy / COOP_SAVE_META_NAME, ec);
+                    Logf("republicmp  SAVE_BANK: imported SP save [%s] -> [%s]",
+                         srcPath.string().c_str(), coopCopy.string().c_str());
+                } else {
+                    // Check if it was a .zip save in Singleplayer
+                    std::filesystem::path srcZip( std::string(spFullDir) + ".zip" );
+                    std::filesystem::path coopZip = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / (folderName + ".zip");
+                    if (std::filesystem::exists(srcZip, ec)) {
+                        std::filesystem::create_directories(coopZip.parent_path(), ec);
+                        std::filesystem::copy_file(srcZip, coopZip, std::filesystem::copy_options::overwrite_existing, ec);
+                    }
+                }
+            }
+        }
+        TwoStates_MountSaveBank(true);
+    }
+
+    g_importingSpSave = false;
+
+    char fullDir[MAX_PATH] = {};
+    bool isSaveRel = (_strnicmp(saveRel, "save\\", 5) == 0 || _strnicmp(saveRel, "save/", 5) == 0);
+    bool hasFullDir = (terrainFlag == 0 && isSaveRel && BuildFullSaveDir(saveRel, fullDir, sizeof(fullDir)));
+    if (hasFullDir && g_expandBorders) {
+        TwoStates_PatchSaveScriptIni(fullDir, 0.0f);
+    }
+
+    ModSync_BeforeWorldLoad(true, hasFullDir ? fullDir : nullptr);
+}
+
+void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
+{
+    if (!g_exeBase) return;
+    BYTE terrainFlag = 0;
+    char saveRel[128] = {};
+    if (!SafeReadPendingLoadInfo(&terrainFlag, saveRel, sizeof(saveRel))) {
+        return;
+    }
+
+    char fullSaveDir[MAX_PATH] = {};
+    bool isSaveRel = (_strnicmp(saveRel, "save\\", 5) == 0 || _strnicmp(saveRel, "save/", 5) == 0);
+    bool hasSaveDir = (terrainFlag == 0 && isSaveRel && BuildFullSaveDir(saveRel, fullSaveDir, sizeof(fullSaveDir)));
+
+    if (isLockstepSessionLoad) {
+        if (hasSaveDir) {
+            ReadCoopSaveMetaInternal(fullSaveDir, false);
+        }
+        TwoStates_OnWorldLoaded();
+        return;
+    }
+
+    if (hasSaveDir && ReadCoopSaveMetaInternal(fullSaveDir, true)) {
+        if (g_chosenMode == COOP_MODE_TWO_STATES) {
+            char msg[240];
+            _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                        Tr("Загружен кооп-сейв «2 государства» (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",
+                           "Loaded 'Two States' Co-op save (West: %.0f RUB / %.0f $, East: %.0f RUB / %.0f $)"),
+                        g_stateRub[0], g_stateUsd[0], g_stateRub[1], g_stateUsd[1]);
+            TwoStates_AddToast(msg, 1);
+        } else {
+            TwoStates_AddToast(Tr("Загружен кооп-сейв «Одно государство»",
+                                  "Loaded 'One State' Co-op save"), 1);
+        }
+    } else {
+        g_loadedFromCoopSave = false;
+        g_treasuryInitialized = false;
+        EnsureOwnerLock();
+        EnterCriticalSection(&g_ownerLock);
+        g_buildingOwners.clear();
+        g_vehicleOwners.clear();
+        LeaveCriticalSection(&g_ownerLock);
+        g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
+        g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
+    }
+}
+
+bool TwoStates_TriggerQuickCoopSave()
+{
+    if (!SaveSync_IsWorldLoaded()) return false;
+    TwoStates_MountSaveBank(true);
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int mode = g_inSession ? (int)g_sessionMode : (int)g_chosenMode;
+    char saveName[96] = {};
+    _snprintf_s(saveName, sizeof(saveName), _TRUNCATE,
+                "coop_%s_%04d-%02d-%02d_%02d-%02d-%02d",
+                (mode == COOP_MODE_TWO_STATES) ? "2states" : "1state",
+                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    char fullSaveDir[MAX_PATH] = {};
+    char saveRel[128] = {};
+    _snprintf_s(saveRel, sizeof(saveRel), _TRUNCATE, "save\\%s", saveName);
+    if (BuildFullSaveDir(saveRel, fullSaveDir, sizeof(fullSaveDir))) {
+        CreateDirectoryA(fullSaveDir, nullptr);
+    }
+
+    return TriggerSaveGame(saveName);
+}
+

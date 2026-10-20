@@ -21,6 +21,10 @@ if (Test-Path (Join-Path $root 'TesmioLoader\build\dinput8.dll')) {
 if (Test-Path (Join-Path $root 'README-RU.txt')) {
     Copy-Item (Join-Path $root 'README-RU.txt') (Join-Path $stage 'README-RU.txt') -Force
 }
+if (Test-Path (Join-Path $root 'TesmioLoader\RepublicMP\assets\editor')) {
+    New-Item -ItemType Directory -Path (Join-Path $stage 'media_soviet\editor') -Force | Out-Null
+    Copy-Item (Join-Path $root 'TesmioLoader\RepublicMP\assets\editor\mp_icon_*.png') (Join-Path $stage 'media_soviet\editor\') -Force
+}
 
 # Write republicmp_updater.ini for both pre-launch PowerShell updater and in-game WinHTTP updater
 $updaterIni = @(
@@ -102,6 +106,7 @@ $batLines = @(
     'echo Found game: !GAME_EXE!',
     'for %%G in ("!GAME_EXE!") do set "GAME_DIR=%%~dpG"',
     'if exist "%HERE%\dinput8.dll" copy /y "%HERE%\dinput8.dll" "!GAME_DIR!dinput8.dll" >nul 2>&1',
+    'if exist "%HERE%\media_soviet\editor\mp_icon_coop.png" copy /y "%HERE%\media_soviet\editor\mp_icon_*.png" "!GAME_DIR!media_soviet\editor\" >nul 2>&1',
     '(',
     'echo [tesmioloader]',
     'echo version = b0.3.6',

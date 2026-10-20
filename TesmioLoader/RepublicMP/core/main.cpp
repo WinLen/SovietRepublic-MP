@@ -29,7 +29,9 @@
 #include "../session/settings_sync.h"
 #include "../session/weather.h"
 #include "../session/two_states.h"
+#include "../session/mod_sync.h"
 #include "../session/updater.h"
+#include "../ui/native_menu.h"
 #include "diag_log.h"
 #include "version.h"
 
@@ -48,6 +50,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* origHost, TsmP
     GameSpeed_Bind(host);
     Money_Bind(host);
     TwoStates_Bind(host);
+    ModSync_Bind(host);
     SaveLoad_Bind(host);
     SaveZip_Bind(host);
     Network_Bind(host);
@@ -72,6 +75,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* origHost, TsmP
     Weather_Bind(host);
     SettingsSync_Bind(host);
     Updater_Bind(host);
+    NativeMenu_Bind(host);
     info->name    = "republicmp";
     info->version = REPUBLICMP_VERSION;
     return 0;
@@ -121,6 +125,8 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     SyncCheck_Install();
     Weather_Install();
     TwoStates_Install();
+    ModSync_Init();
+    NativeMenu_Install();
     NetworkInit();
     Updater_Init();
     DiagLog_LogStartupSummary();

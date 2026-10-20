@@ -1164,11 +1164,47 @@ struct LoadedPlugin
     const char*      name;
     const char*      version;
     TsmPluginStartFn start;      // optional second phase; null when absent
+    TsmPluginReloadFn reload;    // optional hot-reload callback
 };
 static LoadedPlugin g_plugin[MAX_PLUGINS];
 static int          g_pluginCount;
 static int          g_plugins = 1;
 static char         g_pluginDir[MAX_PATH];
+static char         g_sessionIniDir[MAX_PATH] = "";
+static const char*  g_currentPlugin = "?";
+
+#define MAX_PLUGIN_HOOKS 256
+struct PluginInlineHook
+{
+    char   ownerFile[64];
+    BYTE*  target;
+    void*  detour;
+    BYTE*  tramp;
+    size_t stolen;
+    bool   active;
+};
+struct PluginIatHook
+{
+    char   ownerFile[64];
+    void** slot;
+    void*  detour;
+    void*  orig;
+    bool   active;
+};
+static PluginInlineHook g_pluginInlineHooks[MAX_PLUGIN_HOOKS];
+static int              g_pluginInlineHookCount = 0;
+static PluginIatHook    g_pluginIatHooks[MAX_PLUGIN_HOOKS];
+static int              g_pluginIatHookCount = 0;
+
+struct KnownPluginEntry
+{
+    char id[64];
+    char file[64];
+    bool localEnabled;
+    bool effectiveEnabled;
+};
+static KnownPluginEntry g_knownPlugins[MAX_PLUGINS];
+static int              g_knownPluginCount = 0;
 
 // --- the host table -------------------------------------------------------
 //
@@ -1184,14 +1220,36 @@ static void**  api_FindIatSlot(void* mod, const char* dll, const char* fn)
 static int api_PatchIat(void* mod, const char* dll, const char* fn,
                         void* detour, void** original, const char* label)
 {
-    return PatchIat((HMODULE)mod, dll, fn, detour, original, label) ? 1 : 0;
+    void** slot = FindIatSlot((HMODULE)mod, dll, fn);
+    if (!PatchIat((HMODULE)mod, dll, fn, detour, original, label)) return 0;
+    if (g_currentPlugin && strcmp(g_currentPlugin, "?") != 0 && slot && g_pluginIatHookCount < MAX_PLUGIN_HOOKS)
+    {
+        PluginIatHook* h = &g_pluginIatHooks[g_pluginIatHookCount++];
+        strncpy_s(h->ownerFile, sizeof(h->ownerFile), g_currentPlugin, _TRUNCATE);
+        h->slot   = slot;
+        h->detour = detour;
+        h->orig   = *original;
+        h->active = true;
+    }
+    return 1;
 }
 
 static int api_InstallInlineHook(void* target, void* detour, void** tramp,
                                  const unsigned char* expect, size_t stolen,
                                  const char* label)
 {
-    return InstallInlineHook(target, detour, tramp, expect, stolen, label) ? 1 : 0;
+    if (!InstallInlineHook(target, detour, tramp, expect, stolen, label)) return 0;
+    if (g_currentPlugin && strcmp(g_currentPlugin, "?") != 0 && g_pluginInlineHookCount < MAX_PLUGIN_HOOKS)
+    {
+        PluginInlineHook* h = &g_pluginInlineHooks[g_pluginInlineHookCount++];
+        strncpy_s(h->ownerFile, sizeof(h->ownerFile), g_currentPlugin, _TRUNCATE);
+        h->target = (BYTE*)target;
+        h->detour = detour;
+        h->tramp  = (BYTE*)*tramp;
+        h->stolen = stolen;
+        h->active = true;
+    }
+    return 1;
 }
 
 static unsigned char* api_AllocNear(unsigned char* anchor, size_t size)
@@ -1211,6 +1269,17 @@ static long api_FaultFilter(const char* what, void* ep)
 
 static void api_IniPath(const char* iniName, char* out, size_t n)
 {
+    if (g_sessionIniDir[0] && iniName &&
+        (_strnicmp(iniName, "plugins\\", 8) == 0 || _strnicmp(iniName, "plugins/", 8) == 0))
+    {
+        char cand[MAX_PATH];
+        _snprintf_s(cand, sizeof(cand), _TRUNCATE, "%s\\%s", g_sessionIniDir, iniName + 8);
+        if (GetFileAttributesA(cand) != INVALID_FILE_ATTRIBUTES)
+        {
+            strncpy_s(out, n, cand, _TRUNCATE);
+            return;
+        }
+    }
     _snprintf_s(out, n, _TRUNCATE, "%s\\%s", g_baseDir, iniName ? iniName : "tesmioloader.ini");
 }
 
@@ -1255,7 +1324,7 @@ struct Service
 };
 static Service g_service[MAX_SERVICES];
 static int     g_serviceCount;
-static const char* g_currentPlugin = "?";
+// g_currentPlugin declared above
 
 static int api_Provide(const char* name, unsigned version, const void* iface)
 {
@@ -1342,6 +1411,11 @@ static bool PluginEnabled(const char* file)
 // manifest: either way the content is not in the game.
 static bool PluginLoaded(const char* key)
 {
+    for (int i = 0; i < g_knownPluginCount; i++)
+    {
+        if (_stricmp(g_knownPlugins[i].id, key) == 0)
+            return g_knownPlugins[i].effectiveEnabled;
+    }
     for (int i = 0; i < g_pluginCount; i++)
     {
         char file[64];
@@ -1441,7 +1515,8 @@ static void LoadOnePlugin(const char* file)
         return;
     }
 
-    p->start = (TsmPluginStartFn)GetProcAddress(mod, TSM_EXPORT_START);
+    p->start  = (TsmPluginStartFn)GetProcAddress(mod, TSM_EXPORT_START);
+    p->reload = (TsmPluginReloadFn)GetProcAddress(mod, TSM_EXPORT_RELOAD);
     g_pluginCount++;
 
     Logf("plugin   %-16s %-8s from %s", p->name, p->version, file);
@@ -1466,6 +1541,175 @@ static void StartPlugins()
     }
 }
 
+static LoadedPlugin* FindLoadedPluginByFile(const char* file)
+{
+    for (int i = 0; i < g_pluginCount; i++)
+        if (_stricmp(g_plugin[i].file, file) == 0) return &g_plugin[i];
+    return NULL;
+}
+
+static void SetPluginHooksActive(const char* file, bool wantActive)
+{
+    LoadedPlugin* lp = FindLoadedPluginByFile(file);
+    if (!lp && wantActive)
+    {
+        int before = g_pluginCount;
+        LoadOnePlugin(file);
+        if (g_pluginCount > before)
+        {
+            lp = &g_plugin[before];
+            if (lp->start)
+            {
+                int rc = 0;
+                g_currentPlugin = lp->file;
+                __try { rc = lp->start(); }
+                __except (FaultFilter("plugin dynamic start", GetExceptionInformation())) { rc = -1; }
+                g_currentPlugin = "?";
+                if (rc != 0) Logf("plugin   %s dynamic start returned %d", lp->name, rc);
+            }
+        }
+    }
+    if (!lp) return;
+
+    for (int i = 0; i < g_pluginInlineHookCount; i++)
+    {
+        PluginInlineHook* h = &g_pluginInlineHooks[i];
+        if (_stricmp(h->ownerFile, file) != 0 || h->active == wantActive) continue;
+        DWORD prot = 0;
+        if (VirtualProtect(h->target, h->stolen, PAGE_EXECUTE_READWRITE, &prot))
+        {
+            if (wantActive)
+            {
+                BYTE* p = h->target;
+                p[0] = 0xFF; p[1] = 0x25;
+                *(DWORD*)(p + 2) = 0;
+                *(void**)(p + 6) = h->detour;
+                for (size_t k = 14; k < h->stolen; k++) p[k] = 0x90;
+            }
+            else
+            {
+                memcpy(h->target, h->tramp, h->stolen);
+            }
+            VirtualProtect(h->target, h->stolen, prot, &prot);
+            FlushInstructionCache(GetCurrentProcess(), h->target, h->stolen);
+            h->active = wantActive;
+        }
+    }
+
+    for (int i = 0; i < g_pluginIatHookCount; i++)
+    {
+        PluginIatHook* h = &g_pluginIatHooks[i];
+        if (_stricmp(h->ownerFile, file) != 0 || h->active == wantActive) continue;
+        DWORD prot = 0;
+        if (VirtualProtect(h->slot, sizeof(void*), PAGE_READWRITE, &prot))
+        {
+            *h->slot = wantActive ? h->detour : h->orig;
+            VirtualProtect(h->slot, sizeof(void*), prot, &prot);
+            h->active = wantActive;
+        }
+    }
+
+    if (lp->reload)
+    {
+        __try { lp->reload(wantActive ? 1 : 0); }
+        __except (FaultFilter("plugin reload", GetExceptionInformation())) {}
+    }
+}
+
+static int pm_Count(void)
+{
+    return g_knownPluginCount;
+}
+
+static int pm_GetInfo(int index, char* idOut, int idMax, char* iniPathOut, int iniMax,
+                      int* localEnabledOut, int* effectiveEnabledOut)
+{
+    if (index < 0 || index >= g_knownPluginCount) return 0;
+    const KnownPluginEntry* e = &g_knownPlugins[index];
+    if (idOut && idMax > 0) strncpy_s(idOut, (size_t)idMax, e->id, _TRUNCATE);
+    if (iniPathOut && iniMax > 0)
+    {
+        char rel[128];
+        _snprintf_s(rel, sizeof(rel), _TRUNCATE, "plugins\\%s.ini", e->id);
+        api_IniPath(rel, iniPathOut, (size_t)iniMax);
+    }
+    if (localEnabledOut) *localEnabledOut = e->localEnabled ? 1 : 0;
+    if (effectiveEnabledOut) *effectiveEnabledOut = e->effectiveEnabled ? 1 : 0;
+    return 1;
+}
+
+static int pm_SetLocalEnabled(const char* id, int enabled)
+{
+    if (!id || !*id) return 0;
+    for (int i = 0; i < g_knownPluginCount; i++)
+    {
+        KnownPluginEntry* e = &g_knownPlugins[i];
+        if (_stricmp(e->id, id) != 0) continue;
+        e->localEnabled = (enabled != 0);
+        WritePrivateProfileStringA("plugins", e->id, e->localEnabled ? "1" : "0", g_iniPath);
+        if (!g_sessionIniDir[0])
+        {
+            e->effectiveEnabled = e->localEnabled;
+            SetPluginHooksActive(e->file, e->effectiveEnabled);
+        }
+        Logf("plugin   %s local enabled -> %d", e->id, e->localEnabled ? 1 : 0);
+        return 1;
+    }
+    return 0;
+}
+
+static bool CsvContainsToken(const char* csv, const char* token)
+{
+    if (!csv || !*csv || !token || !*token) return false;
+    size_t tlen = strlen(token);
+    const char* p = csv;
+    while (*p)
+    {
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        const char* start = p;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - start);
+        if (len == tlen && _strnicmp(start, token, len) == 0) return true;
+    }
+    return false;
+}
+
+static int pm_SetSessionOverride(const char* sessionIniDir, const char* enabledCsv)
+{
+    strncpy_s(g_sessionIniDir, sizeof(g_sessionIniDir), sessionIniDir ? sessionIniDir : "", _TRUNCATE);
+    for (int i = 0; i < g_knownPluginCount; i++)
+    {
+        KnownPluginEntry* e = &g_knownPlugins[i];
+        bool want = CsvContainsToken(enabledCsv, e->id);
+        e->effectiveEnabled = want;
+        SetPluginHooksActive(e->file, want);
+    }
+    Logf("plugin   session override active (dir=\"%s\", enabled=\"%s\")",
+         g_sessionIniDir, enabledCsv ? enabledCsv : "");
+    return 1;
+}
+
+static void pm_ClearSessionOverride(void)
+{
+    if (!g_sessionIniDir[0]) return;
+    g_sessionIniDir[0] = 0;
+    for (int i = 0; i < g_knownPluginCount; i++)
+    {
+        KnownPluginEntry* e = &g_knownPlugins[i];
+        e->effectiveEnabled = e->localEnabled;
+        SetPluginHooksActive(e->file, e->localEnabled);
+    }
+    Logf("plugin   session override cleared, local singleplayer plugin states restored");
+}
+
+static const TsmPluginManagerApi kPluginMgrApi = {
+    pm_Count,
+    pm_GetInfo,
+    pm_SetLocalEnabled,
+    pm_SetSessionOverride,
+    pm_ClearSessionOverride
+};
+
 static void LoadPlugins()
 {
     _snprintf_s(g_pluginDir, sizeof(g_pluginDir), _TRUNCATE, "%s\\plugins", g_baseDir);
@@ -1478,6 +1722,9 @@ static void LoadPlugins()
     }
 
     BuildHostTable();
+    g_currentPlugin = "tesmioloader";
+    api_Provide(TSM_SERVICE_PLUGINS, TSM_PLUGINS_VERSION, &kPluginMgrApi);
+    g_currentPlugin = "?";
 
     char pattern[MAX_PATH];
     _snprintf_s(pattern, sizeof(pattern), _TRUNCATE, "%s\\*.dll", g_pluginDir);
@@ -1495,7 +1742,17 @@ static void LoadPlugins()
     do
     {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        if (!PluginEnabled(fd.cFileName))
+        bool en = PluginEnabled(fd.cFileName);
+        if (_stricmp(fd.cFileName, "RepublicMP.dll") != 0 && g_knownPluginCount < MAX_PLUGINS)
+        {
+            KnownPluginEntry* kp = &g_knownPlugins[g_knownPluginCount++];
+            strncpy_s(kp->file, sizeof(kp->file), fd.cFileName, _TRUNCATE);
+            strncpy_s(kp->id, sizeof(kp->id), fd.cFileName, _TRUNCATE);
+            if (char* dot = strrchr(kp->id, '.')) *dot = 0;
+            kp->localEnabled = en;
+            kp->effectiveEnabled = en;
+        }
+        if (!en)
         {
             Logf("plugin   %-16s off in tesmioloader.ini [plugins]", fd.cFileName);
             continue;

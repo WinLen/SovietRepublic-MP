@@ -67,12 +67,6 @@
     <Filter Include="third_party\imgui\backends">
       <UniqueIdentifier>{A1B2C3D4-8888-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
     </Filter>
-    <Filter Include="third_party\imgui\misc">
-      <UniqueIdentifier>{A1B2C3D4-9999-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="third_party\imrad">
-      <UniqueIdentifier>{A1B2C3D4-AAAA-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="core\main.cpp">
@@ -171,10 +165,7 @@
     <ClCompile Include="game\input_block.cpp">
       <Filter>game</Filter>
     </ClCompile>
-    <ClCompile Include="ui\main_menu.cpp">
-      <Filter>ui</Filter>
-    </ClCompile>
-    <ClCompile Include="ui\debug_window.cpp">
+    <ClCompile Include="ui\native_menu.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\ui_log.cpp">
@@ -185,9 +176,6 @@
     </ClCompile>
     <ClCompile Include="ui\sync_block.cpp">
       <Filter>ui</Filter>
-    </ClCompile>
-    <ClCompile Include="third_party\imgui\misc\cpp\imgui_stdlib.cpp">
-      <Filter>third_party\imgui\misc</Filter>
     </ClCompile>
     <ClCompile Include="third_party\imgui\imgui.cpp">
       <Filter>third_party\imgui</Filter>
@@ -371,10 +359,7 @@
     <ClInclude Include="game\imgui_hook.h">
       <Filter>game</Filter>
     </ClInclude>
-    <ClInclude Include="ui\main_menu.h">
-      <Filter>ui</Filter>
-    </ClInclude>
-    <ClInclude Include="ui\debug_window.h">
+    <ClInclude Include="ui\native_menu.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\ui_log.h">
@@ -385,12 +370,6 @@
     </ClInclude>
     <ClInclude Include="ui\sync_block.h">
       <Filter>ui</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imgui\misc\cpp\imgui_stdlib.h">
-      <Filter>third_party\imgui\misc</Filter>
-    </ClInclude>
-    <ClInclude Include="third_party\imrad\imrad.h">
-      <Filter>third_party\imrad</Filter>
     </ClInclude>
     <ClInclude Include="third_party\imgui\imgui.h">
       <Filter>third_party\imgui</Filter>

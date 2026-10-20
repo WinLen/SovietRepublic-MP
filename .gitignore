@@ -23,6 +23,7 @@ TesmioLoader/RepublicMP/.vs/
 
 # Staged workshop content & local secrets
 steam_workshop/content/
+steam_workshop/RepublicMP.dll
 steam_workshop/workshop_ci.vdf
 steam_workshop/workshop_local.vdf
 steam_workshop/STEAM_CONFIG_VDF.txt

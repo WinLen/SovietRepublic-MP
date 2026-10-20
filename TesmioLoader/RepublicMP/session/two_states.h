@@ -98,33 +98,40 @@ bool TwoStates_CheckDemolishAllowed(float x, float z, const char* actionDesc);
 bool TwoStates_CheckBuildingControlAllowed(int buildingId, float x, float z, const char* actionDesc);
 bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* actionDesc);
 
-// Per-state cumulative trade/customs/auto-purchase statistics during the session:
-double TwoStates_GetNetTradeRub(int state);
-double TwoStates_GetNetTradeUsd(int state);
-
 // Current cursor & camera position in the world (for HUD & partner sync).
 bool TwoStates_GetCursorWorldPos(float* outX, float* outY, float* outZ);
 bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ);
 bool TwoStates_JumpCameraTo(float wx, float wz);
 bool TwoStates_JumpCameraToPartner();
 
-// 3D World Overlays, Mini-HUD & Toast notifications:
+// 3D World Overlays & Toast notifications:
 void TwoStates_SetShow3DBorder(bool on);
 bool TwoStates_GetShow3DBorder();
-void TwoStates_SetShowMiniHud(bool on);
-bool TwoStates_GetShowMiniHud();
 void TwoStates_PingAtCursor();
 void TwoStates_AddToast(const char* text, int colorKind = 0);
 void TwoStates_DrawOverlay();
-bool TwoStates_MiniHudWantsMouse();
 
-// Map expansion:
-//   1. Unlock 2km border buffer on all maps (20x20 km full area)
+// Map expansion: unlock 2km border buffer on all maps (20x20 km full area)
 void TwoStates_SetExpandBorders(bool on);
 bool TwoStates_GetExpandBorders();
 bool TwoStates_PatchSaveScriptIni(const char* saveDir, float customWorldSizeMeters = 0.0f);
 
-//   2. Generate & load a 30x30 km (900 km^2) expanded map save from the currently loaded world
-void TwoStates_RequestCreateExpandedMap(int sizeKm = 30);
-bool TwoStates_IsCreatingExpandedMap();
+// Persistent global Co-op settings (republicmp_settings.ini)
+void TwoStates_LoadSettings();
+void TwoStates_SaveSettings();
+const char* TwoStates_GetSavedJoinAddress();
+void TwoStates_SetSavedJoinAddress(const char* addr);
+
+// Separate Singleplayer vs Co-op Save Banks (media_soviet\save <-> save_sp / save_coop)
+bool TwoStates_MountSaveBank(bool wantCoop);
+bool TwoStates_IsCoopBankMounted();
+bool TwoStates_GetLatestCoopSaveName(char* outName, size_t outSize);
+void TwoStates_SetImportingSpSave(bool importing);
+bool TwoStates_IsImportingSpSave();
+
+// Per-save Co-op metadata (republicmp_coop.ini) & save/load hooks
+void TwoStates_BeforeAnyWorldLoad();
+void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad);
+bool TwoStates_TriggerQuickCoopSave();
+
 

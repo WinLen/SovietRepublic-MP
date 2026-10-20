@@ -13,6 +13,7 @@ enum MpLang {
 
 __declspec(selectany) volatile int g_mpLang = MP_LANG_RU;
 __declspec(selectany) bool g_mpLangInit = false;
+__declspec(selectany) bool g_mpLangUserSet = false;
 
 inline std::string Lang_GetConfigPath()
 {
@@ -37,8 +38,10 @@ inline void Lang_EnsureInit()
     GetPrivateProfileStringA("ui", "lang", "", buf, sizeof(buf), ini.c_str());
     if (_stricmp(buf, "en") == 0) {
         g_mpLang = MP_LANG_EN;
+        g_mpLangUserSet = true;
     } else if (_stricmp(buf, "ru") == 0) {
         g_mpLang = MP_LANG_RU;
+        g_mpLangUserSet = true;
     } else {
         LANGID lid = GetUserDefaultUILanguage();
         WORD prim = PRIMARYLANGID(lid);
@@ -58,9 +61,18 @@ inline int Lang_Get()
 inline void Lang_Set(int lang)
 {
     g_mpLangInit = true;
+    g_mpLangUserSet = true;
     g_mpLang = (lang == MP_LANG_EN) ? MP_LANG_EN : MP_LANG_RU;
     std::string ini = Lang_GetConfigPath();
     WritePrivateProfileStringA("ui", "lang", (g_mpLang == MP_LANG_EN) ? "en" : "ru", ini.c_str());
+}
+
+inline void Lang_AutoDetectFromGame(int lang)
+{
+    if (!g_mpLangInit) Lang_EnsureInit();
+    if (!g_mpLangUserSet) {
+        g_mpLang = (lang == MP_LANG_EN) ? MP_LANG_EN : MP_LANG_RU;
+    }
 }
 
 inline void Lang_Toggle()

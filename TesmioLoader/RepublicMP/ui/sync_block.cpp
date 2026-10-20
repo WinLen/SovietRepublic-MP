@@ -51,17 +51,6 @@ bool SyncBlock_IsActive()
     return g_active;
 }
 
-bool SyncBlock_GetStep(int* step, int* totalSteps, char* text, int textSize, int* percent)
-{
-    std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_active) return false;
-    *step = g_step;
-    *totalSteps = g_totalSteps;
-    *percent = g_percent;
-    _snprintf_s(text, textSize, _TRUNCATE, "%s", g_text);
-    return true;
-}
-
 static void CenteredText(const char* s, float y)
 {
     ImVec2 size = ImGui::CalcTextSize(s);

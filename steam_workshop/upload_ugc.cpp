@@ -204,7 +204,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "Release v1.0.0 — Co-op Multiplayer (Lockstep, Steam P2P, One State & Two States, 30x30 km Maps, GitHub Auto-Updater)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "Release v1.0.0 — Native UI & Sidebar, Two States Economy, Isolated Co-op Save Bank, and Automatic Bidirectional Workshop Mod Sync");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

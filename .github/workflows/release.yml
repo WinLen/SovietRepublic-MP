@@ -2,6 +2,9 @@ name: Build, Release & Publish to Steam Workshop
 
 on:
   push:
+    branches:
+      - main
+      - master
     tags:
       - 'v*'
   workflow_dispatch:
@@ -13,7 +16,7 @@ on:
       changenote:
         description: 'Описание изменений для Steam Workshop'
         required: false
-        default: 'Co-op multiplayer update (Lockstep + Steam P2P + Two States)'
+        default: 'RepublicMP update: Native UI, Two States economy, isolated Co-op save bank, and bidirectional Workshop Mod Auto-Sync'
       publish_steam:
         description: 'Опубликовать / обновить в Steam Workshop (если заданы секреты STEAM_*)'
         type: boolean
@@ -75,7 +78,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: "RepublicMP ${{ env.RELEASE_TAG }} — Co-op Multiplayer"
-          generate_release_notes: true
+          body_path: README.md
           files: |
             RepublicMP_Friend_Pack.zip
             TesmioLoader/build/plugins/RepublicMP.dll
@@ -102,7 +105,6 @@ jobs:
           Invoke-WebRequest -Uri "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip" -OutFile $zipPath -UseBasicParsing
           Expand-Archive -Path $zipPath -DestinationPath $steamcmdDir -Force
 
-          # Restore config.vdf if provided
           if ($env:STEAM_CONFIG_VDF) {
             $cfgDir = Join-Path $steamcmdDir "config"
             New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
@@ -110,7 +112,6 @@ jobs:
             [System.IO.File]::WriteAllBytes((Join-Path $cfgDir "config.vdf"), $bytes)
           }
 
-          # Generate Steam Guard TOTP code from STEAM_SHARED_SECRET if provided
           $guardCode = ""
           if ($env:STEAM_SHARED_SECRET) {
             $secretBytes = [Convert]::FromBase64String($env:STEAM_SHARED_SECRET)
@@ -149,8 +150,8 @@ jobs:
               "contentfolder"    "$contentDir"
               "previewfile"      "$previewFile"
               "visibility"       "2"
-              "title"            "RepublicMP - Co-op Multiplayer (One State / Two States)"
-              "description"      "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep sync, Steam P2P, One State & Two States modes, 30x30 km maps, GitHub Releases auto-updater)."
+              "title"            "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)"
+              "description"      "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep sync, Steam P2P, Native Menu & Sidebar, One State & Two States modes, Automatic Bidirectional Workshop Mod Sync)."
               "changenote"       "$note"
           }
           "@

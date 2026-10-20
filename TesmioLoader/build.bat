@@ -137,9 +137,26 @@ rem checkboxes and the game path into it, so overwriting it on every build would
 rem throw away what the user chose. Copied only when it is not there yet - to
 rem pick up new defaults from the repo copy, delete it and build again.
 if not exist build\tesmioloader.ini (
-    copy /y tesmioloader.ini build\tesmioloader.ini >nul
+    if exist tesmioloader.ini (
+        copy /y tesmioloader.ini build\tesmioloader.ini >nul
+    ) else (
+        (
+            echo [tesmioloader]
+            echo version = b0.3.6
+            echo plugins = 1
+            echo vfs = 0
+            echo save_manifest = 0
+            echo version_check = 1
+            echo menu_patch = 1
+            echo menu_tag = tesmioloader v. b0.3.6
+            echo.
+            echo [plugins]
+            echo RepublicMP = 1
+        ) > build\tesmioloader.ini
+    )
 ) else (
     echo [build] build\tesmioloader.ini kept - delete it to take the repo defaults
 )
 echo [build] ok -^> build\tesmiolauncher.exe
 endlocal
+exit /b 0

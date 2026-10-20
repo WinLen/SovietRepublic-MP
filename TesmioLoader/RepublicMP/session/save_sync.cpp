@@ -6,6 +6,7 @@
 #include "game_speed.h"
 #include "sync_check.h"
 #include "two_states.h"
+#include "mod_sync.h"
 #include "../game/save_load.h"
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
@@ -189,6 +190,7 @@ enum SessionMsgCode {
     MSG_FILE_FOLLOWS = 1, // host -> client: the save file comes next
     MSG_READY = 2,       // client -> host: world loaded
     MSG_ABORT = 3,       // either way: giving up, text says why
+    MSG_MOD_SYNC = 4,    // host -> client: ModSync handshake begins now
 };
 struct SessionMsg {
     int code;
@@ -701,6 +703,16 @@ static bool RunHostJoin(SOCKET sock)
             TwoStates_PatchSaveScriptIni(saveDir, 0.0f);
         }
 
+        // 2b. Synchronize Workshop/local mods and TesmioLoader gameplay plugins.
+        HostStep(sock, 2, "Synchronizing mods & plugins", 0);
+        SendMsg(sock, MSG_MOD_SYNC, 2, 0, "synchronizing mods & plugins");
+        char modWhy[256] = {};
+        if (!ModSync_HostHandshake(sock, saveDir, modWhy, sizeof(modWhy))) {
+            SetSessionError("mod sync failed: %s", modWhy);
+            SaveStatus("[HOST] mod sync failed: %s", modWhy);
+            break;
+        }
+
         // 3. Pack.
         char zipPath[MAX_PATH] = {};
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
@@ -995,6 +1007,16 @@ static bool RunClientJoin(bool rejoin)
                 SetSessionError("the host gave up: %s", m.text);
                 break;
             }
+            if (m.code == MSG_MOD_SYNC) {
+                ClientStep(2, "Synchronizing mods & plugins", 0);
+                char modWhy[256] = {};
+                if (!ModSync_ClientHandshake(sock, modWhy, sizeof(modWhy))) {
+                    SetSessionError("mod sync failed: %s", modWhy);
+                    SaveStatus("[CLIENT] mod sync failed: %s", modWhy);
+                    break;
+                }
+                continue;
+            }
             if (m.code == MSG_STEP) {
                 char text[96];
                 _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the host - %s", m.text);
@@ -1166,10 +1188,24 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 bool SaveSync_IsWorldLoaded()
 {
     __try {
-        return *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0;
+        return *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0 &&
+               *(volatile char*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) == 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+static bool SafeGetCurrentWorldSaveRel(char* outRel, size_t outSize)
+{
+    __try {
+        const char* curRel = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
+        if (curRel && _strnicmp(curRel, "save/", 5) == 0 && curRel[5]) {
+            strncpy_s(outRel, outSize, curRel, _TRUNCATE);
+            return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
 }
 
 void SaveSync_StartHost()
@@ -1181,6 +1217,25 @@ void SaveSync_StartHost()
         SetSessionError("load a city before hosting");
         return;
     }
+    if (!TwoStates_IsCoopBankMounted()) {
+        // Started server from an in-game Singleplayer session: copy current save folder (if any) to Co-op bank first
+        char curRel[128] = {};
+        if (SafeGetCurrentWorldSaveRel(curRel, sizeof(curRel))) {
+            char spDir[MAX_PATH] = {};
+            if (GetGameSaveDir(spDir, sizeof(spDir), curRel + 5)) {
+                std::error_code ec;
+                std::filesystem::path src(spDir);
+                std::filesystem::path dst = src.parent_path().parent_path() / "save_coop" / (curRel + 5);
+                if (std::filesystem::exists(src, ec) && std::filesystem::is_directory(src, ec)) {
+                    std::filesystem::create_directories(dst.parent_path(), ec);
+                    std::filesystem::copy(src, dst,
+                                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                                          ec);
+                }
+            }
+        }
+        TwoStates_MountSaveBank(true);
+    }
     if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
         g_lockstepChosen = true;
     }
@@ -1191,15 +1246,22 @@ void SaveSync_StartHost()
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
+    double initRub[2] = {}, initUsd[2] = {};
+    TwoStates_PrepareHostSave(false, initRub, initUsd);
+    TwoStates_OnSessionJoined(true, TwoStates_GetMode(), TwoStates_GetBorderHalfWidth(), TwoStates_GetExpandBorders(),
+                              initRub, initUsd);
     CreateThread(nullptr, 0, HostSessionThread, nullptr, 0, nullptr);
 }
 
 void SaveSync_StartClient(const char* hostIp)
 {
     if (g_state != SESSION_IDLE) return;
+    TwoStates_MountSaveBank(true);
     g_disconnectRequested = false;
     if (hostIp && hostIp[0]) {
         strncpy_s(g_targetIp, hostIp, _TRUNCATE);
+        TwoStates_SetSavedJoinAddress(g_targetIp);
+        TwoStates_SaveSettings();
     }
     g_isHost = false;
     g_resyncing = false;
@@ -1296,71 +1358,10 @@ static void CheckStillInWorld()
     SetSessionError(host ? "hosting stopped: you left the world" : "disconnected: you left the world");
 }
 
-static volatile bool g_pendingHostAfterLoad = false;
-static volatile ULONGLONG g_pendingHostStartTick = 0;
-
-void SaveSync_ListLocalSaves(std::vector<std::string>& outSaves)
-{
-    outSaves.clear();
-    char saveRoot[MAX_PATH] = {};
-    if (!GetGameSaveDir(saveRoot, sizeof(saveRoot), "")) return;
-
-    struct Entry {
-        std::string name;
-        std::filesystem::file_time_type mtime;
-    };
-    std::vector<Entry> entries;
-    std::error_code ec;
-    for (auto const& dirEntry : std::filesystem::directory_iterator(saveRoot, ec)) {
-        if (!dirEntry.is_directory(ec)) continue;
-        std::string folder = dirEntry.path().filename().string();
-        if (folder.empty() || folder[0] == '.') continue;
-        if (folder.find("mp_syncsave_") == 0) continue;
-        if (folder.find("_received") != std::string::npos) continue;
-        auto headerFile = dirEntry.path() / "header.bin";
-        if (!std::filesystem::exists(headerFile, ec)) continue;
-        auto ft = std::filesystem::last_write_time(headerFile, ec);
-        entries.push_back({ folder, ft });
-    }
-    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
-        return a.mtime > b.mtime;
-    });
-    for (const auto& e : entries) {
-        outSaves.push_back(e.name);
-    }
-}
-
-void SaveSync_LoadAndStartHost(const char* saveName)
-{
-    if (g_state != SESSION_IDLE || !saveName || !saveName[0]) return;
-    if (SaveSync_IsWorldLoaded()) {
-        SaveSync_StartHost();
-        return;
-    }
-    SaveStatus(Tr("[ХОСТ] Загрузка сохранения '%s' и автоматический запуск сервера...", "[HOST] Loading save '%s' and starting server automatically..."), saveName);
-    g_pendingHostAfterLoad = true;
-    g_pendingHostStartTick = GetTickCount64();
-    TriggerLoadSave(saveName);
-}
-
-bool SaveSync_IsPendingHostAfterLoad()
-{
-    return g_pendingHostAfterLoad;
-}
-
 void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
     DiagLog_FrameTick();
-    if (g_pendingHostAfterLoad) {
-        bool loadPending = *(volatile BYTE*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) != 0;
-        if (SaveSync_IsWorldLoaded() && !loadPending) {
-            g_pendingHostAfterLoad = false;
-            SaveSync_StartHost();
-        } else if (GetTickCount64() - g_pendingHostStartTick > 180000) {
-            g_pendingHostAfterLoad = false;
-        }
-    }
     if (g_state == SESSION_IDLE) {
         char steamJoinTarget[64] = {};
         if (SteamP2P_ConsumePendingJoin(steamJoinTarget, sizeof(steamJoinTarget))) {

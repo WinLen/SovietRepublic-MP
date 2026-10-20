@@ -6,7 +6,6 @@
 #pragma once
 
 #include "tesmio_plugin.h"
-#include <string>
 
 // Wraps TsmHost so every H->log (Logf) call across all modules is also written
 // to RepublicMP_Diagnostics.log with millisecond timestamps and Thread IDs.
@@ -22,13 +21,6 @@ void DiagLog_Printf(const char* category, const char* fmt, ...);
 // periodic 5-second session/lockstep/SteamP2P telemetry snapshots.
 void DiagLog_FrameTick(void);
 
-// Dumps an immediate full diagnostic snapshot, copies RepublicMP_Diagnostics.log
-// to the user's Desktop, and opens Explorer selecting the file.
-bool DiagLog_ExportToDesktop(std::string* outDesktopPath = nullptr);
-
-// Dumps an immediate full diagnostic snapshot and returns the tail of the log
-// (suitable for copying to the clipboard).
-std::string DiagLog_GetClipboardReport(size_t maxBytes = 65536);
-
-// Returns the full path to <GameDir>\RepublicMP_Diagnostics.log.
-const char* DiagLog_GetLogFilePath(void);
+// Suppresses VectoredExceptionHandler crash logging inside guarded __try/__except probes.
+void DiagLog_BeginSafeSeh(void);
+void DiagLog_EndSafeSeh(void);

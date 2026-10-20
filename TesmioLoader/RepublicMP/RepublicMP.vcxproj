@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -97,7 +97,7 @@
            hooks\imgui_hook.cpp. third_party\imrad - single-header ImRAD
            runtime support lib (ImRad::HBox etc.), used by ui\main_menu.cpp
            to reuse the layout designed in the ImRAD editor. -->
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- /MTd - static CRT, so the plugin needs no vcruntime redistributables
            alongside SOVIET64.exe. -->
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -120,7 +120,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -139,7 +139,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -160,7 +160,7 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;third_party\imrad;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;third_party\imgui;third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -204,6 +204,7 @@
     <ClCompile Include="session\sync_check.cpp" />
     <ClCompile Include="session\money.cpp" />
     <ClCompile Include="session\two_states.cpp" />
+    <ClCompile Include="session\mod_sync.cpp" />
     <ClCompile Include="session\updater.cpp" />
     <ClCompile Include="session\settings_sync.cpp" />
     <ClCompile Include="session\weather.cpp" />
@@ -222,12 +223,11 @@
     <ClCompile Include="transport\network.cpp" />
     <ClCompile Include="transport\steam_p2p.cpp" />
     <ClCompile Include="session\save_sync.cpp" />
-    <ClCompile Include="ui\main_menu.cpp" />
-    <ClCompile Include="ui\debug_window.cpp" />
+    <ClCompile Include="ui\native_menu.cpp" />
+
     <ClCompile Include="ui\ui_log.cpp" />
     <ClCompile Include="ui\debug_log.cpp" />
     <ClCompile Include="ui\sync_block.cpp" />
-    <ClCompile Include="third_party\imgui\misc\cpp\imgui_stdlib.cpp" />
     <!-- miniz (vendored, see save\save_zip.h) - compiled as C, third-party
          code, lives in third_party\miniz\. -->
     <ClCompile Include="third_party\miniz\miniz.c" />
@@ -271,6 +271,7 @@
     <ClInclude Include="session\sync_check.h" />
     <ClInclude Include="session\money.h" />
     <ClInclude Include="session\two_states.h" />
+    <ClInclude Include="session\mod_sync.h" />
     <ClInclude Include="session\updater.h" />
     <ClInclude Include="session\settings_sync.h" />
     <ClInclude Include="session\weather.h" />
@@ -296,13 +297,11 @@
     <ClInclude Include="transport\network.h" />
     <ClInclude Include="transport\steam_p2p.h" />
     <ClInclude Include="session\save_sync.h" />
-    <ClInclude Include="ui\main_menu.h" />
-    <ClInclude Include="ui\debug_window.h" />
+    <ClInclude Include="ui\native_menu.h" />
+
     <ClInclude Include="ui\ui_log.h" />
     <ClInclude Include="ui\debug_log.h" />
     <ClInclude Include="ui\sync_block.h" />
-    <ClInclude Include="third_party\imgui\misc\cpp\imgui_stdlib.h" />
-    <ClInclude Include="third_party\imrad\imrad.h" />
     <ClInclude Include="third_party\miniz\miniz.h" />
     <ClInclude Include="third_party\miniz\miniz_common.h" />
     <ClInclude Include="third_party\miniz\miniz_export.h" />
