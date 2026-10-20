@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -176,6 +176,7 @@
   <ItemGroup>
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
+    <ClCompile Include="core\diag_log.cpp" />
     <ClCompile Include="world_sync\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
@@ -285,6 +286,7 @@
     <ClInclude Include="world_sync\replay_menus.h" />
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
+    <ClInclude Include="core\diag_log.h" />
     <ClInclude Include="world_sync\buildings\build_sync.h" />
     <ClInclude Include="world_sync\networks\road_sync.h" />
     <ClInclude Include="world_sync\terrain\terrain_sync.h" />

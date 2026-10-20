@@ -20,6 +20,7 @@
 #include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
+#include "../transport/steam_p2p.h"
 #include "../session/save_sync.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
@@ -29,8 +30,7 @@
 #include "../session/weather.h"
 #include "../session/two_states.h"
 #include "../session/updater.h"
-
-
+#include "diag_log.h"
 #include "version.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
@@ -39,8 +39,9 @@ extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
 }
 
 // Binds every module to the loader's host API.
-extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPluginInfo* info)
+extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info)
 {
+    const TsmHost* host = DiagLog_InitAndWrapHost(origHost);
     TsmBind(host);
     LocalBuilds_Bind(host);
     PresentHook_Bind(host);
@@ -50,6 +51,7 @@ extern "C" __declspec(dllexport) int TsmPluginInit(const TsmHost* host, TsmPlugi
     SaveLoad_Bind(host);
     SaveZip_Bind(host);
     Network_Bind(host);
+    SteamP2P_Bind(host);
     SaveSync_Bind(host);
     BuildSync_Bind(host);
     RoadSync_Bind(host);
@@ -121,6 +123,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     TwoStates_Install();
     NetworkInit();
     Updater_Init();
+    DiagLog_LogStartupSummary();
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);

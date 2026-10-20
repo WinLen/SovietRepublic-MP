@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 // See save_sync.h.
 #include "save_sync.h"
 #include "../core/version.h"
+#include "../core/diag_log.h"
 #include "game_speed.h"
 #include "sync_check.h"
 #include "two_states.h"
@@ -1335,7 +1336,7 @@ void SaveSync_LoadAndStartHost(const char* saveName)
         SaveSync_StartHost();
         return;
     }
-    SaveStatus("[HOST] Загрузка сохранения '%s' и автоматический запуск сервера...", saveName);
+    SaveStatus("[HOST] Р—Р°РіСЂСѓР·РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ '%s' Рё Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРёР№ Р·Р°РїСѓСЃРє СЃРµСЂРІРµСЂР°...", saveName);
     g_pendingHostAfterLoad = true;
     g_pendingHostStartTick = GetTickCount64();
     TriggerLoadSave(saveName);
@@ -1349,6 +1350,7 @@ bool SaveSync_IsPendingHostAfterLoad()
 void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
+    DiagLog_FrameTick();
     if (g_pendingHostAfterLoad) {
         bool loadPending = *(volatile BYTE*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) != 0;
         if (SaveSync_IsWorldLoaded() && !loadPending) {

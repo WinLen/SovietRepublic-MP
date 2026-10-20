@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "debug_log.h"
+#include "../core/diag_log.h"
 #include <windows.h>
 #include <mutex>
 #include <cstdio>
@@ -10,6 +11,7 @@ static const size_t kMaxLines = 500;
 
 void DebugLog_Add(const char* line)
 {
+    DiagLog_Printf("DEBUG", "%s", line ? line : "");
     SYSTEMTIME t;
     GetLocalTime(&t);
     char buf[600];

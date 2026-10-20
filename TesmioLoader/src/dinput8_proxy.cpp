@@ -30,6 +30,44 @@ static bool FileExistsA(const char* path)
     return (attr != INVALID_FILE_ATTRIBUTES) && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static void BootLogf(const char* gameDir, bool rotate, const char* fmt, ...)
+{
+    char logPath[MAX_PATH] = {};
+    _snprintf_s(logPath, sizeof(logPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.log", gameDir);
+    if (rotate) {
+        char prevPath[MAX_PATH] = {};
+        _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", gameDir);
+        CopyFileA(logPath, prevPath, FALSE);
+        DeleteFileA(logPath);
+    }
+    HANDLE h = CreateFileA(logPath, FILE_APPEND_DATA | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SetFilePointer(h, 0, nullptr, FILE_END);
+
+    char body[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
+    va_end(ap);
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char line[2300];
+    int n = _snprintf_s(line, sizeof(line), _TRUNCATE,
+                        "[%04d-%02d-%02d %02d:%02d:%02d.%03d] [TID:%05lu] [BOOT   ] %s\r\n",
+                        st.wYear, st.wMonth, st.wDay,
+                        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                        (unsigned long)GetCurrentThreadId(), body);
+    if (n > 0) {
+        DWORD written = 0;
+        WriteFile(h, line, (DWORD)n, &written, nullptr);
+        FlushFileBuffers(h);
+    }
+    CloseHandle(h);
+}
+
 static void EnsureLoaderIni(const char* buildDir, const char* exePath)
 {
     char iniPath[MAX_PATH] = {};
@@ -51,14 +89,18 @@ static void EnsureTesmioLoaderLoaded()
         return;
 
     // If launched via tesmiolauncher.exe, tesmioloader.dll is already in memory.
-    if (GetModuleHandleA("tesmioloader.dll") || GetModuleHandleA("RepublicMP.dll"))
-        return;
-
     char exePath[MAX_PATH] = {};
     GetModuleFileNameA(nullptr, exePath, MAX_PATH);
     char gameDir[MAX_PATH] = {};
     strncpy_s(gameDir, exePath, _TRUNCATE);
     if (char* slash = strrchr(gameDir, '\\')) *slash = '\0';
+
+    if (GetModuleHandleA("tesmioloader.dll") || GetModuleHandleA("RepublicMP.dll")) {
+        BootLogf(gameDir, false, "dinput8.dll: tesmioloader.dll/RepublicMP.dll already in memory (launched via tesmiolauncher)");
+        return;
+    }
+
+    BootLogf(gameDir, true, "dinput8.dll: Direct Steam launch detected for %s", exePath);
 
     char candidateBuildDirs[4][MAX_PATH] = {};
     int numCandidates = 0;
@@ -100,9 +142,13 @@ static void EnsureTesmioLoaderLoaded()
     for (int i = 0; i < numCandidates; ++i) {
         char dllPath[MAX_PATH] = {};
         _snprintf_s(dllPath, sizeof(dllPath), _TRUNCATE, "%s\\tesmioloader.dll", candidateBuildDirs[i]);
+        BootLogf(gameDir, false, "dinput8.dll: Checking candidate [%d]: %s (exists=%d)",
+                 i, dllPath, (int)FileExistsA(dllPath));
         if (FileExistsA(dllPath)) {
             EnsureLoaderIni(candidateBuildDirs[i], exePath);
-            LoadLibraryA(dllPath);
+            HMODULE hLoaded = LoadLibraryA(dllPath);
+            BootLogf(gameDir, false, "dinput8.dll: LoadLibraryA(%s) -> %p (err=%lu)",
+                     dllPath, (void*)hLoaded, (unsigned long)GetLastError());
             break;
         }
     }

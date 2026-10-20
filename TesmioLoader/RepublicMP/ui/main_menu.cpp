@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 // See main_menu.h.
 #include "main_menu.h"
 #include "debug_window.h"
@@ -13,6 +13,7 @@
 #include "../session/sync_check.h"
 #include "../session/two_states.h"
 #include "../session/updater.h"
+#include "../core/diag_log.h"
 #include "../determinism/determinism.h"
 #include "../transport/steam_p2p.h"
 
@@ -287,26 +288,26 @@ static void CoopComfortPanel()
 {
     ImGui::Spacing();
     ImGui::Separator();
-    ImGui::TextColored(kYellow, "Удобство и навигация в кооперативе:");
+    ImGui::TextColored(kYellow, "РЈРґРѕР±СЃС‚РІРѕ Рё РЅР°РІРёРіР°С†РёСЏ РІ РєРѕРѕРїРµСЂР°С‚РёРІРµ:");
 
     bool showMiniHud = TwoStates_GetShowMiniHud();
-    if (ImGui::Checkbox("Верхняя мини-панель (Mini-HUD поверх игры)", &showMiniHud))
+    if (ImGui::Checkbox("Р’РµСЂС…РЅСЏСЏ РјРёРЅРё-РїР°РЅРµР»СЊ (Mini-HUD РїРѕРІРµСЂС… РёРіСЂС‹)", &showMiniHud))
         TwoStates_SetShowMiniHud(showMiniHud);
 
     if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
         bool showBorder = TwoStates_GetShow3DBorder();
-        if (ImGui::Checkbox("3D-граница государств и погранзона на земле [F7]", &showBorder))
+        if (ImGui::Checkbox("3D-РіСЂР°РЅРёС†Р° РіРѕСЃСѓРґР°СЂСЃС‚РІ Рё РїРѕРіСЂР°РЅР·РѕРЅР° РЅР° Р·РµРјР»Рµ [F7]", &showBorder))
             TwoStates_SetShow3DBorder(showBorder);
     }
 
-    if (ImGui::Button("Камера к партнёру [F6]")) {
+    if (ImGui::Button("РљР°РјРµСЂР° Рє РїР°СЂС‚РЅС‘СЂСѓ [F6]")) {
         TwoStates_JumpCameraToPartner();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Подать сигнал на карте [Alt+ЛКМ]")) {
+    if (ImGui::Button("РџРѕРґР°С‚СЊ СЃРёРіРЅР°Р» РЅР° РєР°СЂС‚Рµ [Alt+Р›РљРњ]")) {
         TwoStates_PingAtCursor();
     }
-    Wrapped(kGrey, "Нажмите Alt + ЛКМ в любом месте карты, чтобы поставить 3D-маяк для партнёра. Нажмите F6, чтобы переместить камеру к курсору или маяку друга.");
+    Wrapped(kGrey, "РќР°Р¶РјРёС‚Рµ Alt + Р›РљРњ РІ Р»СЋР±РѕРј РјРµСЃС‚Рµ РєР°СЂС‚С‹, С‡С‚РѕР±С‹ РїРѕСЃС‚Р°РІРёС‚СЊ 3D-РјР°СЏРє РґР»СЏ РїР°СЂС‚РЅС‘СЂР°. РќР°Р¶РјРёС‚Рµ F6, С‡С‚РѕР±С‹ РїРµСЂРµРјРµСЃС‚РёС‚СЊ РєР°РјРµСЂСѓ Рє РєСѓСЂСЃРѕСЂСѓ РёР»Рё РјР°СЏРєСѓ РґСЂСѓРіР°.");
 }
 
 static void TwoStatesLivePanel()
@@ -316,54 +317,54 @@ static void TwoStatesLivePanel()
     ImGui::Spacing();
     ImGui::Separator();
     int myState = TwoStates_LocalState();
-    Wrapped(kBlue, "Режим: ДВА ГОСУДАРСТВА  |  Вы: %s", TwoStates_StateName(myState));
+    Wrapped(kBlue, "Р РµР¶РёРј: Р”Р’Рђ Р“РћРЎРЈР”РђР РЎРўР’Рђ  |  Р’С‹: %s", TwoStates_StateName(myState));
 
     float cx = 0.0f, cy = 0.0f, cz = 0.0f;
     if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
         int zone = TwoStates_GetZoneAt(cx, cz);
         if (zone == 0) {
-            Wrapped(kYellow, "Курсор (X=%.0f м, Z=%.0f м): Общая пограничная зона (±%.0f м) — можно стыковать сети",
+            Wrapped(kYellow, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): РћР±С‰Р°СЏ РїРѕРіСЂР°РЅРёС‡РЅР°СЏ Р·РѕРЅР° (В±%.0f Рј) вЂ” РјРѕР¶РЅРѕ СЃС‚С‹РєРѕРІР°С‚СЊ СЃРµС‚Рё",
                     cx, cz, TwoStates_GetBorderHalfWidth());
         } else if (zone == myState) {
-            Wrapped(kGreen, "Курсор (X=%.0f м, Z=%.0f м): Ваша территория (%s)",
+            Wrapped(kGreen, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): Р’Р°С€Р° С‚РµСЂСЂРёС‚РѕСЂРёСЏ (%s)",
                     cx, cz, TwoStates_StateName(zone));
         } else {
-            Wrapped(kRed, "Курсор (X=%.0f м, Z=%.0f м): Чужая территория (%s) — строительство запрещено",
+            Wrapped(kRed, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): Р§СѓР¶Р°СЏ С‚РµСЂСЂРёС‚РѕСЂРёСЏ (%s) вЂ” СЃС‚СЂРѕРёС‚РµР»СЊСЃС‚РІРѕ Р·Р°РїСЂРµС‰РµРЅРѕ",
                     cx, cz, TwoStates_StateName(zone));
         }
     }
 
     ImGui::Spacing();
     ImGui::TextColored(myState == 1 ? kGreen : kGrey,
-                       "Западная ССР (Хост, X < 0):   %.0f ₽ (торг: %+.0f ₽)  |  %.0f $ (торг: %+.0f $)",
+                       "Р—Р°РїР°РґРЅР°СЏ РЎРЎР  (РҐРѕСЃС‚, X < 0):   %.0f в‚Ѕ (С‚РѕСЂРі: %+.0f в‚Ѕ)  |  %.0f $ (С‚РѕСЂРі: %+.0f $)",
                        TwoStates_GetRubles(1), TwoStates_GetNetTradeRub(1),
                        TwoStates_GetDollars(1), TwoStates_GetNetTradeUsd(1));
     ImGui::TextColored(myState == 2 ? kGreen : kGrey,
-                       "Восточная ССР (Игрок 2, X >= 0): %.0f ₽ (торг: %+.0f ₽)  |  %.0f $ (торг: %+.0f $)",
+                       "Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР  (РРіСЂРѕРє 2, X >= 0): %.0f в‚Ѕ (С‚РѕСЂРі: %+.0f в‚Ѕ)  |  %.0f $ (С‚РѕСЂРі: %+.0f $)",
                        TwoStates_GetRubles(2), TwoStates_GetNetTradeRub(2),
                        TwoStates_GetDollars(2), TwoStates_GetNetTradeUsd(2));
 
     ImGui::Spacing();
-    ImGui::TextColored(kYellow, "Перевод средств в %s:", TwoStates_StateName(myState == 1 ? 2 : 1));
+    ImGui::TextColored(kYellow, "РџРµСЂРµРІРѕРґ СЃСЂРµРґСЃС‚РІ РІ %s:", TwoStates_StateName(myState == 1 ? 2 : 1));
     static double s_sendRub = 100000.0;
     static double s_sendUsd = 0.0;
     ImGui::SetNextItemWidth(135);
-    ImGui::InputDouble("Рубли (₽)##sendRub", &s_sendRub, 50000.0, 500000.0, "%.0f");
+    ImGui::InputDouble("Р СѓР±Р»Рё (в‚Ѕ)##sendRub", &s_sendRub, 50000.0, 500000.0, "%.0f");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(135);
-    ImGui::InputDouble("Доллары ($)##sendUsd", &s_sendUsd, 50000.0, 500000.0, "%.0f");
+    ImGui::InputDouble("Р”РѕР»Р»Р°СЂС‹ ($)##sendUsd", &s_sendUsd, 50000.0, 500000.0, "%.0f");
     if (s_sendRub < 0.0) s_sendRub = 0.0;
     if (s_sendUsd < 0.0) s_sendUsd = 0.0;
 
-    if (ImGui::Button("Отправить перевод")) {
+    if (ImGui::Button("РћС‚РїСЂР°РІРёС‚СЊ РїРµСЂРµРІРѕРґ")) {
         TwoStates_RequestTransfer(s_sendRub, s_sendUsd);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("+100 тыс. ₽")) TwoStates_RequestTransfer(100000.0, 0.0);
+    if (ImGui::SmallButton("+100 С‚С‹СЃ. в‚Ѕ")) TwoStates_RequestTransfer(100000.0, 0.0);
     ImGui::SameLine();
-    if (ImGui::SmallButton("+1 млн ₽")) TwoStates_RequestTransfer(1000000.0, 0.0);
+    if (ImGui::SmallButton("+1 РјР»РЅ в‚Ѕ")) TwoStates_RequestTransfer(1000000.0, 0.0);
     ImGui::SameLine();
-    if (ImGui::SmallButton("+100 тыс. $")) TwoStates_RequestTransfer(0.0, 100000.0);
+    if (ImGui::SmallButton("+100 С‚С‹СЃ. $")) TwoStates_RequestTransfer(0.0, 100000.0);
 }
 
 static void SteamFriendsPanel(std::string& hostIp)
@@ -373,16 +374,16 @@ static void SteamFriendsPanel(std::string& hostIp)
     ImGui::Spacing();
 
     if (!SteamP2P_IsAvailable()) {
-        Wrapped(kYellow, "Steam P2P: запустите клиент Steam для игры через друзей/Steam ID без VPN. Подключение по IP (127.0.0.1 / LAN / Radmin) работает и без Steam.");
+        Wrapped(kYellow, "Steam P2P: Р·Р°РїСѓСЃС‚РёС‚Рµ РєР»РёРµРЅС‚ Steam РґР»СЏ РёРіСЂС‹ С‡РµСЂРµР· РґСЂСѓР·РµР№/Steam ID Р±РµР· VPN. РџРѕРґРєР»СЋС‡РµРЅРёРµ РїРѕ IP (127.0.0.1 / LAN / Radmin) СЂР°Р±РѕС‚Р°РµС‚ Рё Р±РµР· Steam.");
         return;
     }
 
     uint64_t mySteamId = SteamP2P_GetLocalSteamId();
     const char* myName = SteamP2P_GetLocalPersonaName();
-    ImGui::TextColored(kGreen, "Steam P2P готов (без VPN и проброса портов)");
-    ImGui::Text("Вы: %s  |  Steam ID: %llu", myName[0] ? myName : "Игрок", (unsigned long long)mySteamId);
+    ImGui::TextColored(kGreen, "Steam P2P РіРѕС‚РѕРІ (Р±РµР· VPN Рё РїСЂРѕР±СЂРѕСЃР° РїРѕСЂС‚РѕРІ)");
+    ImGui::Text("Р’С‹: %s  |  Steam ID: %llu", myName[0] ? myName : "РРіСЂРѕРє", (unsigned long long)mySteamId);
     ImGui::SameLine();
-    if (ImGui::SmallButton("Скопировать ID")) {
+    if (ImGui::SmallButton("РЎРєРѕРїРёСЂРѕРІР°С‚СЊ ID")) {
         char idStr[32] = {};
         _snprintf_s(idStr, sizeof(idStr), _TRUNCATE, "%llu", (unsigned long long)mySteamId);
         ImGui::SetClipboardText(idStr);
@@ -394,9 +395,9 @@ static void SteamFriendsPanel(std::string& hostIp)
     bool refresh = (now - s_lastRefresh > 2500);
 
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(kYellow, "Друзья в Steam онлайн (%zu):", s_friends.size());
+    ImGui::TextColored(kYellow, "Р”СЂСѓР·СЊСЏ РІ Steam РѕРЅР»Р°Р№РЅ (%zu):", s_friends.size());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Обновить список")) refresh = true;
+    if (ImGui::SmallButton("РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє")) refresh = true;
 
     if (refresh) {
         SteamP2P_GetOnlineFriends(s_friends);
@@ -407,7 +408,7 @@ static void SteamFriendsPanel(std::string& hostIp)
     bool world = SaveSync_IsWorldLoaded();
 
     if (s_friends.empty()) {
-        ImGui::TextColored(kGrey, "Нет друзей в сети (или профиль скрыт). Вы можете подключиться по Steam ID ниже.");
+        ImGui::TextColored(kGrey, "РќРµС‚ РґСЂСѓР·РµР№ РІ СЃРµС‚Рё (РёР»Рё РїСЂРѕС„РёР»СЊ СЃРєСЂС‹С‚). Р’С‹ РјРѕР¶РµС‚Рµ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ РїРѕ Steam ID РЅРёР¶Рµ.");
         return;
     }
 
@@ -417,11 +418,11 @@ static void SteamFriendsPanel(std::string& hostIp)
             const SteamFriendEntry& f = s_friends[i];
             ImGui::PushID((int)i);
             StatusDot(f.inThisGame ? kGreen : kBlue);
-            ImGui::Text("%s %s", f.name, f.inThisGame ? "[В игре W&R]" : "[В сети]");
+            ImGui::Text("%s %s", f.name, f.inThisGame ? "[Р’ РёРіСЂРµ W&R]" : "[Р’ СЃРµС‚Рё]");
 
             if (st == SESSION_IDLE) {
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Подключиться")) {
+                if (ImGui::SmallButton("РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ")) {
                     char target[48] = {};
                     _snprintf_s(target, sizeof(target), _TRUNCATE, "steam:%llu", (unsigned long long)f.steamId);
                     hostIp = target;
@@ -429,14 +430,14 @@ static void SteamFriendsPanel(std::string& hostIp)
                 }
                 if (world) {
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("Пригласить (Host)")) {
+                    if (ImGui::SmallButton("РџСЂРёРіР»Р°СЃРёС‚СЊ (Host)")) {
                         SaveSync_StartHost();
                         SteamP2P_InviteFriend(f.steamId);
                     }
                 }
             } else if (st == SESSION_HOST_LISTENING) {
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Пригласить в игру")) {
+                if (ImGui::SmallButton("РџСЂРёРіР»Р°СЃРёС‚СЊ РІ РёРіСЂСѓ")) {
                     SteamP2P_InviteFriend(f.steamId);
                 }
             }
@@ -455,24 +456,24 @@ static void SessionButtons(std::string& hostIp)
 
     if (st == SESSION_IDLE) {
         // --- Gameplay mode selection (One State vs Two States) ---
-        ImGui::TextColored(kYellow, "Режим совместной игры (выбор Хоста):");
+        ImGui::TextColored(kYellow, "Р РµР¶РёРј СЃРѕРІРјРµСЃС‚РЅРѕР№ РёРіСЂС‹ (РІС‹Р±РѕСЂ РҐРѕСЃС‚Р°):");
         int coopMode = TwoStates_GetMode();
-        if (ImGui::RadioButton("Одно государство (общая казна и карта)", coopMode == COOP_MODE_ONE_STATE)) {
+        if (ImGui::RadioButton("РћРґРЅРѕ РіРѕСЃСѓРґР°СЂСЃС‚РІРѕ (РѕР±С‰Р°СЏ РєР°Р·РЅР° Рё РєР°СЂС‚Р°)", coopMode == COOP_MODE_ONE_STATE)) {
             TwoStates_SetMode(COOP_MODE_ONE_STATE);
         }
-        if (ImGui::RadioButton("Два государства на одной карте (Западная ССР / Восточная ССР)", coopMode == COOP_MODE_TWO_STATES)) {
+        if (ImGui::RadioButton("Р”РІР° РіРѕСЃСѓРґР°СЂСЃС‚РІР° РЅР° РѕРґРЅРѕР№ РєР°СЂС‚Рµ (Р—Р°РїР°РґРЅР°СЏ РЎРЎР  / Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР )", coopMode == COOP_MODE_TWO_STATES)) {
             TwoStates_SetMode(COOP_MODE_TWO_STATES);
             SaveSync_SetLockstep(true);
         }
         if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
             float borderHalf = TwoStates_GetBorderHalfWidth();
             ImGui::SetNextItemWidth(160);
-            if (ImGui::SliderFloat("Пограничная зона X=0 (±м)", &borderHalf, 50.0f, 1000.0f, "%.0f м"))
+            if (ImGui::SliderFloat("РџРѕРіСЂР°РЅРёС‡РЅР°СЏ Р·РѕРЅР° X=0 (В±Рј)", &borderHalf, 50.0f, 1000.0f, "%.0f Рј"))
                 TwoStates_SetBorderHalfWidth(borderHalf);
             bool fullCap = TwoStates_GetFullStartingCapital();
-            if (ImGui::Checkbox("100% стартового капитала каждому государству (иначе 50/50)", &fullCap))
+            if (ImGui::Checkbox("100% СЃС‚Р°СЂС‚РѕРІРѕРіРѕ РєР°РїРёС‚Р°Р»Р° РєР°Р¶РґРѕРјСѓ РіРѕСЃСѓРґР°СЂСЃС‚РІСѓ (РёРЅР°С‡Рµ 50/50)", &fullCap))
                 TwoStates_SetFullStartingCapital(fullCap);
-            Wrapped(kGrey, "Западная ССР (Хост, X < 0) и Восточная ССР (Игрок 2, X >= 0): раздельные казны (₽ и $), защита территории и чужих зданий, стыковка дорог/ЖД/ЛЭП в пограничной полосе.");
+            Wrapped(kGrey, "Р—Р°РїР°РґРЅР°СЏ РЎРЎР  (РҐРѕСЃС‚, X < 0) Рё Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР  (РРіСЂРѕРє 2, X >= 0): СЂР°Р·РґРµР»СЊРЅС‹Рµ РєР°Р·РЅС‹ (в‚Ѕ Рё $), Р·Р°С‰РёС‚Р° С‚РµСЂСЂРёС‚РѕСЂРёРё Рё С‡СѓР¶РёС… Р·РґР°РЅРёР№, СЃС‚С‹РєРѕРІРєР° РґРѕСЂРѕРі/Р–Р”/Р›Р­Рџ РІ РїРѕРіСЂР°РЅРёС‡РЅРѕР№ РїРѕР»РѕСЃРµ.");
         }
 
         ImGui::Spacing();
@@ -480,19 +481,19 @@ static void SessionButtons(std::string& hostIp)
         ImGui::Spacing();
 
         // --- Map Expansion Options ---
-        ImGui::TextColored(kYellow, "Увеличение размера карты:");
+        ImGui::TextColored(kYellow, "РЈРІРµР»РёС‡РµРЅРёРµ СЂР°Р·РјРµСЂР° РєР°СЂС‚С‹:");
         bool expandBorders = TwoStates_GetExpandBorders();
-        if (ImGui::Checkbox("Снять 2-км ограничение у краёв карты (20x20 км целиком, +56% площади)", &expandBorders))
+        if (ImGui::Checkbox("РЎРЅСЏС‚СЊ 2-РєРј РѕРіСЂР°РЅРёС‡РµРЅРёРµ Сѓ РєСЂР°С‘РІ РєР°СЂС‚С‹ (20x20 РєРј С†РµР»РёРєРѕРј, +56% РїР»РѕС‰Р°РґРё)", &expandBorders))
             TwoStates_SetExpandBorders(expandBorders);
         bool world = SaveSync_IsWorldLoaded();
         bool creatingMap = TwoStates_IsCreatingExpandedMap();
         ImGui::BeginDisabled(!world || creatingMap);
-        if (ImGui::Button(creatingMap ? "Создание карты 30x30 км..." : "Создать и загрузить карту 30x30 км (900 км²)", ImVec2(-1, 0))) {
+        if (ImGui::Button(creatingMap ? "РЎРѕР·РґР°РЅРёРµ РєР°СЂС‚С‹ 30x30 РєРј..." : "РЎРѕР·РґР°С‚СЊ Рё Р·Р°РіСЂСѓР·РёС‚СЊ РєР°СЂС‚Сѓ 30x30 РєРј (900 РєРјВІ)", ImVec2(-1, 0))) {
             TwoStates_RequestCreateExpandedMap(30);
         }
         ImGui::EndDisabled();
         if (!world && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Сначала загрузите любой город или карту, чтобы создать на её основе расширенную карту 30x30 км.");
+            ImGui::SetTooltip("РЎРЅР°С‡Р°Р»Р° Р·Р°РіСЂСѓР·РёС‚Рµ Р»СЋР±РѕР№ РіРѕСЂРѕРґ РёР»Рё РєР°СЂС‚Сѓ, С‡С‚РѕР±С‹ СЃРѕР·РґР°С‚СЊ РЅР° РµС‘ РѕСЃРЅРѕРІРµ СЂР°СЃС€РёСЂРµРЅРЅСѓСЋ РєР°СЂС‚Сѓ 30x30 РєРј.");
 
         SteamFriendsPanel(hostIp);
 
@@ -502,16 +503,16 @@ static void SessionButtons(std::string& hostIp)
 
         // The host picks the mode; the joining player follows it.
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Синхронизация:");
+        ImGui::TextUnformatted("РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ:");
         ImGui::SameLine();
         bool lockstep = SaveSync_GetLockstep();
-        if (ImGui::RadioButton("Lockstep (рекомендуется)", lockstep)) SaveSync_SetLockstep(true);
+        if (ImGui::RadioButton("Lockstep (СЂРµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ)", lockstep)) SaveSync_SetLockstep(true);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Оба ПК симулируют одни и те же тики без рассинхрона.");
+            ImGui::SetTooltip("РћР±Р° РџРљ СЃРёРјСѓР»РёСЂСѓСЋС‚ РѕРґРЅРё Рё С‚Рµ Р¶Рµ С‚РёРєРё Р±РµР· СЂР°СЃСЃРёРЅС…СЂРѕРЅР°.");
         ImGui::SameLine();
         if (ImGui::RadioButton("Replay", !lockstep)) SaveSync_SetLockstep(false);
         bool dlcCheck = SaveSync_GetDlcCheck();
-        if (ImGui::Checkbox("Проверять совпадение DLC (Check DLCs)", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
+        if (ImGui::Checkbox("РџСЂРѕРІРµСЂСЏС‚СЊ СЃРѕРІРїР°РґРµРЅРёРµ DLC (Check DLCs)", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
         ImGui::Spacing();
 
         static std::vector<std::string> s_localSaves;
@@ -526,7 +527,7 @@ static void SessionButtons(std::string& hostIp)
             }
             if (!s_localSaves.empty()) {
                 ImGui::AlignTextToFramePadding();
-                ImGui::TextColored(kYellow, "Сохранение для сервера:");
+                ImGui::TextColored(kYellow, "РЎРѕС…СЂР°РЅРµРЅРёРµ РґР»СЏ СЃРµСЂРІРµСЂР°:");
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(-90.0f);
                 if (ImGui::BeginCombo("##saveCombo", s_localSaves[s_selectedSave].c_str())) {
@@ -539,7 +540,7 @@ static void SessionButtons(std::string& hostIp)
                     ImGui::EndCombo();
                 }
                 ImGui::SameLine();
-                if (ImGui::SmallButton("Обновить##saves")) {
+                if (ImGui::SmallButton("РћР±РЅРѕРІРёС‚СЊ##saves")) {
                     SaveSync_ListLocalSaves(s_localSaves);
                     if (s_selectedSave >= (int)s_localSaves.size()) s_selectedSave = 0;
                 }
@@ -550,34 +551,34 @@ static void SessionButtons(std::string& hostIp)
         bool pendingLoadHost = SaveSync_IsPendingHostAfterLoad();
         ImGui::BeginDisabled(!canStartHost || pendingLoadHost);
         const char* hostBtnLabel = pendingLoadHost
-            ? "Загрузка города и запуск сервера..."
-            : (world ? "Создать сервер (Host: Steam + IP)" : "Загрузить и Создать сервер (Host)");
+            ? "Р—Р°РіСЂСѓР·РєР° РіРѕСЂРѕРґР° Рё Р·Р°РїСѓСЃРє СЃРµСЂРІРµСЂР°..."
+            : (world ? "РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂ (Host: Steam + IP)" : "Р—Р°РіСЂСѓР·РёС‚СЊ Рё РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂ (Host)");
         if (ImGui::Button(hostBtnLabel, ImVec2(half, 0))) {
             if (world) SaveSync_StartHost();
             else if (!s_localSaves.empty()) SaveSync_LoadAndStartHost(s_localSaves[s_selectedSave].c_str());
         }
         ImGui::EndDisabled();
         if (!canStartHost && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Создайте новую игру или загрузите город, чтобы запустить сервер.");
+            ImGui::SetTooltip("РЎРѕР·РґР°Р№С‚Рµ РЅРѕРІСѓСЋ РёРіСЂСѓ РёР»Рё Р·Р°РіСЂСѓР·РёС‚Рµ РіРѕСЂРѕРґ, С‡С‚РѕР±С‹ Р·Р°РїСѓСЃС‚РёС‚СЊ СЃРµСЂРІРµСЂ.");
         ImGui::SameLine();
         ImGui::BeginDisabled(hostIp.empty());
-        if (ImGui::Button("Подключиться (Connect)", ImVec2(half, 0)))
+        if (ImGui::Button("РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ (Connect)", ImVec2(half, 0)))
             SaveSync_StartClient(hostIp.c_str());
         ImGui::EndDisabled();
 
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Steam ID или IP Хоста:");
+        ImGui::TextUnformatted("Steam ID РёР»Рё IP РҐРѕСЃС‚Р°:");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Вставить")) {
+        if (ImGui::SmallButton("Р’СЃС‚Р°РІРёС‚СЊ")) {
             const char* clip = ImGui::GetClipboardText();
             if (clip && clip[0]) hostIp = clip;
         }
         ImGui::SetNextItemWidth(-1);
         ImGui::InputText("##hostIp", &hostIp);
         if (!world && !s_localSaves.empty())
-            Wrapped(kGrey, "Вы можете сразу нажать «Загрузить и Создать сервер» прямо из главного меню или подключиться к другу из списка выше.");
+            Wrapped(kGrey, "Р’С‹ РјРѕР¶РµС‚Рµ СЃСЂР°Р·Сѓ РЅР°Р¶Р°С‚СЊ В«Р—Р°РіСЂСѓР·РёС‚СЊ Рё РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂВ» РїСЂСЏРјРѕ РёР· РіР»Р°РІРЅРѕРіРѕ РјРµРЅСЋ РёР»Рё РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє РґСЂСѓРіСѓ РёР· СЃРїРёСЃРєР° РІС‹С€Рµ.");
         else if (!world)
-            Wrapped(kGrey, "Начните новую игру или подключитесь к другу из списка Steam выше.");
+            Wrapped(kGrey, "РќР°С‡РЅРёС‚Рµ РЅРѕРІСѓСЋ РёРіСЂСѓ РёР»Рё РїРѕРґРєР»СЋС‡РёС‚РµСЃСЊ Рє РґСЂСѓРіСѓ РёР· СЃРїРёСЃРєР° Steam РІС‹С€Рµ.");
         return;
     }
 
@@ -592,7 +593,7 @@ static void SessionButtons(std::string& hostIp)
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
     ImGui::BeginDisabled(SaveSync_GetSessionAgeMs() < SAVE_SYNC_STOP_BUTTON_DELAY_MS);
-    if (ImGui::Button(host ? "Остановить сервер (Stop hosting)" : "Отключиться (Disconnect)", ImVec2(-1, 0)))
+    if (ImGui::Button(host ? "РћСЃС‚Р°РЅРѕРІРёС‚СЊ СЃРµСЂРІРµСЂ (Stop hosting)" : "РћС‚РєР»СЋС‡РёС‚СЊСЃСЏ (Disconnect)", ImVec2(-1, 0)))
         SaveSync_RequestDisconnect();
     ImGui::EndDisabled();
     ImGui::PopStyleColor(2);
@@ -606,7 +607,7 @@ void MainMenu::Draw()
     }
 
     ImGui::SetNextWindowSize(ImVec2(500, 620), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("RepublicMP — Кооператив (Одно / Два государства)"))
+    if (ImGui::Begin("RepublicMP вЂ” РљРѕРѕРїРµСЂР°С‚РёРІ (РћРґРЅРѕ / Р”РІР° РіРѕСЃСѓРґР°СЂСЃС‚РІР°)"))
     {
         StatusPanel();
 
@@ -619,22 +620,22 @@ void MainMenu::Draw()
         ImGui::Spacing();
         float spacing = ImGui::GetStyle().ItemSpacing.x;
         float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
-        if (ImGui::Button("Скрыть меню (INSERT)", ImVec2(half, 0)))
+        if (ImGui::Button("РЎРєСЂС‹С‚СЊ РјРµРЅСЋ (INSERT)", ImVec2(half, 0)))
             g_imguiVisible = false; // INSERT brings it back (game/imgui_hook.cpp)
         ImGui::SameLine();
-        if (ImGui::Button("Отладка (Debug)", ImVec2(half, 0)))
+        if (ImGui::Button("РћС‚Р»Р°РґРєР° (Debug)", ImVec2(half, 0)))
             g_debug_window.Open();
 
         ImGui::TextColored(kGrey, "RepublicMP v%s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Проверить обновления"))
+        if (ImGui::SmallButton("РџСЂРѕРІРµСЂРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёСЏ"))
             Updater_CheckNow();
 
         UpdateStatus ust = Updater_GetStatus();
         const char* umsg = Updater_GetStatusMessage();
         if (ust == UPDATE_AVAILABLE_GITHUB || ust == UPDATE_AVAILABLE_WORKSHOP) {
             Wrapped(kGreen, "%s", umsg);
-            if (ImGui::Button("Скачать и установить обновление сейчас", ImVec2(-1, 0)))
+            if (ImGui::Button("РЎРєР°С‡Р°С‚СЊ Рё СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёРµ СЃРµР№С‡Р°СЃ", ImVec2(-1, 0)))
                 Updater_DownloadAndApply();
         } else if (ust == UPDATE_APPLIED_RESTART_NEEDED) {
             Wrapped(kYellow, "%s", umsg);
@@ -646,7 +647,7 @@ void MainMenu::Draw()
             Wrapped(kGrey, "%s", umsg);
         }
 
-        if (ImGui::TreeNode("Настройки автообновления (GitHub Releases / Steam Workshop)")) {
+        if (ImGui::TreeNode("РќР°СЃС‚СЂРѕР№РєРё Р°РІС‚РѕРѕР±РЅРѕРІР»РµРЅРёСЏ (GitHub Releases / Steam Workshop)")) {
             static std::string repoBuf;
             static bool repoInit = false;
             if (!repoInit) {
@@ -656,7 +657,7 @@ void MainMenu::Draw()
             ImGui::SetNextItemWidth(260);
             ImGui::InputText("GitHub (owner/repo)", &repoBuf);
             ImGui::SameLine();
-            if (ImGui::SmallButton("Сохранить")) {
+            if (ImGui::SmallButton("РЎРѕС…СЂР°РЅРёС‚СЊ")) {
                 Updater_SetGithubRepo(repoBuf.c_str());
                 Updater_CheckNow();
             }
@@ -668,12 +669,12 @@ void MainMenu::Draw()
         ImGui::Spacing();
 
         // --- Everyday log; verbose sync logs are in the Debug window ---
-        ImGui::TextUnformatted("Журнал событий (Log):");
+        ImGui::TextUnformatted("Р–СѓСЂРЅР°Р» СЃРѕР±С‹С‚РёР№ (Log):");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Очистить"))
+        if (ImGui::SmallButton("РћС‡РёСЃС‚РёС‚СЊ"))
             UiLog_Clear();
         ImGui::SameLine();
-        ImGui::Checkbox("Автопрокрутка", &autoScrollLog);
+        ImGui::Checkbox("РђРІС‚РѕРїСЂРѕРєСЂСѓС‚РєР°", &autoScrollLog);
 
         if (ImGui::BeginChild("log", { -1, -1 }, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoSavedSettings))
         {
