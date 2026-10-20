@@ -25,8 +25,8 @@ inline std::string Lang_GetConfigPath()
     }
     std::string dll(path);
     size_t pos = dll.find_last_of("\\/");
-    if (pos == std::string::npos) return "republicmp_updater.ini";
-    return dll.substr(0, pos + 1) + "republicmp_updater.ini";
+    if (pos == std::string::npos) return "republicmp_settings.ini";
+    return dll.substr(0, pos + 1) + "republicmp_settings.ini";
 }
 
 inline void Lang_EnsureInit()

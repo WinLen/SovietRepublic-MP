@@ -49,7 +49,7 @@
     - Добавляет кнопку `КООПЕРАТИВ` с советской иконкой `editor/mp_icon_coop.png` внизу системной вкладки `☭`.
     - При клике открывает подвкладку «Кооператив» (через `SYSTAB_SUBTAB_IDX_OFF = -2` и временный NOP заголовка `0x337D7B`), где отрисовывает однородные 9-slice кнопки (`DrawSidebarButton`) с квадратными иконками `96x96` (`editor/mp_icon_*.png`, `editor/settings_save.png`).
     - Содержит кнопку быстрого сохранения хоста **«Сохранить кооп-игру»** (`TwoStates_TriggerQuickCoopSave()`), перевод средств (`50 000 РУБ / $`), прыжок камеры к партнёру (`[F6]`), пинг (`[Alt+ЛКМ]`), переключение 3D-границы (`[F7]`), ре-синк и остановку/отключение.
-- [`lang.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/ui/lang.h) — Переключение языка (`MP_LANG_RU` / `MP_LANG_EN`), автоопределение по первому пункту главного меню игры.
+- [`lang.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/ui/lang.h) — Переключение языка (`MP_LANG_RU` / `MP_LANG_EN`), автоопределение по первому пункту главного меню игры и сохранение в `plugins\republicmp_settings.ini` (`[ui] lang=ru/en`).
 
 ### `session/` — Сессия, режим «Два государства», сохранения и настройки
 - [`two_states.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/session/two_states.h) / [`two_states.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/session/two_states.cpp):

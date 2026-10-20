@@ -111,6 +111,9 @@ static void SetSessionError(const char* fmt, ...)
     EnterCriticalSection(&g_lock);
     strncpy_s(g_lastError, body, _TRUNCATE);
     LeaveCriticalSection(&g_lock);
+    if (body[0]) {
+        TwoStates_AddToast(body, 3);
+    }
 }
 
 // Writes to tesmioloader.log and the in-game UI log.
@@ -233,7 +236,9 @@ static void MakeHello(SessionHello* h)
 static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 {
     if (memcmp(peer.magic, "RPMPSES", 8) != 0) {
-        _snprintf_s(why, whySize, _TRUNCATE, "the other side is not a compatible RepublicMP (old build?)");
+        _snprintf_s(why, whySize, _TRUNCATE, "%s",
+                    Tr("несовместимая версия RepublicMP у второго игрока",
+                       "the other side is not a compatible RepublicMP (old build?)"));
         return false;
     }
     char peerVersion[17] = {};
@@ -241,8 +246,10 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
     if (peer.protocol != REPUBLICMP_PROTOCOL || strcmp(peerVersion, REPUBLICMP_VERSION) != 0 ||
         peer.dllCrc != SaveSync_GetLocalDllCrc()) {
         _snprintf_s(why, whySize, _TRUNCATE,
-                    "different RepublicMP builds - yours %s (protocol %d, crc %08X), theirs %s (protocol %d, crc %08X). "
-                    "Both players need the same RepublicMP.dll",
+                    Tr("разные сборки RepublicMP: у вас %s (протокол %d, crc %08X), у партнёра %s (протокол %d, crc %08X). "
+                       "Обновите RepublicMP.dll до одной версии",
+                       "different RepublicMP builds - yours %s (protocol %d, crc %08X), theirs %s (protocol %d, crc %08X). "
+                       "Both players need the same RepublicMP.dll"),
                     REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, SaveSync_GetLocalDllCrc(),
                     peerVersion, peer.protocol, peer.dllCrc);
         return false;
@@ -368,7 +375,7 @@ static const char* MonitorLockstep(bool client)
         }
         // A game that froze or crashed keeps its socket open while Windows
         // reports it: it is gone once it stays silent.
-        if (LockstepNet_MsSinceReceived() > LOCKSTEP_SILENCE_MS) return "the other game stopped answering";
+        if (LockstepNet_MsSinceReceived() > LOCKSTEP_SILENCE_MS) return Tr("второй игрок перестал отвечать", "the other game stopped answering");
         if (client && LockstepNet_TakeResync()) {
             SaveSync_OnResyncAnnounced();
             return kResyncReason;
@@ -397,7 +404,7 @@ static const char* MonitorLockstep(bool client)
         SaveSync_OnResyncAnnounced();
         return kResyncReason;
     }
-    return g_disconnectRequested ? nullptr : "the lockstep connection closed";
+    return g_disconnectRequested ? nullptr : Tr("Lockstep-соединение закрыто", "the lockstep connection closed");
 }
 
 static const char* MonitorLiveSession(bool client)
@@ -564,10 +571,13 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     if (strcmp(mine.list, peer) == 0) return true;
     bool refuse = mine.check && theirs.check;
     _snprintf_s(why, whySize, _TRUNCATE,
-                "the DLCs differ - host [%s], player [%s]. DLC maps, buildings and vehicles cannot be shown without the DLC%s",
-                hostList[0] ? hostList : "none", playerList[0] ? playerList : "none",
-                refuse ? "; install the same DLCs, or untick \"Check DLCs\" on either PC to play a map that needs none"
-                       : " (the DLC check is off - playing anyway)");
+                Tr("разный набор DLC: хост [%s], клиент [%s]%s",
+                   "the DLCs differ - host [%s], player [%s]. DLC maps, buildings and vehicles cannot be shown without the DLC%s"),
+                hostList[0] ? hostList : Tr("нет", "none"), playerList[0] ? playerList : Tr("нет", "none"),
+                refuse ? Tr(". Установите одинаковые DLC или отключите «Проверка DLC» в Настройках коопа",
+                            "; install the same DLCs, or untick \"Check DLCs\" on either PC to play a map that needs none")
+                       : Tr(" (проверка DLC выключена — продолжаем)",
+                            " (the DLC check is off - playing anyway)"));
     if (!refuse) {
         Logf("republicmp  SESSION: %s", why);
         SaveStatus("%s %s", host ? "[HOST]" : "[CLIENT]", why);
@@ -639,7 +649,9 @@ static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
 static bool RunHostJoin(SOCKET sock)
 {
     g_activeSock = sock;
-    SyncBlock_SetActive(true, g_resyncing ? "Re-syncing the world" : "A player is connecting");
+    SyncBlock_SetActive(true, g_resyncing
+        ? Tr("Повторная синхронизация мира...", "Re-syncing the world")
+        : Tr("Подключается второй игрок...", "A player is connecting"));
     EnsureGamePaused();
     bool joined = false;
     char madeSaveDir[MAX_PATH] = {}; // cleaned up below
@@ -647,18 +659,18 @@ static bool RunHostJoin(SOCKET sock)
 
     do {
         // 1. Versions.
-        HostStep(sock, 1, "A player is connecting - checking versions");
+        HostStep(sock, 1, Tr("Подключение игрока — проверка версий", "A player is connecting - checking versions"));
         SessionHello mine, theirs;
         MakeHello(&mine);
         TwoStates_PrepareHostSave(g_resyncing, mine.stateRub, mine.stateUsd);
         if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the player dropped during the version check");
+            SetSessionError(Tr("Игрок отключился во время проверки версий", "the player dropped during the version check"));
             break;
         }
         NetworkSendExact(sock, &mine, sizeof(mine)); // always, so the client can show what differs
         char why[256];
         if (!HelloMatches(theirs, why, sizeof(why))) {
-            SetSessionError("join refused: %s", why);
+            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
             SaveStatus("[HOST] join refused: %s", why);
             break;
         }
@@ -666,12 +678,12 @@ static bool RunHostJoin(SOCKET sock)
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
             memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
-            SetSessionError("the player dropped during the DLC check");
+            SetSessionError(Tr("Игрок отключился во время проверки DLC", "the player dropped during the DLC check"));
             break;
         }
         char dlcWhy[512];
         if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
-            SetSessionError("join refused: %s", dlcWhy);
+            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
             SaveStatus("[HOST] join refused: %s", dlcWhy);
             break;
         }
@@ -681,15 +693,15 @@ static bool RunHostJoin(SOCKET sock)
         GenerateRandomSaveName(liveSaveName, sizeof(liveSaveName));
         char saveDir[MAX_PATH] = {};
         if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
-            SetSessionError("couldn't build the save path");
+            SetSessionError(Tr("Не удалось сформировать путь сохранения", "couldn't build the save path"));
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
-        HostStep(sock, 2, "Saving the world");
-        SendMsg(sock, MSG_STEP, 2, -1, "saving the world");
+        HostStep(sock, 2, Tr("Сохранение мира для передачи", "Saving the world"));
+        SendMsg(sock, MSG_STEP, 2, -1, Tr("сохранение мира", "saving the world"));
         // The engine's save writer does not create the destination folder.
         if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            SetSessionError("couldn't create the save folder (error %lu)", GetLastError());
+            SetSessionError(Tr("Не удалось создать папку сохранения (код %lu)", "couldn't create the save folder (error %lu)"), GetLastError());
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
@@ -704,11 +716,11 @@ static bool RunHostJoin(SOCKET sock)
         }
 
         // 2b. Synchronize Workshop/local mods and TesmioLoader gameplay plugins.
-        HostStep(sock, 2, "Synchronizing mods & plugins", 0);
-        SendMsg(sock, MSG_MOD_SYNC, 2, 0, "synchronizing mods & plugins");
+        HostStep(sock, 2, Tr("Авто-синхронизация модов Мастерской", "Synchronizing Workshop mods"), 0);
+        SendMsg(sock, MSG_MOD_SYNC, 2, 0, Tr("синхронизация модов", "synchronizing mods"));
         char modWhy[256] = {};
         if (!ModSync_HostHandshake(sock, saveDir, modWhy, sizeof(modWhy))) {
-            SetSessionError("mod sync failed: %s", modWhy);
+            SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
             SaveStatus("[HOST] mod sync failed: %s", modWhy);
             break;
         }
@@ -716,12 +728,12 @@ static bool RunHostJoin(SOCKET sock)
         // 3. Pack.
         char zipPath[MAX_PATH] = {};
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
-        HostStep(sock, 3, "Packing the save", 0);
-        SendMsg(sock, MSG_STEP, 3, 0, "packing the save");
-        ProgressCtx packCtx = { sock, 3, "packing the save", -100 };
+        HostStep(sock, 3, Tr("Упаковка сохранения", "Packing the save"), 0);
+        SendMsg(sock, MSG_STEP, 3, 0, Tr("упаковка сохранения", "packing the save"));
+        ProgressCtx packCtx = { sock, 3, Tr("упаковка сохранения", "packing the save"), -100 };
         strncpy_s(madeZip, zipPath, _TRUNCATE);
         if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
-            SetSessionError("packing the save failed");
+            SetSessionError(Tr("Ошибка упаковки сохранения", "packing the save failed"));
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
             break;
         }
@@ -731,27 +743,27 @@ static bool RunHostJoin(SOCKET sock)
         }
 
         // 4. Send.
-        HostStep(sock, 4, "Sending the world to the player", 0);
+        HostStep(sock, 4, Tr("Передача мира второму игроку", "Sending the world to the player"), 0);
         SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
         ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
         if (!NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx)) {
-            SetSessionError("sending the save failed - connection lost");
+            SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
             break;
         }
 
         // Lockstep: this PC loads the same save while the player unpacks and
         // loads its copy; the player's step messages wait in the socket.
         if (g_lockstep) {
-            HostStep(sock, 5, "Loading the shared world while the player loads it");
+            HostStep(sock, 5, Tr("Загрузка общего мира...", "Loading the shared world while the player loads it"));
             if (!Determinism_BeginSession(true)) {
-                SetSessionError("lockstep is not available - see the log (determinism layer)");
+                SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
                 break;
             }
             TwoStates_OnSessionJoined(true, mine.twoStatesMode, mine.borderHalfWidth, mine.expandBorders != 0,
                                       mine.stateRub, mine.stateUsd);
             TriggerLoadSave(liveSaveName);
             if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
-                if (!g_disconnectRequested) SetSessionError("loading the shared world failed");
+                if (!g_disconnectRequested) SetSessionError(Tr("Не удалось загрузить общий мир", "loading the shared world failed"));
                 TwoStates_OnSessionEnded();
                 ResetChannels();
                 break;
@@ -759,23 +771,23 @@ static bool RunHostJoin(SOCKET sock)
         }
 
         // 5-6. The player unpacks and loads; its steps arrive as messages.
-        HostStep(sock, 5, "Waiting for the player - unpacking", 0);
+        HostStep(sock, 5, Tr("Ожидание второго игрока — распаковка", "Waiting for the player - unpacking"), 0);
         bool ready = false;
         for (;;) {
             SessionMsg m;
             if (!RecvMsg(sock, &m)) {
-                SetSessionError("the player dropped while loading");
+                SetSessionError(Tr("Второй игрок отключился во время загрузки мира", "the player dropped while loading"));
                 break;
             }
             if (m.code == MSG_READY) { ready = true; break; }
             if (m.code == MSG_ABORT) {
-                SetSessionError("the player gave up: %s", m.text);
+                SetSessionError(Tr("Второй игрок отменил подключение: %s", "the player gave up: %s"), m.text);
                 SaveStatus("[HOST] the player gave up: %s", m.text);
                 break;
             }
             if (m.code == MSG_STEP) {
                 char text[96];
-                _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the player - %s", m.text);
+                _snprintf_s(text, sizeof(text), _TRUNCATE, Tr("Ожидание игрока — %s", "Waiting for the player - %s"), m.text);
                 if (m.step == 5) SyncBlock_SetStep(5, JOIN_STEPS, text, m.percent);
                 else HostStep(sock, m.step, text, m.percent);
             }
@@ -790,7 +802,7 @@ static bool RunHostJoin(SOCKET sock)
 
         // 7. Lockstep: both loaded the same save; the channel connects.
         if (g_lockstep) {
-            HostStep(sock, 7, "Waiting for the player's lockstep connection");
+            HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
             if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
                 if (!g_disconnectRequested) SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
                 TwoStates_OnSessionEnded();
@@ -926,7 +938,9 @@ static bool JoinHostGone(void* sockPtr)
 static bool RunClientJoin(bool rejoin)
 {
     g_resyncAnnounced = false;
-    SyncBlock_SetActive(true, rejoin ? "Re-syncing with the host" : "Connecting to the host");
+    SyncBlock_SetActive(true, rejoin
+        ? Tr("Повторная синхронизация с хостом...", "Re-syncing with the host")
+        : Tr("Подключение к хосту...", "Connecting to the host"));
     EnsureGamePaused();
 
     SOCKET sock = INVALID_SOCKET;
@@ -935,7 +949,7 @@ static bool RunClientJoin(bool rejoin)
     do {
         char saveDir[MAX_PATH] = {};
         if (!GetGameSaveDir(saveDir, sizeof(saveDir), SAVE_SYNC_CLIENT_STAGING_NAME)) {
-            SetSessionError("couldn't build the save path");
+            SetSessionError(Tr("Не удалось сформировать путь сохранения", "couldn't build the save path"));
             break;
         }
         char zipPath[MAX_PATH] = {};
@@ -944,9 +958,9 @@ static bool RunClientJoin(bool rejoin)
         _snprintf_s(destDir, sizeof(destDir), _TRUNCATE, "%s%s", saveDir, SAVE_SYNC_RECEIVED_SUFFIX);
 
         // 1. Connect + versions.
-        ClientStep(1, "Connecting to the host - checking versions");
+        ClientStep(1, Tr("Подключение к серверу — проверка версий", "Connecting to the host - checking versions"));
         if (!NetworkInit()) {
-            SetSessionError("network init failed");
+            SetSessionError(Tr("Ошибка инициализации сети", "network init failed"));
             break;
         }
         ULONGLONG connectStart = GetTickCount64();
@@ -958,7 +972,9 @@ static bool RunClientJoin(bool rejoin)
         }
         if (sock == INVALID_SOCKET) {
             if (!g_disconnectRequested)
-                SetSessionError("couldn't reach %s:%d - is the host hosting (and not already playing with someone)? is the IP right?", g_targetIp, SAVE_SYNC_PORT);
+                SetSessionError(Tr("Не удалось подключиться к %s — проверьте, что хост уже открыл сервер",
+                                   "couldn't reach %s:%d - is the host hosting (and not already playing with someone)?"),
+                                g_targetIp, SAVE_SYNC_PORT);
             break;
         }
         g_activeSock = sock;
@@ -968,12 +984,12 @@ static bool RunClientJoin(bool rejoin)
         SessionHello mine, theirs;
         MakeHello(&mine);
         if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError("the host dropped during the version check (old build, or already has a player?)");
+            SetSessionError(Tr("Соединение с хостом прервалось при проверке версий", "the host dropped during the version check"));
             break;
         }
         char why[256];
         if (!HelloMatches(theirs, why, sizeof(why))) {
-            SetSessionError("join refused: %s", why);
+            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
             SaveStatus("[CLIENT] join refused: %s", why);
             break;
         }
@@ -981,12 +997,12 @@ static bool RunClientJoin(bool rejoin)
         MakeDlcs(&myDlcs);
         if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
             memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
-            SetSessionError("the host dropped during the DLC check");
+            SetSessionError(Tr("Соединение с хостом прервалось при проверке DLC", "the host dropped during the DLC check"));
             break;
         }
         char dlcWhy[512];
         if (!DlcsMatch(myDlcs, theirDlcs, false, dlcWhy, sizeof(dlcWhy))) {
-            SetSessionError("join refused: %s", dlcWhy);
+            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
             SaveStatus("[CLIENT] join refused: %s", dlcWhy);
             break;
         }
@@ -994,24 +1010,24 @@ static bool RunClientJoin(bool rejoin)
         if (g_lockstep) SaveStatus("[CLIENT] the host runs this session in lockstep");
 
         // 2-3. The host saves and packs; its steps arrive as messages.
-        ClientStep(2, "Waiting for the host - saving the world");
+        ClientStep(2, Tr("Ожидание хоста — сохранение мира", "Waiting for the host - saving the world"));
         bool fileFollows = false;
         for (;;) {
             SessionMsg m;
             if (!RecvMsg(sock, &m)) {
-                SetSessionError("the host dropped while preparing the world");
+                SetSessionError(Tr("Хост отключился во время подготовки мира", "the host dropped while preparing the world"));
                 break;
             }
             if (m.code == MSG_FILE_FOLLOWS) { fileFollows = true; break; }
             if (m.code == MSG_ABORT) {
-                SetSessionError("the host gave up: %s", m.text);
+                SetSessionError(Tr("Хост прервал подключение: %s", "the host gave up: %s"), m.text);
                 break;
             }
             if (m.code == MSG_MOD_SYNC) {
-                ClientStep(2, "Synchronizing mods & plugins", 0);
+                ClientStep(2, Tr("Авто-синхронизация модов Мастерской", "Synchronizing Workshop mods"), 0);
                 char modWhy[256] = {};
                 if (!ModSync_ClientHandshake(sock, modWhy, sizeof(modWhy))) {
-                    SetSessionError("mod sync failed: %s", modWhy);
+                    SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
                     SaveStatus("[CLIENT] mod sync failed: %s", modWhy);
                     break;
                 }
@@ -1019,26 +1035,26 @@ static bool RunClientJoin(bool rejoin)
             }
             if (m.code == MSG_STEP) {
                 char text[96];
-                _snprintf_s(text, sizeof(text), _TRUNCATE, "Waiting for the host - %s", m.text);
+                _snprintf_s(text, sizeof(text), _TRUNCATE, Tr("Ожидание хоста — %s", "Waiting for the host - %s"), m.text);
                 SyncBlock_SetStep(m.step, JOIN_STEPS, text, m.percent);
             }
         }
         if (!fileFollows) break;
 
         // 4. Receive.
-        ClientStep(4, "Receiving the world", 0);
+        ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
         ProgressCtx recvCtx = { INVALID_SOCKET, 4, nullptr, 0 };
         if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
-            SetSessionError("receiving the world failed - connection lost");
+            SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
             break;
         }
 
         // 5. Unpack (relayed to the host).
-        ClientStep(5, "Unpacking", 0);
-        SendMsg(sock, MSG_STEP, 5, 0, "unpacking");
-        ProgressCtx unpackCtx = { sock, 5, "unpacking", -100 };
+        ClientStep(5, Tr("Распаковка мира", "Unpacking"), 0);
+        SendMsg(sock, MSG_STEP, 5, 0, Tr("распаковка мира", "unpacking"));
+        ProgressCtx unpackCtx = { sock, 5, Tr("распаковка мира", "unpacking"), -100 };
         if (!UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx)) {
-            SetSessionError("unpacking the world failed");
+            SetSessionError(Tr("Ошибка распаковки мира", "unpacking the world failed"));
             SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
             break;
         }
@@ -1048,14 +1064,14 @@ static bool RunClientJoin(bool rejoin)
         }
 
         // 6. Load.
-        ClientStep(6, "Loading the world");
-        SendMsg(sock, MSG_STEP, 6, -1, "loading the world");
+        ClientStep(6, Tr("Загрузка мира...", "Loading the world"));
+        SendMsg(sock, MSG_STEP, 6, -1, Tr("загрузка мира", "loading the world"));
         char receivedSaveName[MAX_PATH] = {};
         _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
                     SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
         if (g_lockstep) {
             if (!Determinism_BeginSession(false)) {
-                SetSessionError("lockstep is not available - see the log (determinism layer)");
+                SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
                 SendMsg(sock, MSG_ABORT, 0, -1, "lockstep is not available on the player");
                 break;
             }
@@ -1065,17 +1081,17 @@ static bool RunClientJoin(bool rejoin)
         TriggerLoadSave(receivedSaveName);
         if (!WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock)) {
             if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
-            else SetSessionError("the host dropped while the world was loading");
+            else SetSessionError(Tr("Хост отключился во время загрузки мира", "the host dropped while the world was loading"));
             if (g_lockstep) TwoStates_OnSessionEnded();
             break;
         }
 
         // 7. Ready -> the host starts listening on the channels; connect them.
         if (g_lockstep) {
-            ClientStep(7, "Waiting for the host to load the shared world");
+            ClientStep(7, Tr("Ожидание загрузки мира у хоста...", "Waiting for the host to load the shared world"));
             SendMsg(sock, MSG_READY, 7, -1, "");
             if (!Determinism_SessionRunning()) {
-                SetSessionError("loading the shared world failed");
+                SetSessionError(Tr("Ошибка загрузки общего мира", "loading the shared world failed"));
                 TwoStates_OnSessionEnded();
                 break;
             }
@@ -1094,18 +1110,18 @@ static bool RunClientJoin(bool rejoin)
                 }
             }
             if (!lockstepUp) {
-                if (hostGone) SetSessionError("the host dropped while loading the shared world");
-                else if (!g_disconnectRequested) SetSessionError("couldn't open the lockstep connection to %s:%d", g_targetIp, LOCKSTEP_PORT);
+                if (hostGone) SetSessionError(Tr("Хост отключился во время загрузки общего мира", "the host dropped while loading the shared world"));
+                else if (!g_disconnectRequested) SetSessionError(Tr("Не удалось открыть Lockstep-канал к %s:%d", "couldn't open the lockstep connection to %s:%d"), g_targetIp, LOCKSTEP_PORT);
                 TwoStates_OnSessionEnded();
                 break;
             }
             joined = true;
             break;
         }
-        ClientStep(7, "Starting live sync");
+        ClientStep(7, Tr("Запуск каналов синхронизации...", "Starting live sync"));
         SendMsg(sock, MSG_READY, 7, -1, "");
         if (!WaitForChannels(true)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
+            if (!g_disconnectRequested) SetSessionError(Tr("Каналы синхронизации не подключились — TCP порты %d-%d хоста недоступны", "the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)"), BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
             ResetChannels();
             break;
         }
@@ -1149,7 +1165,7 @@ static void RunClientSession()
         }
         TwoStates_OnSessionEnded();
         if (why) {
-            SetSessionError("disconnected from the host: %s", why);
+            SetSessionError(Tr("Отключено от хоста: %s", "disconnected from the host: %s"), why);
             SaveStatus("[CLIENT] disconnected from the host (%s)", why);
         } else {
             SaveStatus("[CLIENT] left the session");
@@ -1214,7 +1230,7 @@ void SaveSync_StartHost()
     if (!SaveSync_IsWorldLoaded()) {
         // A joining player gets the host's world: there has to be one.
         SaveStatus("[HOST] no world loaded - load a city first, then host");
-        SetSessionError("load a city before hosting");
+        SetSessionError(Tr("Сначала загрузите город или карту перед созданием сервера", "load a city before hosting"));
         return;
     }
     if (!TwoStates_IsCoopBankMounted()) {
@@ -1355,7 +1371,8 @@ static void CheckStillInWorld()
     bool host = g_isHost;
     SaveStatus(host ? "[HOST] left the world - stopping hosting" : "[CLIENT] left the world - disconnecting");
     SaveSync_RequestDisconnect();
-    SetSessionError(host ? "hosting stopped: you left the world" : "disconnected: you left the world");
+    SetSessionError(host ? Tr("Сервер остановлен: выход из мира", "hosting stopped: you left the world")
+                         : Tr("Отключено: выход из мира", "disconnected: you left the world"));
 }
 
 void SaveSync_Tick()

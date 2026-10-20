@@ -196,15 +196,16 @@ int main(int argc, char** argv)
     }
 
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
-    pSetTitle(pUGC, hUpdate, "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)");
-    pSetDesc(pUGC, hUpdate, desc.c_str());
-    pSetVis(pUGC, hUpdate, 2 /* k_ERemoteStoragePublishedFileVisibilityPrivate */);
-    pSetContent(pUGC, hUpdate, contentDir.c_str());
-    pSetPreview(pUGC, hUpdate, previewFile.c_str());
+    bool bTitle = pSetTitle(pUGC, hUpdate, "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)");
+    bool bDesc = pSetDesc(pUGC, hUpdate, desc.c_str());
+    bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
+    bool bPreview = pSetPreview(pUGC, hUpdate, previewFile.c_str());
+    printf("[UGC] SetItem: title=%d desc=%d content=%d preview=%d\n",
+           (int)bTitle, (int)bDesc, (int)bContent, (int)bPreview);
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "Release v1.0.0 — Native UI & Sidebar, Two States Economy, Isolated Co-op Save Bank, and Automatic Bidirectional Workshop Mod Sync");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "Release v1.0.0 - Native UI & Sidebar, Two States Economy, Isolated Co-op Save Bank, and Automatic Bidirectional Workshop Mod Sync");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;
