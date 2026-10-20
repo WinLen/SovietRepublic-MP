@@ -158,12 +158,8 @@ int main(int argc, char** argv)
         publishedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
     }
     if (argc > 1 && argv[1][0]) {
-        if (strcmp(argv[1], "new") == 0 || strcmp(argv[1], "0") == 0) {
-            publishedId = 0;
-        } else {
-            uint64_t argId = _strtoui64(argv[1], nullptr, 10);
-            if (argId > 0) publishedId = argId;
-        }
+        uint64_t argId = _strtoui64(argv[1], nullptr, 10);
+        if (argId > 0) publishedId = argId;
     }
 
     if (publishedId == 0) {

@@ -102,12 +102,12 @@ static void EnsureTesmioLoaderLoaded()
 
     BootLogf(gameDir, true, "dinput8.dll: Direct Steam launch detected for %s", exePath);
 
-    char candidateBuildDirs[4][MAX_PATH] = {};
+    char candidateBuildDirs[8][MAX_PATH] = {};
     int numCandidates = 0;
 
-    // 1. Subscribed Steam Workshop item 3822972914 (steamapps\workshop\content\784150\3822972914\TesmioLoader\build)
+    // 1. Subscribed Steam Workshop item 3823543010 (steamapps\workshop\content\784150\3823543010\TesmioLoader\build)
     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
-                "%s\\..\\..\\workshop\\content\\784150\\3822972914\\TesmioLoader\\build", gameDir);
+                "%s\\..\\..\\workshop\\content\\784150\\3823543010\\TesmioLoader\\build", gameDir);
 
     // 2. Local TesmioLoader\build inside game directory
     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
@@ -129,7 +129,7 @@ static void EnsureTesmioLoaderLoaded()
                 _snprintf_s(extraWs, sizeof(extraWs), _TRUNCATE,
                             "%s\\..\\..\\workshop\\content\\784150\\%s\\TesmioLoader\\build\\tesmioloader.dll",
                             gameDir, fd.cFileName);
-                if (FileExistsA(extraWs) && numCandidates < 4) {
+                if (FileExistsA(extraWs) && numCandidates < 8) {
                     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
                                 "%s\\..\\..\\workshop\\content\\784150\\%s\\TesmioLoader\\build",
                                 gameDir, fd.cFileName);
@@ -145,6 +145,26 @@ static void EnsureTesmioLoaderLoaded()
         BootLogf(gameDir, false, "dinput8.dll: Checking candidate [%d]: %s (exists=%d)",
                  i, dllPath, (int)FileExistsA(dllPath));
         if (FileExistsA(dllPath)) {
+            // Auto-sync custom sidebar icons (mp_icon_*.png) from the mod root into gameDir\media_soviet\editor
+            char iconWild[MAX_PATH] = {};
+            _snprintf_s(iconWild, sizeof(iconWild), _TRUNCATE,
+                        "%s\\..\\..\\media_soviet\\editor\\mp_icon_*.png", candidateBuildDirs[i]);
+            WIN32_FIND_DATAA ifd = {};
+            HANDLE hIcon = FindFirstFileA(iconWild, &ifd);
+            if (hIcon != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!(ifd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                        char srcIcon[MAX_PATH] = {}, dstIcon[MAX_PATH] = {};
+                        _snprintf_s(srcIcon, sizeof(srcIcon), _TRUNCATE,
+                                    "%s\\..\\..\\media_soviet\\editor\\%s", candidateBuildDirs[i], ifd.cFileName);
+                        _snprintf_s(dstIcon, sizeof(dstIcon), _TRUNCATE,
+                                    "%s\\media_soviet\\editor\\%s", gameDir, ifd.cFileName);
+                        CopyFileA(srcIcon, dstIcon, FALSE);
+                    }
+                } while (FindNextFileA(hIcon, &ifd));
+                FindClose(hIcon);
+            }
+
             EnsureLoaderIni(candidateBuildDirs[i], exePath);
             HMODULE hLoaded = LoadLibraryA(dllPath);
             BootLogf(gameDir, false, "dinput8.dll: LoadLibraryA(%s) -> %p (err=%lu)",
