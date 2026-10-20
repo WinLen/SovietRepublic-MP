@@ -1,691 +1,753 @@
-﻿// SPDX-License-Identifier: GPL-3.0-only
-// See main_menu.h.
+// SPDX-License-Identifier: GPL-3.0-only
 #include "main_menu.h"
-#include "debug_window.h"
+#include "lang.h"
 #include "ui_log.h"
 #include "sync_block.h"
-#include "../game/imgui_hook.h" // g_imguiVisible - "Hide menu" button
+#include "debug_window.h"
 #include "../session/save_sync.h"
-#include "../lockstep/lockstep_net.h"
-#include "../world_sync/buildings/build_sync.h"
-#include "../world_sync/networks/road_sync.h"
-#include "../world_sync/terrain/terrain_sync.h"
 #include "../session/sync_check.h"
 #include "../session/two_states.h"
 #include "../session/updater.h"
-#include "../core/diag_log.h"
-#include "../determinism/determinism.h"
 #include "../transport/steam_p2p.h"
-
+#include "../core/version.h"
+#include "../core/diag_log.h"
+#include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/networks/road_sync.h"
+#include "../world_sync/terrain/terrain_sync.h"
+#include "../determinism/determinism.h"
+#include "../lockstep/lockstep_net.h"
+#include "../game/imgui_hook.h"
 #include "imgui.h"
-#include <misc/cpp/imgui_stdlib.h> // ImGui::InputText(const char*, std::string*)
-
+#include <cstdio>
+#include <cstring>
 #include <vector>
 #include <string>
-#include <cstdio>
-#include <cstdarg>
 
-MainMenu g_mainMenu;
+static const ImVec4 kRed    = ImVec4(0.95f, 0.35f, 0.35f, 1.0f);
+static const ImVec4 kYellow = ImVec4(0.95f, 0.80f, 0.30f, 1.0f);
+static const ImVec4 kGreen  = ImVec4(0.35f, 0.90f, 0.45f, 1.0f);
+static const ImVec4 kGrey   = ImVec4(0.65f, 0.65f, 0.65f, 1.0f);
+static const ImVec4 kCyan   = ImVec4(0.40f, 0.85f, 1.00f, 1.0f);
+static const ImVec4 kGold   = ImVec4(1.00f, 0.78f, 0.35f, 1.0f);
 
-static const ImVec4 kGrey   = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-static const ImVec4 kBlue   = ImVec4(0.4f, 0.75f, 0.95f, 1.0f);
-static const ImVec4 kYellow = ImVec4(0.95f, 0.8f, 0.25f, 1.0f);
-static const ImVec4 kGreen  = ImVec4(0.35f, 0.9f, 0.35f, 1.0f);
-static const ImVec4 kRed    = ImVec4(0.95f, 0.4f, 0.35f, 1.0f);
-
-// Text in a colour that wraps at the window's edge.
-static void Wrapped(const ImVec4& color, const char* fmt, ...)
+static void Dot(const ImVec4& col)
 {
-    char text[512];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(text, sizeof(text), fmt, args);
-    va_end(args);
-    ImGui::PushStyleColor(ImGuiCol_Text, color);
-    ImGui::TextWrapped("%s", text);
-    ImGui::PopStyleColor();
-}
-
-// A coloured dot followed by text on the same line.
-static void StatusDot(const ImVec4& color)
-{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = ImGui::GetTextLineHeight();
-    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + h * 0.4f, p.y + h * 0.5f), h * 0.3f,
-                                                ImGui::GetColorU32(color));
+    dl->AddCircleFilled(ImVec2(p.x + h * 0.4f, p.y + h * 0.5f), h * 0.32f,
+                        ImGui::ColorConvertFloat4ToU32(col));
     ImGui::Dummy(ImVec2(h * 0.9f, h));
     ImGui::SameLine();
 }
 
-// Replay mode: "Buildings  Roads  Terrain" with a green/red dot each (lockstep uses none of them).
-static void ChannelIndicators()
+static void StatusPanel(SessionState st)
 {
-    struct { const char* name; bool up; } ch[] = {
-        { "Buildings", BuildSync_IsConnected() },
-        { "Roads", RoadSync_IsConnected() },
-        { "Terrain", TerrainSync_IsConnected() },
-    };
-    ImGui::TextColored(kGrey, "Live sync:");
-    for (auto& c : ch) {
-        ImGui::SameLine(0, 12);
-        StatusDot(c.up ? kGreen : kRed);
-        ImGui::TextUnformatted(c.name);
-    }
-}
-
-// The current join step (from the sync screen), e.g. "Step 4/7 - Sending...  62%".
-static void JoinStepLine()
-{
-    int step, total, percent;
-    char text[160];
-    if (!SyncBlock_GetStep(&step, &total, text, sizeof(text), &percent)) {
-        ImGui::TextColored(kGrey, "Preparing...");
-        return;
-    }
-    if (total > 0) Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "Step %d/%d - %s", step, total, text);
-    else Wrapped(ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s", text);
-    if (percent >= 0) {
-        char overlay[16];
-        _snprintf_s(overlay, sizeof(overlay), _TRUNCATE, "%d%%", percent);
-        ImGui::ProgressBar(percent / 100.0f, ImVec2(-1, 0), overlay);
-    }
-}
-
-static void MinutesSeconds(char* out, size_t n, unsigned long long ms)
-{
-    _snprintf_s(out, n, _TRUNCATE, "%llu:%02llu", ms / 60000, (ms / 1000) % 60);
-}
-
-// Lockstep in the game: the simulation, the connection, how the ticks flow and the comparison.
-static void LockstepPanel(bool host)
-{
-    bool paused = true;
-    int speed = 1;
-    Determinism_SessionSpeed(&paused, &speed);
-    unsigned long long tick = Determinism_StepCount();
-    if (paused) Wrapped(kYellow, "Simulation: paused at tick %llu", tick);
-    else {
-        static const char* const kSpeeds[] = { "", "normal", "fast", "Hyper", "Plaid" };
-        Wrapped(kGreen, "Simulation: running, tick %llu (%s)", tick, kSpeeds[speed < 1 ? 1 : speed > 4 ? 4 : speed]);
-    }
-
-    unsigned long long rtt = 0;
-    if (LockstepNet_RoundTrip(&rtt)) {
-        ImVec4 col = rtt < 80 ? kGreen : rtt < 250 ? kYellow : kRed;
-        Wrapped(col, "Ping: %llu ms", rtt);
-    } else {
-        Wrapped(kGrey, "Ping: measuring...");
-    }
-
-    LockstepFlow f = LockstepNet_Flow();
-    if (host) {
-        if (f.msSinceStall < 5000)
-            Wrapped(kYellow, "Flow: waiting for the player (%llu ticks behind) - the slower PC sets the pace", f.behind);
-        else
-            Wrapped(kGreen, "Flow: steady (player %llu tick(s) behind)", f.behind);
-    } else {
-        if (f.behind > LOCKSTEP_WINDOW / 2)
-            Wrapped(kYellow, "Flow: catching up, %llu tick(s) waiting", f.behind);
-        else
-            Wrapped(kGreen, "Flow: steady");
-    }
-
-    const char* desync = LockstepNet_Desync();
-    unsigned long long matched = LockstepNet_LastMatchedTick();
-    if (desync[0]) {
-        Wrapped(kRed, "Sync: %s", desync);
-        ULONGLONG left = host ? SaveSync_GetMsUntilDesyncResync() : 0;
-        if (left) {
-            char t[16];
-            MinutesSeconds(t, sizeof(t), left);
-            Wrapped(kYellow, "The game goes on; re-sync in %s.", t);
-        } else {
-            Wrapped(kGrey, host ? "The game goes on; re-sync when you choose." : "The game goes on until the host re-syncs.");
-        }
-    } else if (host && matched) {
-        Wrapped(kGreen, "Sync: the games match (checked after tick %llu)", matched);
-    } else {
-        Wrapped(kGrey, "Sync: compared every %d ticks%s", LOCKSTEP_HASH_TICKS, host ? "" : " by the host");
-    }
-
-    if (!host) return;
-    ImGui::Spacing();
-    if (ImGui::Button("Re-sync now")) SaveSync_RequestResync();
-    ImGui::SameLine();
-    static const int kSeconds[] = { -1, 0, 60, 120, 300 };
-    static const char* const kLabels[] = { "Off", "immediately", "after 1 min", "after 2 min", "after 5 min" };
-    int current = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(kSeconds); i++)
-        if (kSeconds[i] == SaveSync_GetDesyncResyncSeconds()) current = i;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("After a desync:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
-    if (ImGui::Combo("##desyncResync", &current, kLabels, IM_ARRAYSIZE(kLabels))) SaveSync_SetDesyncResyncSeconds(kSeconds[current]);
-    Wrapped(kGrey, "Re-sync sends your world to the player again; both games then go on from it.");
-}
-
-// Replay mode, host with a player in the game: re-sync now, the interval and the drift.
-static void ReplayResyncControls()
-{
-    static const int kMinutes[] = { 0, 5, 10, 15, 30, 60 };
-    static const char* const kLabels[] = { "Off", "every 5 min", "every 10 min", "every 15 min",
-                                           "every 30 min", "every 60 min" };
-    int current = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(kMinutes); i++)
-        if (kMinutes[i] == SaveSync_GetAutoResyncMinutes()) current = i;
-
-    if (ImGui::Button("Re-sync now"))
-        SaveSync_RequestResync();
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Auto:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(130);
-    if (ImGui::Combo("##autoResync", &current, kLabels, IM_ARRAYSIZE(kLabels)))
-        SaveSync_SetAutoResyncMinutes(kMinutes[current]);
-    ULONGLONG left = SaveSync_GetMsUntilAutoResync();
-    if (left) {
-        char t[16];
-        MinutesSeconds(t, sizeof(t), left);
-        ImGui::SameLine();
-        ImGui::TextColored(kGrey, "next in %s", t);
-    }
-    Wrapped(kGrey, "Re-sync sends your world to the player again (vehicles, citizens, production).");
-
-    SyncDrift d = SyncCheck_GetDrift();
-    if (d.valid) {
-        ImVec4 col = d.total < 2.0f ? kGreen : d.total < 10.0f ? kYellow : kRed;
-        Wrapped(col, "Drift %.1f%% (day %d %02d:00 - citizens %d/%d, vehicles %d/%d, storage %.1f%%)", d.total, d.day, d.hour,
-                d.hostCitizens, d.clientCitizens, d.hostVehicles, d.clientVehicles, d.storage);
-    } else {
-        Wrapped(kGrey, "Drift: measured every game hour");
-    }
-    static const int kLimits[] = { 0, 2, 5, 10, 20 };
-    static const char* const kLimitLabels[] = { "Off", "above 2%", "above 5%", "above 10%", "above 20%" };
-    int limit = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(kLimits); i++)
-        if (kLimits[i] == SyncCheck_GetAutoResyncPercent()) limit = i;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Re-sync on drift:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::Combo("##driftResync", &limit, kLimitLabels, IM_ARRAYSIZE(kLimitLabels)))
-        SyncCheck_SetAutoResyncPercent(kLimits[limit]);
-    // Why an automatic re-sync has not happened yet (see session/sync_check.h).
-    if (kLimits[limit] > 0 && d.valid && d.overLimitChecks > 0) {
-        unsigned long long wait = SyncCheck_GetResyncCooldownMs();
-        if (d.overLimitChecks < SYNC_CHECK_CONFIRM_CHECKS)
-            Wrapped(kYellow, "above for %d/%d hours", d.overLimitChecks, SYNC_CHECK_CONFIRM_CHECKS);
-        else if (wait) {
-            char t[16];
-            MinutesSeconds(t, sizeof(t), wait);
-            Wrapped(kYellow, "waiting %s after the last re-sync", t);
-        }
-    }
-}
-
-static void StatusPanel()
-{
-    SessionState st = SaveSync_GetState();
     const char* peer = SaveSync_GetPeerIp();
-    const char* lastError = SaveSync_GetLastError();
-    bool lockstep = SaveSync_IsLockstepSession();
-    const char* mode = lockstep ? "lockstep" : "replay mode";
+    ImVec4 col = kGrey;
+    char headline[128] = {};
+    const char* hint = nullptr;
 
     switch (st) {
     case SESSION_IDLE:
-        StatusDot(kGrey);
-        ImGui::TextColored(kGrey, "Not in a multiplayer session");
-        if (lastError[0]) Wrapped(kRed, "Last session: %s", lastError);
+        col = kGrey;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE, "%s",
+                    Tr("Не подключено", "Not connected"));
+        hint = SaveSync_IsWorldLoaded()
+            ? Tr("Выберите режим игры и нажмите «Создать сервер», либо подключитесь к другу.",
+                 "Select a game mode and click 'Start Server', or connect to a friend.")
+            : Tr("Выберите сохранение прямо здесь для запуска сервера, либо подключитесь к другу.",
+                 "Pick a save right here to start hosting, or connect to a friend.");
         break;
-
     case SESSION_HOST_LISTENING:
-        if (SaveSync_IsResyncing()) {
-            StatusDot(kYellow);
-            Wrapped(kYellow, "Re-syncing - waiting for %s to reconnect", peer[0] ? peer : "the player");
-            break;
-        }
-        StatusDot(kBlue);
-        Wrapped(kBlue, "Hosting (%s) - waiting for a player", SaveSync_GetLockstep() ? "lockstep" : "replay mode");
-        Wrapped(kGrey, "Your game keeps running. Players connect to your IP (port %d).", SAVE_SYNC_PORT);
-        if (lastError[0]) Wrapped(kYellow, "%s", lastError);
+        col = kYellow;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE,
+                    Tr("Ожидание второго игрока (порт %d + Steam P2P)", "Waiting for player 2 (port %d + Steam P2P)"),
+                    SAVE_SYNC_PORT);
+        hint = Tr("Друг может войти в 1 клик через список друзей Steam ниже или по вашему IP.",
+                  "Your friend can join in 1 click via the Steam Friends list below or by IP.");
         break;
-
     case SESSION_HOST_JOINING:
-        StatusDot(kYellow);
-        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing - sending the world to %s" : "Hosting - %s is joining",
-                peer[0] ? peer : "a player");
-        JoinStepLine();
+        col = kYellow;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE,
+                    SaveSync_IsResyncing()
+                        ? Tr("Пересинхронизация мира с %s...", "Re-syncing the world with %s...")
+                        : Tr("Игрок %s подключается — передача сохранения...", "Player %s is joining — sending save..."),
+                    peer[0] ? peer : Tr("игроком", "player"));
+        hint = Tr("Обе игры поставлены на паузу до завершения загрузки мира.",
+                  "Both games are paused until the world finishes loading.");
         break;
-
     case SESSION_HOST_IN_GAME:
-        StatusDot(kGreen);
-        Wrapped(kGreen, "Hosting (%s) - %s is in the game", mode, peer[0] ? peer : "a player");
-        if (lockstep) LockstepPanel(true);
-        else {
-            ChannelIndicators();
-            ReplayResyncControls();
-        }
+        col = kGreen;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE,
+                    Tr("В игре (Хост) — партнёр: %s", "In game (Host) — partner: %s"),
+                    peer[0] ? peer : Tr("игрок", "player"));
         break;
-
     case SESSION_CLIENT_JOINING:
-        StatusDot(kYellow);
-        Wrapped(kYellow, SaveSync_IsResyncing() ? "Re-syncing with %s" : "Joining %s", peer[0] ? peer : SaveSync_GetTargetIp());
-        JoinStepLine();
+        col = kYellow;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE,
+                    SaveSync_IsResyncing()
+                        ? Tr("Пересинхронизация с хостом %s...", "Re-syncing with host %s...")
+                        : Tr("Подключение к %s:%d...", "Connecting to %s:%d..."),
+                    peer[0] ? peer : "?", SAVE_SYNC_PORT);
+        hint = Tr("Скачивание и загрузка мира хоста — игра временно на паузе.",
+                  "Downloading and loading the host's world — game is paused.");
         break;
-
     case SESSION_CLIENT_IN_GAME:
-        StatusDot(kGreen);
-        Wrapped(kGreen, "Connected to %s (%s) - in the game", peer[0] ? peer : SaveSync_GetTargetIp(), mode);
-        if (lockstep) LockstepPanel(false);
-        else ChannelIndicators();
+        col = kGreen;
+        _snprintf_s(headline, sizeof(headline), _TRUNCATE,
+                    Tr("В игре (Клиент) — сервер: %s", "In game (Client) — server: %s"),
+                    peer[0] ? peer : Tr("хост", "host"));
         break;
     }
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(col.x * 0.18f, col.y * 0.18f, col.z * 0.18f, 0.85f));
+    ImGui::BeginChild("##status", ImVec2(0, hint ? 52.0f : 32.0f), true, ImGuiWindowFlags_NoScrollbar);
+    Dot(col);
+    ImGui::TextColored(col, "%s", headline);
+    if (hint) {
+        ImGui::TextDisabled("%s", hint);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    const char* err = SaveSync_GetLastError();
+    if (err[0]) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.35f, 0.10f, 0.10f, 0.90f));
+        ImGui::BeginChild("##last_err", ImVec2(0, 44.0f), true, ImGuiWindowFlags_NoScrollbar);
+        ImGui::TextColored(kRed, "%s %s", Tr("Последняя ошибка:", "Last error:"), err);
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
 }
 
-static void CoopComfortPanel()
+static void LockstepPanel(SessionState st)
 {
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::TextColored(kYellow, "РЈРґРѕР±СЃС‚РІРѕ Рё РЅР°РІРёРіР°С†РёСЏ РІ РєРѕРѕРїРµСЂР°С‚РёРІРµ:");
+    if (st != SESSION_HOST_IN_GAME && st != SESSION_CLIENT_IN_GAME) return;
+    if (!SaveSync_IsLockstepSession()) return;
 
-    bool showMiniHud = TwoStates_GetShowMiniHud();
-    if (ImGui::Checkbox("Р’РµСЂС…РЅСЏСЏ РјРёРЅРё-РїР°РЅРµР»СЊ (Mini-HUD РїРѕРІРµСЂС… РёРіСЂС‹)", &showMiniHud))
-        TwoStates_SetShowMiniHud(showMiniHud);
-
-    if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
-        bool showBorder = TwoStates_GetShow3DBorder();
-        if (ImGui::Checkbox("3D-РіСЂР°РЅРёС†Р° РіРѕСЃСѓРґР°СЂСЃС‚РІ Рё РїРѕРіСЂР°РЅР·РѕРЅР° РЅР° Р·РµРјР»Рµ [F7]", &showBorder))
-            TwoStates_SetShow3DBorder(showBorder);
+    const char* desync = LockstepNet_Desync();
+    bool ok = !desync[0];
+    ImGui::TextDisabled("%s", Tr("Синхронизация симуляции:", "Simulation sync:"));
+    ImGui::SameLine();
+    Dot(ok ? kGreen : kRed);
+    if (ok) {
+        ImGui::TextColored(kGreen, Tr("Lockstep (шаг %u)", "Lockstep (step %u)"), Determinism_StepCount());
+    } else {
+        ImGui::TextColored(kRed, "%s", desync);
+    }
+    unsigned long long rtt = 0;
+    if (LockstepNet_RoundTrip(&rtt)) {
+        ImGui::SameLine();
+        ImGui::TextDisabled(Tr("  Пинг: %llu мс", "  Ping: %llu ms"), rtt);
     }
 
-    if (ImGui::Button("РљР°РјРµСЂР° Рє РїР°СЂС‚РЅС‘СЂСѓ [F6]")) {
-        TwoStates_JumpCameraToPartner();
+    if (st != SESSION_HOST_IN_GAME) return;
+
+    static const int kWaitSeconds[] = { -1, 0, 30, 60, 120, 300 };
+    static const char* const kWaitLabelsRu[] = { "Выкл", "Сразу", "Через 30 сек", "Через 1 мин", "Через 2 мин", "Через 5 мин" };
+    static const char* const kWaitLabelsEn[] = { "Off", "Immediately", "After 30 sec", "After 1 min", "After 2 min", "After 5 min" };
+    int cur = SaveSync_GetDesyncResyncSeconds(), idx = 3;
+    for (int i = 0; i < 6; i++)
+        if (kWaitSeconds[i] == cur) idx = i;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", Tr("Авто-ресинк при рассинхроне:", "Auto re-sync on desync:"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140.0f);
+    const char* const* labels = (Lang_Get() == MP_LANG_EN) ? kWaitLabelsEn : kWaitLabelsRu;
+    if (ImGui::Combo("##lsresync", &idx, labels, 6))
+        SaveSync_SetDesyncResyncSeconds(kWaitSeconds[idx]);
+    ULONGLONG left = SaveSync_GetMsUntilDesyncResync();
+    if (left) {
+        ImGui::SameLine();
+        ImGui::TextColored(kYellow, Tr("через %llus", "in %llus"), (left + 999) / 1000);
     }
     ImGui::SameLine();
-    if (ImGui::Button("РџРѕРґР°С‚СЊ СЃРёРіРЅР°Р» РЅР° РєР°СЂС‚Рµ [Alt+Р›РљРњ]")) {
-        TwoStates_PingAtCursor();
-    }
-    Wrapped(kGrey, "РќР°Р¶РјРёС‚Рµ Alt + Р›РљРњ РІ Р»СЋР±РѕРј РјРµСЃС‚Рµ РєР°СЂС‚С‹, С‡С‚РѕР±С‹ РїРѕСЃС‚Р°РІРёС‚СЊ 3D-РјР°СЏРє РґР»СЏ РїР°СЂС‚РЅС‘СЂР°. РќР°Р¶РјРёС‚Рµ F6, С‡С‚РѕР±С‹ РїРµСЂРµРјРµСЃС‚РёС‚СЊ РєР°РјРµСЂСѓ Рє РєСѓСЂСЃРѕСЂСѓ РёР»Рё РјР°СЏРєСѓ РґСЂСѓРіР°.");
+    if (ImGui::Button(Tr("Пересинхронизировать мир", "Re-sync World Now")))
+        SaveSync_RequestResync();
 }
 
-static void TwoStatesLivePanel()
+static void ReplayResyncControls(SessionState st)
 {
-    if (!TwoStates_IsActive()) return;
+    if (st != SESSION_HOST_IN_GAME) return;
 
     ImGui::Spacing();
-    ImGui::Separator();
-    int myState = TwoStates_LocalState();
-    Wrapped(kBlue, "Р РµР¶РёРј: Р”Р’Рђ Р“РћРЎРЈР”РђР РЎРўР’Рђ  |  Р’С‹: %s", TwoStates_StateName(myState));
+    if (ImGui::Button(Tr("Пересинхронизировать мир сейчас", "Re-sync World Now")))
+        SaveSync_RequestResync();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Tr("Сохранить ваш мир и заново отправить его второму игроку.",
+                                   "Save your world and send it to the second player again."));
 
-    float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-    if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
-        int zone = TwoStates_GetZoneAt(cx, cz);
-        if (zone == 0) {
-            Wrapped(kYellow, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): РћР±С‰Р°СЏ РїРѕРіСЂР°РЅРёС‡РЅР°СЏ Р·РѕРЅР° (В±%.0f Рј) вЂ” РјРѕР¶РЅРѕ СЃС‚С‹РєРѕРІР°С‚СЊ СЃРµС‚Рё",
-                    cx, cz, TwoStates_GetBorderHalfWidth());
-        } else if (zone == myState) {
-            Wrapped(kGreen, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): Р’Р°С€Р° С‚РµСЂСЂРёС‚РѕСЂРёСЏ (%s)",
-                    cx, cz, TwoStates_StateName(zone));
-        } else {
-            Wrapped(kRed, "РљСѓСЂСЃРѕСЂ (X=%.0f Рј, Z=%.0f Рј): Р§СѓР¶Р°СЏ С‚РµСЂСЂРёС‚РѕСЂРёСЏ (%s) вЂ” СЃС‚СЂРѕРёС‚РµР»СЊСЃС‚РІРѕ Р·Р°РїСЂРµС‰РµРЅРѕ",
-                    cx, cz, TwoStates_StateName(zone));
-        }
+    static const int kIntervals[] = { 0, 5, 10, 15, 30 };
+    static const char* const kLabelsRu[] = { "Выкл", "Каждые 5 мин", "Каждые 10 мин", "Каждые 15 мин", "Каждые 30 мин" };
+    static const char* const kLabelsEn[] = { "Off", "Every 5 min", "Every 10 min", "Every 15 min", "Every 30 min" };
+    int cur = SaveSync_GetAutoResyncMinutes();
+    int idx = 0;
+    for (int i = 0; i < 5; i++)
+        if (kIntervals[i] == cur) idx = i;
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", Tr("По таймеру:", "Timer:"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(135.0f);
+    const char* const* labels = (Lang_Get() == MP_LANG_EN) ? kLabelsEn : kLabelsRu;
+    if (ImGui::Combo("##autoresync", &idx, labels, 5))
+        SaveSync_SetAutoResyncMinutes(kIntervals[idx]);
+    ULONGLONG leftMs = SaveSync_GetMsUntilAutoResync();
+    if (leftMs) {
+        unsigned secs = (unsigned)(leftMs / 1000);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%u:%02u)", secs / 60, secs % 60);
     }
-
-    ImGui::Spacing();
-    ImGui::TextColored(myState == 1 ? kGreen : kGrey,
-                       "Р—Р°РїР°РґРЅР°СЏ РЎРЎР  (РҐРѕСЃС‚, X < 0):   %.0f в‚Ѕ (С‚РѕСЂРі: %+.0f в‚Ѕ)  |  %.0f $ (С‚РѕСЂРі: %+.0f $)",
-                       TwoStates_GetRubles(1), TwoStates_GetNetTradeRub(1),
-                       TwoStates_GetDollars(1), TwoStates_GetNetTradeUsd(1));
-    ImGui::TextColored(myState == 2 ? kGreen : kGrey,
-                       "Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР  (РРіСЂРѕРє 2, X >= 0): %.0f в‚Ѕ (С‚РѕСЂРі: %+.0f в‚Ѕ)  |  %.0f $ (С‚РѕСЂРі: %+.0f $)",
-                       TwoStates_GetRubles(2), TwoStates_GetNetTradeRub(2),
-                       TwoStates_GetDollars(2), TwoStates_GetNetTradeUsd(2));
-
-    ImGui::Spacing();
-    ImGui::TextColored(kYellow, "РџРµСЂРµРІРѕРґ СЃСЂРµРґСЃС‚РІ РІ %s:", TwoStates_StateName(myState == 1 ? 2 : 1));
-    static double s_sendRub = 100000.0;
-    static double s_sendUsd = 0.0;
-    ImGui::SetNextItemWidth(135);
-    ImGui::InputDouble("Р СѓР±Р»Рё (в‚Ѕ)##sendRub", &s_sendRub, 50000.0, 500000.0, "%.0f");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(135);
-    ImGui::InputDouble("Р”РѕР»Р»Р°СЂС‹ ($)##sendUsd", &s_sendUsd, 50000.0, 500000.0, "%.0f");
-    if (s_sendRub < 0.0) s_sendRub = 0.0;
-    if (s_sendUsd < 0.0) s_sendUsd = 0.0;
-
-    if (ImGui::Button("РћС‚РїСЂР°РІРёС‚СЊ РїРµСЂРµРІРѕРґ")) {
-        TwoStates_RequestTransfer(s_sendRub, s_sendUsd);
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("+100 С‚С‹СЃ. в‚Ѕ")) TwoStates_RequestTransfer(100000.0, 0.0);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("+1 РјР»РЅ в‚Ѕ")) TwoStates_RequestTransfer(1000000.0, 0.0);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("+100 С‚С‹СЃ. $")) TwoStates_RequestTransfer(0.0, 100000.0);
 }
 
-static void SteamFriendsPanel(std::string& hostIp)
+static void ChannelIndicators(SessionState st)
 {
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (!SteamP2P_IsAvailable()) {
-        Wrapped(kYellow, "Steam P2P: Р·Р°РїСѓСЃС‚РёС‚Рµ РєР»РёРµРЅС‚ Steam РґР»СЏ РёРіСЂС‹ С‡РµСЂРµР· РґСЂСѓР·РµР№/Steam ID Р±РµР· VPN. РџРѕРґРєР»СЋС‡РµРЅРёРµ РїРѕ IP (127.0.0.1 / LAN / Radmin) СЂР°Р±РѕС‚Р°РµС‚ Рё Р±РµР· Steam.");
+    if (st != SESSION_HOST_IN_GAME && st != SESSION_CLIENT_IN_GAME) return;
+    if (SaveSync_IsLockstepSession()) {
+        LockstepPanel(st);
         return;
     }
 
-    uint64_t mySteamId = SteamP2P_GetLocalSteamId();
-    const char* myName = SteamP2P_GetLocalPersonaName();
-    ImGui::TextColored(kGreen, "Steam P2P РіРѕС‚РѕРІ (Р±РµР· VPN Рё РїСЂРѕР±СЂРѕСЃР° РїРѕСЂС‚РѕРІ)");
-    ImGui::Text("Р’С‹: %s  |  Steam ID: %llu", myName[0] ? myName : "РРіСЂРѕРє", (unsigned long long)mySteamId);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("РЎРєРѕРїРёСЂРѕРІР°С‚СЊ ID")) {
-        char idStr[32] = {};
-        _snprintf_s(idStr, sizeof(idStr), _TRUNCATE, "%llu", (unsigned long long)mySteamId);
-        ImGui::SetClipboardText(idStr);
+    struct Chan { const char* name; bool up; } chans[] = {
+        { Tr("Постройки", "Buildings"), BuildSync_IsConnected() },
+        { Tr("Дороги и сети", "Roads & Networks"), RoadSync_IsConnected() },
+        { Tr("Терраформинг", "Terraforming"), TerrainSync_IsConnected() },
+    };
+    ImGui::TextDisabled("%s", Tr("Каналы синхронизации:", "Sync channels:"));
+    for (const Chan& c : chans) {
+        ImGui::SameLine(0.0f, 14.0f);
+        Dot(c.up ? kGreen : kRed);
+        ImGui::TextColored(c.up ? kGreen : kRed, "%s", c.name);
     }
+    ReplayResyncControls(st);
+}
+
+static void JoinStepLine(SessionState st)
+{
+    if (st != SESSION_HOST_JOINING && st != SESSION_CLIENT_JOINING) return;
+    int step = 0, total = 0, pct = -1;
+    char text[160] = {};
+    if (!SyncBlock_GetStep(&step, &total, text, sizeof(text), &pct)) return;
+    if (total > 0 && pct >= 0)
+        ImGui::TextColored(kYellow, Tr("Шаг %d/%d: %s (%d%%)", "Step %d/%d: %s (%d%%)"), step, total, text, pct);
+    else if (total > 0)
+        ImGui::TextColored(kYellow, Tr("Шаг %d/%d: %s", "Step %d/%d: %s"), step, total, text);
+    else
+        ImGui::TextColored(kYellow, "%s", text);
+}
+
+static void CoopComfortPanel(SessionState st)
+{
+    bool inGame = (st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
+    if (!inGame && !SaveSync_IsWorldLoaded()) return;
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.14f, 0.19f, 0.88f));
+    ImGui::BeginChild("##coop_comfort_bar", ImVec2(0, 62.0f), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::TextColored(kCyan, "%s", Tr("Удобство и навигация в коопе:", "Co-op Comfort & Navigation:"));
+    ImGui::SameLine();
+    bool miniHud = TwoStates_GetShowMiniHud();
+    if (ImGui::Checkbox(Tr("Верхняя мини-панель (Mini-HUD)", "Top Mini-HUD Bar"), &miniHud))
+        TwoStates_SetShowMiniHud(miniHud);
+    if (TwoStates_GetMode() == COOP_MODE_TWO_STATES || TwoStates_IsActive()) {
+        ImGui::SameLine();
+        bool showBorder = TwoStates_GetShow3DBorder();
+        if (ImGui::Checkbox(Tr("3D-граница на земле [F7]", "3D Ground Border [F7]"), &showBorder))
+            TwoStates_SetShow3DBorder(showBorder);
+    }
+
+    if (ImGui::Button(Tr("К камере / сигналу друга [F6]", "Jump to Partner / Ping [F6]")))
+        TwoStates_JumpCameraToPartner();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Tr("Мгновенно переместить вашу камеру к курсору партнёра или к его последнему сигналу на карте.",
+                                   "Instantly move your camera to your partner's cursor or latest map ping."));
+    ImGui::SameLine();
+    if (ImGui::Button(Tr("Подать сигнал на карте [Alt+ЛКМ]", "Send Map Ping [Alt+LMB]")))
+        TwoStates_PingAtCursor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Tr("Поставить яркий 3D-маяк в точке курсора (или в центре экрана), который увидит ваш друг.",
+                                   "Place a bright 3D beacon at your cursor (or screen center) visible to your friend."));
+    if (TwoStates_GetMode() == COOP_MODE_TWO_STATES || TwoStates_IsActive()) {
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Камера на границу (X=0)", "Camera to Border (X=0)"))) {
+            float lx = 0.0f, ly = 0.0f, lz = 0.0f;
+            TwoStates_GetCameraLookAt(&lx, &ly, &lz);
+            TwoStates_JumpCameraTo(0.0f, lz);
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+static void TwoStatesLivePanel(SessionState st)
+{
+    if ((st != SESSION_HOST_IN_GAME && st != SESSION_CLIENT_IN_GAME) || !TwoStates_IsActive())
+        return;
+
+    int me = TwoStates_LocalState();
+    float borderW = TwoStates_GetBorderHalfWidth();
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.18f, 0.24f, 0.92f));
+    ImGui::BeginChild("##twostates_live", ImVec2(0, 178.0f), true, ImGuiWindowFlags_NoScrollbar);
+
+    ImGui::TextColored(kGold, Tr("Режим «Два государства» — Вы управляете: %s",
+                                 "Two States Mode — You control: %s"),
+                       TwoStates_StateName(me));
+    ImGui::SameLine();
+    ImGui::TextDisabled(Tr("(Погранзона: X от -%.0f м до +%.0f м)",
+                           "(Border Zone: X from -%.0f m to +%.0f m)"),
+                        borderW, borderW);
+
+    // Cursor territory indicator
+    float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+    if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
+        int zone = TwoStates_GetZoneAt(cx, cz);
+        ImGui::TextDisabled(Tr("Курсор (X=%.0f, Z=%.0f):", "Cursor (X=%.0f, Z=%.0f):"), cx, cz);
+        ImGui::SameLine();
+        if (zone == 0) {
+            ImGui::TextColored(kYellow, "%s",
+                               Tr("Общая пограничная зона (строить могут оба государства)",
+                                  "Shared Border Zone (both states can build here)"));
+        } else if (zone == me) {
+            ImGui::TextColored(kGreen, Tr("Ваша суверенная территория (%s)", "Your sovereign territory (%s)"),
+                               TwoStates_StateName(zone));
+        } else {
+            ImGui::TextColored(kRed, Tr("Чужая территория (%s — строительство запрещено)",
+                                        "Partner's territory (%s — building forbidden)"),
+                               TwoStates_StateName(zone));
+        }
+    }
+
+    ImGui::Separator();
+
+    // Dual Treasury Table
+    ImGui::TextColored(me == 1 ? kCyan : kGrey,
+                       Tr("Западная ССР (Хост):    %12.0f ₽  |  %12.0f $   (торговля/таможня: %+.0f ₽ / %+.0f $)",
+                          "West SSR (Host):        %12.0f RUB | %12.0f USD  (trade/customs: %+.0f RUB / %+.0f USD)"),
+                       TwoStates_GetRubles(1), TwoStates_GetDollars(1),
+                       TwoStates_GetNetTradeRub(1), TwoStates_GetNetTradeUsd(1));
+    ImGui::TextColored(me == 2 ? kCyan : kGrey,
+                       Tr("Восточная ССР (Игрок 2): %12.0f ₽  |  %12.0f $   (торговля/таможня: %+.0f ₽ / %+.0f $)",
+                          "East SSR (Player 2):    %12.0f RUB | %12.0f USD  (trade/customs: %+.0f RUB / %+.0f USD)"),
+                       TwoStates_GetRubles(2), TwoStates_GetDollars(2),
+                       TwoStates_GetNetTradeRub(2), TwoStates_GetNetTradeUsd(2));
+
+    ImGui::Spacing();
+    static float s_sendRub = 50000.0f;
+    static float s_sendUsd = 0.0f;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", Tr("Межгосударственный перевод:", "Inter-state transfer:"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(115.0f);
+    ImGui::InputFloat("₽##tr_rub", &s_sendRub, 10000.0f, 100000.0f, "%.0f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(115.0f);
+    ImGui::InputFloat("$##tr_usd", &s_sendUsd, 10000.0f, 100000.0f, "%.0f");
+    ImGui::SameLine();
+    if (ImGui::Button(Tr("Отправить партнёру", "Send to Partner"))) {
+        if (s_sendRub > 0.0f || s_sendUsd > 0.0f) {
+            TwoStates_RequestTransfer((double)s_sendRub, (double)s_sendUsd);
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s",
+                          Tr("Мгновенный перевод рублей и/или долларов из вашей казны во второе государство (засчитывается как оплата за ресурсы/электроэнергию/помощь).",
+                             "Instant transfer of Rubles and/or Dollars from your treasury to the partner state (for resources, power, or aid)."));
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+static void SteamFriendsPanel(bool canConnect, char* ipBuf, size_t ipBufSize)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.16f, 0.22f, 0.90f));
+    ImGui::BeginChild("##steam_p2p_panel", ImVec2(0, 128.0f), true);
+
+    if (!SteamP2P_IsAvailable()) {
+        ImGui::TextColored(kYellow, "%s",
+                           Tr("Steam P2P: клиент Steam не обнаружен (доступно прямое подключение по IP / Radmin / ZeroTier)",
+                              "Steam P2P: Steam client not detected (direct connection via IP / Radmin / ZeroTier is available)"));
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    ImGui::TextColored(kCyan, Tr("Steam P2P активен: %s (SteamID: %llu)",
+                                 "Steam P2P Active: %s (SteamID: %llu)"),
+                       SteamP2P_GetLocalPersonaName(), (unsigned long long)SteamP2P_GetLocalSteamId());
+    ImGui::SameLine();
+    if (ImGui::SmallButton(Tr("Копировать мой код", "Copy My Code"))) {
+        char code[64];
+        _snprintf_s(code, sizeof(code), _TRUNCATE, "steam:%llu", (unsigned long long)SteamP2P_GetLocalSteamId());
+        ImGui::SetClipboardText(code);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Tr("Скопировать ваш адрес steam:<SteamID> в буфер обмена (можно также приглашать через Shift+Tab в Steam)",
+                                   "Copy your steam:<SteamID> address to clipboard (you can also invite via Shift+Tab Steam Overlay)"));
 
     static std::vector<SteamFriendEntry> s_friends;
     static ULONGLONG s_lastRefresh = 0;
     ULONGLONG now = GetTickCount64();
-    bool refresh = (now - s_lastRefresh > 2500);
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(kYellow, "Р”СЂСѓР·СЊСЏ РІ Steam РѕРЅР»Р°Р№РЅ (%zu):", s_friends.size());
     ImGui::SameLine();
-    if (ImGui::SmallButton("РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє")) refresh = true;
-
-    if (refresh) {
-        SteamP2P_GetOnlineFriends(s_friends);
+    if (ImGui::SmallButton(Tr("Обновить список друзей", "Refresh Friends")) || now - s_lastRefresh > 3000) {
         s_lastRefresh = now;
+        SteamP2P_GetOnlineFriends(s_friends);
     }
-
-    SessionState st = SaveSync_GetState();
-    bool world = SaveSync_IsWorldLoaded();
 
     if (s_friends.empty()) {
-        ImGui::TextColored(kGrey, "РќРµС‚ РґСЂСѓР·РµР№ РІ СЃРµС‚Рё (РёР»Рё РїСЂРѕС„РёР»СЊ СЃРєСЂС‹С‚). Р’С‹ РјРѕР¶РµС‚Рµ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ РїРѕ Steam ID РЅРёР¶Рµ.");
-        return;
-    }
-
-    float listHeight = s_friends.size() > 4 ? 115.0f : (float)s_friends.size() * 28.0f + 12.0f;
-    if (ImGui::BeginChild("steam_friends", ImVec2(-1, listHeight), ImGuiChildFlags_Borders)) {
+        ImGui::TextDisabled("%s",
+                            Tr("Нет друзей онлайн в списке Steam (вы можете ввести steam:<SteamID> вручную или пригласить через Shift+Tab).",
+                               "No online friends found in Steam list (you can type steam:<SteamID> manually or invite via Shift+Tab)."));
+    } else {
+        ImGui::TextDisabled("%s", Tr("Друзья в Steam (нажмите «Подключиться» к другу, который создал сервер):",
+                                     "Steam Friends (click 'Connect' next to a friend who is hosting):"));
         for (size_t i = 0; i < s_friends.size(); ++i) {
-            const SteamFriendEntry& f = s_friends[i];
+            const auto& f = s_friends[i];
             ImGui::PushID((int)i);
-            StatusDot(f.inThisGame ? kGreen : kBlue);
-            ImGui::Text("%s %s", f.name, f.inThisGame ? "[Р’ РёРіСЂРµ W&R]" : "[Р’ СЃРµС‚Рё]");
-
-            if (st == SESSION_IDLE) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ")) {
-                    char target[48] = {};
-                    _snprintf_s(target, sizeof(target), _TRUNCATE, "steam:%llu", (unsigned long long)f.steamId);
-                    hostIp = target;
-                    SaveSync_StartClient(hostIp.c_str());
-                }
-                if (world) {
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("РџСЂРёРіР»Р°СЃРёС‚СЊ (Host)")) {
-                        SaveSync_StartHost();
-                        SteamP2P_InviteFriend(f.steamId);
-                    }
-                }
-            } else if (st == SESSION_HOST_LISTENING) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("РџСЂРёРіР»Р°СЃРёС‚СЊ РІ РёРіСЂСѓ")) {
-                    SteamP2P_InviteFriend(f.steamId);
-                }
+            bool hosting = (f.connectString[0] != 0);
+            if (hosting) {
+                Dot(kGreen);
+                ImGui::TextColored(kGreen, Tr("%s  [Сервер открыт]", "%s  [Server Open]"), f.name);
+            } else if (f.inThisGame) {
+                Dot(kYellow);
+                ImGui::TextColored(kYellow, Tr("%s  [В игре Soviet Republic]", "%s  [In Soviet Republic]"), f.name);
+            } else {
+                Dot(kGrey);
+                ImGui::TextDisabled("%s", f.name);
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!canConnect);
+            if (ImGui::SmallButton(Tr("Подключиться по Steam", "Connect via Steam"))) {
+                _snprintf_s(ipBuf, ipBufSize, _TRUNCATE, "steam:%llu", (unsigned long long)f.steamId);
+                SaveSync_StartClient(ipBuf);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::SmallButton(Tr("Пригласить", "Invite"))) {
+                SteamP2P_InviteFriend(f.steamId);
             }
             ImGui::PopID();
         }
     }
+
     ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
 
-// Host/Connect while idle; Stop hosting / Disconnect during a session.
-static void SessionButtons(std::string& hostIp)
+static void SessionButtons(SessionState st, char* ipBuf, size_t ipBufSize)
 {
-    SessionState st = SaveSync_GetState();
-    float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
+    bool busy = SaveSync_IsBusy();
+    bool worldLoaded = SaveSync_IsWorldLoaded();
+    float btnH = ImGui::GetFrameHeight() * 1.35f;
 
-    if (st == SESSION_IDLE) {
-        // --- Gameplay mode selection (One State vs Two States) ---
-        ImGui::TextColored(kYellow, "Р РµР¶РёРј СЃРѕРІРјРµСЃС‚РЅРѕР№ РёРіСЂС‹ (РІС‹Р±РѕСЂ РҐРѕСЃС‚Р°):");
-        int coopMode = TwoStates_GetMode();
-        if (ImGui::RadioButton("РћРґРЅРѕ РіРѕСЃСѓРґР°СЂСЃС‚РІРѕ (РѕР±С‰Р°СЏ РєР°Р·РЅР° Рё РєР°СЂС‚Р°)", coopMode == COOP_MODE_ONE_STATE)) {
+    if (!busy) {
+        // --- Game Mode Selection Box ---
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.15f, 0.20f, 0.90f));
+        ImGui::BeginChild("##coop_mode_select", ImVec2(0, 172.0f), true, ImGuiWindowFlags_NoScrollbar);
+        ImGui::TextColored(kGold, "%s", Tr("Режим кооперативной игры (выбирает Хост):",
+                                           "Co-op Game Mode (selected by Host):"));
+
+        int mode = TwoStates_GetMode();
+        if (ImGui::RadioButton(Tr("Одно государство (общая казна и единое управление всей картой)",
+                                  "One State (shared treasury & joint control of the whole map)"),
+                               mode == COOP_MODE_ONE_STATE)) {
             TwoStates_SetMode(COOP_MODE_ONE_STATE);
+            mode = COOP_MODE_ONE_STATE;
         }
-        if (ImGui::RadioButton("Р”РІР° РіРѕСЃСѓРґР°СЂСЃС‚РІР° РЅР° РѕРґРЅРѕР№ РєР°СЂС‚Рµ (Р—Р°РїР°РґРЅР°СЏ РЎРЎР  / Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР )", coopMode == COOP_MODE_TWO_STATES)) {
+        if (ImGui::RadioButton(Tr("Два государства (Западная ССР vs Восточная ССР — раздельные бюджеты и границы)",
+                                  "Two States (West SSR vs East SSR — separate budgets & borders)"),
+                               mode == COOP_MODE_TWO_STATES)) {
             TwoStates_SetMode(COOP_MODE_TWO_STATES);
             SaveSync_SetLockstep(true);
+            mode = COOP_MODE_TWO_STATES;
         }
-        if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
-            float borderHalf = TwoStates_GetBorderHalfWidth();
-            ImGui::SetNextItemWidth(160);
-            if (ImGui::SliderFloat("РџРѕРіСЂР°РЅРёС‡РЅР°СЏ Р·РѕРЅР° X=0 (В±Рј)", &borderHalf, 50.0f, 1000.0f, "%.0f Рј"))
-                TwoStates_SetBorderHalfWidth(borderHalf);
+
+        if (mode == COOP_MODE_TWO_STATES) {
+            float halfW = TwoStates_GetBorderHalfWidth();
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::SliderFloat(Tr("Пограничная зона (±м от X=0)", "Border Zone (±m from X=0)"),
+                                   &halfW, 100.0f, 1500.0f, "%.0f m")) {
+                TwoStates_SetBorderHalfWidth(halfW);
+            }
+            ImGui::SameLine();
             bool fullCap = TwoStates_GetFullStartingCapital();
-            if (ImGui::Checkbox("100% СЃС‚Р°СЂС‚РѕРІРѕРіРѕ РєР°РїРёС‚Р°Р»Р° РєР°Р¶РґРѕРјСѓ РіРѕСЃСѓРґР°СЂСЃС‚РІСѓ (РёРЅР°С‡Рµ 50/50)", &fullCap))
+            if (ImGui::Checkbox(Tr("100% стартового капитала каждому", "100% starting capital for each"), &fullCap)) {
                 TwoStates_SetFullStartingCapital(fullCap);
-            Wrapped(kGrey, "Р—Р°РїР°РґРЅР°СЏ РЎРЎР  (РҐРѕСЃС‚, X < 0) Рё Р’РѕСЃС‚РѕС‡РЅР°СЏ РЎРЎР  (РРіСЂРѕРє 2, X >= 0): СЂР°Р·РґРµР»СЊРЅС‹Рµ РєР°Р·РЅС‹ (в‚Ѕ Рё $), Р·Р°С‰РёС‚Р° С‚РµСЂСЂРёС‚РѕСЂРёРё Рё С‡СѓР¶РёС… Р·РґР°РЅРёР№, СЃС‚С‹РєРѕРІРєР° РґРѕСЂРѕРі/Р–Р”/Р›Р­Рџ РІ РїРѕРіСЂР°РЅРёС‡РЅРѕР№ РїРѕР»РѕСЃРµ.");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s",
+                                  Tr("Вкл: каждое государство получает полный стартовый бюджет карты.\nВыкл: текущий бюджет карты делится 50/50.",
+                                     "On: each state receives 100% of the map's starting budget.\nOff: the map's budget is split 50/50."));
+            }
+        } else {
+            ImGui::TextDisabled("%s",
+                                Tr("Оба игрока строят и управляют одной общей республикой без территориальных ограничений.",
+                                   "Both players build and manage a single shared republic without territory restrictions."));
         }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // --- Map Expansion Options ---
-        ImGui::TextColored(kYellow, "РЈРІРµР»РёС‡РµРЅРёРµ СЂР°Р·РјРµСЂР° РєР°СЂС‚С‹:");
+        // Map Expansion Options
         bool expandBorders = TwoStates_GetExpandBorders();
-        if (ImGui::Checkbox("РЎРЅСЏС‚СЊ 2-РєРј РѕРіСЂР°РЅРёС‡РµРЅРёРµ Сѓ РєСЂР°С‘РІ РєР°СЂС‚С‹ (20x20 РєРј С†РµР»РёРєРѕРј, +56% РїР»РѕС‰Р°РґРё)", &expandBorders))
+        if (ImGui::Checkbox(Tr("Снять 2-км буфер у краёв карты (доступна вся площадь 20×20 км = 388 км²)",
+                               "Unlock 2-km map edge buffer (full 20×20 km = 388 km² buildable area)"),
+                            &expandBorders)) {
             TwoStates_SetExpandBorders(expandBorders);
-        bool world = SaveSync_IsWorldLoaded();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s",
+                              Tr("По умолчанию игра запрещает строить ближе 2 км от края карты (оставляя лишь 16×16 км).\nЭта опция открывает строительство вплоть до самых таможен на обоих компьютерах!",
+                                 "By default the game blocks building within 2 km of map edges (leaving only 16×16 km).\nThis option unlocks building right up to the customs houses on both PCs!"));
+        }
+        ImGui::SameLine();
         bool creatingMap = TwoStates_IsCreatingExpandedMap();
-        ImGui::BeginDisabled(!world || creatingMap);
-        if (ImGui::Button(creatingMap ? "РЎРѕР·РґР°РЅРёРµ РєР°СЂС‚С‹ 30x30 РєРј..." : "РЎРѕР·РґР°С‚СЊ Рё Р·Р°РіСЂСѓР·РёС‚СЊ РєР°СЂС‚Сѓ 30x30 РєРј (900 РєРјВІ)", ImVec2(-1, 0))) {
+        ImGui::BeginDisabled(!worldLoaded || creatingMap);
+        if (ImGui::SmallButton(creatingMap
+                               ? Tr("Создание карты 30×30 км...", "Creating 30×30 km map...")
+                               : Tr("Создать карту 30×30 км (900 км²)", "Create 30×30 km Map (900 km²)"))) {
             TwoStates_RequestCreateExpandedMap(30);
         }
         ImGui::EndDisabled();
-        if (!world && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("РЎРЅР°С‡Р°Р»Р° Р·Р°РіСЂСѓР·РёС‚Рµ Р»СЋР±РѕР№ РіРѕСЂРѕРґ РёР»Рё РєР°СЂС‚Сѓ, С‡С‚РѕР±С‹ СЃРѕР·РґР°С‚СЊ РЅР° РµС‘ РѕСЃРЅРѕРІРµ СЂР°СЃС€РёСЂРµРЅРЅСѓСЋ РєР°СЂС‚Сѓ 30x30 РєРј.");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s",
+                              Tr("Автоматически сохраняет текущую карту как «TwoStates_30x30km», расширяет её масштаб до 30×30 км (900 км², в 3.5 раза больше стандартной!) и загружает её.",
+                                 "Saves the current map as 'TwoStates_30x30km', expands its world scale to 30×30 km (900 km², 3.5x larger than standard!) and loads it."));
+        }
 
-        SteamFriendsPanel(hostIp);
-
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
 
-        // The host picks the mode; the joining player follows it.
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ:");
-        ImGui::SameLine();
         bool lockstep = SaveSync_GetLockstep();
-        if (ImGui::RadioButton("Lockstep (СЂРµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ)", lockstep)) SaveSync_SetLockstep(true);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("РћР±Р° РџРљ СЃРёРјСѓР»РёСЂСѓСЋС‚ РѕРґРЅРё Рё С‚Рµ Р¶Рµ С‚РёРєРё Р±РµР· СЂР°СЃСЃРёРЅС…СЂРѕРЅР°.");
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Replay", !lockstep)) SaveSync_SetLockstep(false);
+        if (mode == COOP_MODE_TWO_STATES) {
+            lockstep = true;
+            SaveSync_SetLockstep(true);
+        }
+        ImGui::BeginDisabled(mode == COOP_MODE_TWO_STATES);
+        if (ImGui::Checkbox(Tr("Полная синхронизация симуляции (Lockstep — транспорт, жители, экономика)",
+                               "Full simulation sync (Lockstep — vehicles, citizens, economy)"),
+                            &lockstep))
+            SaveSync_SetLockstep(lockstep);
+        ImGui::EndDisabled();
+
+        ImGui::SameLine(0.0f, 18.0f);
         bool dlcCheck = SaveSync_GetDlcCheck();
-        if (ImGui::Checkbox("РџСЂРѕРІРµСЂСЏС‚СЊ СЃРѕРІРїР°РґРµРЅРёРµ DLC (Check DLCs)", &dlcCheck)) SaveSync_SetDlcCheck(dlcCheck);
-        ImGui::Spacing();
+        if (ImGui::Checkbox(Tr("Проверять совпадение DLC", "Verify matching DLCs"), &dlcCheck))
+            SaveSync_SetDlcCheck(dlcCheck);
+    }
 
-        static std::vector<std::string> s_localSaves;
-        static int s_selectedSave = 0;
-        static ULONGLONG s_lastSavesScan = 0;
-        if (!world) {
-            ULONGLONG now = GetTickCount64();
-            if (s_localSaves.empty() || now - s_lastSavesScan > 5000) {
-                SaveSync_ListLocalSaves(s_localSaves);
-                if (s_selectedSave >= (int)s_localSaves.size()) s_selectedSave = 0;
-                s_lastSavesScan = now;
-            }
-            if (!s_localSaves.empty()) {
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextColored(kYellow, "РЎРѕС…СЂР°РЅРµРЅРёРµ РґР»СЏ СЃРµСЂРІРµСЂР°:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(-90.0f);
-                if (ImGui::BeginCombo("##saveCombo", s_localSaves[s_selectedSave].c_str())) {
-                    for (int i = 0; i < (int)s_localSaves.size(); ++i) {
-                        bool sel = (i == s_selectedSave);
-                        if (ImGui::Selectable(s_localSaves[i].c_str(), sel))
-                            s_selectedSave = i;
-                        if (sel) ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SameLine();
-                if (ImGui::SmallButton("РћР±РЅРѕРІРёС‚СЊ##saves")) {
-                    SaveSync_ListLocalSaves(s_localSaves);
-                    if (s_selectedSave >= (int)s_localSaves.size()) s_selectedSave = 0;
-                }
-            }
-        }
-
-        bool canStartHost = world || !s_localSaves.empty();
-        bool pendingLoadHost = SaveSync_IsPendingHostAfterLoad();
-        ImGui::BeginDisabled(!canStartHost || pendingLoadHost);
-        const char* hostBtnLabel = pendingLoadHost
-            ? "Р—Р°РіСЂСѓР·РєР° РіРѕСЂРѕРґР° Рё Р·Р°РїСѓСЃРє СЃРµСЂРІРµСЂР°..."
-            : (world ? "РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂ (Host: Steam + IP)" : "Р—Р°РіСЂСѓР·РёС‚СЊ Рё РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂ (Host)");
-        if (ImGui::Button(hostBtnLabel, ImVec2(half, 0))) {
-            if (world) SaveSync_StartHost();
-            else if (!s_localSaves.empty()) SaveSync_LoadAndStartHost(s_localSaves[s_selectedSave].c_str());
-        }
+    // Host row (works both in-game AND directly from the Main Menu by picking a save)
+    bool canHostNow = !busy && worldLoaded && !SaveSync_IsPendingHostAfterLoad();
+    if (worldLoaded) {
+        ImGui::BeginDisabled(!canHostNow);
+        if (ImGui::Button(Tr("Создать сервер (Хост текущего мира)", "Start Server (Host Current World)"), ImVec2(290.0f, btnH)))
+            SaveSync_StartHost();
         ImGui::EndDisabled();
-        if (!canStartHost && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("РЎРѕР·РґР°Р№С‚Рµ РЅРѕРІСѓСЋ РёРіСЂСѓ РёР»Рё Р·Р°РіСЂСѓР·РёС‚Рµ РіРѕСЂРѕРґ, С‡С‚РѕР±С‹ Р·Р°РїСѓСЃС‚РёС‚СЊ СЃРµСЂРІРµСЂ.");
         ImGui::SameLine();
-        ImGui::BeginDisabled(hostIp.empty());
-        if (ImGui::Button("РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ (Connect)", ImVec2(half, 0)))
-            SaveSync_StartClient(hostIp.c_str());
-        ImGui::EndDisabled();
-
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Steam ID РёР»Рё IP РҐРѕСЃС‚Р°:");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Р’СЃС‚Р°РІРёС‚СЊ")) {
-            const char* clip = ImGui::GetClipboardText();
-            if (clip && clip[0]) hostIp = clip;
+        ImGui::TextDisabled("%s", Tr("Мир загружен — можно открывать сервер", "World loaded — ready to host"));
+    } else {
+        static std::vector<std::string> s_saves;
+        static int s_selectedSave = 0;
+        static ULONGLONG s_lastSaveScan = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastSaveScan > 3000 || s_saves.empty()) {
+            s_lastSaveScan = now;
+            SaveSync_ListLocalSaves(s_saves);
+            if (s_selectedSave >= (int)s_saves.size()) s_selectedSave = 0;
         }
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputText("##hostIp", &hostIp);
-        if (!world && !s_localSaves.empty())
-            Wrapped(kGrey, "Р’С‹ РјРѕР¶РµС‚Рµ СЃСЂР°Р·Сѓ РЅР°Р¶Р°С‚СЊ В«Р—Р°РіСЂСѓР·РёС‚СЊ Рё РЎРѕР·РґР°С‚СЊ СЃРµСЂРІРµСЂВ» РїСЂСЏРјРѕ РёР· РіР»Р°РІРЅРѕРіРѕ РјРµРЅСЋ РёР»Рё РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє РґСЂСѓРіСѓ РёР· СЃРїРёСЃРєР° РІС‹С€Рµ.");
-        else if (!world)
-            Wrapped(kGrey, "РќР°С‡РЅРёС‚Рµ РЅРѕРІСѓСЋ РёРіСЂСѓ РёР»Рё РїРѕРґРєР»СЋС‡РёС‚РµСЃСЊ Рє РґСЂСѓРіСѓ РёР· СЃРїРёСЃРєР° Steam РІС‹С€Рµ.");
-        return;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.19f, 0.14f, 0.90f));
+        ImGui::BeginChild("##quick_host_menu", ImVec2(0, 68.0f), true, ImGuiWindowFlags_NoScrollbar);
+        ImGui::TextColored(kGreen, "%s",
+                           Tr("Быстрый запуск сервера прямо из главного меню:",
+                              "Quick Server Launch directly from the Main Menu:"));
+        if (s_saves.empty()) {
+            ImGui::TextDisabled("%s",
+                                Tr("Сохранения не найдены — начните новую игру в меню слева, затем нажмите «Создать сервер».",
+                                   "No saves found — start a new game from the left menu, then click 'Start Server'."));
+        } else {
+            ImGui::SetNextItemWidth(260.0f);
+            const char* preview = s_saves[s_selectedSave].c_str();
+            if (ImGui::BeginCombo("##save_picker", preview)) {
+                for (int i = 0; i < (int)s_saves.size(); ++i) {
+                    bool sel = (i == s_selectedSave);
+                    if (ImGui::Selectable(s_saves[i].c_str(), sel))
+                        s_selectedSave = i;
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            bool pending = SaveSync_IsPendingHostAfterLoad();
+            ImGui::BeginDisabled(busy || pending);
+            if (ImGui::Button(pending
+                              ? Tr("Загрузка мира и запуск...", "Loading world & starting...")
+                              : Tr("Загрузить мир и создать сервер", "Load Save & Start Server"))) {
+                SaveSync_LoadAndStartHost(s_saves[s_selectedSave].c_str());
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::SmallButton(Tr("Обновить", "Refresh"))) {
+                SaveSync_ListLocalSaves(s_saves);
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
 
-    if (st == SESSION_HOST_LISTENING) {
-        SteamFriendsPanel(hostIp);
-    }
-    CoopComfortPanel();
-    TwoStatesLivePanel();
     ImGui::Spacing();
+    // Steam P2P Friends & 1-click Join Panel
+    SteamFriendsPanel(!busy, ipBuf, ipBufSize);
 
-    bool host = SaveSync_IsHostRole();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-    ImGui::BeginDisabled(SaveSync_GetSessionAgeMs() < SAVE_SYNC_STOP_BUTTON_DELAY_MS);
-    if (ImGui::Button(host ? "РћСЃС‚Р°РЅРѕРІРёС‚СЊ СЃРµСЂРІРµСЂ (Stop hosting)" : "РћС‚РєР»СЋС‡РёС‚СЊСЃСЏ (Disconnect)", ImVec2(-1, 0)))
-        SaveSync_RequestDisconnect();
+    // Direct IP / SteamID row
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button(Tr("Подключиться по адресу", "Connect to Address"), ImVec2(220.0f, btnH)))
+        SaveSync_StartClient(ipBuf);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(Tr("IP или steam:<ID>:", "IP or steam:<ID>:"));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputText("##hostip", ipBuf, ipBufSize);
     ImGui::EndDisabled();
-    ImGui::PopStyleColor(2);
+
+    // Stop / Disconnect row
+    if (busy) {
+        ImGui::Spacing();
+        const char* stopLabel = Tr("Отключиться", "Disconnect");
+        if (st == SESSION_HOST_LISTENING) stopLabel = Tr("Остановить сервер", "Stop Server");
+        else if (st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME) stopLabel = Tr("Остановить сервер (отключить игрока)", "Stop Server (Disconnect Player)");
+        else if (st == SESSION_CLIENT_JOINING) stopLabel = Tr("Отменить подключение", "Cancel Connection");
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.22f, 0.22f, 1.0f));
+        if (ImGui::Button(stopLabel, ImVec2(290.0f, btnH)))
+            SaveSync_RequestDisconnect();
+        ImGui::PopStyleColor(2);
+    }
 }
 
 void MainMenu::Draw()
 {
-    if (!hostIpInitialized) {
-        hostIp = SaveSync_GetTargetIp(); // prefill with the default host IP
-        hostIpInitialized = true;
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.05f),
+                            ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 680.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(560.0f, 380.0f), ImVec2(vp->Size.x * 0.95f, vp->Size.y * 0.95f));
+
+    if (!ImGui::Begin(Tr("Кооператив — Workers & Resources: Soviet Republic (RepublicMP)###RepublicMPMain",
+                         "Co-op Multiplayer — Workers & Resources: Soviet Republic (RepublicMP)###RepublicMPMain"))) {
+        ImGui::End();
+        return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(500, 620), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("RepublicMP вЂ” РљРѕРѕРїРµСЂР°С‚РёРІ (РћРґРЅРѕ / Р”РІР° РіРѕСЃСѓРґР°СЂСЃС‚РІР°)"))
-    {
-        StatusPanel();
+    // Header row: version + language selector [RU | EN] + Hide button
+    ImGui::TextDisabled(Tr("Версия %s (протокол %d, CRC %08X)  |  Клавиша INSERT — скрыть/показать окно",
+                           "Version %s (protocol %d, CRC %08X)  |  INSERT key — hide/show window"),
+                        SaveSync_GetLocalVersion(), REPUBLICMP_PROTOCOL, SaveSync_GetLocalDllCrc());
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+    ImGui::SameLine(ImGui::GetWindowWidth() - 235.0f);
+    bool isRu = (Lang_Get() == MP_LANG_RU);
+    if (isRu) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.50f, 0.80f, 1.0f));
+    if (ImGui::SmallButton("RU")) Lang_Set(MP_LANG_RU);
+    if (isRu) ImGui::PopStyleColor();
+    ImGui::SameLine(0.0f, 4.0f);
+    if (!isRu) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.50f, 0.80f, 1.0f));
+    if (ImGui::SmallButton("EN")) Lang_Set(MP_LANG_EN);
+    if (!isRu) ImGui::PopStyleColor();
 
-        SessionButtons(hostIp);
+    ImGui::SameLine(0.0f, 10.0f);
+    if (ImGui::SmallButton(Tr("Свернуть окно [Ins]", "Minimize [Ins]"))) {
+        g_imguiVisible = false;
+    }
 
-        ImGui::Spacing();
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
-        float half = (ImGui::GetContentRegionAvail().x - spacing) * 0.5f;
-        if (ImGui::Button("РЎРєСЂС‹С‚СЊ РјРµРЅСЋ (INSERT)", ImVec2(half, 0)))
-            g_imguiVisible = false; // INSERT brings it back (game/imgui_hook.cpp)
-        ImGui::SameLine();
-        if (ImGui::Button("РћС‚Р»Р°РґРєР° (Debug)", ImVec2(half, 0)))
-            g_debug_window.Open();
-
-        ImGui::TextColored(kGrey, "RepublicMP v%s  build %08X", SaveSync_GetLocalVersion(), SaveSync_GetLocalDllCrc());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("РџСЂРѕРІРµСЂРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёСЏ"))
-            Updater_CheckNow();
-
-        UpdateStatus ust = Updater_GetStatus();
-        const char* umsg = Updater_GetStatusMessage();
-        if (ust == UPDATE_AVAILABLE_GITHUB || ust == UPDATE_AVAILABLE_WORKSHOP) {
-            Wrapped(kGreen, "%s", umsg);
-            if (ImGui::Button("РЎРєР°С‡Р°С‚СЊ Рё СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёРµ СЃРµР№С‡Р°СЃ", ImVec2(-1, 0)))
-                Updater_DownloadAndApply();
-        } else if (ust == UPDATE_APPLIED_RESTART_NEEDED) {
-            Wrapped(kYellow, "%s", umsg);
-        } else if (ust == UPDATE_CHECKING || ust == UPDATE_DOWNLOADING) {
-            Wrapped(kBlue, "%s", umsg);
-        } else if (ust == UPDATE_ERROR) {
-            Wrapped(kRed, "%s", umsg);
-        } else if (umsg && umsg[0]) {
-            Wrapped(kGrey, "%s", umsg);
-        }
-
-        if (ImGui::TreeNode("РќР°СЃС‚СЂРѕР№РєРё Р°РІС‚РѕРѕР±РЅРѕРІР»РµРЅРёСЏ (GitHub Releases / Steam Workshop)")) {
-            static std::string repoBuf;
-            static bool repoInit = false;
-            if (!repoInit) {
-                repoBuf = Updater_GetGithubRepo();
-                repoInit = true;
-            }
-            ImGui::SetNextItemWidth(260);
-            ImGui::InputText("GitHub (owner/repo)", &repoBuf);
+    // Auto-updater bar (Steam Workshop & GitHub Releases)
+    UpdateStatus updSt = Updater_GetStatus();
+    if (updSt == UPDATE_AVAILABLE_GITHUB || updSt == UPDATE_AVAILABLE_WORKSHOP || updSt == UPDATE_APPLIED_RESTART_NEEDED) {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.18f, 0.26f, 0.14f, 0.92f));
+        ImGui::BeginChild("##updater_banner", ImVec2(0, 36.0f), true, ImGuiWindowFlags_NoScrollbar);
+        ImGui::TextColored(kGreen, "%s", Updater_GetStatusMessage());
+        if (updSt != UPDATE_APPLIED_RESTART_NEEDED) {
             ImGui::SameLine();
-            if (ImGui::SmallButton("РЎРѕС…СЂР°РЅРёС‚СЊ")) {
-                Updater_SetGithubRepo(repoBuf.c_str());
-                Updater_CheckNow();
+            if (ImGui::SmallButton(Tr("Скачать и установить в 1 клик", "Download & Install in 1 Click"))) {
+                Updater_DownloadAndApply();
             }
-            ImGui::TreePop();
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        // --- Everyday log; verbose sync logs are in the Debug window ---
-        ImGui::TextUnformatted("Р–СѓСЂРЅР°Р» СЃРѕР±С‹С‚РёР№ (Log):");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("РћС‡РёСЃС‚РёС‚СЊ"))
-            UiLog_Clear();
-        ImGui::SameLine();
-        ImGui::Checkbox("РђРІС‚РѕРїСЂРѕРєСЂСѓС‚РєР°", &autoScrollLog);
-
-        if (ImGui::BeginChild("log", { -1, -1 }, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoSavedSettings))
-        {
-            std::vector<std::string> lines = UiLog_Snapshot();
-            for (const std::string& line : lines)
-                ImGui::TextWrapped("%s", line.c_str());
-
-            if (autoScrollLog && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-                ImGui::SetScrollHereY(1.0f);
         }
         ImGui::EndChild();
+        ImGui::PopStyleColor();
     }
+
+    static char s_ip[64] = "";
+    if (s_ip[0] == '\0')
+        strncpy_s(s_ip, SaveSync_GetTargetIp(), _TRUNCATE);
+
+    SessionState st = SaveSync_GetState();
+    StatusPanel(st);
+    JoinStepLine(st);
+    ChannelIndicators(st);
+    CoopComfortPanel(st);
+    TwoStatesLivePanel(st);
+
+    ImGui::Spacing();
+    SessionButtons(st, s_ip, sizeof(s_ip));
+
+    ImGui::Spacing();
+    ImGui::Separator();
+
+    // Event log header with Clear + Copy + Export Diagnostic Report buttons
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(Tr("Журнал событий", "Event Log"));
+    ImGui::SameLine();
+    if (ImGui::SmallButton(Tr("Очистить", "Clear")))
+        UiLog_Clear();
+    ImGui::SameLine();
+    if (ImGui::SmallButton(Tr("Скопировать диагностику в буфер", "Copy Diagnostics to Clipboard"))) {
+        std::string rep = DiagLog_GetClipboardReport(); ImGui::SetClipboardText(rep.c_str());
+        TwoStates_AddToast(Tr("Полный диагностический лог скопирован в буфер обмена (Ctrl+V)",
+                              "Full diagnostic log copied to clipboard (Ctrl+V)"), 1);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(Tr("Сохранить отчёт на Рабочий стол", "Save Report to Desktop"))) {
+        std::string savedPath;
+        if (DiagLog_ExportToDesktop(&savedPath)) {
+            char msg[320];
+            _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                        Tr("Отчёт сохранён: %s", "Report saved: %s"), savedPath.c_str());
+            TwoStates_AddToast(msg, 1);
+        }
+    }
+
+    float footerH = ImGui::GetFrameHeightWithSpacing() * 1.4f;
+    ImGui::BeginChild("##uilog", ImVec2(0, -footerH), true, ImGuiWindowFlags_HorizontalScrollbar);
+    std::vector<std::string> lines = UiLog_Snapshot();
+    for (const std::string& line : lines)
+        ImGui::TextWrapped("%s", line.c_str());
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+
+    if (ImGui::CollapsingHeader(Tr("Обновления и диагностика (для разработчиков)",
+                                   "Updates & Diagnostics (Developer Tools)"))) {
+        static char s_repoBuf[128] = "";
+        static bool s_repoInit = false;
+        if (!s_repoInit) {
+            strncpy_s(s_repoBuf, Updater_GetGithubRepo(), _TRUNCATE);
+            s_repoInit = true;
+        }
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::InputText(Tr("GitHub репозиторий (owner/repo)", "GitHub Repository (owner/repo)"), s_repoBuf, sizeof(s_repoBuf))) {
+            Updater_SetGithubRepo(s_repoBuf);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(Tr("Проверить обновления", "Check for Updates"))) {
+            Updater_CheckNow();
+        }
+        ImGui::TextDisabled(Tr("Статус обновлений: %s", "Update status: %s"), Updater_GetStatusMessage());
+        ImGui::TextDisabled(Tr("Файл полной диагностики: %s", "Full diagnostics file: %s"), DiagLog_GetLogFilePath());
+        if (ImGui::SmallButton(Tr("Открыть техническое окно отладки", "Open Technical Debug Window"))) {
+            g_debug_window.Open();
+        }
+    }
+
     ImGui::End();
 }
+
+MainMenu g_mainMenu;

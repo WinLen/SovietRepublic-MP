@@ -8,6 +8,7 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../determinism/determinism.h"
+#include "../ui/lang.h"
 #include "imgui.h"
 #include <stdio.h>
 #include <string.h>
@@ -416,9 +417,9 @@ int TwoStates_LocalState()
 
 const char* TwoStates_StateName(int state)
 {
-    if (state == 1) return "Западная ССР (Хост)";
-    if (state == 2) return "Восточная ССР (Игрок 2)";
-    return "Общая пограничная зона";
+    if (state == 1) return Tr("Западная ССР (Хост)", "West SSR (Host)");
+    if (state == 2) return Tr("Восточная ССР (Игрок 2)", "East SSR (Player 2)");
+    return Tr("Общая пограничная зона", "Shared Border Zone");
 }
 
 void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
@@ -489,17 +490,23 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
-        SaveStatus("[ДВА ГОСУДАРСТВА] Режим активен! Вы: %s | Граница X=0 (общая зона ±%.0f м)",
+        SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Режим активен! Вы: %s | Граница X=0 (общая зона ±%.0f м)",
+                      "[TWO STATES] Mode active! You: %s | Border X=0 (shared zone ±%.0f m)"),
                    TwoStates_StateName(TwoStates_LocalState()), g_borderHalfWidth);
-        SaveStatus("[ДВА ГОСУДАРСТВА] Казна Запада: %.0f ₽ / %.0f $ | Казна Востока: %.0f ₽ / %.0f $",
+        SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Казна Запада: %.0f ₽ / %.0f $ | Казна Востока: %.0f ₽ / %.0f $",
+                      "[TWO STATES] West Treasury: %.0f RUB / %.0f USD | East Treasury: %.0f RUB / %.0f USD"),
                    g_stateRub[0], g_stateUsd[0], g_stateRub[1], g_stateUsd[1]);
         char toast[220];
-        _snprintf_s(toast, sizeof(toast), _TRUNCATE, "Режим «Два государства»: Вы — %s (F7: 3D-граница, F6: к другу, Alt+ЛКМ: сигнал)",
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("Режим «Два государства»: Вы — %s (F7: 3D-граница, F6: к другу, Alt+ЛКМ: сигнал)",
+                       "Two States Mode: You are %s (F7: 3D border, F6: jump to partner, Alt+LMB: ping)"),
                     TwoStates_StateName(TwoStates_LocalState()));
         TwoStates_AddToast(toast, 1);
     } else {
-        SaveStatus("[ОДНО ГОСУДАРСТВО] Совместное управление единой республикой (общая казна)");
-        TwoStates_AddToast("Режим «Одно государство»: общая казна и территория (F6: к другу, Alt+ЛКМ: сигнал)", 1);
+        SaveStatus(Tr("[ОДНО ГОСУДАРСТВО] Совместное управление единой республикой (общая казна)",
+                      "[ONE STATE] Co-op management of a single republic (shared treasury)"));
+        TwoStates_AddToast(Tr("Режим «Одно государство»: общая казна и территория (F6: к другу, Alt+ЛКМ: сигнал)",
+                              "One State Mode: shared treasury & territory (F6: jump to partner, Alt+LMB: ping)"), 1);
     }
 }
 
@@ -679,10 +686,13 @@ bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t)
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
-    SaveStatus("[ДВА ГОСУДАРСТВА] Перевод из %s в %s: %.0f ₽, %.0f $",
+    SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Перевод из %s в %s: %.0f ₽, %.0f $",
+                  "[TWO STATES] Transfer from %s to %s: %.0f RUB, %.0f USD"),
                TwoStates_StateName(t.fromState), TwoStates_StateName(t.toState), sendRub, sendUsd);
     char toast[200];
-    _snprintf_s(toast, sizeof(toast), _TRUNCATE, "💸 Перевод из %s в %s: %.0f ₽ / %.0f $",
+    _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                Tr("💸 Перевод из %s в %s: %.0f ₽ / %.0f $",
+                   "💸 Transfer from %s to %s: %.0f RUB / %.0f USD"),
                 TwoStates_StateName(t.fromState), TwoStates_StateName(t.toState), sendRub, sendUsd);
     TwoStates_AddToast(toast, 1);
     return true;
@@ -976,11 +986,15 @@ static void NotifyTerritoryRefused(const char* actionDesc, float x)
     if (now - g_lastRefuseLogMs < 1500) return;
     g_lastRefuseLogMs = now;
     int other = (TwoStates_LocalState() == 1) ? 2 : 1;
-    SaveStatus("[ДВА ГОСУДАРСТВА] Запрещено (%s на X=%.0f): это территория/собственность «%s»!",
-               actionDesc ? actionDesc : "действие", x, TwoStates_StateName(other));
+    const char* act = actionDesc ? actionDesc : Tr("действие", "action");
+    SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Запрещено (%s на X=%.0f): это территория/собственность «%s»!",
+                  "[TWO STATES] Forbidden (%s at X=%.0f): territory/property of '%s'!"),
+               act, x, TwoStates_StateName(other));
     char toast[220];
-    _snprintf_s(toast, sizeof(toast), _TRUNCATE, "⛔ Запрещено (%s): собственность «%s»!",
-                actionDesc ? actionDesc : "действие", TwoStates_StateName(other));
+    _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                Tr("⛔ Запрещено (%s): собственность «%s»!",
+                   "⛔ Forbidden (%s): property of '%s'!"),
+                act, TwoStates_StateName(other));
     TwoStates_AddToast(toast, 3);
 }
 
@@ -1082,7 +1096,8 @@ bool TwoStates_JumpCameraToPartner()
 {
     PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
     if (!pc.valid) {
-        TwoStates_AddToast("Партнёр ещё не подключён в режиме Lockstep", 2);
+        TwoStates_AddToast(Tr("Партнёр ещё не подключён в режиме Lockstep",
+                              "Partner is not connected in Lockstep mode yet"), 2);
         return false;
     }
     ULONGLONG now = GetTickCount64();
@@ -1096,7 +1111,10 @@ bool TwoStates_JumpCameraToPartner()
     }
     if (TwoStates_JumpCameraTo(tx, tz)) {
         char msg[160];
-        _snprintf_s(msg, sizeof(msg), _TRUNCATE, "📷 Камера перемещена к партнёру (X=%.0f м, Z=%.0f м)", tx, tz);
+        _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                    Tr("📷 Камера перемещена к партнёру (X=%.0f м, Z=%.0f м)",
+                       "📷 Camera jumped to partner (X=%.0f m, Z=%.0f m)"),
+                    tx, tz);
         TwoStates_AddToast(msg, 0);
         return true;
     }
@@ -1122,9 +1140,13 @@ void TwoStates_PingAtCursor()
         LockstepNet_SendCursor(cx, cy, cz, lx, lz, true);
     }
     char msg[160];
-    _snprintf_s(msg, sizeof(msg), _TRUNCATE, "📍 Сигнал отправлен на карту (X=%.0f м, Z=%.0f м)", cx, cz);
+    _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                Tr("📍 Сигнал отправлен на карту (X=%.0f м, Z=%.0f м)",
+                   "📍 Ping sent on map (X=%.0f m, Z=%.0f m)"),
+                cx, cz);
     TwoStates_AddToast(msg, 1);
-    SaveStatus("[КАРТА] Отправлен сигнал партнёру: X=%.0f м, Z=%.0f м", cx, cz);
+    SaveStatus(Tr("[КАРТА] Отправлен сигнал партнёру: X=%.0f м, Z=%.0f м",
+                  "[MAP] Ping sent to partner: X=%.0f m, Z=%.0f m"), cx, cz);
 }
 
 static bool WorldToScreen(float wx, float wy, float wz, const ImVec2& displaySize, ImVec2* outScreen)
@@ -1223,18 +1245,19 @@ static void Draw3DBorderLines(ImDrawList* dl, const ImVec2& displaySize)
     ImVec2 centerScreen;
     if (WorldToScreen(0.0f, labelY, lz, displaySize, &centerScreen)) {
         Draw3DTextBadge(dl, centerScreen,
-                        "◄ ЗАПАДНАЯ ССР (Хост)  |  ГОСУДАРСТВЕННАЯ ГРАНИЦА (X=0)  |  ВОСТОЧНАЯ ССР (Игрок 2) ►",
+                        Tr("◄ ЗАПАДНАЯ ССР (Хост)  |  ГОСУДАРСТВЕННАЯ ГРАНИЦА (X=0)  |  ВОСТОЧНАЯ ССР (Игрок 2) ►",
+                           "◄ WEST SSR (Host)  |  STATE BORDER (X=0)  |  EAST SSR (Player 2) ►"),
                         IM_COL32(20, 22, 28, 220), IM_COL32(255, 200, 60, 230), IM_COL32(255, 235, 140, 255));
     }
     ImVec2 westEdgeScreen, eastEdgeScreen;
     if (WorldToScreen(-g_borderHalfWidth, SampleTerrainHeight(-g_borderHalfWidth, lz) + 14.0f, lz, displaySize, &westEdgeScreen)) {
         char buf[96];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Пограничная зона (-%.0f м)", g_borderHalfWidth);
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE, Tr("Пограничная зона (-%.0f м)", "Border Zone (-%.0f m)"), g_borderHalfWidth);
         Draw3DTextBadge(dl, westEdgeScreen, buf, IM_COL32(18, 28, 40, 195), IM_COL32(80, 190, 255, 200), IM_COL32(160, 225, 255, 255));
     }
     if (WorldToScreen(g_borderHalfWidth, SampleTerrainHeight(g_borderHalfWidth, lz) + 14.0f, lz, displaySize, &eastEdgeScreen)) {
         char buf[96];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Пограничная зона (+%.0f м)", g_borderHalfWidth);
+        _snprintf_s(buf, sizeof(buf), _TRUNCATE, Tr("Пограничная зона (+%.0f м)", "Border Zone (+%.0f m)"), g_borderHalfWidth);
         Draw3DTextBadge(dl, eastEdgeScreen, buf, IM_COL32(40, 26, 16, 195), IM_COL32(255, 170, 70, 200), IM_COL32(255, 215, 150, 255));
     }
 }
@@ -1251,15 +1274,17 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
         s_lastPingSeq = pc.pingSeq;
         char toast[200];
         _snprintf_s(toast, sizeof(toast), _TRUNCATE,
-                    "📍 Сигнал от партнёра на карте (X=%.0f м, Z=%.0f м) — нажмите F6 для перехода!",
+                    Tr("📍 Сигнал от партнёра на карте (X=%.0f м, Z=%.0f м) — нажмите F6 для перехода!",
+                       "📍 Map ping from partner (X=%.0f m, Z=%.0f m) — press F6 to jump!"),
                     pc.pingX, pc.pingZ);
         TwoStates_AddToast(toast, 2);
     }
 
     int partnerState = (TwoStates_LocalState() == 1) ? 2 : 1;
     const char* partnerLabel = TwoStates_IsActive()
-        ? (partnerState == 1 ? "Курсор: Западная ССР (Хост)" : "Курсор: Восточная ССР (Игрок 2)")
-        : (LockstepNet_IsHost() ? "Курсор: Игрок 2" : "Курсор: Хост");
+        ? (partnerState == 1 ? Tr("Курсор: Западная ССР (Хост)", "Cursor: West SSR (Host)")
+                             : Tr("Курсор: Восточная ССР (Игрок 2)", "Cursor: East SSR (Player 2)"))
+        : (LockstepNet_IsHost() ? Tr("Курсор: Игрок 2", "Cursor: Player 2") : Tr("Курсор: Хост", "Cursor: Host"));
 
     // Draw partner 3D cursor
     if (now - pc.lastUpdateMs < 10000 && (fabsf(pc.x) > 0.01f || fabsf(pc.z) > 0.01f)) {
@@ -1288,7 +1313,9 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
             if (WorldToScreen(pc.pingX, py + 65.0f, pc.pingZ, displaySize, &beamTopPt)) {
                 dl->AddLine(basePt, beamTopPt, IM_COL32(255, 220, 60, 220), 3.5f);
                 char pingText[128];
-                _snprintf_s(pingText, sizeof(pingText), _TRUNCATE, "📍 СИГНАЛ ПАРТНЁРА (X=%.0f, Z=%.0f) [F6]", pc.pingX, pc.pingZ);
+                _snprintf_s(pingText, sizeof(pingText), _TRUNCATE,
+                            Tr("📍 СИГНАЛ ПАРТНЁРА (X=%.0f, Z=%.0f) [F6]", "📍 PARTNER PING (X=%.0f, Z=%.0f) [F6]"),
+                            pc.pingX, pc.pingZ);
                 Draw3DTextBadge(dl, ImVec2(beamTopPt.x, beamTopPt.y - 14.0f), pingText,
                                 IM_COL32(45, 30, 10, 235), IM_COL32(255, 210, 50, 255), IM_COL32(255, 240, 150, 255));
             }
@@ -1313,7 +1340,9 @@ void TwoStates_DrawOverlay()
     bool f7Down = focused && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
     if (f7Down && !s_f7WasDown) {
         g_show3DBorder = !g_show3DBorder;
-        TwoStates_AddToast(g_show3DBorder ? "3D-граница государств: ВКЛЮЧЕНА [F7]" : "3D-граница государств: СКРЫТА [F7]", 0);
+        TwoStates_AddToast(g_show3DBorder
+            ? Tr("3D-граница государств: ВКЛЮЧЕНА [F7]", "3D State Border: ON [F7]")
+            : Tr("3D-граница государств: СКРЫТА [F7]", "3D State Border: OFF [F7]"), 0);
     }
     s_f7WasDown = f7Down;
 
@@ -1372,18 +1401,20 @@ void TwoStates_DrawOverlay()
             if (TwoStates_IsActive()) {
                 int me = TwoStates_LocalState();
                 ImGui::TextColored(me == 1 ? ImVec4(0.4f, 0.85f, 1.0f, 1.0f) : ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
-                                   "%s", me == 1 ? "★ Западная ССР" : "★ Восточная ССР");
+                                   "%s", me == 1 ? Tr("★ Западная ССР", "★ West SSR") : Tr("★ Восточная ССР", "★ East SSR"));
                 ImGui::SameLine();
                 ImGui::TextDisabled("|");
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "Ваша казна: %.0f ₽ / %.0f $",
+                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f),
+                                   Tr("Ваша казна: %.0f ₽ / %.0f $", "Your Treasury: %.0f RUB / %.0f USD"),
                                    TwoStates_LocalRubles(), TwoStates_LocalDollars());
                 ImGui::SameLine();
                 ImGui::TextDisabled("|");
                 ImGui::SameLine();
                 int other = (me == 1) ? 2 : 1;
-                ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.0f), "%s: %.0f ₽ / %.0f $",
-                                   other == 1 ? "Запад" : "Восток",
+                ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.0f),
+                                   Tr("%s: %.0f ₽ / %.0f $", "%s: %.0f RUB / %.0f USD"),
+                                   other == 1 ? Tr("Запад", "West") : Tr("Восток", "East"),
                                    TwoStates_GetRubles(other), TwoStates_GetDollars(other));
 
                 float cx = 0.0f, cy = 0.0f, cz = 0.0f;
@@ -1393,14 +1424,15 @@ void TwoStates_DrawOverlay()
                     ImGui::TextDisabled("|");
                     ImGui::SameLine();
                     if (zone == 0)
-                        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Погранзона");
+                        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), Tr("Погранзона", "Border Zone"));
                     else if (zone == me)
-                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Своя земля");
+                        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), Tr("Своя земля", "Own Land"));
                     else
-                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Чужая земля");
+                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), Tr("Чужая земля", "Partner's Land"));
                 }
             } else {
-                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "★ Одно государство (Кооп)");
+                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f),
+                                   Tr("★ Одно государство (Кооп)", "★ One State (Co-op)"));
             }
 
             unsigned long long rtt = 0;
@@ -1409,22 +1441,22 @@ void TwoStates_DrawOverlay()
                 ImGui::TextDisabled("|");
                 ImGui::SameLine();
                 ImGui::TextColored(rtt < 80 ? ImVec4(0.4f, 0.9f, 0.4f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
-                                   "%llu мс", rtt);
+                                   Tr("%llu мс", "%llu ms"), rtt);
             }
 
             ImGui::SameLine();
             ImGui::TextDisabled("|");
             ImGui::SameLine();
-            if (ImGui::SmallButton("К другу [F6]")) TwoStates_JumpCameraToPartner();
+            if (ImGui::SmallButton(Tr("К другу [F6]", "To Partner [F6]"))) TwoStates_JumpCameraToPartner();
             ImGui::SameLine();
-            if (ImGui::SmallButton("Сигнал [Alt+ЛКМ]")) TwoStates_PingAtCursor();
+            if (ImGui::SmallButton(Tr("Сигнал [Alt+ЛКМ]", "Ping [Alt+LMB]"))) TwoStates_PingAtCursor();
             if (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
                 ImGui::SameLine();
-                if (ImGui::SmallButton(g_show3DBorder ? "Граница: ВКЛ [F7]" : "Граница: ВЫКЛ [F7]"))
+                if (ImGui::SmallButton(g_show3DBorder ? Tr("Граница: ВКЛ [F7]", "Border: ON [F7]") : Tr("Граница: ВЫКЛ [F7]", "Border: OFF [F7]")))
                     g_show3DBorder = !g_show3DBorder;
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton(g_imguiVisible ? "Скрыть [Ins]" : "Меню [Ins]"))
+            if (ImGui::SmallButton(g_imguiVisible ? Tr("Скрыть [Ins]", "Hide [Ins]") : Tr("Меню [Ins]", "Menu [Ins]")))
                 g_imguiVisible = !g_imguiVisible;
 
             if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
@@ -1581,26 +1613,32 @@ static DWORD WINAPI CreateExpandedMapThread(LPVOID)
     _snprintf_s(saveDir, sizeof(saveDir), _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName);
     CreateDirectoryA(saveDir, nullptr);
 
-    SaveStatus("[КАРТА %dx%d КМ] Шаг 1/3: Сохранение текущего мира в «%s»...", km, km, saveName);
+    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 1/3: Сохранение текущего мира в «%s»...",
+                  "[MAP %dx%d KM] Step 1/3: Saving current world to '%s'..."), km, km, saveName);
     TriggerSaveGame(saveName);
     if (!WaitForSaveToFinish(120000)) {
-        SaveStatus("[КАРТА %dx%d КМ] Ошибка: превышено время ожидания сохранения", km, km);
+        SaveStatus(Tr("[КАРТА %dx%d КМ] Ошибка: превышено время ожидания сохранения",
+                      "[MAP %dx%d KM] Error: save timed out"), km, km);
         g_creatingMap = false;
         return 0;
     }
 
-    SaveStatus("[КАРТА %dx%d КМ] Шаг 2/3: Расширение границ и масштаба карты до %dx%d км (%d км²)...",
+    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 2/3: Расширение границ и масштаба карты до %dx%d км (%d км²)...",
+                  "[MAP %dx%d KM] Step 2/3: Expanding borders and map scale to %dx%d km (%d km²)..."),
                km, km, km, km, km * km);
     if (!TwoStates_PatchSaveScriptIni(saveDir, (float)km * 1000.0f)) {
-        SaveStatus("[КАРТА %dx%d КМ] Ошибка: не удалось обновить script.ini", km, km);
+        SaveStatus(Tr("[КАРТА %dx%d КМ] Ошибка: не удалось обновить script.ini",
+                      "[MAP %dx%d KM] Error: failed to patch script.ini"), km, km);
         g_creatingMap = false;
         return 0;
     }
 
-    SaveStatus("[КАРТА %dx%d КМ] Шаг 3/3: Загрузка увеличенной карты «%s»...", km, km, saveName);
+    SaveStatus(Tr("[КАРТА %dx%d КМ] Шаг 3/3: Загрузка увеличенной карты «%s»...",
+                  "[MAP %dx%d KM] Step 3/3: Loading expanded map '%s'..."), km, km, saveName);
     TriggerLoadSave(saveName);
     WaitForLoadToFinish(180000);
-    SaveStatus("[КАРТА %dx%d КМ] Готово! Карта %dx%d км (%d км²) успешно загружена.", km, km, km, km, km * km);
+    SaveStatus(Tr("[КАРТА %dx%d КМ] Готово! Карта %dx%d км (%d км²) успешно загружена.",
+                  "[MAP %dx%d KM] Done! Map %dx%d km (%d km²) loaded."), km, km, km, km, km * km);
     g_creatingMap = false;
     return 0;
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See sync_block.h.
 #include "sync_block.h"
+#include "lang.h"
 #include "../session/game_speed.h" // EnsureGamePaused() re-assert, see SyncBlock_Draw
 #include "../session/save_sync.h"    // the Cancel button
 #include "imgui.h"
@@ -107,12 +108,12 @@ void SyncBlock_Draw()
         float lineH = ImGui::GetTextLineHeight();
 
         ImGui::SetWindowFontScale(1.4f);
-        CenteredText("Multiplayer - joining", cy - lineH * 5.0f);
+        CenteredText(Tr("Мультиплеер — синхронизация", "Multiplayer - joining"), cy - lineH * 5.0f);
 
         ImGui::SetWindowFontScale(2.0f);
         char stepLine[200];
         if (totalSteps > 0)
-            _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE, "Step %d/%d - %s", step, totalSteps, text);
+            _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE, Tr("Шаг %d/%d — %s", "Step %d/%d - %s"), step, totalSteps, text);
         else
             _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE, "%s", text);
         CenteredText(stepLine, cy - lineH * 1.5f);
@@ -127,7 +128,8 @@ void SyncBlock_Draw()
         }
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        CenteredText("The game is paused and input is locked until both players are ready.",
+        CenteredText(Tr("Игра на паузе и управление заблокировано до готовности обоих игроков.",
+                        "The game is paused and input is locked until both players are ready."),
                      cy + lineH * 4.5f);
         ImGui::PopStyleColor();
     }
@@ -151,7 +153,8 @@ void SyncBlock_Draw()
             bool host = SaveSync_IsHostRole();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.2f, 0.2f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
-            if (ImGui::Button(host ? "Stop hosting" : "Cancel joining", ImVec2(lineH * 12.0f, lineH * 2.0f)))
+            if (ImGui::Button(host ? Tr("Остановить сервер", "Stop hosting") : Tr("Отменить вход", "Cancel joining"),
+                              ImVec2(lineH * 12.0f, lineH * 2.0f)))
                 SaveSync_RequestDisconnect();
             ImGui::PopStyleColor(2);
         }

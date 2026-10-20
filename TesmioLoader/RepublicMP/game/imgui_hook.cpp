@@ -4,6 +4,7 @@
 #include "../ui/main_menu.h"
 #include "../ui/debug_window.h"
 #include "../ui/sync_block.h"
+#include "../ui/lang.h"
 #include "../session/two_states.h"
 
 #include "imgui.h"
@@ -178,7 +179,7 @@ void ImGuiHook_NewFrameAndRender()
         if (ImGui::Begin("##RepublicMPTopToggle", nullptr, btnFlags)) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.16f, 0.16f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.22f, 0.22f, 1.0f));
-            if (ImGui::Button("Кооператив / Сервер (INSERT)")) {
+            if (ImGui::Button(Tr("Кооператив / Сервер (INSERT)", "Co-op / Server (INSERT)"))) {
                 g_imguiVisible = true;
             }
             ImGui::PopStyleColor(2);
@@ -194,4 +195,3 @@ void ImGuiHook_NewFrameAndRender()
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 }
-

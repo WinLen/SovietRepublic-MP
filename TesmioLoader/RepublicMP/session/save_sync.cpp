@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: GPL-3.0-only
 // See save_sync.h.
 #include "save_sync.h"
 #include "../core/version.h"
@@ -10,6 +10,7 @@
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
+#include "../ui/lang.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
 #include "../transport/steam_p2p.h"
@@ -1336,7 +1337,7 @@ void SaveSync_LoadAndStartHost(const char* saveName)
         SaveSync_StartHost();
         return;
     }
-    SaveStatus("[HOST] Р—Р°РіСЂСѓР·РєР° СЃРѕС…СЂР°РЅРµРЅРёСЏ '%s' Рё Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРёР№ Р·Р°РїСѓСЃРє СЃРµСЂРІРµСЂР°...", saveName);
+    SaveStatus(Tr("[ХОСТ] Загрузка сохранения '%s' и автоматический запуск сервера...", "[HOST] Loading save '%s' and starting server automatically..."), saveName);
     g_pendingHostAfterLoad = true;
     g_pendingHostStartTick = GetTickCount64();
     TriggerLoadSave(saveName);

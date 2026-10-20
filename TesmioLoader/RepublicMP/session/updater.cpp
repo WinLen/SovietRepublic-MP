@@ -3,6 +3,7 @@
 #include "updater.h"
 #include "../core/version.h"
 #include "../ui/ui_log.h"
+#include "../ui/lang.h"
 #include "../third_party/miniz/miniz.h"
 
 #include <windows.h>
@@ -229,7 +230,7 @@ static bool CheckWorkshopNewerDll(std::string& outDllPath)
 
 static DWORD WINAPI CheckThreadProc(LPVOID)
 {
-    SetStatus(UPDATE_CHECKING, "Проверка обновлений...");
+    SetStatus(UPDATE_CHECKING, Tr("Проверка обновлений...", "Checking for updates..."));
 
     // 1. Check Steam Workshop folder first
     std::string wsDll;
@@ -238,8 +239,8 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
         strncpy_s(g_workshopDllPath, wsDll.c_str(), _TRUNCATE);
         strncpy_s(g_latestVersion, "Steam Workshop", _TRUNCATE);
         LeaveCriticalSection(&g_updLock);
-        SetStatus(UPDATE_AVAILABLE_WORKSHOP, "Найдена новая версия в папке Steam Workshop!");
-        UiLog_Add("[Updater] Найдена обновлённая сборка в Steam Workshop");
+        SetStatus(UPDATE_AVAILABLE_WORKSHOP, Tr("Найдена новая версия в папке Steam Workshop!", "New version found in Steam Workshop folder!"));
+        UiLog_Add(Tr("[Updater] Найдена обновлённая сборка в Steam Workshop", "[Updater] Newer build found in Steam Workshop"));
         g_workerRunning = false;
         return 0;
     }
@@ -251,7 +252,7 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
     LeaveCriticalSection(&g_updLock);
 
     if (!repo[0]) {
-        SetStatus(UPDATE_IDLE, "Репозиторий GitHub не задан (укажите owner/repo для автообновления)");
+        SetStatus(UPDATE_IDLE, Tr("Репозиторий GitHub не задан (укажите owner/repo для автообновления)", "GitHub repo not configured (set owner/repo for auto-update)"));
         g_workerRunning = false;
         return 0;
     }
@@ -261,7 +262,7 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
 
     std::vector<unsigned char> body;
     if (!HttpGetBytes(apiUrl, body)) {
-        SetStatus(UPDATE_ERROR, "Не удалось получить релизы с GitHub (проверьте owner/repo или интернет)");
+        SetStatus(UPDATE_ERROR, Tr("Не удалось получить релизы с GitHub (проверьте owner/repo или интернет)", "Failed to fetch GitHub releases (check owner/repo or internet)"));
         g_workerRunning = false;
         return 0;
     }
@@ -269,7 +270,7 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
     std::string json((const char*)body.data(), body.size());
     std::string tag = ExtractJsonString(json, "tag_name");
     if (tag.empty()) {
-        SetStatus(UPDATE_ERROR, "Ответ GitHub API не содержит tag_name");
+        SetStatus(UPDATE_ERROR, Tr("Ответ GitHub API не содержит tag_name", "GitHub API response missing tag_name"));
         g_workerRunning = false;
         return 0;
     }
@@ -299,12 +300,16 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
 
     if (normRemote != normLocal && !dllUrl.empty()) {
         char msg[256];
-        _snprintf_s(msg, sizeof(msg), _TRUNCATE, "Доступно обновление на GitHub: %s (текущая v%s)", tag.c_str(), REPUBLICMP_VERSION);
+        _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                    Tr("Доступно обновление на GitHub: %s (текущая v%s)", "Update available on GitHub: %s (current v%s)"),
+                    tag.c_str(), REPUBLICMP_VERSION);
         SetStatus(UPDATE_AVAILABLE_GITHUB, msg);
         UiLog_Add(msg);
     } else {
         char msg[256];
-        _snprintf_s(msg, sizeof(msg), _TRUNCATE, "Установлена актуальная версия (v%s)", REPUBLICMP_VERSION);
+        _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                    Tr("Установлена актуальная версия (v%s)", "Up to date (v%s)"),
+                    REPUBLICMP_VERSION);
         SetStatus(UPDATE_UP_TO_DATE, msg);
     }
 
@@ -317,7 +322,7 @@ static DWORD WINAPI ApplyThreadProc(LPVOID)
     UpdateStatus curStatus = Updater_GetStatus();
     std::string ownDll = GetOwnDllPath();
     if (ownDll.empty()) {
-        SetStatus(UPDATE_ERROR, "Не удалось определить путь к RepublicMP.dll");
+        SetStatus(UPDATE_ERROR, Tr("Не удалось определить путь к RepublicMP.dll", "Failed to determine path to RepublicMP.dll"));
         g_workerRunning = false;
         return 0;
     }
@@ -325,7 +330,7 @@ static DWORD WINAPI ApplyThreadProc(LPVOID)
     std::vector<unsigned char> newBytes;
 
     if (curStatus == UPDATE_AVAILABLE_WORKSHOP) {
-        SetStatus(UPDATE_DOWNLOADING, "Копирование обновления из Steam Workshop...");
+        SetStatus(UPDATE_DOWNLOADING, Tr("Копирование обновления из Steam Workshop...", "Copying update from Steam Workshop..."));
         char wsPath[MAX_PATH] = {};
         EnterCriticalSection(&g_updLock);
         strncpy_s(wsPath, g_workshopDllPath, _TRUNCATE);
@@ -343,21 +348,21 @@ static DWORD WINAPI ApplyThreadProc(LPVOID)
             fclose(f);
         }
     } else {
-        SetStatus(UPDATE_DOWNLOADING, "Скачивание RepublicMP.dll с GitHub Releases...");
+        SetStatus(UPDATE_DOWNLOADING, Tr("Скачивание RepublicMP.dll с GitHub Releases...", "Downloading RepublicMP.dll from GitHub Releases..."));
         char url[512] = {};
         EnterCriticalSection(&g_updLock);
         strncpy_s(url, g_downloadUrl, _TRUNCATE);
         LeaveCriticalSection(&g_updLock);
 
         if (!url[0] || !HttpGetBytes(url, newBytes)) {
-            SetStatus(UPDATE_ERROR, "Ошибка при скачивании RepublicMP.dll с GitHub");
+            SetStatus(UPDATE_ERROR, Tr("Ошибка при скачивании RepublicMP.dll с GitHub", "Failed to download RepublicMP.dll from GitHub"));
             g_workerRunning = false;
             return 0;
         }
     }
 
     if (newBytes.size() < 65536 || newBytes[0] != 'M' || newBytes[1] != 'Z') {
-        SetStatus(UPDATE_ERROR, "Скачанный файл повреждён (не является корректной DLL)");
+        SetStatus(UPDATE_ERROR, Tr("Скачанный файл повреждён (не является корректной DLL)", "Downloaded file is corrupted (not a valid DLL)"));
         g_workerRunning = false;
         return 0;
     }
@@ -368,7 +373,7 @@ static DWORD WINAPI ApplyThreadProc(LPVOID)
 
     FILE* out = nullptr;
     if (fopen_s(&out, tmpDll.c_str(), "wb") != 0 || !out) {
-        SetStatus(UPDATE_ERROR, "Не удалось создать временный файл обновления");
+        SetStatus(UPDATE_ERROR, Tr("Не удалось создать временный файл обновления", "Failed to create temporary update file"));
         g_workerRunning = false;
         return 0;
     }
@@ -377,21 +382,21 @@ static DWORD WINAPI ApplyThreadProc(LPVOID)
 
     DeleteFileA(oldDll.c_str());
     if (!MoveFileExA(ownDll.c_str(), oldDll.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        SetStatus(UPDATE_ERROR, "Не удалось переименовать текущую RepublicMP.dll");
+        SetStatus(UPDATE_ERROR, Tr("Не удалось переименовать текущую RepublicMP.dll", "Failed to rename current RepublicMP.dll"));
         g_workerRunning = false;
         return 0;
     }
     if (!MoveFileExA(tmpDll.c_str(), ownDll.c_str(), MOVEFILE_REPLACE_EXISTING)) {
         // Restore backup
         MoveFileExA(oldDll.c_str(), ownDll.c_str(), MOVEFILE_REPLACE_EXISTING);
-        SetStatus(UPDATE_ERROR, "Не удалось записать новую RepublicMP.dll");
+        SetStatus(UPDATE_ERROR, Tr("Не удалось записать новую RepublicMP.dll", "Failed to write new RepublicMP.dll"));
         g_workerRunning = false;
         return 0;
     }
 
     SaveConfig();
-    SetStatus(UPDATE_APPLIED_RESTART_NEEDED, "Обновление установлено! Перезапустите игру (START-COOP.bat) для применения.");
-    UiLog_Add("[Updater] RepublicMP.dll успешно обновлена! Перезапустите игру.");
+    SetStatus(UPDATE_APPLIED_RESTART_NEEDED, Tr("Обновление установлено! Перезапустите игру для применения.", "Update installed! Restart the game to apply."));
+    UiLog_Add(Tr("[Updater] RepublicMP.dll успешно обновлена! Перезапустите игру.", "[Updater] RepublicMP.dll updated! Please restart the game."));
     g_workerRunning = false;
     return 0;
 }
