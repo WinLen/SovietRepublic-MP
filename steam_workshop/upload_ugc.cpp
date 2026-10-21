@@ -206,7 +206,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v1.0.0 - Fix citizen invite/relocate sync & crash, road preview switch spam, and building terrain leveling ledger sync");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v1.0.0 - Add Two States border & ownership overlay on minimap, 20s map ping markers, and fix Host Co-op sidebar button click in Lockstep");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

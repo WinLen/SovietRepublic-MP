@@ -47,13 +47,16 @@
       - `NATIVE_PAGE_SETTINGS` (`Режим: 1/2 ССР`, `Казна: 100% / 50-50`, `Погранзона`, `Карта: 20x20 с границей / Вся без границ`, переключатель авто-синка модов `Моды: Общие (Авто) / Только Хоста / Из сейва`, `Проверка DLC`, `Язык`)
   - **Левая игровая боковая панель `☭` (`Hook_SystemTabBuild`, `RVA 0x31EAF8 -> 0x337450`):**
     - Добавляет кнопку `КООПЕРАТИВ` с советской иконкой `editor/mp_icon_coop.png` внизу системной вкладки `☭`.
-    - При клике открывает подвкладку «Кооператив» (через `SYSTAB_SUBTAB_IDX_OFF = -2` и временный NOP заголовка `0x337D7B`), где отрисовывает однородные 9-slice кнопки (`DrawSidebarButton`) с квадратными иконками `96x96` (`editor/mp_icon_*.png`, `editor/settings_save.png`).
-    - Содержит кнопку быстрого сохранения хоста **«Сохранить кооп-игру»** (`TwoStates_TriggerQuickCoopSave()`), перевод средств (`50 000 РУБ / $`), прыжок камеры к партнёру (`[F6]`), пинг (`[Alt+ЛКМ]`), переключение 3D-границы (`[F7]`), ре-синк и остановку/отключение.
+    - При клике открывает подвкладку «Кооператив» (через `SYSTAB_SUBTAB_IDX_OFF = -2` и временный NOP заголовка `0x337D7B`), где отрисовывает однородные 9-slice кнопки (`DrawSidebarButton`) с квадратными иконками `96x96` (`editor/mp_icon_*.png`, `editor/settings_save.png`). Обработка клика использует `g_sidebarLClickAvailable` (объединение `INPUT_LCLICK_RVA` и переднего фронта `INPUT_LHELD_RVA` / `VK_LBUTTON`) и изолированный `PlayMenuClickSoundSafe()`, чтобы клики не терялись при активном Lockstep.
+    - Содержит кнопку быстрого сохранения хоста **«Сохранить кооп-игру»** (`TwoStates_TriggerQuickCoopSave()`), перевод средств (`50 000 РУБ / $`), прыжок камеры к партнёру (`[F6]`), пинг на 20 секунд (`[Alt+ЛКМ]`), переключение 3D-границы (`[F7]`), ре-синк и остановку/отключение.
 - [`lang.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/ui/lang.h) — Переключение языка (`MP_LANG_RU` / `MP_LANG_EN`), автоопределение по первому пункту главного меню игры и сохранение в `plugins\republicmp_settings.ini` (`[ui] lang=ru/en`).
 
 ### `session/` — Сессия, режим «Два государства», сохранения и настройки
 - [`two_states.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/session/two_states.h) / [`two_states.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/session/two_states.cpp):
   - **Режимы:** `COOP_MODE_ONE_STATE` (0 — общая республика и казна) и `COOP_MODE_TWO_STATES` (1 — Западная ССР у Хоста `X < 0`, Восточная ССР у Клиента `X > 0`, общая погранзона `[-borderHalfWidth .. +borderHalfWidth]`).
+  - **3D-граница, миникарта и сигналы (метки 20 сек):**
+    - `DrawMinimapOverlay` (читает нативную миникарту по `*(BYTE**)(world + 0xD400)` при `*(BYTE*)(world + 0xFBA) == 0`) рисует поверх миникарты линию границы `X = 0`, общую погранзону, цветовую подсветку своей стороны (зелёный контур + плашка `ЗАПАД (ВЫ)` / `ВОСТОК (ВЫ)`) и стороны партнёра (красный оттенок + плашка `ЗАПАД (ПАРТНЁР)` / `ВОСТОК (ПАРТНЁР)`), а также курсор партнёра и активные метки.
+    - Метки на карте (`TwoStates_PingAtCursor`, `[Alt+ЛКМ]`) отображаются в 3D и на миникарте у обоих игроков в течение **20 секунд** (`PING_LIFETIME_MS = 20000`) с обратным отсчётом в секундах.
   - **Раздельная экономика (`2 государства`):**
     - Хранит `g_stateRub[2]` и `g_stateUsd[2]`.
     - Подменяет `WorldRubles()` / `WorldDollars()` вокруг выполнения команд (`TwoStates_BeginCommand` / `TwoStates_EndCommand`), вокруг UI/инструментов (`TwoStates_UiBegin/End`, `TwoStates_ToolMoneyBegin/End`) и внутри 5 inline-хуков симуляции (`H_BldEcon`, `H_CustomsBorder`, `H_CustomsVehicle`, `H_ConstructStep`, `H_VehicleSale`).
@@ -97,6 +100,8 @@
 | Назначение | RVA / Смещение | Примечание |
 | :--- | :--- | :--- |
 | `WORLD_RVA` (`WORLD_THIS_RVA`) | `0x9D4F10` | Глобальный объект мира и главного меню (`menuObj`) |
+| `WORLD_HIDE_HUD_OFF` | `world + 0xFBA` | `BYTE`: `0` — интерфейс виден, `!= 0` — интерфейс скрыт |
+| `WORLD_MINIMAP_PTR_OFF` | `world + 0xD400` | Указатель на объект нативной миникарты (`+0x00` открыта, `+0x48..+0x58` геометрия экрана) |
 | `SAVE_NAME_FIELD_OFFSET` | `world + 0x9F8` | `char[120]`: путь сохранения (`"save/<name>"` или `"saved_last"`) |
 | `WORLD_FORCE_TERRAIN_SAVE_OFF` | `world + 0xFC90` | `BYTE`: `1` заставляет `C3D_TERRAIN::Save` записать `script.ini` и карты высот |
 | `WORLD_UNLIMITED_MONEY_OFFSET` | `world + 0x578` | `int`: `!= 0` — режим неограниченных денег (`Late` на `0x30DAA2` каждый кадр сбрасывает баланс в `100000000.0`) |

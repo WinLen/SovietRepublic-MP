@@ -59,7 +59,9 @@
 #define SOUND_MGR_RVA           0x9E4C20
 #define MIDDLEPOINT_OBJ_RVA     0x9EACD0
 #define TEX_BIND_ARG_RVA        0x9EAD08
+#define WINDOW_FOCUS_BYTE_RVA   0x99208F
 #define INPUT_OBJ_RVA           0xA54B90
+#define INPUT_LHELD_RVA         0xA54E90
 #define INPUT_LCLICK_RVA        0xA54E91
 
 #define SYSTAB_CHEAT_BYTE_OFF   0x0009
@@ -878,6 +880,31 @@ static void DrawSidebarText(float x, float y, unsigned int colorARGB, bool boldH
     drawText(fontMgr, font, floorf(x + 0.5f), floorf(y - 7.0f * guiScale + 0.5f), colorARGB, fmt, text);
 }
 
+static bool g_prevSidebarLmbDown = false;
+static bool g_sidebarLClickAvailable = false;
+
+static void PlayMenuClickSoundSafe()
+{
+    if (!g_exeBase) return;
+    __try {
+        if (*(BYTE*)(g_exeBase + SOUND_MUTE_BYTE_RVA) == 0 && *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA) != nullptr) {
+            uintptr_t hasSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_HAS_SOUND_RVA);
+            uintptr_t getSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_GET_SOUND_RVA);
+            uintptr_t playSndAddr = *(uintptr_t*)(g_exeBase + IMPORT_PLAY_SOUND_RVA);
+            void* soundEngine = *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA);
+            void* soundCfg = (void*)(g_exeBase + SOUND_MGR_RVA);
+            const char* clickName = (const char*)(g_exeBase + SND_CLICK_NAME_RVA);
+            if (soundEngine && hasSndAddr && getSndAddr && playSndAddr && ((FnHasSound)hasSndAddr)(soundCfg, clickName)) {
+                const char* sndPath = ((FnGetSound)getSndAddr)(soundCfg, clickName);
+                if (sndPath && sndPath[0]) {
+                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, true, 1.0f, nullptr);
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colorARGB,
                               const wchar_t* label, const char* iconRelPath = nullptr)
 {
@@ -929,25 +956,11 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
     bool hovered = (mx > (float)hitLeft && mx < (float)boxRect[2] &&
                     my > (float)boxRect[1] && my < (float)boxRect[3]);
     bool clicked = false;
-    if (hovered && *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0) {
+    if (hovered && (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0 || g_sidebarLClickAvailable)) {
         clicked = true;
+        g_sidebarLClickAvailable = false;
         *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
-
-        // Play native "button" click sound (matching 0x14021CE4A..0x14021CEB0)
-        if (*(BYTE*)(g_exeBase + SOUND_MUTE_BYTE_RVA) == 0 && *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA) != nullptr) {
-            uintptr_t hasSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_HAS_SOUND_RVA);
-            uintptr_t getSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_GET_SOUND_RVA);
-            uintptr_t playSndAddr = *(uintptr_t*)(g_exeBase + IMPORT_PLAY_SOUND_RVA);
-            void* soundEngine = *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA);
-            void* soundCfg = (void*)(g_exeBase + SOUND_MGR_RVA);
-            const char* clickName = (const char*)(g_exeBase + SND_CLICK_NAME_RVA);
-            if (soundEngine && hasSndAddr && getSndAddr && playSndAddr && ((FnHasSound)hasSndAddr)(soundCfg, clickName)) {
-                const char* sndPath = ((FnGetSound)getSndAddr)(soundCfg, clickName);
-                if (sndPath && sndPath[0]) {
-                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, true, 1.0f, nullptr);
-                }
-            }
-        }
+        PlayMenuClickSoundSafe();
     }
 
     float* guiRgba = (float*)(g_exeBase + GUI_COLOR_RGBA_RVA);
@@ -1003,10 +1016,19 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
 static void Hook_SystemTabBuildInner(BYTE* menuObj)
 {
     __try {
+        bool focused = (*(BYTE*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) != 0) && IsGameWindowFocused();
+        bool lmbDown = focused &&
+                       ((*(BYTE*)(g_exeBase + INPUT_LHELD_RVA) != 0) ||
+                        ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0));
+        bool lmbEdge = (lmbDown && !g_prevSidebarLmbDown);
+        g_prevSidebarLmbDown = lmbDown;
+        g_sidebarLClickAvailable = (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0) || lmbEdge;
+
         int curSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
         if (curSubTab != -1) {
             // Player is in one of the game's built-in sub-tabs (Audio, Graphics, Cheats, etc.)
             g_inGameCoopSubTab = false;
+            g_sidebarLClickAvailable = false;
             g_origSystemTabBuild(menuObj);
             return;
         }
@@ -1037,11 +1059,13 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
 
             if (!*(void**)(menuObj + SYSTAB_TAB_PTR_OFF)) {
                 g_inGameCoopSubTab = false;
+                g_sidebarLClickAvailable = false;
                 return;
             }
             if (afterSubTab == -1) {
                 // Player clicked the native top-left Back arrow icon!
                 g_inGameCoopSubTab = false;
+                g_sidebarLClickAvailable = false;
                 *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
                 return;
             }
@@ -1289,9 +1313,14 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
 
         // Root 'system' (Hammer & Sickle) tab: let the game draw all standard icons/elements,
         // then append our native "КООПЕРАТИВ" / "CO-OP" button cleanly below "Достижения доступны".
+        bool hadNativeClickBefore = (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0);
         g_origSystemTabBuild(menuObj);
+        if (hadNativeClickBefore && *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) == 0) {
+            g_sidebarLClickAvailable = false;
+        }
 
         if (!*(void**)(menuObj + SYSTAB_TAB_PTR_OFF) || *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) != -1) {
+            g_sidebarLClickAvailable = false;
             return;
         }
 

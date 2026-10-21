@@ -1260,6 +1260,13 @@ bool TwoStates_JumpCameraTo(float wx, float wz)
     }
 }
 
+static constexpr ULONGLONG PING_LIFETIME_MS = 20000;
+static bool      g_localPingActive = false;
+static float     g_localPingX      = 0.0f;
+static float     g_localPingY      = 0.0f;
+static float     g_localPingZ      = 0.0f;
+static ULONGLONG g_localPingSentMs = 0;
+
 bool TwoStates_JumpCameraToPartner()
 {
     PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
@@ -1270,7 +1277,7 @@ bool TwoStates_JumpCameraToPartner()
     }
     ULONGLONG now = GetTickCount64();
     float tx = pc.x, tz = pc.z;
-    if (pc.hasPing && now - pc.pingReceivedMs < 15000) {
+    if (pc.hasPing && now - pc.pingReceivedMs < PING_LIFETIME_MS) {
         tx = pc.pingX;
         tz = pc.pingZ;
     } else if (fabsf(tx) < 0.01f && fabsf(tz) < 0.01f) {
@@ -1301,13 +1308,19 @@ void TwoStates_PingAtCursor()
     if (fabsf(cx) < 0.01f && fabsf(cz) < 0.01f) {
         cx = lx; cy = ly; cz = lz;
     }
+    g_localPingActive = true;
+    g_localPingX      = cx;
+    g_localPingY      = cy;
+    g_localPingZ      = cz;
+    g_localPingSentMs = GetTickCount64();
+
     if (LockstepNet_IsConnected()) {
         LockstepNet_SendCursor(cx, cy, cz, lx, lz, true);
     }
     char msg[160];
     _snprintf_s(msg, sizeof(msg), _TRUNCATE,
-                Tr("[СИГНАЛ] Отправлен на карту (X=%.0f м, Z=%.0f м)",
-                   "[PING] Sent on map (X=%.0f m, Z=%.0f m)"),
+                Tr("[СИГНАЛ] Отправлен на карту на 20 сек (X=%.0f м, Z=%.0f м)",
+                   "[PING] Sent on map for 20s (X=%.0f m, Z=%.0f m)"),
                 cx, cz);
     TwoStates_AddToast(msg, 1);
     SaveStatus(Tr("[КАРТА] Отправлен сигнал партнёру: X=%.0f м, Z=%.0f м",
@@ -1342,6 +1355,141 @@ static void Draw3DTextBadge(ImDrawList* dl, const ImVec2& pos, const char* text,
     dl->AddRectFilled(pMin, pMax, bgCol, 5.0f);
     dl->AddRect(pMin, pMax, borderCol, 5.0f, 0, 1.5f);
     dl->AddText(ImVec2(pos.x - sz.x * 0.5f, pos.y - sz.y * 0.5f), textCol, text);
+}
+
+// Native Minimap pointer at world + 0xD400 (RVA 0x9E2310), HUD hidden flag at world + 0xFBA (RVA 0x9D5ECA).
+static bool GetNativeMinimapRect(float* outCenterX, float* outCenterY, float* outMapSize)
+{
+    if (!g_exeBase) return false;
+    __try {
+        BYTE hideHud = *(BYTE*)(g_exeBase + WORLD_RVA + 0xFBA);
+        if (hideHud != 0) return false;
+        BYTE* mm = *(BYTE**)(g_exeBase + WORLD_RVA + 0xD400);
+        if (!mm) return false;
+        if (mm[0] == 0) return false; // minimap panel collapsed
+        float rightX  = *(float*)(mm + 0x48);
+        float bottomY = *(float*)(mm + 0x4C);
+        float mapSize = *(float*)(mm + 0x50);
+        float panelW  = *(float*)(mm + 0x54);
+        float panelH  = *(float*)(mm + 0x58);
+        if (!isfinite(mapSize) || mapSize < 40.0f || mapSize > 2500.0f) return false;
+        if (!isfinite(rightX)  || !isfinite(bottomY) || !isfinite(panelW) || !isfinite(panelH)) return false;
+        *outCenterX = (rightX - panelW) + panelH * 0.5f;
+        *outCenterY = bottomY - panelH * 0.5f;
+        *outMapSize = mapSize;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void DrawMinimapOverlay(ImDrawList* dl)
+{
+    float cx = 0.0f, cy = 0.0f, mapSize = 0.0f;
+    if (!GetNativeMinimapRect(&cx, &cy, &mapSize)) return;
+
+    float half = mapSize * 0.5f;
+    ImVec2 mapMin(cx - half, cy - half);
+    ImVec2 mapMax(cx + half, cy + half);
+
+    dl->PushClipRect(mapMin, mapMax, true);
+
+    bool twoStates = (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES);
+    if (twoStates) {
+        int myState = TwoStates_LocalState(); // 1 = West (X < 0), 2 = East (X > 0)
+        float borderZoneHalfPx = (g_borderHalfWidth / 20000.0f) * mapSize;
+        if (borderZoneHalfPx < 1.5f) borderZoneHalfPx = 1.5f;
+
+        ImU32 ownTint     = IM_COL32(45, 210, 95, 36);
+        ImU32 partnerTint = IM_COL32(235, 65, 55, 36);
+        ImU32 westTint    = (myState == 1) ? ownTint : partnerTint;
+        ImU32 eastTint    = (myState == 2) ? ownTint : partnerTint;
+
+        // Subtle territory tint on West (X < 0) and East (X > 0) halves
+        dl->AddRectFilled(mapMin, ImVec2(cx - borderZoneHalfPx, mapMax.y), westTint);
+        dl->AddRectFilled(ImVec2(cx + borderZoneHalfPx, mapMin.y), mapMax, eastTint);
+
+        // Shared border zone band [-g_borderHalfWidth .. +g_borderHalfWidth]
+        dl->AddRectFilled(ImVec2(cx - borderZoneHalfPx, mapMin.y),
+                          ImVec2(cx + borderZoneHalfPx, mapMax.y),
+                          IM_COL32(255, 215, 60, 42));
+
+        // Dashed/highlighted border zone edges
+        dl->AddLine(ImVec2(cx - borderZoneHalfPx, mapMin.y),
+                    ImVec2(cx - borderZoneHalfPx, mapMax.y),
+                    IM_COL32(90, 200, 255, 175), 1.2f);
+        dl->AddLine(ImVec2(cx + borderZoneHalfPx, mapMin.y),
+                    ImVec2(cx + borderZoneHalfPx, mapMax.y),
+                    IM_COL32(255, 175, 70, 175), 1.2f);
+
+        // Center state border line X = 0
+        dl->AddLine(ImVec2(cx, mapMin.y), ImVec2(cx, mapMax.y), IM_COL32(255, 65, 50, 235), 2.5f);
+        dl->AddLine(ImVec2(cx, mapMin.y), ImVec2(cx, mapMax.y), IM_COL32(255, 230, 95, 200), 1.2f);
+
+        // Highlight border around the player's own half of the minimap
+        ImVec2 ownMin = (myState == 1) ? mapMin : ImVec2(cx, mapMin.y);
+        ImVec2 ownMax = (myState == 1) ? ImVec2(cx, mapMax.y) : mapMax;
+        dl->AddRect(ownMin, ownMax, IM_COL32(75, 240, 120, 200), 0.0f, 0, 2.0f);
+
+        // Top badges inside West & East halves showing which side is YOURS vs PARTNER'S
+        const char* westLabel = (myState == 1) ? Tr("ЗАПАД (ВЫ)", "WEST (YOU)") : Tr("ЗАПАД (ПАРТНЁР)", "WEST (PARTNER)");
+        const char* eastLabel = (myState == 2) ? Tr("ВОСТОК (ВЫ)", "EAST (YOU)") : Tr("ВОСТОК (ПАРТНЁР)", "EAST (PARTNER)");
+
+        ImU32 ownBg       = IM_COL32(16, 48, 24, 225);
+        ImU32 ownBrd      = IM_COL32(80, 240, 125, 245);
+        ImU32 ownTxt      = IM_COL32(185, 255, 200, 255);
+        ImU32 partnerBg   = IM_COL32(52, 20, 20, 220);
+        ImU32 partnerBrd  = IM_COL32(255, 110, 95, 235);
+        ImU32 partnerTxt  = IM_COL32(255, 205, 195, 255);
+
+        float badgeY = mapMin.y + 13.0f;
+        float westCx = mapMin.x + half * 0.5f;
+        float eastCx = cx + half * 0.5f;
+
+        Draw3DTextBadge(dl, ImVec2(westCx, badgeY), westLabel,
+                        (myState == 1) ? ownBg : partnerBg,
+                        (myState == 1) ? ownBrd : partnerBrd,
+                        (myState == 1) ? ownTxt : partnerTxt);
+        Draw3DTextBadge(dl, ImVec2(eastCx, badgeY), eastLabel,
+                        (myState == 2) ? ownBg : partnerBg,
+                        (myState == 2) ? ownBrd : partnerBrd,
+                        (myState == 2) ? ownTxt : partnerTxt);
+    }
+
+    ULONGLONG now = GetTickCount64();
+
+    // Draw local ping marker on minimap (20s)
+    if (g_localPingActive && now - g_localPingSentMs < PING_LIFETIME_MS) {
+        float ageSec = (float)(now - g_localPingSentMs) * 0.001f;
+        float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
+        float px = cx + (g_localPingX / 20000.0f) * mapSize;
+        float py = cy - (g_localPingZ / 20000.0f) * mapSize;
+        dl->AddCircle(ImVec2(px, py), 5.0f + pulse * 7.0f, IM_COL32(110, 245, 130, 235), 20, 2.0f);
+        dl->AddCircleFilled(ImVec2(px, py), 3.5f, IM_COL32(80, 255, 120, 255));
+    }
+
+    // Draw partner cursor & partner ping marker on minimap
+    if (LockstepNet_IsConnected()) {
+        PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
+        if (pc.valid) {
+            if (now - pc.lastUpdateMs < 10000 && (fabsf(pc.x) > 0.01f || fabsf(pc.z) > 0.01f)) {
+                float px = cx + (pc.x / 20000.0f) * mapSize;
+                float py = cy - (pc.z / 20000.0f) * mapSize;
+                dl->AddCircleFilled(ImVec2(px, py), 3.5f, IM_COL32(60, 215, 255, 240));
+                dl->AddCircle(ImVec2(px, py), 6.5f, IM_COL32(255, 255, 255, 200), 16, 1.5f);
+            }
+            if (pc.hasPing && now - pc.pingReceivedMs < PING_LIFETIME_MS) {
+                float ageSec = (float)(now - pc.pingReceivedMs) * 0.001f;
+                float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
+                float px = cx + (pc.pingX / 20000.0f) * mapSize;
+                float py = cy - (pc.pingZ / 20000.0f) * mapSize;
+                dl->AddCircle(ImVec2(px, py), 6.0f + pulse * 9.0f, IM_COL32(255, 215, 50, 245), 24, 2.2f);
+                dl->AddCircleFilled(ImVec2(px, py), 4.0f, IM_COL32(255, 85, 40, 255));
+            }
+        }
+    }
+
+    dl->PopClipRect();
 }
 
 static void Draw3DBorderLines(ImDrawList* dl, const ImVec2& displaySize)
@@ -1418,11 +1566,34 @@ static void Draw3DBorderLines(ImDrawList* dl, const ImVec2& displaySize)
 
 static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
 {
+    ULONGLONG now = GetTickCount64();
+
+    // Draw local 3D Map Ping beacon (visible for 20 seconds)
+    if (g_localPingActive && now - g_localPingSentMs < PING_LIFETIME_MS) {
+        float ageSec = (float)(now - g_localPingSentMs) * 0.001f;
+        int remSec = (int)ceilf((float)(PING_LIFETIME_MS - (now - g_localPingSentMs)) * 0.001f);
+        float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
+        float py = g_localPingY > 1.0f ? g_localPingY : SampleTerrainHeight(g_localPingX, g_localPingZ);
+        ImVec2 basePt, beamTopPt;
+        if (WorldToScreen(g_localPingX, py + 1.0f, g_localPingZ, displaySize, &basePt)) {
+            dl->AddCircle(basePt, 12.0f + pulse * 14.0f, IM_COL32(95, 240, 125, 225), 32, 2.5f);
+            dl->AddCircleFilled(basePt, 6.0f, IM_COL32(60, 225, 95, 245));
+            if (WorldToScreen(g_localPingX, py + 55.0f, g_localPingZ, displaySize, &beamTopPt)) {
+                dl->AddLine(basePt, beamTopPt, IM_COL32(95, 240, 125, 210), 3.0f);
+                char pingText[128];
+                _snprintf_s(pingText, sizeof(pingText), _TRUNCATE,
+                            Tr("[ВАША МЕТКА] (X=%.0f, Z=%.0f) [%dс]", "[YOUR PING] (X=%.0f, Z=%.0f) [%ds]"),
+                            g_localPingX, g_localPingZ, remSec);
+                Draw3DTextBadge(dl, ImVec2(beamTopPt.x, beamTopPt.y - 14.0f), pingText,
+                                IM_COL32(15, 42, 22, 230), IM_COL32(95, 240, 125, 250), IM_COL32(190, 255, 205, 255));
+            }
+        }
+    }
+
     if (!LockstepNet_IsConnected()) return;
     PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
     if (!pc.valid) return;
 
-    ULONGLONG now = GetTickCount64();
     static unsigned s_lastPingSeq = 0;
     if (pc.hasPing && pc.pingSeq != s_lastPingSeq) {
         s_lastPingSeq = pc.pingSeq;
@@ -1455,9 +1626,10 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
         }
     }
 
-    // Draw active 3D Map Ping beacon (visible for 10 seconds)
-    if (pc.hasPing && now - pc.pingReceivedMs < 10000) {
+    // Draw active 3D Map Ping beacon (visible for 20 seconds)
+    if (pc.hasPing && now - pc.pingReceivedMs < PING_LIFETIME_MS) {
         float ageSec = (float)(now - pc.pingReceivedMs) * 0.001f;
+        int remSec = (int)ceilf((float)(PING_LIFETIME_MS - (now - pc.pingReceivedMs)) * 0.001f);
         float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
         float py = pc.pingY > 1.0f ? pc.pingY : SampleTerrainHeight(pc.pingX, pc.pingZ);
         ImVec2 basePt, beamTopPt;
@@ -1468,8 +1640,9 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
                 dl->AddLine(basePt, beamTopPt, IM_COL32(255, 220, 60, 220), 3.5f);
                 char pingText[128];
                 _snprintf_s(pingText, sizeof(pingText), _TRUNCATE,
-                            Tr("[СИГНАЛ ПАРТНЁРА] (X=%.0f, Z=%.0f) [F6]", "[PARTNER PING] (X=%.0f, Z=%.0f) [F6]"),
-                            pc.pingX, pc.pingZ);
+                            Tr("[СИГНАЛ ПАРТНЁРА] (X=%.0f, Z=%.0f) [%dс | F6]",
+                               "[PARTNER PING] (X=%.0f, Z=%.0f) [%ds | F6]"),
+                            pc.pingX, pc.pingZ, remSec);
                 Draw3DTextBadge(dl, ImVec2(beamTopPt.x, beamTopPt.y - 14.0f), pingText,
                                 IM_COL32(45, 30, 10, 235), IM_COL32(255, 210, 50, 255), IM_COL32(255, 240, 150, 255));
             }
@@ -1534,9 +1707,10 @@ void TwoStates_DrawOverlay()
         Draw3DBorderLines(bg, displaySize);
     }
 
-    // Draw 3D partner cursor and map ping beacon
-    if (worldLoaded && LockstepNet_IsConnected()) {
+    // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime)
+    if (worldLoaded) {
         DrawPartnerCursorAndPing(bg, displaySize);
+        DrawMinimapOverlay(bg);
     }
 
     // While Host is waiting for Player 2 (before Lockstep starts), keep State 1 treasury synced with world balance
