@@ -10,6 +10,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "../TesmioLoader/RepublicMP/core/version.h"
 
 #pragma pack(push, 8)
 struct CreateItemResult_t {
@@ -196,7 +197,7 @@ int main(int argc, char** argv)
     }
 
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
-    bool bTitle = pSetTitle(pUGC, hUpdate, "RepublicMP — Кооператив / Co-op Multiplayer (One State & Two States)");
+    bool bTitle = pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " — Кооператив / Co-op Multiplayer (One State & Two States)");
     bool bDesc = pSetDesc(pUGC, hUpdate, desc.c_str());
     bool bVis = pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */);
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
@@ -206,7 +207,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v1.0.0 - Fix client road building crash/desync in Lockstep (RoadSync_ClearCategoryPreview + compact LS_CMD_SEGMENT + 4FCAF0 ledger)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Fix client road building crash/desync in Lockstep (RoadSync_ClearCategoryPreview + compact LS_CMD_SEGMENT + 4FCAF0 ledger)");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

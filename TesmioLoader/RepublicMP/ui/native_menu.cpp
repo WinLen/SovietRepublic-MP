@@ -2,6 +2,7 @@
 // See native_menu.h.
 #include "native_menu.h"
 #include "lang.h"
+#include "../core/version.h"
 #include "../core/diag_log.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
@@ -284,7 +285,7 @@ static void BuildCoopHubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
     *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
     g_origMainMenuBuild(menuObj);
 
-    SetMenuTitleText(menuObj, TrW(L"КООПЕРАТИВ", L"CO-OP MULTIPLAYER"));
+    SetMenuTitleText(menuObj, TrW(L"КООПЕРАТИВ v" REPUBLICMP_VERSION_W, L"CO-OP v" REPUBLICMP_VERSION_W));
     SetMenuItemText(menuObj, 0, TrW(L"Создать сервер",  L"Host Server"));
     SetMenuItemText(menuObj, 1, TrW(L"Подключиться",    L"Join Server"));
     SetMenuItemText(menuObj, 2, TrW(L"Настройки коопа", L"Co-op Settings"));

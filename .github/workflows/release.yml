@@ -36,12 +36,18 @@ jobs:
       - name: Determine Version and Inject into core/version.h
         shell: pwsh
         run: |
+          $verHeader = Join-Path $env:GITHUB_WORKSPACE "TesmioLoader\RepublicMP\core\version.h"
+          $content = Get-Content $verHeader -Raw
+          $headerVer = "1.0.1"
+          if ($content -match '#define\s+REPUBLICMP_VERSION\s+"([^"]+)"') {
+            $headerVer = $Matches[1]
+          }
           if ("${{ github.ref_type }}" -eq "tag") {
             $tag = "${{ github.ref_name }}"
             $ver = $tag.TrimStart('v', 'V')
           } else {
             $ver = "${{ inputs.version }}".TrimStart('v', 'V')
-            if (-not $ver) { $ver = "1.0.0" }
+            if (-not $ver) { $ver = $headerVer }
             $tag = "v$ver"
           }
           $repo = "${{ github.repository }}"
@@ -49,8 +55,6 @@ jobs:
           "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_TAG=$tag"     | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          $verHeader = Join-Path $env:GITHUB_WORKSPACE "TesmioLoader\RepublicMP\core\version.h"
-          $content = Get-Content $verHeader -Raw
           $content = $content -replace '#define REPUBLICMP_VERSION "[^"]*"', "#define REPUBLICMP_VERSION `"$ver`""
           $content = $content -replace '#define REPUBLICMP_GITHUB_REPO "[^"]*"', "#define REPUBLICMP_GITHUB_REPO `"$repo`""
           Set-Content -Path $verHeader -Value $content -Encoding UTF8
