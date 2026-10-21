@@ -789,8 +789,10 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             m.cursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
-            if (!TwoStates_CheckDemolishAllowed(m.cursor[0], m.cursor[2], "снос инфраструктуры"))
+            if (!TwoStates_CheckDemolishAllowed(m.cursor[0], m.cursor[2], "снос инфраструктуры")) {
+                RoadSync_ClearCategoryPreview(category);
                 return true;
+            }
             m.hasRange = listed && ReadDemolishRange(manager, m.rangeA, m.rangeB) ? 1 : 0;
             // A removal drag over many segments: the message holds 8, so the
             // rest go in further commands (whole segments, independent).
@@ -814,6 +816,7 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
                 }
                 if (haveHover && !DemolishAlreadySent(m, 0, 0, 0, &s_hover.hover))
                     Commands_Submit(LS_CMD_NET_DEMOLISH, &s_hover, sizeof(s_hover));
+                RoadSync_ClearCategoryPreview(category);
                 return true;
             }
             if (m.hasRange) {
@@ -841,32 +844,41 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
                 NoteCommitSkip(category, "lockstep: the demolition piece cannot be read (count, range start, range end)", count,
                                *(int*)(manager + MGR_UPG_RANGE_START_OFFSET), *(int*)(manager + MGR_UPG_RANGE_END_OFFSET));
             }
+            RoadSync_ClearCategoryPreview(category);
             return true;
         }
         if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
             RoadSyncUpgradeMsg m = {};
             if (FillUpgrade(manager, category, m)) {
                 if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], "модернизация дороги/сети") ||
-                    !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], "модернизация дороги/сети"))
+                    !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], "модернизация дороги/сети")) {
+                    RoadSync_ClearCategoryPreview(category);
                     return true;
+                }
                 TerrainHook_LockstepFlush();
                 m.mode = BuildMode_Read();
                 Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
             }
+            RoadSync_ClearCategoryPreview(category);
             return true;
         }
         memset(&g_commandSegment, 0, sizeof(g_commandSegment));
         if (FillSegment(manager, category, g_commandSegment.seg)) {
             if (!TwoStates_CheckBuildAllowed(g_commandSegment.seg.startNode[0], g_commandSegment.seg.startNode[2], "строительство дороги/сети") ||
-                !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], "строительство дороги/сети"))
+                !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], "строительство дороги/сети")) {
+                RoadSync_ClearCategoryPreview(category);
                 return true;
+            }
             TerrainHook_LockstepFlush();
             g_commandSegment.mode = BuildMode_Read();
-            Commands_Submit(LS_CMD_SEGMENT, &g_commandSegment, sizeof(g_commandSegment));
+            size_t segBytes = ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(g_commandSegment.seg.pointCount);
+            Commands_Submit(LS_CMD_SEGMENT, &g_commandSegment, segBytes);
         }
+        RoadSync_ClearCategoryPreview(category);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         NoteCommitSkip(category, "lockstep: exception reading the commit - not made", -1, -1, -1);
+        RoadSync_ClearCategoryPreview(category);
         return true;
     }
 }

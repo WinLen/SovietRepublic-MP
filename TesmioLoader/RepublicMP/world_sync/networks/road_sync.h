@@ -377,6 +377,10 @@ bool RoadSync_IsApplyingSegment();
 // on a later frame would land at another point of the simulation. Main
 // thread. True when the engine made it.
 bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg);
+// Clears a category manager's finished drag/preview state right after a local
+// commit is intercepted as a lockstep command, so Late and subsequent frames
+// before the command echoes back do not read stale preview state.
+void RoadSync_ClearCategoryPreview(int category);
 // Ends a drag the local player has under way (every tool manager's preview
 // cleared, the drag flag down) before a command uses the tools.
 void RoadSync_CancelLocalDrag();

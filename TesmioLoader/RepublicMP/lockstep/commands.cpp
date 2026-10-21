@@ -197,7 +197,16 @@ static void Apply(const Command& c)
     ReplayUiScope menus;
     switch (c.kind) {
     case LS_CMD_SEGMENT:
-        if (n == sizeof(RoadSyncMsg)) ok = RoadSync_ApplyCommandSegment(*(const RoadSyncMsg*)p);
+        if (n >= ROAD_SYNC_MSG_HEADER_BYTES && n <= sizeof(RoadSyncMsg)) {
+            static RoadSyncMsg s_segMsg;
+            memset(&s_segMsg, 0, sizeof(s_segMsg));
+            memcpy(&s_segMsg, p, n);
+            if (RoadSync_PointCountValid(s_segMsg.seg.pointCount) &&
+                (n == sizeof(RoadSyncMsg) ||
+                 n == ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(s_segMsg.seg.pointCount))) {
+                ok = RoadSync_ApplyCommandSegment(s_segMsg);
+            }
+        }
         break;
     case LS_CMD_UPGRADE:
         if (n == sizeof(RoadSyncUpgradeMsg)) ok = RoadSync_ApplyCommandUpgrade(*(const RoadSyncUpgradeMsg*)p);

@@ -97,8 +97,12 @@ static bool Send(unsigned type, const void* a, size_t na, const void* b = nullpt
     if (!g_connected) return false;
     LsHeader h = { type, (unsigned)(na + nb) };
     EnterCriticalSection(&g_sendLock);
-    bool ok = NetworkSendExact(g_sock, &h, sizeof(h)) && (!na || NetworkSendExact(g_sock, a, na)) &&
-              (!nb || NetworkSendExact(g_sock, b, nb));
+    static std::vector<unsigned char> s_sendBuf;
+    s_sendBuf.resize(sizeof(h) + na + nb);
+    memcpy(s_sendBuf.data(), &h, sizeof(h));
+    if (na) memcpy(s_sendBuf.data() + sizeof(h), a, na);
+    if (nb) memcpy(s_sendBuf.data() + sizeof(h) + na, b, nb);
+    bool ok = NetworkSendExact(g_sock, s_sendBuf.data(), s_sendBuf.size());
     LeaveCriticalSection(&g_sendLock);
     if (!ok && g_connected) {
         g_connected = false;
@@ -377,8 +381,10 @@ bool LockstepNet_MayRun(unsigned long long tick)
     bool may = g_connected && g_playerCompleted + LOCKSTEP_WINDOW >= tick;
     if (!may && g_connected) {
         ULONGLONG now = GetTickCount64();
-        if (now - g_lastStallMs > 1000) InterlockedIncrement(&g_stalls); // one per second of waiting
-        g_lastStallMs = now;
+        if (now - g_lastStallMs > 1000) {
+            InterlockedIncrement(&g_stalls); // one per second of waiting
+            g_lastStallMs = now;
+        }
     }
     return may;
 }

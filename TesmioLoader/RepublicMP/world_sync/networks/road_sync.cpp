@@ -2116,6 +2116,27 @@ static void ClearCommandPreview(int category)
     }
 }
 
+void RoadSync_ClearCategoryPreview(int category)
+{
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(category);
+    if (!info) return;
+    __try {
+        __int64 thisPtr = GetWorldThisPtr();
+        __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
+        if (manager) {
+            *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
+            *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
+            *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
+            *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
+            *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
+            *(unsigned char*)(manager + MGR_VALID_OFFSET) = 0;
+            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    HoverGlobals_Clear();
+}
+
 void RoadSync_CancelLocalDrag()
 {
     __try {

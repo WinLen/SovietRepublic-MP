@@ -206,7 +206,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v1.0.0 - Add Two States border & ownership overlay on minimap, 20s map ping markers, and fix Host Co-op sidebar button click in Lockstep");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v1.0.0 - Fix client road building crash/desync in Lockstep (RoadSync_ClearCategoryPreview + compact LS_CMD_SEGMENT + 4FCAF0 ledger)");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;
