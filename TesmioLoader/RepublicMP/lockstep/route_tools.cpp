@@ -558,7 +558,7 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
     int mode = 0;
     __try {
         U64 sel = Q(world + SELECTED_OFFSET);
-        const char* name = sel ? *(const char**)sel : nullptr;
+        const char* name = sel ? (const char*)sel : nullptr;
         if (name) {
             if (strcmp(name, "worker_relocate_educated") == 0) mode = 1;
             else if (strcmp(name, "worker_relocate_inmate") == 0) mode = 2;
@@ -1158,21 +1158,43 @@ static const char* ApplyWorkerRelocate(const RouteMsg& m)
     U64 srcBld = Ref_BuildingAt(m.object), dstBld = Ref_BuildingAt(m.building);
     if (!srcBld || !dstBld) return "a building is gone";
     __try {
+        U64 cBeg = Q(dstBld + 0xBC0), cEnd = Q(dstBld + 0xBC8);
+        int currentIndependent = 0;
+        for (U64 p = cBeg; p && p < cEnd; p += 8) {
+            U64 cit = Q(p);
+            if (cit && Q(cit + 0xC8) == 0) currentIndependent++;
+        }
+        U64 slot0 = Q(dstBld + 0x970);
+        int freeCap = slot0 ? (int)(*(float*)(slot0 + 0x8C) - (float)currentIndependent) : 0;
+        int maxStep = (m.index == 1) ? 5 : 10;
+        int limit = freeCap < maxStep ? freeCap : maxStep;
         if (m.index == 2) {
-            typedef unsigned char (*RelocInmateFn)(U64 world, U64 src, U64 dst);
-            int loops = m.ctrl ? 20 : 1;
-            for (int i = 0; i < loops; i++)
-                if (!((RelocInmateFn)(g_exeBase + 0x83CA50))(world, srcBld, dstBld)) break;
-        } else {
-            typedef unsigned char (*RelocWorkerFn)(U64 world, U64 src, U64 dst, unsigned char onlyEducated);
-            if (m.index == 0 && !m.ctrl) {
-                ((RelocWorkerFn)(g_exeBase + 0x83C6A0))(world, srcBld, dstBld, 0);
-            } else {
-                int count = (int)((Q(srcBld + 0x7A8) - Q(srcBld + 0x7A0)) >> 3);
-                unsigned char edu = (m.index == 1 && !m.ctrl) ? 1 : 0;
-                for (int i = 0; i < count; i++)
-                    ((RelocWorkerFn)(g_exeBase + 0x83C6A0))(world, srcBld, dstBld, edu);
+            typedef void (*RelocInmateFn)(U64 world, U64 inmateCitizen, U64 dstBld);
+            U64 iBeg = Q(srcBld + 0xBD8), iEnd = Q(srcBld + 0xBE0);
+            int count = (iBeg && iEnd >= iBeg) ? (int)((iEnd - iBeg) >> 3) : 0;
+            if (count > 0) {
+                int idx = (int)(((unsigned)(*(int*)srcBld + *(int*)dstBld)) % (unsigned)count);
+                int moved = 0, attempts = 0;
+                while (moved < 5) {
+                    iBeg = Q(srcBld + 0xBD8);
+                    iEnd = Q(srcBld + 0xBE0);
+                    int curCount = (iBeg && iEnd >= iBeg) ? (int)((iEnd - iBeg) >> 3) : 0;
+                    if (curCount <= 0 || attempts >= curCount) break;
+                    if (idx >= curCount) idx = 0;
+                    U64 inmate = Q(iBeg + (U64)idx * 8);
+                    if (inmate) ((RelocInmateFn)(g_exeBase + 0x83CA50))(world, inmate, dstBld);
+                    moved++;
+                    attempts++;
+                    U64 newBeg = Q(srcBld + 0xBD8), newEnd = Q(srcBld + 0xBE0);
+                    int newCount = (newBeg && newEnd >= newBeg) ? (int)((newEnd - newBeg) >> 3) : 0;
+                    if (newCount >= curCount) idx = (idx + 1) % (newCount > 0 ? newCount : 1);
+                }
             }
+        } else if (limit > 0) {
+            typedef unsigned char (*RelocWorkerFn)(U64 world, U64 src, U64 dst, unsigned char testOnly, unsigned char onlyEducated);
+            unsigned char edu = (m.index == 1) ? 1 : 0;
+            for (int i = 0; i < limit; i++)
+                ((RelocWorkerFn)(g_exeBase + 0x83C6A0))(world, srcBld, dstBld, 0, edu);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";

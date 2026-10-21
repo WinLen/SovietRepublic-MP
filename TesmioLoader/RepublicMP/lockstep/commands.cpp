@@ -429,8 +429,9 @@ static void PutAwayUncarriedTool()
     __int64* tool = (__int64*)(g_exeBase + 0x9D4F10 + 0xD428);
     char name[64] = {};
     __try {
-        if (!*tool || !*(char**)tool) return;
-        const char* s = *(const char**)tool;
+        if (!*tool) return;
+        const char* s = (const char*)*tool;
+        if (!s[0]) return;
         for (int i = 0; i < 63 && s[i]; i++) name[i] = s[i];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return;

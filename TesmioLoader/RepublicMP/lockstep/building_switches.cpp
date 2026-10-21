@@ -42,9 +42,17 @@ struct WorldRange {
 static const WorldRange kWorldRanges[] = { { 0xAF8, 0x14 }, { 0xC798, 4 } };
 
 // Building words that are this PC's view (camera visibility and distance,
-// animation phase, ambience timer, piece index, the window's cost display):
+// animation phase, ambience timer, piece index, the window's cost display)
+// or std::vector headers / heap pointers inside BUILDING (from ~BUILDING at 164bb0):
 // never a setting.
-static const WorldRange kViewWords[] = { { 0x600, 8 }, { 0x63C, 4 }, { 0x1158, 8 }, { 0x1344, 4 }, { 0x137C, 4 } };
+static const WorldRange kViewWords[] = {
+    { 0x5B8, 0x18 },  { 0x600, 8 },     { 0x610, 0x150 }, { 0x848, 0x50 },
+    { 0x970, 0xE8 },  { 0xB78, 0x18 },  { 0xBC0, 0x78 },  { 0xC70, 0x68 },
+    { 0xD38, 0xA0 },  { 0xE60, 0x48 },  { 0xEE0, 0x30 },  { 0xF18, 0x108 },
+    { 0x1030, 0x18 }, { 0x1090, 0x18 }, { 0x10C8, 0x18 }, { 0x1140, 0x18 },
+    { 0x1158, 8 },    { 0x1168, 0x30 }, { 0x11D8, 0x18 }, { 0x1238, 0x30 },
+    { 0x1320, 0x18 }, { 0x1344, 4 },    { 0x137C, 4 },    { 0x1388, 0x18 },
+};
 
 #pragma pack(push, 1)
 struct SwitchWord {
@@ -180,7 +188,12 @@ static bool TakeSnapshot()
 static bool PointerLike(U64 v)
 {
     unsigned high = (unsigned)(v >> 32);
-    return high >= 0x100 && high <= 0x7FFF;
+    if (high >= 0x100 && high <= 0x7FFF) return true;
+    if (high >= 1 && high < 0x100 && (v & 3) == 0) {
+        U64 probe = 0;
+        if (Copy(&probe, (const void*)v, 8)) return true;
+    }
+    return false;
 }
 
 static bool InRanges(const WorldRange* list, size_t n, unsigned offset)
@@ -197,7 +210,8 @@ static bool LeftOut(const Range& r, unsigned offset)
         return SettingsSync_OwnsBuildingWord((const BYTE*)r.building, offset) ||
                InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
     if (r.kind == KIND_SLOT)
-        return SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
+        return (((offset % SLOT_STRIDE) / REGION_STRIDE == 0) && (offset % REGION_STRIDE) < 0x48) ||
+               SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
                                          offset % REGION_STRIDE);
     return false;
 }
@@ -351,6 +365,28 @@ static void WorldWords()
         for (unsigned at = w.at; at + 4 <= w.at + w.size && g_worldCount < WORLD_WORDS; at += 4) g_worldAt[g_worldCount++] = at;
 }
 
+static bool ReadWorldSetting(BYTE* world, unsigned at, unsigned& out)
+{
+    out = 0;
+    if (at == 0xB08) {
+        BYTE b = 0;
+        if (!Copy(&b, world + at, 1)) return false;
+        out = (unsigned)b;
+        return true;
+    }
+    return Copy(&out, world + at, 4);
+}
+
+static void WriteWorldSetting(BYTE* world, unsigned at, unsigned val)
+{
+    if (at == 0xB08) {
+        BYTE b = (BYTE)(val & 0xFF);
+        Copy(world + at, &b, 1);
+        return;
+    }
+    Copy(world + at, &val, 4);
+}
+
 static void WorldFrame(bool click)
 {
     WorldWords();
@@ -358,7 +394,7 @@ static void WorldFrame(bool click)
     if (!g_authReady) {
         // The session's start: both PCs loaded the same save.
         for (int i = 0; i < g_worldCount; i++) {
-            Copy(&g_auth[i], world + g_worldAt[i], 4);
+            ReadWorldSetting(world, g_worldAt[i], g_auth[i]);
             g_stale[i] = g_auth[i];
             g_sentValid[i] = false;
         }
@@ -371,7 +407,7 @@ static void WorldFrame(bool click)
     m.kind = KIND_WORLD;
     for (int i = 0; i < g_worldCount; i++) {
         unsigned cur = 0;
-        if (!Copy(&cur, world + g_worldAt[i], 4) || cur == g_auth[i]) continue;
+        if (!ReadWorldSetting(world, g_worldAt[i], cur) || cur == g_auth[i]) continue;
         if (click && cur != g_stale[i] && !(g_sentValid[i] && g_sent[i] == cur)) {
             m.words[m.count++] = { g_worldAt[i], g_auth[i], cur };
             g_sent[i] = cur;
@@ -380,7 +416,7 @@ static void WorldFrame(bool click)
             g_stale[i] = cur;
         }
         unsigned auth = g_auth[i];
-        Copy(world + g_worldAt[i], &auth, 4);
+        WriteWorldSetting(world, g_worldAt[i], auth);
     }
     if (m.count) Submit(m);
 }
@@ -440,16 +476,43 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     __try {
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
         if (m.kind != KIND_WORLD && !building) why = "the building is gone";
-        for (unsigned i = 0; i < m.count && !why; i++)
-            if (m.words[i].offset % 4 || !WordAddress(building, m, m.words[i].offset)) why = "a word is not there (another shape here)";
         for (unsigned i = 0; i < m.count && !why; i++) {
-            unsigned* p = (unsigned*)WordAddress(building, m, m.words[i].offset);
-            if (*p != m.words[i].old && *p != m.words[i].now) differing++;
-            *p = m.words[i].now;
+            unsigned off = m.words[i].offset;
+            if (off % 4 || !WordAddress(building, m, off)) {
+                why = "a word is not there (another shape here)";
+                break;
+            }
+            if (m.kind != KIND_WORLD) {
+                Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
+                if (LeftOut(checkR, off)) {
+                    why = "a word is in a view/vector range";
+                    break;
+                }
+                bool text = m.kind == KIND_BUILDING && off >= NAME_AT && off < NAME_END;
+                U64 pairAddr = WordAddress(building, m, off & ~7u);
+                if (!text && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
+                    PointerLike(*(const U64*)pairAddr)) {
+                    why = "a word overlaps a heap pointer here";
+                    break;
+                }
+            }
+        }
+        for (unsigned i = 0; i < m.count && !why; i++) {
+            unsigned off = m.words[i].offset;
+            if (m.kind == KIND_WORLD && off == 0xB08) {
+                BYTE* pb = (BYTE*)WordAddress(building, m, off);
+                unsigned curVal = *pb;
+                if (curVal != (m.words[i].old & 0xFF) && curVal != (m.words[i].now & 0xFF)) differing++;
+                *pb = (BYTE)(m.words[i].now & 0xFF);
+            } else {
+                unsigned* p = (unsigned*)WordAddress(building, m, off);
+                if (*p != m.words[i].old && *p != m.words[i].now) differing++;
+                *p = m.words[i].now;
+            }
             if (m.kind == KIND_WORLD) // the session's value from now on
                 for (int k = 0; k < g_worldCount; k++)
-                    if (g_worldAt[k] == m.words[i].offset) {
-                        g_auth[k] = m.words[i].now;
+                    if (g_worldAt[k] == off) {
+                        g_auth[k] = off == 0xB08 ? (m.words[i].now & 0xFF) : m.words[i].now;
                         g_sentValid[k] = false;
                     }
         }

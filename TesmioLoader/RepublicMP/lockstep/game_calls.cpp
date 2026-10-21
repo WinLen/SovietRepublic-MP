@@ -56,6 +56,8 @@ enum {
     CALL_DRAG,
     // The rename window's write (5290 = swprintf): a city's or a crossroad's name goes to rename.cpp.
     CALL_RENAME,
+    // Residential building window (6f8cc0): invite immigrants/experts buttons (6fee1e, 6ff31a, 6ff52d, 6ffa4e).
+    CALL_INVITE_CITIZENS,
 };
 
 // Appended only: a command names its site by index.
@@ -145,6 +147,10 @@ static const GameCallSite kSites[] = {
     { 0x7C8458, 0x497B10, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x12800, 0, false },
     { 0x7C846C, 0x3BB330, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
     { 0x8018D0, 0x5290, "rename window: write the name", "xxx", 0, 0, false, CALL_RENAME },
+    { 0x6FEE1E, 0x3FFAD0, "building window: invite Third World immigrants (USD)", "WxxB", 0, 0x1CE, false, CALL_INVITE_CITIZENS },
+    { 0x6FF31A, 0x3FFAD0, "building window: invite Soviet immigrants (tutorial)", "WxxB", 1, 0x187, false, CALL_INVITE_CITIZENS },
+    { 0x6FF52D, 0x3FFAD0, "building window: invite Soviet immigrants (RUB)", "WxxB", 2, 0x1A2, false, CALL_INVITE_CITIZENS },
+    { 0x6FFA4E, 0x3FFAD0, "building window: invite educated Soviet experts (RUB)", "WxxB", 3, 0x1FA, false, CALL_INVITE_CITIZENS },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -191,6 +197,86 @@ static U64 CallSite(const GameCallSite& s, const U64* a)
     if (Float4(s))
         return ((CallF4Fn)(g_exeBase + s.target))(a[0], a[1], a[2], AsFloat(a[3]), a[4], a[5], a[6]);
     return ((CallFn)(g_exeBase + s.target))(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+}
+
+static void InviteCitizensNow(U64 world, U64 building, unsigned mode)
+{
+    if (!world || !building) return;
+    typedef U64 (*ResourceByNameFn)(U64 world, const char* name);
+    typedef U64 (*SpawnCitizenFn)(U64 world, U64 bld, unsigned char one, float minAge, float maxAge, int eduLevel, unsigned char assignFlat);
+    ResourceByNameFn getRes = (ResourceByNameFn)(g_exeBase + 0x2AA830);
+    SpawnCitizenFn spawnCit = (SpawnCitizenFn)(g_exeBase + 0x837EB0);
+    const int* childTable = (const int*)(g_exeBase + 0x90AC10);
+
+    U64 cBeg = Q(building + 0xBC0), cEnd = Q(building + 0xBC8);
+    int currentIndependent = 0;
+    for (U64 p = cBeg; p && p < cEnd; p += 8) {
+        U64 cit = Q(p);
+        if (cit && Q(cit + 0xC8) == 0) currentIndependent++;
+    }
+    U64 slot0 = Q(building + 0x970);
+    if (!slot0) return;
+    int freeFlats = (int)(*(float*)(slot0 + 0x8C) - (float)currentIndependent);
+    int maxBatch = (mode == 3) ? 5 : 10;
+    int count = freeFlats < maxBatch ? freeFlats : maxBatch;
+    if (count <= 0) return;
+
+    int yearIdx = (*(int*)(world + 0x14D08) - 1900) * 12;
+    int monthIdx = yearIdx + *(int*)(world + 0x14D04);
+
+    if (mode == 0) {
+        U64 res = getRes(world, (const char*)(g_exeBase + 0x8DDFA8)); // "worker_usd"
+        float rate = *(const float*)(g_exeBase + 0x90A750);           // 0.2f
+        float mult = 1.0f + (float)(*(int*)(world + 0x570)) * rate;
+        double cost = res ? (double)(*(float*)(res + 0x58) * mult * 10.0f) : 0.0;
+        *(double*)(world + 0x580) -= cost;
+        if (yearIdx >= 0 && monthIdx >= 0) {
+            *(double*)(world + 0x127B0 + (U64)yearIdx * 8) += cost;
+            *(double*)(world + 0x10AE8 + (U64)monthIdx * 8) += cost;
+        }
+        for (int i = 0; i < count; i++) {
+            spawnCit(world, building, 1, 21.0f, 30.0f, 0, 1);
+            int children = childTable[(currentIndependent + i) & 3];
+            for (int c = 0; c < children; c++)
+                spawnCit(world, building, 1, 1.0f, 15.0f, 0, 0);
+        }
+        *(int*)(world + 0x570) += 1;
+    } else if (mode == 1 || mode == 2) {
+        U64 res = getRes(world, (const char*)(g_exeBase + 0x8DDFB8)); // "workerrub"
+        float rate = *(const float*)(g_exeBase + 0x90A754);           // 0.08f
+        float mult = 1.0f + (float)(*(int*)(world + 0x568)) * rate;
+        double cost = res ? (double)(*(float*)(res + 0x5C) * mult * 10.0f) : 0.0;
+        *(double*)(world + 0x588) -= cost;
+        if (mode == 2 && yearIdx >= 0 && monthIdx >= 0) {
+            *(double*)(world + 0x11FE0 + (U64)yearIdx * 8) += cost;
+            *(double*)(world + 0xFA18 + (U64)monthIdx * 8) += cost;
+        }
+        for (int i = 0; i < count; i++) {
+            spawnCit(world, building, 1, 21.0f, 30.0f, 1, 1);
+            int children = childTable[(currentIndependent + i) & 3];
+            for (int c = 0; c < children; c++)
+                spawnCit(world, building, 1, 1.0f, 15.0f, 1, 0);
+        }
+        *(int*)(world + 0x568) += 1;
+    } else if (mode == 3) {
+        U64 res = getRes(world, (const char*)(g_exeBase + 0x8DDFC8)); // "worker2rub"
+        float rate = *(const float*)(g_exeBase + 0x90A758);           // 0.04f
+        float mult = 1.0f + (float)(*(int*)(world + 0x56C)) * rate;
+        double cost = res ? (double)(*(float*)(res + 0x5C) * mult * 5.0f) : 0.0;
+        *(double*)(world + 0x588) -= cost;
+        if (*(BYTE*)(world + 0x57C) == 0 && yearIdx >= 0 && monthIdx >= 0) {
+            *(double*)(world + 0x11FE0 + (U64)yearIdx * 8) += cost;
+            *(double*)(world + 0xFA18 + (U64)monthIdx * 8) += cost;
+        }
+        for (int i = 0; i < count; i++) {
+            spawnCit(world, building, 1, 21.0f, 30.0f, 2, 1);
+            int children = childTable[(currentIndependent + i) & 3];
+            for (int c = 0; c < children; c++)
+                spawnCit(world, building, 1, 1.0f, 15.0f, 1, 0);
+        }
+        *(int*)(world + 0x56C) += 1;
+        if (*(BYTE*)(world + 0x57C) != 0) *(BYTE*)(world + 0x57D) = 1;
+    }
 }
 
 static bool ObjectRef(U64 object, unsigned char& kind, RouteRef& r)
@@ -278,6 +364,19 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
 static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
+    if (s.special == CALL_INVITE_CITIZENS) {
+        if (TwoStates_IsActive() && a[3]) {
+            const BYTE* b = (const BYTE*)a[3];
+            if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
+                                                       "приглашение жителей в чужое здание"))
+                return 0;
+        }
+        CallSite(s, a); // play click sound locally
+        if (!Commands_TakeUi()) {
+            InviteCitizensNow(a[0], a[3], s.worldPointer);
+            return 0;
+        }
+    }
     if (!Commands_TakeUi()) {
         // The junction window and the settings page are never opened by a command: in a
         // session their call not taken stays on this PC.
@@ -331,7 +430,7 @@ static U64 Run(unsigned index, const U64* a)
                         refusedByTwoStates = true;
                         break;
                     }
-                } else if (j <= 1 && m.kinds[j] == OBJ_BUILDING && args[j]) {
+                } else if ( m.kinds[j] == OBJ_BUILDING && args[j]) {
                     const BYTE* b = (const BYTE*)args[j];
                     if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
                                                                "управление чужим зданием")) {
@@ -398,23 +497,29 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     U64 dragged = 0;
     __try {
         why = Rebuild(m, a);
-        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG) why = "not a command site";
+        if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
+            s.special != CALL_INVITE_CITIZENS)
+            why = "not a command site";
         if (!why) {
-            if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
-            if (s.special == CALL_DRAG) {
-                drag = (U64*)(g_exeBase + DRAG_RVA);
-                dragged = *drag;
-                *drag = a[0];
-            }
-            r = CallSite(s, a);
-            if (drag) *drag = dragged;
-            if (s.special == CALL_DELETE_LINE) {
-                typedef void (*CleanupFn)(U64, U64);
-                ((CleanupFn)(g_exeBase + DELETE_CLEANUP))(Q((U64)World() + LINES_OFFSET), 1);
-            }
-            if (s.orDepot && !(r & 0xff) && a[1]) {
-                typedef void (*DepotFn)(U64, U64, U64, U64, U64, U64);
-                ((DepotFn)(g_exeBase + SEND_TO_DEPOT))((U64)World(), a[1], 0, 0, 1, 1);
+            if (s.special == CALL_INVITE_CITIZENS) {
+                InviteCitizensNow(a[0], a[3], s.worldPointer);
+            } else {
+                if (s.special == CALL_DELETE_LINE) *(BYTE*)(a[1] + 1) = 0;
+                if (s.special == CALL_DRAG) {
+                    drag = (U64*)(g_exeBase + DRAG_RVA);
+                    dragged = *drag;
+                    *drag = a[0];
+                }
+                r = CallSite(s, a);
+                if (drag) *drag = dragged;
+                if (s.special == CALL_DELETE_LINE) {
+                    typedef void (*CleanupFn)(U64, U64);
+                    ((CleanupFn)(g_exeBase + DELETE_CLEANUP))(Q((U64)World() + LINES_OFFSET), 1);
+                }
+                if (s.orDepot && !(r & 0xff) && a[1]) {
+                    typedef void (*DepotFn)(U64, U64, U64, U64, U64, U64);
+                    ((DepotFn)(g_exeBase + SEND_TO_DEPOT))((U64)World(), a[1], 0, 0, 1, 1);
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -435,15 +540,27 @@ bool GameCalls_Install()
         return false;
     }
     DWORD old;
-    VirtualProtect(relay, SITE_COUNT * 16, PAGE_EXECUTE_READWRITE, &old);
+    VirtualProtect(relay, SITE_COUNT * 32, PAGE_EXECUTE_READWRITE, &old);
     for (size_t i = 0; i < SITE_COUNT; i++) {
-        BYTE* r = relay + i * 16;
-        r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
+        BYTE* r = relay + i * 32;
         void* to = Float4(kSites[i]) ? thunksF4[i] : thunks[i];
-        memcpy(r + 6, &to, 8);
+        if (kSites[i].special == CALL_INVITE_CITIZENS) {
+            // mov r9, r12 (4D 89 E1)
+            // add qword ptr [rsp], skipImm32 (48 81 04 24 <imm32>)
+            // jmp qword ptr [rip+0] (FF 25 00 00 00 00 <abs64>)
+            r[0] = 0x4D; r[1] = 0x89; r[2] = 0xE1;
+            r[3] = 0x48; r[4] = 0x81; r[5] = 0x04; r[6] = 0x24;
+            unsigned skip = kSites[i].result;
+            memcpy(r + 7, &skip, 4);
+            r[11] = 0xFF; r[12] = 0x25; r[13] = r[14] = r[15] = r[16] = 0;
+            memcpy(r + 17, &to, 8);
+        } else {
+            r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
+            memcpy(r + 6, &to, 8);
+        }
     }
-    VirtualProtect(relay, SITE_COUNT * 16, PAGE_EXECUTE_READ, &old);
-    FlushInstructionCache(GetCurrentProcess(), relay, SITE_COUNT * 16);
+    VirtualProtect(relay, SITE_COUNT * 32, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, SITE_COUNT * 32);
     int on = 0;
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* at = g_exeBase + kSites[i].site;
@@ -453,7 +570,7 @@ bool GameCalls_Install()
             Logf("republicmp  GAME CALL: site 0x%X (%s) differs - left alone", kSites[i].site, kSites[i].name);
             continue;
         }
-        long long to = (long long)(relay + i * 16) - (long long)(at + 5);
+        long long to = (long long)(relay + i * 32) - (long long)(at + 5);
         if (to < INT_MIN || to > INT_MAX) continue;
         unsigned char call[5] = { 0xE8 };
         int rel32 = (int)to;

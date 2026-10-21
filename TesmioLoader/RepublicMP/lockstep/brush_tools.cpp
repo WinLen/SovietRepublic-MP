@@ -49,11 +49,11 @@ struct InputSite {
 static const InputSite kInputSites[3] = { { 0x3AA850, 0 }, { 0x3AAA58, 1 }, { 0x3AAAA9, 1 } };
 static const unsigned kInputSlots[2] = { 0x86C8B0, 0x86C8B8 };
 
-// 3a8a70's two construction ledger rows (call 2fdb00, 5 bytes): the stroke's
+// 3a8a70's and 2bade0's construction ledger rows (call 2fdb00, 5 bytes): the stroke's
 // cost in dollars (world +11330) and in rubles (+11360), written when it pays.
 #define LEDGER_RVA 0x2FDB00
 #define RESOURCE_BY_NAME_RVA 0x2AA830 // (world, name) -> resource definition
-static const unsigned kLedgerCalls[2] = { 0x3AABCD, 0x3AACE3 };
+static const unsigned kLedgerCalls[4] = { 0x3AABCD, 0x3AACE3, 0x2CB854, 0x2CB942 };
 
 #pragma pack(push, 1)
 struct BrushState {

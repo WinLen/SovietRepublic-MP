@@ -5,6 +5,7 @@
 #include "../session/game_speed.h"
 #include "buildings/build_sync.h"
 #include "networks/road_sync.h"
+#include "terrain/terrain_hook.h"
 #include "view_list_scope.h"
 #include "buildings/demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
@@ -848,6 +849,7 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
                 if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], "модернизация дороги/сети") ||
                     !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], "модернизация дороги/сети"))
                     return true;
+                TerrainHook_LockstepFlush();
                 m.mode = BuildMode_Read();
                 Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
             }
@@ -858,6 +860,7 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             if (!TwoStates_CheckBuildAllowed(g_commandSegment.seg.startNode[0], g_commandSegment.seg.startNode[2], "строительство дороги/сети") ||
                 !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], "строительство дороги/сети"))
                 return true;
+            TerrainHook_LockstepFlush();
             g_commandSegment.mode = BuildMode_Read();
             Commands_Submit(LS_CMD_SEGMENT, &g_commandSegment, sizeof(g_commandSegment));
         }
@@ -1097,6 +1100,18 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
     void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
     void** vecEndPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
     long long before = BuildingCount(*vecBeginPtr, *vecEndPtr);
+    __try {
+        bool lmbDown = *(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA);
+        if (lmbDown && TwoStates_IsActive()) {
+            float cx = *(float*)(param_1 + CURSOR_X_OFFSET);
+            float cz = *(float*)(param_1 + CURSOR_Z_OFFSET);
+            if (!TwoStates_CheckBuildAllowed(cx, cz, "строительство здания")) {
+                *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
+                *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     g_placeWorld = param_1;
     g_placeType = param_2;
     g_placeParam5 = param_5;
@@ -1137,6 +1152,7 @@ bool LocalBuilds_PlacementPress()
     }
     if (!TwoStates_CheckBuildAllowed(msg.x, msg.z, "строительство здания"))
         return true; // swallow click so building is not placed on foreign territory
+    TerrainHook_LockstepFlush();
     Commands_Submit(LS_CMD_PLACE, &msg, sizeof(msg));
     return true;
 }

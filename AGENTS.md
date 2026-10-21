@@ -85,6 +85,10 @@
 - [`determinism.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/determinism/determinism.cpp) — Фиксированный шаг симуляции, `HookedLoadWorld` (вызывает `TwoStates_BeforeAnyWorldLoad()` до `o_loadWorld()` и `TwoStates_OnAnyWorldLoaded(session)` после), `HookedSimStep`.
 - [`sim_patches.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/determinism/sim_patches.cpp) — Патчи детерминизма (`HookedLate` на `0x30D1A0`, перехват оконных вызовов и видимости зданий).
 - [`commands.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/lockstep/commands.cpp) — Очередь Lockstep-команд, обёрнутая в `TwoStates_BeginCommand` / `TwoStates_EndCommand`.
+- [`building_switches.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/lockstep/building_switches.cpp) — Синхронизация переключателей в окнах зданий и нижнем меню мира (`kWorldRanges` на `0xAF8..0xB0C`, где `world + 0xB08` читается/пишется как 1 байт без захвата буфера `FormatMoney` на `world + 0xB0A`); исключает все заголовки `std::vector` внутри `BUILDING` (`kViewWords`, по данным `BUILDING::~BUILDING()` на `0x164BB0`) и `SLOT` (`0x00..0x48`), а также распознаёт heap-указатели в диапазоне `4 GB .. 1 TB` (`high >= 1 && high < 0x100`).
+- [`game_calls.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/lockstep/game_calls.cpp) — Перехват оконных вызовов (`LS_CMD_GAME_CALL` через 32-байтные трамплины), включая 4 кнопки приглашения жителей/специалистов в жилые дома в `0x6F8CC0` (`CALL_INVITE_CITIZENS` на `0x6FEE1E`, `0x6FF31A`, `0x6FF52D`, `0x6FFA4E` -> `0x3FFAD0`, с детерминированным спавном через `InviteCitizensNow` и `0x837EB0`).
+- [`route_tools.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/lockstep/route_tools.cpp) — Синхронизация маршрутных инструментов и переселения граждан (`RouteTools_WorkerRelocateTool` на `0x2B8CE0` и `ApplyWorkerRelocate` через 5-аргументный `0x83C6A0` и `0x83CA50`).
+- [`brush_tools.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/lockstep/brush_tools.cpp) и [`local_builds.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/world_sync/local_builds.cpp) — Синхронизация кистей рельефа, выравнивания земли под превью здания в `2BADE0` (перехват записи в строительную книгу `0x2FDB00` на `0x3AABCD`, `0x3AACE3`, `0x2CB854`, `0x2CB942` через `LS_CMD_LEDGER`) и сброс `TerrainHook_LockstepFlush()` перед постановкой здания/дороги (`LS_CMD_PLACE`, `LS_CMD_SEGMENT`, `LS_CMD_UPGRADE`).
 
 ---
 
@@ -115,6 +119,12 @@
 | `RVA_VEHICLE_SALE` | `0x3E0730` | Продажа техники / доставка за границу |
 | `WORKSHOP_MGR_PTR_RVA` | `0x9E22B8` | Указатель `SOVIET_WORKSHOP_MANAGER*` (`WORLD_RVA + 0xD3A8`; `0x9E7750` — это `std::vector<VEHICLE_TYPE>`, не трогать!) |
 | `RVA_WORKSHOP_REFRESH` | `0x8407C0` | `SOVIET_WORKSHOP_MANAGER::RefreshItems` (`Hook_WorkshopRefresh`, 16 байт пролога) |
+| `RVA_WORKER_RELOCATE_TOOL` | `0x2B8CE0` | Инструмент переселения жителей/заключённых (`RouteTools_WorkerRelocateTool`) |
+| `RVA_RELOCATE_CITIZEN` | `0x83C6A0` | Переселение жителя `(world, srcBld, dstBld, testOnly, onlyEducated)` (5 аргументов!) |
+| `RVA_RELOCATE_INMATE` | `0x83CA50` | Переселение заключённого `(world, inmateCitizenPtr, dstBld)` |
+| `RVA_SPAWN_CITIZEN` | `0x837EB0` | Спавн жителя в здании `(world, bld, 1, minAge, maxAge, eduLevel, assignFlat)` |
+| `RVA_INVITE_CITIZENS_SITES` | `0x6FEE1E`, `0x6FF31A`, `0x6FF52D`, `0x6FFA4E` | Кнопки приглашения иммигрантов/специалистов в жилом доме (`0x6F8CC0` -> `0x3FFAD0`) |
+| `LEDGER_RVA` | `0x2FDB00` | Запись расхода в строительную книгу (`world + 0x11330` USD / `+0x11360` RUB; сайты `0x3AABCD`, `0x3AACE3`, `0x2CB854`, `0x2CB942`) |
 
 ---
 
@@ -144,3 +154,7 @@
    - В `SOVIET64.exe` внутри `Late` (`0x30DAA2..0x30DAB9`) при `*(int*)(world + 0x578) != 0` движок на каждом кадре принудительно перезаписывает `world + 0x580` и `world + 0x588` значением `100,000,000.0` (`0x4197D78400000000`). Поэтому при `IsUnlimitedMoney()` нельзя делить капитал 50/50 или складывать `g_stateRub[0] + g_stateRub[1] = 200,000,000.0`, а `TakeMoney` не должен генерировать `LS_CMD_MONEY`.
 11. **Сигнатура `C3D_SOUNDMANAGER::PlaySound2D` (`IMPORT_PLAY_SOUND_RVA = 0x86D2A8`):**
    - `GetValueString` (`0x86CD18`) возвращает `const char* sndPath` (а не указатель на звук). В `PlaySound2D` (`?PlaySound2D@C3D_SOUNDMANAGER@@QEAA_NPEAD_NM0@Z`) первым аргументом (`rcx`) передаётся `*(void**)(g_exeBase + 0x9E4C18)` (`SOUND_ENGINE_PTR_RVA`), вторым (`rdx`) — `sndPath`, третьим (`r8b`) — `true`, четвёртым (`xmm3`) — `1.0f`, пятым (`[rsp+0x20]`) — `nullptr`.
+12. **Структура выбранного инструмента `world + 0xD428` и векторы `BUILDING` в `building_switches.cpp`:**
+   - По адресу `*(void**)(world + 0xD428)` хранится указатель на запись меню (`0x2D0` байт), где по смещению `+0x00` лежит встроенный массив `char name[]` (`(const char*)sel`), а **не** `const char*` указатель. Разыменование `*(const char**)sel` приводит к чтению ASCII-символов как адреса и SEH-исключению.
+   - В `BUILDING` (`0x1420` байт) все заголовки `std::vector` (например, `building + 0xBC0..0xBD7` — вектор жильцов `std::vector<Citizen*>`, `+0xBD8..0xBEF` — вектор заключённых) обязаны быть исключены в `kViewWords` в `building_switches.cpp`, а `PointerLike(U64)` обязан учитывать низкие сегменты кучи Windows x64 (`high >= 1 && high < 0x100`), иначе изменение размера вектора жильцов на одном ПК отправит младшие 32 бита указателя `_Mylast` как `LS_CMD_BUILDING_SWITCH` и повредит указатель кучи на другом ПК (`ACCESS_VIOLATION` на `0x6FE57C`).
+   - Смещение `world + 0xB08` в `building_switches.cpp` — это 1-байтовая настройка; начиная с `world + 0xB0A` функция `FormatMoney` (`0x336420`) пишет форматированную строку стоимости во время превью строительства дорог и зданий.
