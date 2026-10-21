@@ -20,7 +20,7 @@
 // Engine RVAs & Offsets (SOVIET64.exe, PE 6A3EB6AD)
 // ---------------------------------------------------------------------------
 
-#define WORKSHOP_MGR_RVA       0x9E7750 // SOVIET_WORKSHOP_MANAGER global instance (vector<ITEM*> at +0x00)
+#define WORKSHOP_MGR_PTR_RVA   0x9E22B8 // Pointer to heap-allocated SOVIET_WORKSHOP_MANAGER (WORLD_RVA + 0xD3A8)
 #define RVA_WORKSHOP_REFRESH   0x8407C0 // SOVIET_WORKSHOP_MANAGER::RefreshItems(this, a2, skipWip, a4)
 
 // Offsets inside SOVIET_WORKSHOP_ITEM (0x21118 bytes):
@@ -210,6 +210,26 @@ static void CleanupTempSessionMods()
 // ---------------------------------------------------------------------------
 // POD SEH Helpers for SOVIET_WORKSHOP_MANAGER (No C++ destructors in __try!)
 // ---------------------------------------------------------------------------
+
+static bool IsRepublicMpSelfId(uint64_t id)
+{
+    return id == 3823543010ULL || id == 3822972914ULL;
+}
+
+static void* SafeGetEngineWorkshopMgr()
+{
+    void* ptr = nullptr;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (g_exeBase) {
+            ptr = *(void**)(g_exeBase + WORKSHOP_MGR_PTR_RVA);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ptr = nullptr;
+    }
+    DiagLog_EndSafeSeh();
+    return ptr;
+}
 
 static int SafeGetWorkshopMgrCount(void* mgrPtr)
 {
@@ -415,6 +435,23 @@ static void ReadWorkshopConfigBasic(const char* configPath, char* titleOut, size
     fclose(f);
 }
 
+static bool IsValidWorkshopModId(uint64_t id)
+{
+    if (id == 0 || IsRepublicMpSelfId(id)) return false;
+    // Steam Workshop PublishedFileIDs for AppID 784150 are 9-11 digits (100,000,000 .. 99,999,999,999)
+    if (id >= 100000000ULL && id <= 99999999999ULL) return true;
+    // Or a local workshop_wip folder exists on disk for smaller custom IDs
+    char rootDir[MAX_PATH] = {};
+    if (GetExeRootDir(rootDir, sizeof(rootDir))) {
+        char wipCfg[MAX_PATH];
+        _snprintf_s(wipCfg, sizeof(wipCfg), _TRUNCATE,
+                    "%s\\media_soviet\\workshop_wip\\%llu\\workshopconfig.ini",
+                    rootDir, (unsigned long long)id);
+        if (GetFileAttributesA(wipCfg) != INVALID_FILE_ATTRIBUTES) return true;
+    }
+    return false;
+}
+
 static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t>& outIds)
 {
     FILE* f = nullptr;
@@ -423,42 +460,48 @@ static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t
     fseek(f, 0, SEEK_END);
     long fileSize = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (fileSize < 0x20C) {
+    // header.bin / headerE.bin have a 0x260-byte header followed by 0x80-byte records.
+    if (fileSize < 0x260 + 0x80) {
         fclose(f);
         return;
     }
 
     auto pushUnique = [&](uint64_t id) {
-        if (id == 0) return;
+        if (!IsValidWorkshopModId(id)) return;
         if (std::find(outIds.begin(), outIds.end(), id) == outIds.end())
             outIds.push_back(id);
     };
 
-    fseek(f, 0x208, SEEK_SET);
-    int bldCount = 0;
-    if (fread(&bldCount, 4, 1, f) != 1 || bldCount < 0 || bldCount > 100000) {
-        fclose(f);
-        return;
-    }
+    fseek(f, 0x260, SEEK_SET);
+    long numRecords = (fileSize - 0x260) / 0x80;
+    if (numRecords > 100000) numRecords = 100000;
 
-    char rec[0x104];
-    for (int i = 0; i < bldCount; ++i) {
-        if (fread(rec, 1, 0x104, f) != 0x104) {
-            fclose(f);
-            return;
+    char rec[0x80];
+    for (long i = 0; i < numRecords; ++i) {
+        if (fread(rec, 1, 0x80, f) != 0x80) break;
+        char nameBuf[104] = {};
+        memcpy(nameBuf, rec, 100);
+        nameBuf[100] = '\0';
+
+        const char* p = nameBuf;
+        if (_strnicmp(p, "MIRRORZ_", 8) == 0) {
+            p += 8;
         }
-        rec[0xFF] = '\0';
-        uint64_t wsId = *(uint64_t*)(rec + 0xFC);
-        if (wsId != 0) pushUnique(wsId);
-    }
-
-    int vehCount = 0;
-    if (fread(&vehCount, 4, 1, f) == 1 && vehCount > 0 && vehCount <= 100000) {
-        for (int i = 0; i < vehCount; ++i) {
-            if (fread(rec, 1, 0x104, f) != 0x104) break;
-            rec[0xFF] = '\0';
-            uint64_t wsId = *(uint64_t*)(rec + 0xFC);
-            if (wsId != 0) pushUnique(wsId);
+        // Workshop items in header.bin are formatted as "<WorkshopID>/<item_name>"
+        const char* slash = strchr(p, '/');
+        if (!slash) slash = strchr(p, '\\');
+        if (slash && slash > p && (slash - p) <= 20) {
+            bool allDigits = true;
+            for (const char* c = p; c < slash; ++c) {
+                if (*c < '0' || *c > '9') {
+                    allDigits = false;
+                    break;
+                }
+            }
+            if (allDigits) {
+                uint64_t wsId = _strtoui64(p, nullptr, 10);
+                pushUnique(wsId);
+            }
         }
     }
 
@@ -508,6 +551,8 @@ static void CatalogFromEngineManager(void* mgrPtr)
         int itemType = 1;
         char title[128] = {};
         if (!SafeReadWorkshopMgrItem(mgrPtr, i, &id, &isWip, &itemType, title, sizeof(title)))
+            continue;
+        if (!IsValidWorkshopModId(id))
             continue;
 
         // Skip temporary session mods downloaded into workshop_wip
@@ -610,8 +655,7 @@ void ModSync_RefreshCatalog()
 
     // 2. Refresh Workshop & WIP catalog
     g_mods.clear();
-    if (g_exeBase) {
-        void* mgrPtr = g_exeBase + WORKSHOP_MGR_RVA;
+    if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
         SafeRestoreWorkshopMgr(mgrPtr, &g_hiddenTailCount);
         CatalogFromEngineManager(mgrPtr);
         if (g_sessionFilterActive) {
@@ -631,6 +675,7 @@ void ModSync_RefreshCatalog()
             uint32_t got = pUGC_GetSubscribedItems(s_pSteamUGC, ids.data(), numSub);
             for (uint32_t i = 0; i < got; ++i) {
                 uint64_t id = ids[i];
+                if (!IsValidWorkshopModId(id)) continue;
                 bool found = false;
                 for (const auto& m : g_mods) {
                     if (m.id == id) { found = true; break; }
@@ -641,14 +686,15 @@ void ModSync_RefreshCatalog()
                 uint32_t ts = 0;
                 char folder[MAX_PATH] = {};
                 if (pUGC_GetItemInstallInfo(s_pSteamUGC, id, &sz, folder, sizeof(folder), &ts) && folder[0]) {
+                    char cfgPath[MAX_PATH];
+                    _snprintf_s(cfgPath, sizeof(cfgPath), _TRUNCATE, "%s\\workshopconfig.ini", folder);
+                    if (GetFileAttributesA(cfgPath) == INVALID_FILE_ATTRIBUTES) continue;
                     LocalModEntry e = {};
                     e.id = id;
                     e.isWip = false;
                     e.itemType = 1;
                     _snprintf_s(e.title, sizeof(e.title), _TRUNCATE, "Workshop #%llu", (unsigned long long)id);
                     strncpy_s(e.folderPath, sizeof(e.folderPath), folder, _TRUNCATE);
-                    char cfgPath[MAX_PATH];
-                    _snprintf_s(cfgPath, sizeof(cfgPath), _TRUNCATE, "%s\\workshopconfig.ini", folder);
                     ReadWorkshopConfigBasic(cfgPath, e.title, sizeof(e.title), &e.itemType);
                     g_mods.push_back(e);
                 }
@@ -913,8 +959,10 @@ static bool DownloadMissingSteamMods(SOCKET sockOrInvalid, const std::vector<Wir
 
     for (size_t i = 0; i < needSteamDownload.size(); ++i) {
         const auto& wm = needSteamDownload[i];
+        if (!IsValidWorkshopModId(wm.id)) continue;
+
         if (pUGC_SubscribeItem) pUGC_SubscribeItem(s_pSteamUGC, wm.id);
-        if (pUGC_DownloadItem)  pUGC_DownloadItem(s_pSteamUGC, wm.id, true);
+        bool dlStarted = pUGC_DownloadItem ? pUGC_DownloadItem(s_pSteamUGC, wm.id, true) : false;
 
         if (sockOrInvalid != INVALID_SOCKET) {
             char stepText[160];
@@ -925,8 +973,9 @@ static bool DownloadMissingSteamMods(SOCKET sockOrInvalid, const std::vector<Wir
         }
 
         ULONGLONG startWait = GetTickCount64();
+        ULONGLONG maxWaitMs = (sockOrInvalid == INVALID_SOCKET) ? 8000ULL : 30000ULL;
         bool installed = false;
-        while (GetTickCount64() - startWait < 30000) {
+        while (GetTickCount64() - startWait < maxWaitMs) {
             if (sockOrInvalid != INVALID_SOCKET && NetworkPeerGone(sockOrInvalid)) {
                 if (errOut && errSize > 0) {
                     _snprintf_s(errOut, errSize, _TRUNCATE, "connection closed while downloading Workshop mods");
@@ -940,6 +989,15 @@ static bool DownloadMissingSteamMods(SOCKET sockOrInvalid, const std::vector<Wir
                 if (ioAnyNewOnDisk) *ioAnyNewOnDisk = true;
                 break;
             }
+            if (pUGC_GetItemState) {
+                uint32_t st = pUGC_GetItemState(s_pSteamUGC, wm.id);
+                ULONGLONG elapsed = GetTickCount64() - startWait;
+                if (elapsed >= 2000ULL &&
+                    !(st & (k_EItemStateDownloading | k_EItemStateDownloadPending | k_EItemStateInstalled)) &&
+                    (!dlStarted || !(st & k_EItemStateNeedsUpdate))) {
+                    break; // Item is removed/unavailable on Steam Workshop; do not hang waiting
+                }
+            }
             if (sockOrInvalid != INVALID_SOCKET && pUGC_GetItemDownloadInfo) {
                 uint64_t done = 0, total = 0;
                 if (pUGC_GetItemDownloadInfo(s_pSteamUGC, wm.id, &done, &total) && total > 0) {
@@ -947,7 +1005,14 @@ static bool DownloadMissingSteamMods(SOCKET sockOrInvalid, const std::vector<Wir
                     SyncBlock_SetPercent(pct);
                 }
             }
-            Sleep(200);
+            if (sockOrInvalid == INVALID_SOCKET) {
+                MSG msg;
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            Sleep(100);
         }
 
         if (!installed) {
@@ -1111,17 +1176,18 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
             }
         }
 
-        if (g_needMainThreadWorkshopRefresh && g_exeBase && o_workshopRefresh) {
+        void* mgrPtr = SafeGetEngineWorkshopMgr();
+        if (g_needMainThreadWorkshopRefresh && mgrPtr && o_workshopRefresh) {
             DiagLog_Printf("MOD_SYNC", "[HOST] Refreshing SOVIET_WORKSHOP_MANAGER after downloading save mods");
-            Hook_WorkshopRefresh(g_exeBase + WORKSHOP_MGR_RVA, false, false, false);
+            Hook_WorkshopRefresh(mgrPtr, false, false, false);
             ModSync_RefreshCatalog();
+            mgrPtr = SafeGetEngineWorkshopMgr();
         }
 
         LockMods();
         BuildHostActiveModListLocked(saveIds, g_sessionAllowedIds);
         g_sessionFilterActive = true;
-        if (g_exeBase) {
-            void* mgrPtr = g_exeBase + WORKSHOP_MGR_RVA;
+        if (mgrPtr) {
             int before = SafeGetWorkshopMgrCount(mgrPtr) + g_hiddenTailCount;
             int kept = SafeFilterAndSortWorkshopMgr(
                 mgrPtr,
@@ -1135,13 +1201,14 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
         return;
     }
 
-    if (g_needMainThreadWorkshopRefresh && g_exeBase && o_workshopRefresh) {
+    void* mgrPtr = SafeGetEngineWorkshopMgr();
+    if (g_needMainThreadWorkshopRefresh && mgrPtr && o_workshopRefresh) {
         DiagLog_Printf("MOD_SYNC", "Running scheduled main-thread SOVIET_WORKSHOP_MANAGER::RefreshItems before world load");
-        Hook_WorkshopRefresh(g_exeBase + WORKSHOP_MGR_RVA, false, false, false);
-    } else if (g_sessionFilterActive && g_exeBase) {
+        Hook_WorkshopRefresh(mgrPtr, false, false, false);
+    } else if (g_sessionFilterActive && mgrPtr) {
         LockMods();
         SafeFilterAndSortWorkshopMgr(
-            g_exeBase + WORKSHOP_MGR_RVA,
+            mgrPtr,
             g_sessionAllowedIds.empty() ? nullptr : g_sessionAllowedIds.data(),
             (int)g_sessionAllowedIds.size(),
             &g_hiddenTailCount);
@@ -1322,8 +1389,7 @@ bool ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_
     std::sort(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end());
     g_sessionFilterActive = true;
 
-    if (g_exeBase) {
-        void* mgrPtr = g_exeBase + WORKSHOP_MGR_RVA;
+    if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
         int kept = SafeFilterAndSortWorkshopMgr(
             mgrPtr,
             g_sessionAllowedIds.empty() ? nullptr : g_sessionAllowedIds.data(),
@@ -1480,8 +1546,7 @@ bool ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize)
     std::sort(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end());
     g_sessionFilterActive = true;
 
-    if (g_exeBase) {
-        void* mgrPtr = g_exeBase + WORKSHOP_MGR_RVA;
+    if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
         int kept = SafeFilterAndSortWorkshopMgr(
             mgrPtr,
             g_sessionAllowedIds.empty() ? nullptr : g_sessionAllowedIds.data(),
@@ -1509,8 +1574,8 @@ void ModSync_EndSession()
         g_sessionFilterActive = false;
         g_sessionAllowedIds.clear();
         g_sessionSandboxForwards.clear();
-        if (g_exeBase) {
-            SafeRestoreWorkshopMgr(g_exeBase + WORKSHOP_MGR_RVA, &g_hiddenTailCount);
+        if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
+            SafeRestoreWorkshopMgr(mgrPtr, &g_hiddenTailCount);
         }
         if (hadSandboxMods) {
             g_needMainThreadWorkshopRefresh = true;

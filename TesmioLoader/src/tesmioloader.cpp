@@ -2257,6 +2257,15 @@ static void ResolveVfsRoot()
 
 static void Init()
 {
+    char hostExePath[MAX_PATH] = {};
+    if (GetModuleFileNameA(NULL, hostExePath, MAX_PATH)) {
+        const char* exeName = strrchr(hostExePath, '\\');
+        exeName = exeName ? (exeName + 1) : hostExePath;
+        if (_stricmp(exeName, "SOVIET64.exe") != 0) {
+            return;
+        }
+    }
+
     InitializeCriticalSection(&g_lock);
 
     GetModuleFileNameA(g_self, g_baseDir, MAX_PATH);

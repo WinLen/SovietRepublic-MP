@@ -685,7 +685,7 @@ static void LogDiffRange(char* line, size_t lineSize, const unsigned char* was, 
     for (int i = 0; i < shown; i++) n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "%02X", was[off + i]);
     n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "->");
     for (int i = 0; i < shown; i++) n += _snprintf_s(part + n, sizeof(part) - n, _TRUNCATE, "%02X", now[off + i]);
-    strcat_s(line, lineSize, part);
+    strncat_s(line, lineSize, part, _TRUNCATE);
 }
 
 static void FieldDiffScan(bool byPlayer)

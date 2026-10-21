@@ -30,6 +30,15 @@ static bool FileExistsA(const char* path)
     return (attr != INVALID_FILE_ATTRIBUTES) && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static bool IsSoviet64Process()
+{
+    char exePath[MAX_PATH] = {};
+    if (!GetModuleFileNameA(nullptr, exePath, MAX_PATH)) return false;
+    const char* base = strrchr(exePath, '\\');
+    base = base ? (base + 1) : exePath;
+    return _stricmp(base, "SOVIET64.exe") == 0;
+}
+
 static void BootLogf(const char* gameDir, bool rotate, const char* fmt, ...)
 {
     char logPath[MAX_PATH] = {};
@@ -85,6 +94,9 @@ static void EnsureLoaderIni(const char* buildDir, const char* exePath)
 
 static void EnsureTesmioLoaderLoaded()
 {
+    if (!IsSoviet64Process())
+        return;
+
     if (InterlockedCompareExchange(&g_loaderInitialized, 1, 0) != 0)
         return;
 
@@ -238,8 +250,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID)
 {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-        PatchIatCreateDXGI(GetModuleHandleA(nullptr));
-        PatchIatCreateDXGI(GetModuleHandleA("C3DDLL64.dll"));
+        if (IsSoviet64Process()) {
+            PatchIatCreateDXGI(GetModuleHandleA(nullptr));
+            PatchIatCreateDXGI(GetModuleHandleA("C3DDLL64.dll"));
+        }
     }
     return TRUE;
 }

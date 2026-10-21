@@ -91,9 +91,9 @@ typedef void (__fastcall* FnDrawBox)(void* guiObj, const int* rect, float s0, fl
 typedef void (__fastcall* FnPanelDraw)(void* guiObj, float u0, float v0, float u1, float v1, float rot, bool flag);
 typedef float* (__fastcall* FnGetMousePos)(void* inputObj, float* outPt);
 typedef float (__fastcall* FnGetGuiYOff)(void* guiObj);
-typedef bool (__fastcall* FnHasSound)(void* soundMgr, const char* name);
-typedef void* (__fastcall* FnGetSound)(void* soundMgr, const char* name);
-typedef void (__fastcall* FnPlaySound)(void* soundObj, bool loop, float vol);
+typedef bool (__fastcall* FnHasSound)(void* soundCfg, const char* name);
+typedef const char* (__fastcall* FnGetSound)(void* soundCfg, const char* name);
+typedef bool (__fastcall* FnPlaySound2D)(void* soundEngine, const char* soundPath, bool flag, float vol, const char* tag);
 
 static MainMenuBuildFn g_origMainMenuBuild = nullptr;
 static SystemTabBuildFn g_origSystemTabBuild = nullptr;
@@ -670,7 +670,7 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
 
 static void ResetSidebarIcons();
 
-static void __fastcall Hook_MainMenuBuild(BYTE* menuObj)
+static void Hook_MainMenuBuildInner(BYTE* menuObj)
 {
     __try {
         ResetSidebarIcons();
@@ -781,6 +781,13 @@ static void __fastcall Hook_MainMenuBuild(BYTE* menuObj)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         if (g_origMainMenuBuild) g_origMainMenuBuild(menuObj);
     }
+}
+
+static void __fastcall Hook_MainMenuBuild(BYTE* menuObj)
+{
+    DiagLog_BeginSafeSeh();
+    Hook_MainMenuBuildInner(menuObj);
+    DiagLog_EndSafeSeh();
 }
 
 // ---------------------------------------------------------------------------
@@ -931,11 +938,14 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
             uintptr_t hasSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_HAS_SOUND_RVA);
             uintptr_t getSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_GET_SOUND_RVA);
             uintptr_t playSndAddr = *(uintptr_t*)(g_exeBase + IMPORT_PLAY_SOUND_RVA);
-            void* soundMgr = (void*)(g_exeBase + SOUND_MGR_RVA);
+            void* soundEngine = *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA);
+            void* soundCfg = (void*)(g_exeBase + SOUND_MGR_RVA);
             const char* clickName = (const char*)(g_exeBase + SND_CLICK_NAME_RVA);
-            if (hasSndAddr && getSndAddr && playSndAddr && ((FnHasSound)hasSndAddr)(soundMgr, clickName)) {
-                void* snd = ((FnGetSound)getSndAddr)(soundMgr, clickName);
-                if (snd) ((FnPlaySound)playSndAddr)(snd, false, 1.0f);
+            if (soundEngine && hasSndAddr && getSndAddr && playSndAddr && ((FnHasSound)hasSndAddr)(soundCfg, clickName)) {
+                const char* sndPath = ((FnGetSound)getSndAddr)(soundCfg, clickName);
+                if (sndPath && sndPath[0]) {
+                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, true, 1.0f, nullptr);
+                }
             }
         }
     }
@@ -990,7 +1000,7 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
     return clicked;
 }
 
-static void __fastcall Hook_SystemTabBuild(BYTE* menuObj)
+static void Hook_SystemTabBuildInner(BYTE* menuObj)
 {
     __try {
         int curSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
@@ -1305,6 +1315,13 @@ static void __fastcall Hook_SystemTabBuild(BYTE* menuObj)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         if (g_origSystemTabBuild) g_origSystemTabBuild(menuObj);
     }
+}
+
+static void __fastcall Hook_SystemTabBuild(BYTE* menuObj)
+{
+    DiagLog_BeginSafeSeh();
+    Hook_SystemTabBuildInner(menuObj);
+    DiagLog_EndSafeSeh();
 }
 
 bool NativeMenu_Install(void)

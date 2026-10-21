@@ -16,16 +16,14 @@ void Network_Bind(const TsmHost* host)
 
 bool NetworkInit()
 {
-    SteamP2P_Init();
     WSADATA wsaData;
     int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (result != 0) {
         Logf("republicmp  NETWORK: WSAStartup failed, code=%d", result);
-        return SteamP2P_IsAvailable();
+        return false;
     }
-    Logf("republicmp  NETWORK: WinSock initialized (%d.%d), SteamP2P=%s",
-         LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion),
-         SteamP2P_IsAvailable() ? "ready" : "off");
+    Logf("republicmp  NETWORK: WinSock initialized (%d.%d), SteamP2P=lazy-init",
+         LOBYTE(wsaData.wVersion), HIBYTE(wsaData.wVersion));
     return true;
 }
 

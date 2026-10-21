@@ -19,7 +19,6 @@ void SteamP2P_Bind(const TsmHost* host)
 // ---------------------------------------------------------------------------
 
 typedef int32_t HSteamUser;
-typedef bool (*Fn_SteamAPI_Init)();
 typedef bool (*Fn_SteamAPI_IsSteamRunning)();
 typedef void (*Fn_SteamAPI_RunCallbacks)();
 typedef HSteamUser (*Fn_SteamAPI_GetHSteamUser)();
@@ -88,7 +87,6 @@ static HMODULE s_hSteamDll = nullptr;
 static bool s_initAttempted = false;
 static bool s_available = false;
 
-static Fn_SteamAPI_Init pSteamAPI_Init = nullptr;
 static Fn_SteamAPI_IsSteamRunning pSteamAPI_IsSteamRunning = nullptr;
 static Fn_SteamAPI_RunCallbacks pSteamAPI_RunCallbacks = nullptr;
 static Fn_SteamAPI_GetHSteamUser pSteamAPI_GetHSteamUser = nullptr;
@@ -255,7 +253,6 @@ bool SteamP2P_Init()
     var = (type)GetProcAddress(s_hSteamDll, name); \
     if (!var) { Logf("republicmp  STEAM_P2P: missing export %s", name); return false; }
 
-    RESOLVE_FN(pSteamAPI_Init, Fn_SteamAPI_Init, "SteamAPI_Init");
     RESOLVE_FN(pSteamAPI_IsSteamRunning, Fn_SteamAPI_IsSteamRunning, "SteamAPI_IsSteamRunning");
     RESOLVE_FN(pSteamAPI_RunCallbacks, Fn_SteamAPI_RunCallbacks, "SteamAPI_RunCallbacks");
     RESOLVE_FN(pSteamAPI_GetHSteamUser, Fn_SteamAPI_GetHSteamUser, "SteamAPI_GetHSteamUser");
@@ -300,15 +297,13 @@ bool SteamP2P_Init()
     }
 
     HSteamUser hUser = pSteamAPI_GetHSteamUser();
-    if (!hUser && pSteamAPI_Init) {
-        pSteamAPI_Init();
-        hUser = pSteamAPI_GetHSteamUser();
-    }
-    if (!hUser) return false;
+    if (!hUser) return false; // Wait until SOVIET64.exe has called SteamAPI_Init() on the main thread
 
+    // SOVIET64.exe + C3DDLL64.dll + steam_api64.dll flat thunks are compiled against:
+    // SteamUser020, SteamFriends017, SteamNetworking005
     static const char* const kUserVersions[] = { "SteamUser020", "SteamUser021", "SteamUser019" };
     static const char* const kFriendsVersions[] = { "SteamFriends017", "SteamFriends016", "SteamFriends015" };
-    static const char* const kNetVersions[] = { "SteamNetworking006", "SteamNetworking005", "SteamNetworking004" };
+    static const char* const kNetVersions[] = { "SteamNetworking005", "SteamNetworking006", "SteamNetworking004" };
 
     s_pSteamUser = FindInterface(hUser, kUserVersions, 3);
     s_pSteamFriends = FindInterface(hUser, kFriendsVersions, 3);
@@ -603,6 +598,16 @@ static void PumpChannelLocked(int channel)
             continue;
         }
 
+        if (hdr->type == P2P_FRAME_FIN) {
+            for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
+                if (it->remoteSteamId == sender && it->port == hdr->port && it->connId == hdr->connId) {
+                    it = s_pendingSyns.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
         // Match active slot
         for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
             SteamSocketSlot& slot = s_slots[i];
@@ -655,10 +660,10 @@ void SteamP2P_PrepareAccept(unsigned short port)
         }
     }
     PumpChannelLocked((int)port);
-    // Prune stale SYNs older than 15s on this port
+    // Prune stale SYNs older than 2s on this port (active clients re-send SYN every 400ms)
     ULONGLONG now = GetTickCount64();
     for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
-        if (it->port == port && now - it->receivedTick > 15000) {
+        if (it->port == port && now - it->receivedTick > 2000) {
             it = s_pendingSyns.erase(it);
         } else {
             ++it;
@@ -674,6 +679,15 @@ SOCKET SteamP2P_TryAcceptOne(unsigned short port, DWORD ioTimeoutMs)
 
     EnterCriticalSection(&s_lock);
     PumpChannelLocked((int)port);
+
+    ULONGLONG now = GetTickCount64();
+    for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
+        if (it->port == port && now - it->receivedTick > 2000) {
+            it = s_pendingSyns.erase(it);
+        } else {
+            ++it;
+        }
+    }
 
     for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ++it) {
         if (it->port != port) continue;
@@ -853,6 +867,13 @@ bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
         }
 
         bool eof = slot.remoteFin;
+        if (!eof && (GetTickCount64() - waitStart) > 2500 &&
+            s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+            P2PSessionState_t state = {};
+            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+                if (state.m_eP2PSessionError != 0) eof = true;
+            }
+        }
         DWORD timeoutMs = slot.ioTimeoutMs;
         LeaveCriticalSection(&s_lock);
 

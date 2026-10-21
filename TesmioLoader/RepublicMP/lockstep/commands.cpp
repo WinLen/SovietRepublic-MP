@@ -26,6 +26,7 @@
 #include "../session/two_states.h"
 #include <vector>
 #include <string.h>
+#include <math.h>
 
 void Commands_Bind(const TsmHost* host)
 {
@@ -287,9 +288,9 @@ static void Apply(const Command& c)
     // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
     TwoStates_EndCommand(owner);
-    char money[96] = "";
+    char money[128] = "";
     if (paidRub != 0.0 || paidUsd != 0.0)
-        sprintf_s(money, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);
+        _snprintf_s(money, sizeof(money), _TRUNCATE, " (money %+.4f rubles %+.4f dollars)", paidRub, paidUsd);
     if (!Frequent(c.kind) || !ok || (money[0] && Determinism_GetMoneyTrace()))
         Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s%s", c.seq, KindName(c.kind), c.afterTick,
              ok ? "made" : "not made", money);
@@ -373,7 +374,17 @@ static double g_lateSimRubles = 0, g_lateSimDollars = 0;
 // recorded ones are written back exactly (not by subtracting).
 static void TakeMoney(double rub, double usd, const char* where)
 {
+    if (*(const int*)(g_exeBase + 0x9D4F10 + 0x578) != 0) {
+        *Rubles() = 100000000.0;
+        *Dollars() = 100000000.0;
+        return;
+    }
     double nowRub = *Rubles(), nowUsd = *Dollars();
+    if (!isfinite(nowRub) || !isfinite(nowUsd) || !isfinite(rub) || !isfinite(usd)) {
+        *Rubles() = rub;
+        *Dollars() = usd;
+        return;
+    }
     if (nowRub == rub && nowUsd == usd) return;
     LsMoneyDelta d = { nowRub - rub, nowUsd - usd };
     *Rubles() = rub;

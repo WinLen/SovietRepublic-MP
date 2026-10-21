@@ -1419,11 +1419,11 @@ bool RouteTools_ApplyCommand(const void* data, size_t size)
         int used = 0;
         why = ApplyStop(m, &used);
         if (!why && !used) why = "the tool did not pick";
-        sprintf_s(detail, ", stop index %d", m.index);
+        _snprintf_s(detail, sizeof(detail), _TRUNCATE, ", stop index %d", m.index);
     } else if (m.kind == ROUTE_LINE_COPY) {
         int result = -1;
         why = ApplyLineCopy(m, &result);
-        if (!why && result != -1) sprintf_s(detail, " - refused by the game (%d)", result);
+        if (!why && result != -1) _snprintf_s(detail, sizeof(detail), _TRUNCATE, " - refused by the game (%d)", result);
     } else if (m.kind == ROUTE_SQUARE_ROAD) {
         why = ApplySquareRoad(m);
     } else if (m.kind == ROUTE_GO_THERE) {

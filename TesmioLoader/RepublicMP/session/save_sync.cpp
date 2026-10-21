@@ -314,9 +314,9 @@ static bool WaitForChannels(bool client)
 static void DownChannels(char* out, size_t outSize)
 {
     out[0] = 0;
-    if (!BuildSync_IsConnected()) strcat_s(out, outSize, "buildings ");
-    if (!RoadSync_IsConnected()) strcat_s(out, outSize, "roads ");
-    if (!TerrainSync_IsConnected()) strcat_s(out, outSize, "terrain ");
+    if (!BuildSync_IsConnected()) strncat_s(out, outSize, "buildings ", _TRUNCATE);
+    if (!RoadSync_IsConnected()) strncat_s(out, outSize, "roads ", _TRUNCATE);
+    if (!TerrainSync_IsConnected()) strncat_s(out, outSize, "terrain ", _TRUNCATE);
     size_t n = strlen(out);
     if (n) out[n - 1] = 0;
 }
@@ -965,7 +965,7 @@ static bool RunClientJoin(bool rejoin)
         }
         ULONGLONG connectStart = GetTickCount64();
         for (;;) {
-            sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 15000, 0, &g_disconnectRequested);
+            sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 30000, 0, &g_disconnectRequested);
             if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
             if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
             Sleep(RESYNC_RETRY_MS);

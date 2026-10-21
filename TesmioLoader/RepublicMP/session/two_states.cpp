@@ -26,6 +26,7 @@
 #include <algorithm>
 
 #define WORLD_RVA 0x9D4F10
+#define WORLD_UNLIMITED_MONEY_OFFSET 0x578
 #define WORLD_USD_OFFSET 0x580
 #define WORLD_RUB_OFFSET 0x588
 #define CURSOR_X_OFFSET 0xF6C
@@ -118,6 +119,15 @@ void TwoStates_AddToast(const char* text, int colorKind)
 
 static double* WorldRubles()  { return (double*)(g_exeBase + WORLD_RVA + WORLD_RUB_OFFSET); }
 static double* WorldDollars() { return (double*)(g_exeBase + WORLD_RVA + WORLD_USD_OFFSET); }
+static bool IsUnlimitedMoney()
+{
+    if (!g_exeBase) return false;
+    __try {
+        return *(const int*)(g_exeBase + WORLD_RVA + WORLD_UNLIMITED_MONEY_OFFSET) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // C3D_TERRAIN boundary IAT hooks + Fair Economy Simulation Inline Hooks
@@ -242,6 +252,7 @@ static double g_unattributedUsd = 0.0;
 static bool BeginEconAttribution(BYTE* world, int owner)
 {
     if (!g_inSimStep || g_inCommand || t_inEconHook || !TwoStates_IsActive()) return false;
+    if (IsUnlimitedMoney()) return false;
     if (!Determinism_InStepFrame()) return false;
     if (world != g_exeBase + WORLD_RVA || GetCurrentThreadId() != g_simStepThread) return false;
     if (owner != 1 && owner != 2) return false;
@@ -403,7 +414,7 @@ static void __fastcall H_MasterSave(BYTE* world)
                     }
                 }
             }
-            if (twoStates) {
+            if (twoStates && !IsUnlimitedMoney()) {
                 prevRub = *WorldRubles();
                 prevUsd = *WorldDollars();
                 *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
@@ -554,7 +565,15 @@ void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
         double worldRub = *WorldRubles();
         double worldUsd = *WorldDollars();
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
-            if (!isResync && !g_treasuryInitialized) {
+            if (IsUnlimitedMoney()) {
+                g_stateRub[0] = 100000000.0;
+                g_stateRub[1] = 100000000.0;
+                g_stateUsd[0] = 100000000.0;
+                g_stateUsd[1] = 100000000.0;
+                *WorldRubles()  = 100000000.0;
+                *WorldDollars() = 100000000.0;
+                g_treasuryInitialized = true;
+            } else if (!isResync && !g_treasuryInitialized) {
                 if (g_fullStartingCapital) {
                     g_stateRub[0] = worldRub;
                     g_stateRub[1] = worldRub;
@@ -621,8 +640,15 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
 
     if (g_sessionMode == COOP_MODE_TWO_STATES) {
         __try {
-            *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
-            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+            if (IsUnlimitedMoney()) {
+                g_stateRub[0] = g_stateRub[1] = 100000000.0;
+                g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
+                *WorldRubles()  = 100000000.0;
+                *WorldDollars() = 100000000.0;
+            } else {
+                *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+                *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+            }
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
@@ -650,8 +676,15 @@ void TwoStates_OnWorldLoaded()
 {
     if (!TwoStates_IsActive()) return;
     __try {
-        *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
-        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        if (IsUnlimitedMoney()) {
+            g_stateRub[0] = g_stateRub[1] = 100000000.0;
+            g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
+            *WorldRubles()  = 100000000.0;
+            *WorldDollars() = 100000000.0;
+        } else {
+            *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        }
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -730,7 +763,7 @@ void TwoStates_BeginCommand(int ownerState)
     g_cmdOwner = (ownerState == 2) ? 2 : 1;
     g_cmdBuildingsBefore = GetWorldBuildingCount();
     g_cmdVehiclesBefore  = GetWorldVehicleCount();
-    if (!TwoStates_IsActive()) {
+    if (!TwoStates_IsActive() || IsUnlimitedMoney()) {
         g_inCommand = false;
         return;
     }
@@ -767,7 +800,7 @@ void TwoStates_EndCommand(int ownerState)
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
-    if (!g_inCommand || !TwoStates_IsActive()) {
+    if (!g_inCommand || !TwoStates_IsActive() || IsUnlimitedMoney()) {
         g_inCommand = false;
         return;
     }
@@ -845,6 +878,12 @@ static int g_stepBldCount[2] = { 0, 0 };
 void TwoStates_BeforeStep(BYTE* world)
 {
     if (!TwoStates_IsActive() || !world) return;
+    if (IsUnlimitedMoney()) {
+        g_inSimStep = false;
+        g_stateRub[0] = g_stateRub[1] = 100000000.0;
+        g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
+        return;
+    }
     g_stepRubWeight[0] = g_stepRubWeight[1] = 0.0;
     g_stepUsdWeight[0] = g_stepUsdWeight[1] = 0.0;
     g_stepBldCount[0] = g_stepBldCount[1] = 0;
@@ -887,7 +926,7 @@ void TwoStates_BeforeStep(BYTE* world)
 
 void TwoStates_AfterStep(BYTE* world)
 {
-    if (!TwoStates_IsActive() || !world) {
+    if (!TwoStates_IsActive() || !world || IsUnlimitedMoney()) {
         g_inSimStep = false;
         return;
     }
@@ -942,7 +981,7 @@ static double g_uiShownUsd = 0.0;
 
 void TwoStates_UiBegin()
 {
-    if (!TwoStates_IsActive() || g_inSimStep) {
+    if (!TwoStates_IsActive() || g_inSimStep || IsUnlimitedMoney()) {
         g_uiMoneySwapped = false;
         return;
     }
@@ -974,7 +1013,7 @@ void TwoStates_UiEnd()
 
 void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd)
 {
-    if (!TwoStates_IsActive()) return;
+    if (!TwoStates_IsActive() || IsUnlimitedMoney()) return;
     __try {
         *outSavedSimRub = *WorldRubles();
         *outSavedSimUsd = *WorldDollars();
@@ -986,7 +1025,7 @@ void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd)
 
 void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd)
 {
-    if (!TwoStates_IsActive()) return;
+    if (!TwoStates_IsActive() || IsUnlimitedMoney()) return;
     __try {
         *WorldRubles()  = savedSimRub;
         *WorldDollars() = savedSimUsd;
@@ -2150,7 +2189,13 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
         g_loadedFromCoopSave = true;
 
         if (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd)) {
-            SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
+            if (IsUnlimitedMoney()) {
+                g_stateRub[0] = g_stateRub[1] = 100000000.0;
+                g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
+                SafeWriteWorldMoney(100000000.0, 100000000.0);
+            } else {
+                SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
+            }
         }
     }
 
