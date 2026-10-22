@@ -12,3 +12,15 @@ void HeldFrame_OnVehicleSoftSynced(BYTE* vehicle);
 bool HeldFrame_Draw(bool entitiesReady);
 // Main thread, right after Early: the doors and the citizens this PC sees.
 void HeldFrame_AfterEarly();
+
+struct HeldFrameDiagStats {
+    unsigned long long heldFramesDrawn;
+    unsigned long long guardFallbacks;
+    unsigned long long restoreRefusals;
+    unsigned trackedVehicles;
+    unsigned lastTargetsCount;
+    unsigned lastInterpolatedCount;
+    float lastAlpha;
+    bool inHeldDraw;
+};
+void HeldFrame_GetDiagStats(HeldFrameDiagStats* out);

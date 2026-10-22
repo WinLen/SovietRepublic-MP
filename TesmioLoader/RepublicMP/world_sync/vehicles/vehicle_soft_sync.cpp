@@ -58,6 +58,7 @@ static volatile LONG g_immediateRequested = 0;
 static int g_immediateSweepLeft = 0;
 static size_t g_rollingCursor = 0;
 static unsigned long long g_lastImmediateTick = 0;
+static VehicleSoftSyncDiagStats g_vssDiag = {};
 
 void VehicleSoftSync_Bind(const TsmHost* host)
 {
@@ -70,6 +71,13 @@ void VehicleSoftSync_Reset()
     g_immediateSweepLeft = 0;
     g_rollingCursor = 0;
     g_lastImmediateTick = 0;
+    memset(&g_vssDiag, 0, sizeof(g_vssDiag));
+}
+
+void VehicleSoftSync_GetDiagStats(VehicleSoftSyncDiagStats* out)
+{
+    if (!out) return;
+    *out = g_vssDiag;
 }
 
 void VehicleSoftSync_RequestImmediate()
@@ -212,6 +220,7 @@ void VehicleSoftSync_HostTick(unsigned long long tick)
         if (InterlockedCompareExchange(&g_immediateRequested, 0, 1) == 1) {
             g_immediateSweepLeft = 8;
             g_lastImmediateTick = tick;
+            g_vssDiag.immediateSweeps++;
         }
     }
 
@@ -226,6 +235,7 @@ void VehicleSoftSync_HostTick(unsigned long long tick)
     VehicleSoftSyncMsg msg = {};
     if (!BuildBatch(msg, immediate)) return;
 
+    g_vssDiag.batchesSent++;
     size_t wireBytes = sizeof(unsigned) + msg.count * sizeof(VehicleSoftSyncEntry);
     Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, &msg, wireBytes);
 }
@@ -262,10 +272,12 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
         if (begin && end > begin) {
             size_t total = (size_t)(end - begin);
             if (total <= MAX_VEHICLES_SCAN) {
+                float batchMaxDriftSq = 0.0f;
                 for (unsigned i = 0; i < msg->count; i++) {
                     const VehicleSoftSyncEntry& e = msg->entries[i];
                     BYTE* v = FindVehicle(begin, total, e.place, e.vehicleId);
                     if (!v) continue;
+                    g_vssDiag.vehiclesSynced++;
 
                     // 1. Always synchronize scalar fuel and wear/aging fields.
                     if (isfinite(e.fuel)) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
@@ -283,6 +295,8 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                                 BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
                                 const char* resName = *(const char**)entry;
                                 if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {
+                                    float prevAmt = *(float*)(entry + CARGO_AMOUNT_OFFSET);
+                                    if (fabsf(prevAmt - e.cargoAmount[k]) > 1e-4f) g_vssDiag.cargoUpdated++;
                                     *(float*)(entry + CARGO_AMOUNT_OFFSET) = e.cargoAmount[k];
                                 }
                             }
@@ -299,6 +313,7 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                     float dz = e.pos[2] - pos[2];
                     float distSq = dx * dx + dy * dy + dz * dz;
                     if (!isfinite(distSq)) continue;
+                    if (distSq > batchMaxDriftSq && distSq < 1e6f) batchMaxDriftSq = distSq;
 
                     BYTE* curBld = *(BYTE**)(v + VEH_CUR_BLD_OFFSET);
                     int localBldId = curBld ? *(int*)curBld : -1;
@@ -307,6 +322,7 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                         if (distSq > 0.0f && distSq < 400.0f) {
                             TranslateVehicleNodes(v, dx, dy, dz);
                             HeldFrame_OnVehicleSoftSynced(v);
+                            g_vssDiag.posSnapped++;
                         }
                     } else if (e.currentBldId < 0 && localBldId < 0) {
                         float localSpeed = *(float*)(v + VEH_SPEED_OFFSET);
@@ -316,12 +332,18 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                         if (distSq > 0.04f && distSq < 64.0f) {
                             TranslateVehicleNodes(v, dx * 0.25f, dy * 0.25f, dz * 0.25f);
                             HeldFrame_OnVehicleSoftSynced(v);
+                            g_vssDiag.posBlended++;
                         } else if (distSq > 0.0f && distSq <= 0.04f) {
                             TranslateVehicleNodes(v, dx, dy, dz);
                             HeldFrame_OnVehicleSoftSynced(v);
+                            g_vssDiag.posSnapped++;
                         }
                     }
                 }
+                float maxDriftM = sqrtf(batchMaxDriftSq);
+                g_vssDiag.lastMaxDriftM = maxDriftM;
+                if (maxDriftM > g_vssDiag.allTimeMaxDriftM) g_vssDiag.allTimeMaxDriftM = maxDriftM;
+                g_vssDiag.batchesApplied++;
                 ok = true;
             }
         }

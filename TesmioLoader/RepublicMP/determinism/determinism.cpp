@@ -828,6 +828,16 @@ float Determinism_RenderAlpha()
     return (float)g_subTickAlpha;
 }
 
+void Determinism_GetDiagInfo(DeterminismDiagInfo* out)
+{
+    if (!out) return;
+    out->frameBeats = g_frameBeats;
+    out->framePhase = (int)g_framePhase;
+    out->isStepFrame = g_frameStep;
+    out->tickDebt = g_tickDebt;
+    out->subTickAlpha = g_subTickAlpha;
+}
+
 bool Determinism_IsStepFrame()
 {
     return g_active && g_frameStep && GetCurrentThreadId() == g_simThread;

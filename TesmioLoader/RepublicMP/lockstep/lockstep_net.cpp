@@ -329,8 +329,10 @@ static void Compare(const LsHash& theirs)
         VehicleSoftSync_RequestImmediate();
         if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
             g_lastSoftDriftLogTick = theirs.tick;
-            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d, vehicles %d/%d) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
-                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, a.vehicles, b.vehicles);
+            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d, vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
+                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff,
+                 a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
+                 a.citizens, b.citizens, a.ageTotal, b.ageTotal);
         }
     }
 
@@ -345,8 +347,10 @@ static void Compare(const LsHash& theirs)
 
     VehicleSoftSync_RequestImmediate();
     if (++g_hardMismatchCount < 3) {
-        Logf("republicmp  LOCKSTEP: transient %sdifference after tick %llu (%d/3) - awaiting soft sync convergence",
-             what, theirs.tick, g_hardMismatchCount);
+        Logf("republicmp  LOCKSTEP: transient %sdifference after tick %llu (%d/3) - awaiting soft sync convergence (prod %.2f/%.2f storage %.2f/%.2f cargo %.2f/%.2f rub %.2f/%.2f usd %.2f/%.2f)",
+             what, theirs.tick, g_hardMismatchCount,
+             a.productionTotal, b.productionTotal, a.storageTotal, b.storageTotal,
+             a.cargoTotal, b.cargoTotal, a.rub, b.rub, a.usd, b.usd);
         return;
     }
 
@@ -355,6 +359,12 @@ static void Compare(const LsHash& theirs)
          a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);
     Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, player day %d %.4f rubles %.4f dollars %.4f", a.day,
          a.dayProgress, a.rub, a.usd, b.day, b.dayProgress, b.rub, b.usd);
+    Logf("republicmp  LOCKSTEP:   totals host(prod=%.3f stor=%.3f cargo=%.3f age=%.1f) vs player(prod=%.3f stor=%.3f cargo=%.3f age=%.1f)",
+         a.productionTotal, a.storageTotal, a.cargoTotal, a.ageTotal,
+         b.productionTotal, b.storageTotal, b.cargoTotal, b.ageTotal);
+    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX veh=%016llX vpos=%016llX cit=%016llX) vs player(clk=%016llX bld=%016llX veh=%016llX vpos=%016llX cit=%016llX)",
+         a.hashClock, a.hashBuildings, a.hashVehicles, a.hashVehiclesPos, a.hashCitizens,
+         b.hashClock, b.hashBuildings, b.hashVehicles, b.hashVehiclesPos, b.hashCitizens);
     Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
 }

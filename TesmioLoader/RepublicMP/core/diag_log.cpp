@@ -7,12 +7,14 @@
 #include "../session/mod_sync.h"
 #include "../session/updater.h"
 #include "../determinism/determinism.h"
+#include "../determinism/held_frame.h"
 #include "../determinism/state_hash.h"
 #include "../lockstep/lockstep_net.h"
 #include "../transport/steam_p2p.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
+#include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../third_party/miniz/miniz.h"
 #include "../ui/lang.h"
 
@@ -117,6 +119,20 @@ static void FormatAddressModule(uintptr_t addr, char* out, size_t outSize)
     }
 }
 
+static const char* FramePhaseName(int phase)
+{
+    switch (phase) {
+    case 0: return "OUTSIDE";
+    case 1: return "PREPARE";
+    case 2: return "STEP_EARLY";
+    case 3: return "HELD_EARLY";
+    case 4: return "AFTER_EARLY";
+    case 5: return "LATE";
+    case 6: return "AFTER_LATE";
+    default: return "UNKNOWN";
+    }
+}
+
 static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
 {
     if (!ep || !ep->ExceptionRecord || !ep->ContextRecord || t_safeSehDepth > 0)
@@ -149,6 +165,21 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         DiagLog_Printf("CRASH", "Access Violation: %s at address 0x%p",
                        op, (void*)ep->ExceptionRecord->ExceptionInformation[1]);
     }
+    DeterminismDiagInfo dinfo = {};
+    Determinism_GetDiagInfo(&dinfo);
+    HeldFrameDiagStats hf = {};
+    HeldFrame_GetDiagStats(&hf);
+    VehicleSoftSyncDiagStats vss = {};
+    VehicleSoftSync_GetDiagStats(&vss);
+    DiagLog_Printf("CRASH", "FrameContext: SimTick=%llu | Beats=%llu | Phase=%d(%s) | StepFrame=%d | TickDebt=%.3f | SubTickAlpha=%.3f",
+                   Determinism_StepCount(), dinfo.frameBeats, dinfo.framePhase, FramePhaseName(dinfo.framePhase),
+                   (int)dinfo.isStepFrame, dinfo.tickDebt, dinfo.subTickAlpha);
+    DiagLog_Printf("CRASH", "HeldFrameCtx: InHeldDraw=%d | Drawn=%llu | TrackedVeh=%u | LastTargets=%u | LastInterp=%u | LastAlpha=%.3f | Fallbacks=%llu | RestoreRefusals=%llu",
+                   (int)hf.inHeldDraw, hf.heldFramesDrawn, hf.trackedVehicles, hf.lastTargetsCount,
+                   hf.lastInterpolatedCount, hf.lastAlpha, hf.guardFallbacks, hf.restoreRefusals);
+    DiagLog_Printf("CRASH", "SoftSyncCtx : Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | MaxDrift=%.2fm/%.2fm",
+                   vss.batchesSent, vss.batchesApplied, vss.immediateSweeps, vss.vehiclesSynced,
+                   vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
     DiagLog_Printf("CRASH", "RAX=%016llX RBX=%016llX RCX=%016llX RDX=%016llX",
                    c->Rax, c->Rbx, c->Rcx, c->Rdx);
     DiagLog_Printf("CRASH", "RSI=%016llX RDI=%016llX RBP=%016llX RSP=%016llX",
@@ -325,6 +356,20 @@ static void DumpLiveSnapshot(const char* tag)
         DiagLog_Printf(tag, "Lockstep: Tick=%llu | MatchedTick=%llu | Paused=%d | Speed=%d | Ping=%llums(valid=%d) | Behind=%llu | Stalls=%ds | msSinceStall=%llu | Desync='%s'",
                        tick, lastMatched, (int)paused, speed, rtt, (int)hasRtt,
                        fl.behind, fl.stalls, fl.msSinceStall, desync ? desync : "");
+
+        DeterminismDiagInfo dinfo = {};
+        Determinism_GetDiagInfo(&dinfo);
+        HeldFrameDiagStats hf = {};
+        HeldFrame_GetDiagStats(&hf);
+        VehicleSoftSyncDiagStats vss = {};
+        VehicleSoftSync_GetDiagStats(&vss);
+        DiagLog_Printf(tag, "HeldFrame: Beats=%llu | Phase=%d(%s) | TickDebt=%.3f | SubTickAlpha=%.3f | Drawn=%llu | TrackedVeh=%u | LastTargets=%u | LastInterp=%u | Fallbacks=%llu | RestoreRefusals=%llu",
+                       dinfo.frameBeats, dinfo.framePhase, FramePhaseName(dinfo.framePhase), dinfo.tickDebt, dinfo.subTickAlpha,
+                       hf.heldFramesDrawn, hf.trackedVehicles, hf.lastTargetsCount, hf.lastInterpolatedCount,
+                       hf.guardFallbacks, hf.restoreRefusals);
+        DiagLog_Printf(tag, "SoftSync: Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | MaxDrift=%.2fm (AllTime=%.2fm)",
+                       vss.batchesSent, vss.batchesApplied, vss.immediateSweeps, vss.vehiclesSynced,
+                       vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
     }
 }
 

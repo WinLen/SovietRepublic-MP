@@ -23,3 +23,16 @@ void VehicleSoftSync_HostTick(unsigned long long tick);
 
 // Both PCs, main thread inside Commands_Boundary.
 bool VehicleSoftSync_ApplyCommand(const void* data, size_t size);
+
+struct VehicleSoftSyncDiagStats {
+    unsigned long long batchesSent;
+    unsigned long long batchesApplied;
+    unsigned long long immediateSweeps;
+    unsigned long long vehiclesSynced;
+    unsigned long long posSnapped;
+    unsigned long long posBlended;
+    unsigned long long cargoUpdated;
+    float lastMaxDriftM;
+    float allTimeMaxDriftM;
+};
+void VehicleSoftSync_GetDiagStats(VehicleSoftSyncDiagStats* out);

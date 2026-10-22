@@ -59,11 +59,19 @@ struct VehicleInterpRecord {
 
 static std::unordered_map<BYTE*, VehicleInterpRecord> g_vehicleInterp;
 static unsigned long long g_interpTick = 0;
+static HeldFrameDiagStats g_hfDiag = {};
 
 void HeldFrame_Reset()
 {
     g_vehicleInterp.clear();
     g_interpTick = 0;
+    memset(&g_hfDiag, 0, sizeof(g_hfDiag));
+}
+
+void HeldFrame_GetDiagStats(HeldFrameDiagStats* out)
+{
+    if (!out) return;
+    *out = g_hfDiag;
 }
 
 static void TranslateC3DNode(BYTE* node, float dx, float dy, float dz)
@@ -183,16 +191,18 @@ void HeldFrame_OnSimTick(unsigned long long tick)
             else ++it;
         }
     }
+    g_hfDiag.trackedVehicles = (unsigned)g_vehicleInterp.size();
 }
 
-static void ApplySubTickVisualInterp(BYTE* p, float alpha)
+static bool ApplySubTickVisualInterp(BYTE* p, float alpha)
 {
-    if (!p || alpha <= 0.001f || alpha >= 0.999f) return;
+    if (!p || alpha <= 0.001f || alpha >= 0.999f) return false;
     auto it = g_vehicleInterp.find(p);
-    if (it == g_vehicleInterp.end()) return;
+    if (it == g_vehicleInterp.end()) return false;
     const VehicleInterpRecord& rec = it->second;
-    if (rec.currTick != g_interpTick || rec.prevTick + 1 != rec.currTick) return;
+    if (rec.currTick != g_interpTick || rec.prevTick + 1 != rec.currTick) return false;
 
+    bool moved = false;
     DiagLog_BeginSafeSeh();
     __try {
         if (*(unsigned*)(p + 0x04) == rec.id) {
@@ -213,14 +223,17 @@ static void ApplySubTickVisualInterp(BYTE* p, float alpha)
                         float distSq = dx * dx + dy * dy + dz * dz;
                         if (distSq < 400.0f && isfinite(distSq)) {
                             TranslateC3DNode(p + kVehicleNodeOffsets[k], dx * alpha, dy * alpha, dz * alpha);
+                            moved = true;
                         }
                     }
                 }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        moved = false;
     }
     DiagLog_EndSafeSeh();
+    return moved;
 }
 
 class VehicleGuard {
@@ -269,9 +282,14 @@ public:
             if (f) flags_.push_back({ p, f });
         }
         for (const auto& f : flags_) f.first[0xD41] = 0;
+        g_hfDiag.lastTargetsCount = (unsigned)targets_.size();
+        unsigned interpCount = 0;
         if (alpha > 0.001f && alpha < 0.999f) {
-            for (BYTE* p : targets_) ApplySubTickVisualInterp(p, alpha);
+            for (BYTE* p : targets_) {
+                if (ApplySubTickVisualInterp(p, alpha)) interpCount++;
+            }
         }
+        g_hfDiag.lastInterpolatedCount = interpCount;
         return true;
     }
 
@@ -292,6 +310,7 @@ public:
                 bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140);
                 if (!inNodes && HeapPointer(before) && HeapPointer(now)) {
                     Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", o);
+                    g_hfDiag.restoreRefusals++;
                     ok = false;
                 } else memcpy(p + o, &before, 8);
             }
@@ -632,6 +651,9 @@ bool HeldFrame_Draw(bool entitiesReady)
     uintptr_t hidden[2] = {};
     int realism = 0;
     float alpha = (Determinism_SessionRunning() && !Probe_IsRunning()) ? Determinism_RenderAlpha() : 0.0f;
+    g_hfDiag.inHeldDraw = true;
+    g_hfDiag.heldFramesDrawn++;
+    g_hfDiag.lastAlpha = alpha;
     if (workerOk) {
         try {
             guarded = guard.Begin(g_exeBase + 0x9E7720, alpha);
@@ -639,6 +661,7 @@ bool HeldFrame_Draw(bool entitiesReady)
             guarded = false;
         }
         if (!guarded) {
+            g_hfDiag.guardFallbacks++;
             if (!hiddenLogged) {
                 hiddenLogged = true;
                 Logf("republicmp  HELD FRAME: vehicle graph could not be captured - vehicles hidden on such frames");
@@ -695,5 +718,6 @@ bool HeldFrame_Draw(bool entitiesReady)
             *(int*)(g_exeBase + 0x9D54CC) = realism;
         }
     }
+    g_hfDiag.inHeldDraw = false;
     return clean;
 }

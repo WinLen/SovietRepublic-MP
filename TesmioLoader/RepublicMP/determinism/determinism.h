@@ -68,6 +68,15 @@ void Determinism_SessionSpeed(bool* paused, int* speed);
 // Sub-tick phase [0..1) between simulation ticks for smooth visual interpolation on held frames.
 float Determinism_RenderAlpha();
 
+struct DeterminismDiagInfo {
+    unsigned long long frameBeats;
+    int framePhase; // 1 Prepare, 2 step Early, 3 held Early, 4 after Early, 5 Late, 6 after Late
+    bool isStepFrame;
+    double tickDebt;
+    double subTickAlpha;
+};
+void Determinism_GetDiagInfo(DeterminismDiagInfo* out);
+
 // Called after a complete tick (Early + Late) while active; after native Early otherwise.
 // Main thread, whether or not the layer
 // is active - for modules that sample or set state at a fixed point of the
