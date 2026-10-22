@@ -294,6 +294,11 @@ static void HoverGlobals_Clear()
         for (size_t i = 0; i < sizeof(kHoverPtrRvas) / sizeof(kHoverPtrRvas[0]); i++)
             *(long long*)((uintptr_t)g_exe + kHoverPtrRvas[i]) = 0;
         *(unsigned char*)((uintptr_t)g_exe + HOVER_FLAG_RVA) = 0;
+        *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 0;
+        memset((void*)((uintptr_t)g_exe + 0x9E456C), 0, 12);
+        *(unsigned char*)((uintptr_t)g_exe + 0x9E4578) = 0;
+        memset((void*)((uintptr_t)g_exe + 0x9E457C), 0, 12);
+        *(unsigned char*)((uintptr_t)g_exe + 0x9E45A8) = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -568,6 +573,12 @@ static void SetOwnHover(__int64 manager, const RoadSyncRoadLink& l, const char* 
         *(long long*)((uintptr_t)g_exe + 0x9E45D8) = edge;
         *(long long*)((uintptr_t)g_exe + 0x9E4560) = node;
         *(long long*)((uintptr_t)g_exe + 0x9E45E0) = node;
+        if (node) {
+            *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 1;
+            memcpy((void*)((uintptr_t)g_exe + 0x9E456C), (const void*)(node + NODE_POS_OFFSET), 12);
+        } else {
+            *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 0;
+        }
         Logf("republicmp  ROAD_SYNC:   %s own-network link: edge %s, node %s", which,
              !l.hasEdge ? "-" : edge ? "found" : "NOT FOUND",
              !l.hasNode ? "-" : node ? "found" : "NOT FOUND");
@@ -681,6 +692,47 @@ static bool BeginScope(const ScopeBox& b, float margin)
 
 static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted);
 
+static void ResetManagerDragState(__int64 manager)
+{
+    if (!manager) return;
+    __try {
+        typedef void (*PreviewDtorFn)(void* obj);
+        typedef void (*GameFreeFn)(void* ptr, unsigned __int64 sz);
+        GameFreeFn gameFree = (GameFreeFn)((uintptr_t)g_exe + 0x84DFE0);
+        const int kExtraPreviewOffsets[2] = { 0x5F8, 0x600 };
+        for (int off : kExtraPreviewOffsets) {
+            void* p = *(void**)(manager + off);
+            if (p) {
+                void** vt = *(void***)p;
+                if (vt && vt[3]) ((PreviewDtorFn)vt[3])(p);
+                gameFree(p, 0x10);
+                *(void**)(manager + off) = nullptr;
+            }
+        }
+        *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
+        *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
+        *(long long*)(manager + 0x350) = 0;
+        *(long long*)(manager + 0x360) = 0;
+        *(long long*)(manager + 0x370) = 0;
+        *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
+        *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
+        *(long long*)(manager + MGR_HOVER_SEGMENT_COPY_OFFSET) = 0;
+        *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
+        *(unsigned char*)(manager + MGR_VALID_OFFSET) = 0;
+        *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET) = -1;
+        *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET) = 0;
+        *(unsigned char*)(manager + 0x5CB) = 0;
+        *(unsigned char*)(manager + 0x5CC) = 0;
+        *(long long*)(manager + 0x740) = 0;
+        *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) = 0;
+        *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) = 0;
+        *(unsigned char*)(manager + 0x74A) = 0;
+        *(unsigned char*)(manager + 0x74B) = 0;
+        ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // The replay sees the same "camera-visible" edges as the sender's does.
 static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
@@ -729,6 +781,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
     unsigned char savedLmbHeld = 0, savedLmbJustPressed = 0, savedSnapModeA = 0, savedSnapModeB = 0;
     long long savedSnapTarget = 0;
     float savedContinuingY = 0.0f, savedCurve = 0.0f, savedRelax = 0.0f;
+    float savedCursor[3] = { 0.0f, 0.0f, 0.0f };
     int savedPresetCurveMode = -1;
     bool threw = false;
 
@@ -748,6 +801,11 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             savedSnapModeA = *(unsigned char*)(thisPtr + SNAP_MODE_A_OFFSET);
             savedSnapModeB = *(unsigned char*)(thisPtr + SNAP_MODE_B_OFFSET);
             savedContinuingY = *(float*)(thisPtr + CONTINUING_Y_OFFSET_OFFSET);
+            savedCursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
+            savedCursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
+            savedCursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
+            ResetManagerDragState(manager);
+            *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
             savedCurve = *(float*)(manager + MGR_CURVE_OFFSET);
             savedRelax = *(float*)(manager + MGR_RELAX_TIMER_OFFSET);
             savedPresetCurveMode = *presetCurveMode;
@@ -781,6 +839,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
             ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
                 Fc040Param5ForCategory(seg.category, seg.typeId), 0, noDirection);
+            if ((seg.snapFlags & 0x01) != 0 && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0) {
+                __int64 existingStart = FindNetworkNodeAt(manager, seg.startNode);
+                if (existingStart) {
+                    *(__int64*)(manager + MGR_START_NODE_OFFSET) = existingStart;
+                    *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) = 1;
+                }
+            }
             // Keep snapModeStart/End (+0x74A/+0x74B) zero while fcaf0 runs:
             // 0x4FCAF0 (0x140514FB7..0x140515186) inserts startNode/endNode into manager+0x410
             // whenever +0x74A/+0x74B == 1 or 3, and seg.points captured at 0x518A80 entry
@@ -826,7 +891,14 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = endHoverNode;
             }
             RawVectorHeader route = { seg.points, seg.points + seg.pointCount, seg.points + seg.pointCount };
+            if (endHoverNode) {
+                *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 1;
+                memcpy((void*)((uintptr_t)g_exe + 0x9E456C), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
+            }
             float end[3] = { seg.endNode[0], seg.endNode[1], seg.endNode[2] };
+            *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.endNode[0];
+            *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.endNode[1];
+            *(float*)(thisPtr + CURSOR_Z_OFFSET) = seg.endNode[2];
             *lmbHeld = 1;
             ((Fcaf0Fn)((uintptr_t)g_exe + FCAF0_RVA))(manager, end, seg.typeId, (unsigned int)seg.variant,
                                                       0, 0, 0, (__int64)&route, 0, 0);
@@ -843,7 +915,25 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             if (*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0 && *(__int64*)(manager + MGR_START_NODE_OFFSET))
                 SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), seg.startNode);
             if (*(__int64*)(manager + MGR_END_NODE_OFFSET))
-                SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
+            {
+                bool wantEndAttached = ((seg.snapFlags & 0x02) != 0) || (endHoverNode != 0);
+                if (wantEndAttached) {
+                    __int64 existingEnd = endHoverNode ? endHoverNode : FindNetworkNodeAt(manager, seg.endNode);
+                    if (existingEnd) {
+                        SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), (const float*)(existingEnd + NODE_POS_OFFSET));
+                        *(__int64*)(manager + 0x740) = existingEnd;
+                        *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) = 1;
+                    } else {
+                        SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
+                        *(__int64*)(manager + 0x740) = 0;
+                        *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) = 0;
+                    }
+                } else {
+                    SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
+                    *(__int64*)(manager + 0x740) = 0;
+                    *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) = 0;
+                }
+            }
             if (IsPowerLine(seg.category) && *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) != 0)
                 CheckAttachedPowerNode(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode, "end");
             if (IsPowerLine(seg.category))
@@ -867,6 +957,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
 
             // Force valid state so a false-positive obstacle/slope check on fcaf0's internal
             // curve [rbp+0x170] never drops a segment that the sender already validated.
+            if (endHoverNode) {
+                *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 1;
+                memcpy((void*)((uintptr_t)g_exe + 0x9E456C), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
+            }
+            *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
+            *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
+            *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
             *(unsigned char*)(manager + MGR_VALID_OFFSET) = 1;
             *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET) = -1;
             *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET) = 0;
@@ -888,6 +985,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             wrapper(thisPtr, seg.typeId, (unsigned int)seg.variant);
             if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) != 0)
                 Logf("republicmp  ROAD_SYNC:   WARNING drag still active after release");
+            *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
+            ResetManagerDragState(manager);
             if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = 0;
         } __finally {
             if (saved) {
@@ -897,6 +996,9 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 *(unsigned char*)(thisPtr + SNAP_MODE_A_OFFSET) = savedSnapModeA;
                 *(unsigned char*)(thisPtr + SNAP_MODE_B_OFFSET) = savedSnapModeB;
                 *(float*)(thisPtr + CONTINUING_Y_OFFSET_OFFSET) = savedContinuingY;
+                *(float*)(thisPtr + CURSOR_X_OFFSET) = savedCursor[0];
+                *(float*)(thisPtr + CURSOR_Y_OFFSET) = savedCursor[1];
+                *(float*)(thisPtr + CURSOR_Z_OFFSET) = savedCursor[2];
                 *presetCurveMode = savedPresetCurveMode;
                 *(float*)(manager + MGR_CURVE_OFFSET) = savedCurve;
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
@@ -2248,7 +2350,9 @@ static void ClearCommandPreview(int category)
     __try {
         __int64 thisPtr = GetWorldThisPtr();
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
-        if (manager && *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0)
+        if (manager && *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) {
+            ResetManagerDragState(manager);
+        } else if (false)
             ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -2267,7 +2371,7 @@ void RoadSync_ClearCategoryPreview(int category)
             *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
             *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
             *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
-            *(unsigned char*)(manager + MGR_VALID_OFFSET) = 0;
+            ResetManagerDragState(manager);
             ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -2281,7 +2385,8 @@ void RoadSync_CancelLocalDrag()
         if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
         for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
             __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
-            if (manager) ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+            if (manager) ResetManagerDragState(manager);
+        HoverGlobals_Clear();
         }
         *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
         Logf("republicmp  ROAD_SYNC: the local drag was cancelled for a lockstep command");
@@ -2622,6 +2727,20 @@ bool RoadSync_InstallPlanStartHooks()
             VirtualProtect(callAt, 5, old, &old);
             FlushInstructionCache(GetCurrentProcess(), callAt, 5);
         }
+    }
+    // Patch SECOND_ROAD wrapper (0x3CF6F0) empty-segments guard at RVA 0x3CFA48:
+    // When HookedRoadCommit intercepts a commit in Lockstep without pushing a segment,
+    // segments_begin == segments_end (0 == 0). The original `je +0x11` (74 11) jumped to
+    // 0x3CFA5B (`mov rbp, [rcx-8]`) and read `[0 - 8]` -> AV crash when building from an
+    // existing road node. Redirecting to +0x0B lands on `je 0x1403D00C8` (0F 84 6B 06 00 00).
+    BYTE* secRoadJe = g_exeBase + 0x3CFA48;
+    if (secRoadJe[0] == 0x74 && secRoadJe[1] == 0x11 &&
+        secRoadJe[2 + 0x0B] == 0x0F && secRoadJe[2 + 0x0B + 1] == 0x84) {
+        DWORD oldProt = 0;
+        VirtualProtect(secRoadJe, 2, PAGE_EXECUTE_READWRITE, &oldProt);
+        secRoadJe[1] = 0x0B;
+        VirtualProtect(secRoadJe, 2, oldProt, &oldProt);
+        FlushInstructionCache(GetCurrentProcess(), secRoadJe, 2);
     }
     return a && b;
 }

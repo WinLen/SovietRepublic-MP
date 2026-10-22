@@ -350,7 +350,8 @@ static bool FillSegment(__int64 manager, int category, RoadSyncSegment& seg)
     int type = *(int*)(manager + MGR_TYPE_OFFSET);
     unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
 
-    if (bytes % ROUTE_RECORD_SIZE != 0 || count > ROAD_SYNC_MAX_POINTS) {
+    if (bytes % ROUTE_RECORD_SIZE != 0 || count > ROAD_SYNC_MAX_POINTS ||
+        (count == 0 && *(int*)(manager + 0x258) <= 1)) {
         NoteCommitSkip(category, "route buffer size invalid or too long", count, valid, type);
         return false;
     }
@@ -370,6 +371,15 @@ static bool FillSegment(__int64 manager, int category, RoadSyncSegment& seg)
     if (!ReadSegmentEndNodes(manager, seg.startNode, seg.endNode)) {
         NoteCommitSkip(category, "end nodes unreadable", count, valid, type);
         return false;
+    }
+    if (count == 0) {
+        float dx = seg.endNode[0] - seg.startNode[0];
+        float dy = seg.endNode[1] - seg.startNode[1];
+        float dz = seg.endNode[2] - seg.startNode[2];
+        if (dx * dx + dy * dy + dz * dz < 0.01f) {
+            NoteCommitSkip(category, "zero-length tap without drag tick", count, valid, type);
+            return false;
+        }
     }
     seg.category = category;
     seg.typeId = type;
@@ -789,7 +799,10 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
             // No piece under the brush: the commit removes only with +0x390 set (518a80).
-            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) return true;
+            if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) {
+                RoadSync_ClearCategoryPreview(category);
+                return true;
+            }
             bool listed = multi || SegmentListed(manager, seg);
             RoadSyncDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
@@ -901,7 +914,9 @@ void HookedRoadCommit(__int64 manager,
                       unsigned __int64 p6, unsigned __int64 p7)
 {
     int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
-    if (category >= 0 && p2 == 0 && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
+    uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
+    bool fromToolWrapper = (retRva >= 0x3AC000 && retRva < 0x3D8000);
+    if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
         !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
         TakeCommitAsCommand(manager, category))
         return;
