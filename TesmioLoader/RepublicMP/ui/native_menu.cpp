@@ -187,7 +187,7 @@ static const wchar_t* TrW(const wchar_t* ru, const wchar_t* en)
 static void RefreshFriendsIfNeeded(bool force)
 {
     ULONGLONG now = GetTickCount64();
-    if (force || now - g_lastFriendsRefreshMs > 3000) {
+    if (force || SteamP2P_ConsumeHostProbeDirty() || now - g_lastFriendsRefreshMs > 1500) {
         g_lastFriendsRefreshMs = now;
         if (SteamP2P_IsAvailable()) {
             SteamP2P_GetOnlineFriends(g_cachedFriends);
@@ -611,14 +611,20 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
 
     auto populateEntries = [&]() {
         entries.clear();
-        size_t maxFriends = g_cachedFriends.size() < 4 ? g_cachedFriends.size() : 4;
+        size_t maxFriends = g_cachedFriends.size() < 6 ? g_cachedFriends.size() : 6;
         for (size_t i = 0; i < maxFriends; ++i) {
             const auto& f = g_cachedFriends[i];
+            if (!f.inThisGame || !f.isHosting) continue;
             wchar_t wName[20] = {};
             Utf8ToWide(f.name, wName, 14);
             wchar_t line[64] = {};
-            _snwprintf_s(line, _TRUNCATE, L"Steam: %s", wName);
+            _snwprintf_s(line, _TRUNCATE, TrW(L"Хост: %s", L"Host: %s"), wName);
             addEntry(JACT_FRIEND_BASE + (int)i, f.steamId, line);
+        }
+
+        if (entries.empty() && SteamP2P_IsAvailable()) {
+            addEntry(JACT_REFRESH_FRIENDS, 0,
+                     TrW(L"Нет хостов в друзьях", L"No Friends Hosting"));
         }
 
         wchar_t connectLine[64] = {};
@@ -637,9 +643,9 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
         addEntry(JACT_PASTE_CLIPBOARD, 0,
                  TrW(L"Вставить из буфера", L"Paste Clipboard"));
 
-        if (SteamP2P_IsAvailable()) {
+        if (SteamP2P_IsAvailable() && !g_cachedFriends.empty()) {
             addEntry(JACT_REFRESH_FRIENDS, 0,
-                     TrW(L"Обновить друзей", L"Refresh Friends"));
+                     TrW(L"Обновить хостов", L"Refresh Hosts"));
         }
 
         addEntry(JACT_BACK, 0,
@@ -653,7 +659,7 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
         if (sel.action >= JACT_FRIEND_BASE) {
             _snprintf_s(g_joinAddress, sizeof(g_joinAddress), _TRUNCATE, "steam:%llu",
                         (unsigned long long)sel.steamId);
-            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to Steam friend %s", g_joinAddress);
+            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to hosting Steam friend %s", g_joinAddress);
             SaveSync_StartClient(g_joinAddress);
         } else if (sel.action == JACT_CONNECT_ADDR) {
             DiagLog_Printf("UI", "Native Co-op Join menu: connecting to address %s", g_joinAddress);
@@ -666,6 +672,13 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
             g_showManualJoinModal = true;
         } else if (sel.action == JACT_REFRESH_FRIENDS) {
             RefreshFriendsIfNeeded(true);
+            if (g_cachedFriends.empty()) {
+                TwoStates_AddToast(Tr("В списке друзей Steam сейчас нет открытых серверов Workers & Resources",
+                                      "No open Workers & Resources Co-op servers found among your Steam friends"), 0);
+            } else {
+                TwoStates_AddToast(Tr("Список открытых серверов друзей обновлён!",
+                                      "Open friends' servers list updated!"), 1);
+            }
         } else if (sel.action == JACT_BACK) {
             g_nativePage = NATIVE_PAGE_COOP_HUB;
             BuildCoopHubMenu(menuObj, hasContinue, 0, 0);

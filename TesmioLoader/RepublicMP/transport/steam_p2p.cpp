@@ -335,6 +335,27 @@ bool SteamP2P_Init()
     }
 
     s_available = true;
+    if (pISteamFriends_ClearRichPresence) {
+        pISteamFriends_ClearRichPresence(s_pSteamFriends);
+    }
+
+    static bool s_checkedCmdLine = false;
+    if (!s_checkedCmdLine) {
+        s_checkedCmdLine = true;
+        const char* cmdLine = GetCommandLineA();
+        const char* p = cmdLine ? strstr(cmdLine, "+connect_steam ") : nullptr;
+        if (p) {
+            uint64_t parsed = _strtoui64(p + 15, nullptr, 10);
+            if (parsed >= 76561197960265728ULL) {
+                EnterCriticalSection(&s_lock);
+                _snprintf_s(s_pendingJoinTarget, sizeof(s_pendingJoinTarget), _TRUNCATE,
+                            "steam:%llu", (unsigned long long)parsed);
+                LeaveCriticalSection(&s_lock);
+                Logf("republicmp  STEAM_P2P: +connect_steam from command line -> %s", s_pendingJoinTarget);
+            }
+        }
+    }
+
     uint64_t myId = pISteamUser_GetSteamID(s_pSteamUser);
     const char* myName = pISteamFriends_GetPersonaName(s_pSteamFriends);
     Logf("republicmp  STEAM_P2P: initialized (SteamID=%llu, name='%s', relay=enabled)",
@@ -370,10 +391,57 @@ const char* SteamP2P_GetLocalPersonaName()
     return name ? name : "";
 }
 
+static volatile bool s_isHostingOpen = false;
+static volatile bool s_hostProbeDirty = false;
+
+struct FriendHostProbe {
+    uint64_t steamId;
+    bool hasPong;
+    bool isOpen;
+    ULONGLONG lastPingSentTick;
+    ULONGLONG lastPongRecvTick;
+};
+
+static std::vector<FriendHostProbe> s_hostProbes;
+
+static FriendHostProbe* FindOrCreateHostProbeLocked(uint64_t steamId)
+{
+    for (auto& fp : s_hostProbes) {
+        if (fp.steamId == steamId) return &fp;
+    }
+    if (s_hostProbes.size() >= 256) {
+        s_hostProbes.erase(s_hostProbes.begin());
+    }
+    FriendHostProbe fp = {};
+    fp.steamId = steamId;
+    s_hostProbes.push_back(fp);
+    return &s_hostProbes.back();
+}
+
+static void PumpChannelLocked(int channel);
+static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
+                                      uint32_t connId, const void* payload, uint32_t payloadLen);
+
+bool SteamP2P_ConsumeHostProbeDirty()
+{
+    if (!s_lockReady) return false;
+    bool dirty = false;
+    EnterCriticalSection(&s_lock);
+    dirty = s_hostProbeDirty;
+    s_hostProbeDirty = false;
+    LeaveCriticalSection(&s_lock);
+    return dirty;
+}
+
 void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends)
 {
     outFriends.clear();
     if (!SteamP2P_IsAvailable()) return;
+
+    ULONGLONG now = GetTickCount64();
+    EnterCriticalSection(&s_lock);
+    PumpChannelLocked(5555);
+    LeaveCriticalSection(&s_lock);
 
     const int k_EFriendFlagImmediate = 0x04;
     int count = pISteamFriends_GetFriendCount(s_pSteamFriends, k_EFriendFlagImmediate);
@@ -386,21 +454,53 @@ void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends)
         uint32_t appId = (uint32_t)(gameInfo.m_gameID & 0xFFFFFFULL);
         bool inSoviet = inGame && (appId == 784150);
 
-        if (state == 0 && !inSoviet) continue; // Offline
+        // Only consider friends who are currently playing Workers & Resources: Soviet Republic (AppID 784150)
+        if (!inSoviet) continue;
+
+        if (pISteamFriends_RequestFriendRichPresence) {
+            pISteamFriends_RequestFriendRichPresence(s_pSteamFriends, fid);
+        }
+
+        const char* conn = pISteamFriends_GetFriendRichPresence(s_pSteamFriends, fid, "connect");
+        const char* hostFlag = pISteamFriends_GetFriendRichPresence(s_pSteamFriends, fid, "republicmp_hosting");
+        bool rpHosting = (conn && strstr(conn, "+connect_steam") != nullptr) ||
+                         (hostFlag && strcmp(hostFlag, "1") == 0);
+
+        bool isHosting = rpHosting;
+        EnterCriticalSection(&s_lock);
+        FriendHostProbe* fp = FindOrCreateHostProbeLocked(fid);
+        if (fp) {
+            if (fp->lastPingSentTick == 0 || (now - fp->lastPingSentTick) >= 1200) {
+                fp->lastPingSentTick = now;
+                pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, fid);
+                SendUnreliableFrameLocked(fid, 5555, 5 /* P2P_FRAME_HOST_PING */, 0, nullptr, 0);
+            }
+            if (fp->hasPong && (now - fp->lastPongRecvTick) <= 6000) {
+                isHosting = fp->isOpen;
+            }
+        }
+        LeaveCriticalSection(&s_lock);
+
+        // Only display friends who are ALREADY actively hosting an open Co-op server
+        if (!isHosting) continue;
 
         SteamFriendEntry entry = {};
         entry.steamId = fid;
         const char* fname = pISteamFriends_GetFriendPersonaName(s_pSteamFriends, fid);
         strncpy_s(entry.name, fname ? fname : "Steam Friend", _TRUNCATE);
-        entry.inThisGame = inSoviet;
+        entry.inThisGame = true;
+        entry.isHosting = true;
         entry.personaState = state;
-        const char* conn = pISteamFriends_GetFriendRichPresence(s_pSteamFriends, fid, "connect");
-        if (conn) strncpy_s(entry.connectString, conn, _TRUNCATE);
+        if (conn && conn[0]) {
+            strncpy_s(entry.connectString, conn, _TRUNCATE);
+        } else {
+            _snprintf_s(entry.connectString, sizeof(entry.connectString), _TRUNCATE,
+                        "+connect_steam %llu", (unsigned long long)fid);
+        }
         outFriends.push_back(entry);
     }
 
     std::sort(outFriends.begin(), outFriends.end(), [](const SteamFriendEntry& a, const SteamFriendEntry& b) {
-        if (a.inThisGame != b.inThisGame) return a.inThisGame > b.inThisGame;
         return _stricmp(a.name, b.name) < 0;
     });
 }
@@ -420,13 +520,24 @@ bool SteamP2P_InviteFriend(uint64_t friendSteamId)
 
 void SteamP2P_SetHostingPresence(bool hosting)
 {
+    s_isHostingOpen = hosting;
     if (!SteamP2P_IsAvailable()) return;
     if (hosting) {
         uint64_t myId = SteamP2P_GetLocalSteamId();
         char connectCmd[64] = {};
         _snprintf_s(connectCmd, sizeof(connectCmd), _TRUNCATE, "+connect_steam %llu", (unsigned long long)myId);
         pISteamFriends_SetRichPresence(s_pSteamFriends, "connect", connectCmd);
-        pISteamFriends_SetRichPresence(s_pSteamFriends, "status", "RepublicMP Co-op");
+        pISteamFriends_SetRichPresence(s_pSteamFriends, "republicmp_hosting", "1");
+        pISteamFriends_SetRichPresence(s_pSteamFriends, "status", "RepublicMP Co-op (Open)");
+
+        const int k_EFriendFlagImmediate = 0x04;
+        int count = pISteamFriends_GetFriendCount(s_pSteamFriends, k_EFriendFlagImmediate);
+        for (int i = 0; i < count; ++i) {
+            uint64_t fid = pISteamFriends_GetFriendByIndex(s_pSteamFriends, i, k_EFriendFlagImmediate);
+            if (fid && pISteamFriends_GetFriendPersonaState(s_pSteamFriends, fid) != 0) {
+                pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, fid);
+            }
+        }
     } else {
         pISteamFriends_ClearRichPresence(s_pSteamFriends);
     }
@@ -478,10 +589,12 @@ uint64_t SteamP2P_ParseTargetSteamId(const char* target)
 #define P2P_MAX_CHUNK       32768U      // 32 KB reliable chunks
 
 enum P2PFrameType : uint8_t {
-    P2P_FRAME_SYN     = 1,
-    P2P_FRAME_SYN_ACK = 2,
-    P2P_FRAME_DATA    = 3,
-    P2P_FRAME_FIN     = 4,
+    P2P_FRAME_SYN       = 1,
+    P2P_FRAME_SYN_ACK   = 2,
+    P2P_FRAME_DATA      = 3,
+    P2P_FRAME_FIN       = 4,
+    P2P_FRAME_HOST_PING = 5,
+    P2P_FRAME_HOST_PONG = 6,
 };
 
 #pragma pack(push, 1)
@@ -565,6 +678,34 @@ static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t
         (int)port);
 }
 
+static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
+                                      uint32_t connId, const void* payload, uint32_t payloadLen)
+{
+    if (s_shuttingDown || !s_available || !s_pSteamNetworking) return false;
+    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
+        s_shuttingDown = true;
+        s_available = false;
+        return false;
+    }
+    std::vector<uint8_t> packet(sizeof(P2PFrameHeader) + payloadLen);
+    P2PFrameHeader* hdr = (P2PFrameHeader*)packet.data();
+    hdr->magic = P2P_FRAME_MAGIC;
+    hdr->type = type;
+    hdr->port = port;
+    hdr->connId = connId;
+    hdr->payloadLen = payloadLen;
+    if (payloadLen > 0 && payload) {
+        memcpy(packet.data() + sizeof(P2PFrameHeader), payload, payloadLen);
+    }
+    return pISteamNetworking_SendP2PPacket(
+        s_pSteamNetworking,
+        remoteSteamId,
+        packet.data(),
+        (uint32_t)packet.size(),
+        k_EP2PSendUnreliableNoDelay,
+        (int)port);
+}
+
 static void PumpChannelLocked(int channel)
 {
     if (s_shuttingDown || !s_available || !s_pSteamNetworking) return;
@@ -595,6 +736,26 @@ static void PumpChannelLocked(int channel)
 
         const uint8_t* payload = buf.data() + sizeof(P2PFrameHeader);
         ULONGLONG now = GetTickCount64();
+
+        if (hdr->type == P2P_FRAME_HOST_PING) {
+            uint8_t openByte = s_isHostingOpen ? 1 : 0;
+            SendUnreliableFrameLocked(sender, hdr->port, P2P_FRAME_HOST_PONG, 0, &openByte, 1);
+            continue;
+        }
+
+        if (hdr->type == P2P_FRAME_HOST_PONG) {
+            bool isOpen = (hdr->payloadLen >= 1 && payload[0] != 0);
+            FriendHostProbe* fp = FindOrCreateHostProbeLocked(sender);
+            if (fp) {
+                if (!fp->hasPong || fp->isOpen != isOpen) {
+                    s_hostProbeDirty = true;
+                }
+                fp->hasPong = true;
+                fp->isOpen = isOpen;
+                fp->lastPongRecvTick = now;
+            }
+            continue;
+        }
 
         if (hdr->type == P2P_FRAME_SYN) {
             // If already accepted in an active slot, re-send SYN_ACK

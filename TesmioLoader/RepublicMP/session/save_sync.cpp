@@ -11,6 +11,7 @@
 #include "../save/save_zip.h"
 #include "../ui/ui_log.h"
 #include "../ui/sync_block.h"
+#include "../ui/native_menu.h"
 #include "../ui/lang.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
@@ -855,10 +856,10 @@ static void RunHostSession()
         return;
     }
 
-    SteamP2P_SetHostingPresence(true);
     bool rejoin = false; // a re-sync: the player is expected back right away
     while (!g_disconnectRequested) {
         SetState(SESSION_HOST_LISTENING);
+        SteamP2P_SetHostingPresence(!rejoin);
         if (!rejoin) {
             SetPeerIp("");
             SaveStatus("[HOST] hosting on port %d (TCP + Steam P2P) - waiting for a player", SAVE_SYNC_PORT);
@@ -882,6 +883,7 @@ static void RunHostSession()
             break;
         }
 
+        SteamP2P_SetHostingPresence(false);
         char peer[64];
         PeerIpOf(sock, peer, sizeof(peer));
         SetPeerIp(peer);
@@ -1398,7 +1400,7 @@ void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
     DiagLog_FrameTick();
-    if (g_state == SESSION_IDLE) {
+    if (g_state == SESSION_IDLE && (NativeMenu_GetActiveScreenId() != 0 || SaveSync_IsWorldLoaded())) {
         char steamJoinTarget[64] = {};
         if (SteamP2P_ConsumePendingJoin(steamJoinTarget, sizeof(steamJoinTarget))) {
             SaveSync_StartClient(steamJoinTarget);

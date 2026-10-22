@@ -14,6 +14,7 @@ struct SteamFriendEntry {
     uint64_t steamId;
     char name[64];
     bool inThisGame;
+    bool isHosting;
     int personaState; // 0=Offline, 1=Online, 2=Busy, 3=Away, 4=Snooze, ...
     char connectString[128];
 };
@@ -30,8 +31,12 @@ bool SteamP2P_IsAvailable();
 uint64_t SteamP2P_GetLocalSteamId();
 const char* SteamP2P_GetLocalPersonaName();
 
-// Refreshes and returns the list of online Steam friends (friends playing W&R first).
+// Refreshes and returns the list of Steam friends currently playing W&R (AppID 784150)
+// and actively hosting an open Co-op server.
 void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends);
+
+// Returns true (and clears the flag) if a P2P host probe reply arrived since the last check.
+bool SteamP2P_ConsumeHostProbeDirty();
 
 // Sends a Steam game invite to a friend.
 bool SteamP2P_InviteFriend(uint64_t friendSteamId);
