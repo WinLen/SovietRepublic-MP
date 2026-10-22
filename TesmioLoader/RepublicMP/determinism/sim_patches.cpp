@@ -3,6 +3,7 @@
 #include "sim_patches.h"
 #include "../lockstep/commands.h"
 #include "../world_sync/local_builds.h"
+#include "../world_sync/networks/road_sync.h"
 #include "../lockstep/purchase.h"
 #include "../lockstep/route_tools.h"
 #include "../lockstep/game_calls.h"
@@ -821,6 +822,9 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x418F90 ? (unsigned __int64)&HoverTools_RailRemove
                                   : kToolCalls[i][1] == 0x4182D0 ? (unsigned __int64)&HoverTools_Junction
                                   : kToolCalls[i][1] == 0x1D51A0 ? (unsigned __int64)&SourceSlots_AddSourceTool
+                                  : kToolCalls[i][1] == 0x214530 ? (unsigned __int64)&RoadSync_CtrlRectUpgradeTool
+                                  : kToolCalls[i][1] == 0x213870 ? (unsigned __int64)&RoadSync_CtrlRectDemolishTool
+                                  : kToolCalls[i][1] == 0x214220 ? (unsigned __int64)&RoadSync_ShiftCancelTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common

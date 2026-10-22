@@ -197,6 +197,40 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     return true;
 }
 
+#define CLEAR_TREES_RVA 0x3AE120
+#define PAINT_GROUND_RVA 0x40EAA0
+#define DEMOLISH_TREES_SITE_RVA 0x3ADEB6
+#define DEMOLISH_PAINT_SITE_RVA 0x3ADF12
+#define KIND_DEMOLISH_GROUND 4
+
+typedef void (*ClearTreesFn)(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5);
+typedef void (*PaintGroundFn)(U64 terrainPaint, U64 a2, const float* pos, float radius, float a5, unsigned char a6);
+
+static void RelayDemolishTreesGround(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5)
+{
+    if (!Commands_TakeLocal()) {
+        ((ClearTreesFn)(g_exeBase + CLEAR_TREES_RVA))(world, pos, radius, a4, a5);
+        return;
+    }
+    __try {
+        if (!TwoStates_CheckDemolishAllowed(pos[0], pos[2], "снос деревьев/объектов")) return;
+        BrushMsg m = {};
+        m.origin = g_origin;
+        m.kind = KIND_DEMOLISH_GROUND;
+        memcpy(m.sample.cursor, pos, 12);
+        m.sample.brush = radius;
+        Commands_Submit(LS_CMD_BRUSH, &m, sizeof(m));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void RelayDemolishPaintGround(U64 terrainPaint, U64 a2, const float* pos, float radius, float a5, unsigned char a6)
+{
+    if (!Commands_TakeLocal()) {
+        ((PaintGroundFn)(g_exeBase + PAINT_GROUND_RVA))(terrainPaint, a2, pos, radius, a5, a6);
+    }
+}
+
 bool BrushTools_Install()
 {
     for (const InputSite& s : kInputSites) {
@@ -223,16 +257,22 @@ bool BrushTools_Install()
     }
     BYTE* relay = AllocNear(g_exeBase, 4096);
     if (!relay) return false;
-    void* targets[3] = { (void*)&RelayPressOff, (void*)&RelayPress, (void*)&RelayLedger };
+    void* targets[5] = {
+        (void*)&RelayPressOff,
+        (void*)&RelayPress,
+        (void*)&RelayLedger,
+        (void*)&RelayDemolishTreesGround,
+        (void*)&RelayDemolishPaintGround
+    };
     DWORD old;
-    VirtualProtect(relay, 48, PAGE_EXECUTE_READWRITE, &old);
-    for (int g = 0; g < 3; g++) {
+    VirtualProtect(relay, 80, PAGE_EXECUTE_READWRITE, &old);
+    for (int g = 0; g < 5; g++) {
         BYTE* r = relay + g * 16;
         r[0] = 0xFF; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
         memcpy(r + 6, &targets[g], 8);
     }
-    VirtualProtect(relay, 48, PAGE_EXECUTE_READ, &old);
-    FlushInstructionCache(GetCurrentProcess(), relay, 48);
+    VirtualProtect(relay, 80, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, 80);
     for (unsigned site : kLedgerCalls) {
         BYTE* at = g_exeBase + site;
         long long to = (long long)(relay + 2 * 16) - (long long)(at + 5);
@@ -245,6 +285,28 @@ bool BrushTools_Install()
         memcpy(at, code, 5);
         VirtualProtect(at, 5, prot, &prot);
         FlushInstructionCache(GetCurrentProcess(), at, 5);
+    }
+    const unsigned int kDemGroundSites[2][2] = {
+        { DEMOLISH_TREES_SITE_RVA, CLEAR_TREES_RVA },
+        { DEMOLISH_PAINT_SITE_RVA, PAINT_GROUND_RVA }
+    };
+    for (int d = 0; d < 2; d++) {
+        BYTE* at = g_exeBase + kDemGroundSites[d][0];
+        int rel = 0;
+        memcpy(&rel, at + 1, 4);
+        if (at[0] == 0xE8 && kDemGroundSites[d][0] + 5 + rel == kDemGroundSites[d][1]) {
+            long long to = (long long)(relay + (3 + d) * 16) - (long long)(at + 5);
+            if (to >= INT_MIN && to <= INT_MAX) {
+                unsigned char code[5] = { 0xE8, 0, 0, 0, 0 };
+                int rel32 = (int)to;
+                memcpy(code + 1, &rel32, 4);
+                DWORD prot;
+                VirtualProtect(at, 5, PAGE_EXECUTE_READWRITE, &prot);
+                memcpy(at, code, 5);
+                VirtualProtect(at, 5, prot, &prot);
+                FlushInstructionCache(GetCurrentProcess(), at, 5);
+            }
+        }
     }
     for (const InputSite& s : kInputSites) {
         BYTE* at = g_exeBase + s.site;
@@ -480,6 +542,17 @@ bool BrushTools_ApplyCommand(const void* data, size_t size)
     BrushMsg m;
     memcpy(&m, data, sizeof(m));
     m.name[NAME_BYTES - 1] = 0;
+    if (m.kind == KIND_DEMOLISH_GROUND) {
+        U64 world = (U64)World();
+        __try {
+            ((ClearTreesFn)(g_exeBase + CLEAR_TREES_RVA))(world, m.sample.cursor, m.sample.brush, 1, 0);
+            U64 tp = *(U64*)(world + 0xF570);
+            if (tp) ((PaintGroundFn)(g_exeBase + PAINT_GROUND_RVA))(tp, 0, m.sample.cursor, 3.0f, 0.0f, 0);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+        return true;
+    }
     if (m.kind < 0 || m.kind >= KINDS || !BrushTools_Ready(m.kind)) return false;
     U64 record = 0;
     __try {

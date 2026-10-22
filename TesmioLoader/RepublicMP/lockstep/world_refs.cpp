@@ -6,6 +6,7 @@
 #define LINES_OFFSET 0x12800
 #define VEHICLES_OFFSET 0x12810
 #define BUILDINGS_OFFSET 0x11B08
+#define CONSTRUCTIONS_OFFSET 0x11C28
 #define NODE_LIST 0x298
 
 static const unsigned kNodeFields[2] = { 0xF908, 0xFA28 };
@@ -66,15 +67,24 @@ U64 Ref_VehicleAt(const RouteRef& r)
 
 bool Ref_Building(U64 building, RouteRef& r)
 {
-    r.list = 0;
-    if (!building || !Find((U64)World() + BUILDINGS_OFFSET, building, &r.place)) return false;
-    r.check = *(unsigned*)building;
-    return true;
+    if (!building) return false;
+    if (Find((U64)World() + BUILDINGS_OFFSET, building, &r.place)) {
+        r.list = 0;
+        r.check = *(unsigned*)building;
+        return true;
+    }
+    if (Find((U64)World() + CONSTRUCTIONS_OFFSET, building, &r.place)) {
+        r.list = 1;
+        r.check = *(unsigned*)building;
+        return true;
+    }
+    return false;
 }
 
 U64 Ref_BuildingAt(const RouteRef& r)
 {
-    U64 b = At((U64)World() + BUILDINGS_OFFSET, r.place);
+    U64 vec = (U64)World() + (r.list == 1 ? CONSTRUCTIONS_OFFSET : BUILDINGS_OFFSET);
+    U64 b = At(vec, r.place);
     return b && *(unsigned*)b == r.check ? b : 0;
 }
 

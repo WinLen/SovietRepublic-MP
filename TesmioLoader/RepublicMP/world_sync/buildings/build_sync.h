@@ -44,6 +44,7 @@
 #include "../../core/host_config.h"
 #include "../networks/road_sync.h" // RoadSyncSegment (access roads)
 #include "build_mode.h"
+#include "../../lockstep/world_refs.h" // RouteRef
 #include "../../session/sync_check.h" // SyncCheckWire
 #include "../../session/weather.h" // WeatherWire
 #include "../../session/settings_sync.h" // SettingWire
@@ -68,7 +69,7 @@
 struct BuildSyncMsg {
     int kind;                   // BUILD_SYNC_KIND_*
     int terrainFence;           // TerrainSync_GetFenceSeq() at send
-    BuildMode mode;             // PLACE / ACCESS_ROAD: sender's rubles/dollars/realistic choice
+    BuildMode mode;             // PLACE / ACCESS_ROAD / DEMOLISH: sender's rubles/dollars/realistic choice
     float x, y, z;              // PLACE: main object position (verification only); DEMOLISH: the building (obj+0x350)
     float rotSin, rotCos;       // main object yaw (obj+0x340 / obj+0x348)
     char typeName[64];          // building type, e.g. "residental_brick_1"
@@ -79,6 +80,17 @@ struct BuildSyncMsg {
     // DEMOLISH only
     int demolishCategory;       // *(obj+0x318)+0x360, -1 = unknown
     unsigned long long demolishArgs[5]; // FUN_140168730's p3..p7, raw
+    unsigned char demolishEb1;  // *(BYTE*)(building + 0xEB1) before call
+    unsigned char demolishShift; // *(int*)(g_exeBase + 0x9D5A08) != 0
+    unsigned char demolishCtrl;  // *(int*)(g_exeBase + 0x9D5A0C) != 0
+    unsigned char fromDialog424; // callerRva == 0x7FD000 (dialog 0x424 confirmation)
+    unsigned char autoSearchOffices; // *(BYTE*)(thisPtr + 0xC798)
+    unsigned char assignFromTool; // callerRva == 0x1DAA78 || callerRva == 0x1DAFFE ("building_adddemolition")
+    unsigned char assignPriority; // *(BYTE*)(g_exeBase + 0xA54BAD) (Ctrl held in demolition office tool)
+    unsigned char assignIsDemolishOffice; // office category == 104
+    int sliderValue;            // 0x0FF6A0(*(void**)(thisPtr + 0xC790))
+    RouteRef assignOffice;      // Ref_Building(*(U64*)(thisPtr + 0xD298))
+    float assignDist;           // *(float*)(thisPtr + 0xF5C0) for 0x1DAFFE, 0.0f for 0x1DAA78
     // SPEED only
     int speed;                  // thisPtr+0x5a4
     int speedSaved;             // thisPtr+0x5a8
@@ -116,7 +128,7 @@ void BuildSync_SendPlacement(const BuildSyncMsg& msg);
 void BuildSync_SendAccessRoad(const RoadSyncSegment& seg);
 
 // Sends a local demolition (world_sync/buildings/demolish_hook). Game thread only.
-void BuildSync_SendDemolish(const float pos[3], int category, const unsigned long long args[5]);
+void BuildSync_SendDemolish(const BuildSyncMsg& msg);
 
 // Sends a game-speed message (dropped while not connected - the host
 // re-sends its speed when the sync starts). Game thread only.

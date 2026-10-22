@@ -477,15 +477,12 @@ void BuildSync_SendAccessRoad(const RoadSyncSegment& seg)
     SendOrQueue(msg, std::make_shared<RoadSyncSegment>(seg));
 }
 
-void BuildSync_SendDemolish(const float pos[3], int category, const unsigned long long args[5])
+void BuildSync_SendDemolish(const BuildSyncMsg& in)
 {
-    BuildSyncMsg msg = {};
+    BuildSyncMsg msg = in;
     msg.kind = BUILD_SYNC_KIND_DEMOLISH;
     msg.terrainFence = TerrainSync_GetFenceSeq();
-    msg.x = pos[0]; msg.y = pos[1]; msg.z = pos[2];
     strcpy_s(msg.typeName, "<demolish>");
-    msg.demolishCategory = category;
-    for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
     SendOrQueue(msg);
 }
 
@@ -1074,7 +1071,7 @@ static bool ApplyOneRemoteDemolish(__int64 thisPtr, const BuildSyncMsg& msg)
 
     TerrainSync_BeginForeignReplay();
     InterlockedIncrement(&g_applyingRemote);
-    bool ok = DemolishHook_CallOriginal(thisPtr, found, msg.demolishArgs);
+    bool ok = DemolishHook_CallOriginal(thisPtr, found, msg);
     InterlockedDecrement(&g_applyingRemote);
     TerrainSync_EndForeignReplay();
 
@@ -1082,16 +1079,21 @@ static bool ApplyOneRemoteDemolish(__int64 thisPtr, const BuildSyncMsg& msg)
     // that stays in the list until workers finish.
     bool stillListed = false;
     __try {
-        __int64* it = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        __int64* end = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end; ++it)
-            if (*it == found) { stillListed = true; break; }
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2 && !stillListed; ++v) {
+            __int64* it = *(__int64**)((uintptr_t)g_exeBase + kBeginRvas[v]);
+            __int64* end = *(__int64**)((uintptr_t)g_exeBase + kEndRvas[v]);
+            for (; it && it < end; ++it)
+                if (*it == found) { stillListed = true; break; }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    Logf("republicmp  BUILD_SYNC: demolish at (%.2f,%.2f,%.2f) category=%d args=[%llx,%llx,%llx,%llx,%llx] %s",
+    Logf("republicmp  BUILD_SYNC: demolish at (%.2f,%.2f,%.2f) category=%d args=[%llx,%llx,%llx,%llx,%llx] eb1=%u shift=%u ctrl=%u %s",
          msg.x, msg.y, msg.z, msg.demolishCategory,
          msg.demolishArgs[0] & 0xff, msg.demolishArgs[1] & 0xff, msg.demolishArgs[2] & 0xff,
          msg.demolishArgs[3] & 0xff, msg.demolishArgs[4] & 0xff,
+         msg.demolishEb1, msg.demolishShift, msg.demolishCtrl,
          !ok ? "THREW" : stillListed ? "applied - building STILL in the list (demolition site?)" : "applied - building removed");
     return ok;
 }

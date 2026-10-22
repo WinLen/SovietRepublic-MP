@@ -10,6 +10,7 @@
 #include "../view_list_scope.h"
 #include "../replay_menus.h"
 #include "../../determinism/determinism.h"
+#include "../../session/two_states.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -1370,10 +1371,13 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
     __try {
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
         if (manager) {
+            int demType = (m.demolishType >= 100 || m.demolishType == -20) ? m.demolishType : ROAD_DEMOLISH_TYPE;
+            BuildMode savedMode = BuildMode_Read();
             unsigned char savedHeld = *lmbHeld, savedPressed = *lmbJustPressed;
             float* cursor = (float*)(thisPtr + CURSOR_X_OFFSET);
             float savedCursor[3] = { cursor[0], cursor[1], cursor[2] };
             __try {
+                BuildMode_Write(m.mode);
                 HoverGlobals_Clear();
                 if (g_applyHover) ApplyHoverRefs(manager, *g_applyHover);
                 *lmbHeld = 0;
@@ -1381,7 +1385,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                 cursor[0] = m.cursor[0]; cursor[1] = m.cursor[1]; cursor[2] = m.cursor[2];
                 reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
                 float c[3] = { m.cursor[0], m.cursor[1], m.cursor[2] };
-                fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                fcaf0(manager, c, demType, 0, 0, 0, 0, 0, 0, 0);
                 if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0 && m.hasRange) {
                     // Picking by cursor skips short segments; the tool removes
                     // those through the hovered node (FUN_1403abc90 ~290-320,
@@ -1405,7 +1409,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                             if (!tryNodes[k]) continue;
                             *(__int64*)((uintptr_t)g_exe + HOVER_NODE_RVA) = tryNodes[k];
                             reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
-                            fcaf0(manager, c, ROAD_DEMOLISH_TYPE, 0, 0, 0, 0, 0, 0, 0);
+                            fcaf0(manager, c, demType, 0, 0, 0, 0, 0, 0, 0);
                             viaNode = *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0;
                         }
                         // The sender's tool hit this piece with its camera's ray
@@ -1459,6 +1463,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                 }
                 reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
             } __finally {
+                BuildMode_Write(savedMode);
                 HoverGlobals_Clear(); // the hovered node may be gone now
                 *lmbHeld = savedHeld;
                 *lmbJustPressed = savedPressed;
@@ -1503,6 +1508,8 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
         RoadSyncDemolishMsg one = {};
         one.seq = m.seq;
         one.category = m.category;
+        one.demolishType = m.demolishType;
+        one.mode = m.mode;
         bool found = false;
         __try {
             __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
@@ -2559,6 +2566,34 @@ static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, uns
     return PlanStartCommon(true, _ReturnAddress(), network, dollars, rubles, count, group);
 }
 
+typedef __int64 (*CancelSegFn)(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5);
+#define CANCEL_SEG_RVA 0x5434C0
+#define BOTTOM_BAR_CANCEL_CALL_RVA 0x39F497
+
+static ULONGLONG g_lastBottomBarCancelMs = 0;
+static __int64 g_lastBottomBarCancelNet = 0;
+
+static __int64 HookedBottomBarCancelSeg(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5)
+{
+    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
+        ULONGLONG now = GetTickCount64();
+        if (g_lastBottomBarCancelNet != network || now - g_lastBottomBarCancelMs > 50) {
+            g_lastBottomBarCancelNet = network;
+            g_lastBottomBarCancelMs = now;
+            int lsCategory = RoadSync_CategoryForManager(GetWorldThisPtr(), network);
+            if (lsCategory >= 0) {
+                RoadSyncPlanStartMsg m = {};
+                m.category = lsCategory;
+                m.exceptGroup = 2;
+                m.mode = BuildMode_Read();
+                Commands_Submit(LS_CMD_PLAN_START, &m, sizeof(m));
+            }
+        }
+        return 0;
+    }
+    return ((CancelSegFn)(g_exeBase + CANCEL_SEG_RVA))(network, seg, p3, p4, p5);
+}
+
 bool RoadSync_InstallPlanStartHooks()
 {
     bool a = InstallInlineHook(g_exeBase + PLAN_START_RVA, (void*)HookedPlanStart, (void**)&g_origPlanStart,
@@ -2566,6 +2601,28 @@ bool RoadSync_InstallPlanStartHooks()
     bool b = InstallInlineHook(g_exeBase + PLAN_START_EXCEPT_RVA, (void*)HookedPlanStartExcept,
                                (void**)&g_origPlanStartExcept, kPlanStartExceptExpect, sizeof(kPlanStartExceptExpect),
                                "republicmp plan start except");
+    BYTE* callAt = g_exeBase + BOTTOM_BAR_CANCEL_CALL_RVA;
+    int rel = 0;
+    memcpy(&rel, callAt + 1, 4);
+    if (callAt[0] == 0xE8 && BOTTOM_BAR_CANCEL_CALL_RVA + 5 + rel == CANCEL_SEG_RVA) {
+        BYTE* relay = AllocNear(callAt, 64);
+        if (relay) {
+            void* target = (void*)&HookedBottomBarCancelSeg;
+            DWORD old;
+            VirtualProtect(relay, 16, PAGE_EXECUTE_READWRITE, &old);
+            relay[0] = 0xFF; relay[1] = 0x25; relay[2] = relay[3] = relay[4] = relay[5] = 0;
+            memcpy(relay + 6, &target, 8);
+            VirtualProtect(relay, 16, PAGE_EXECUTE_READ, &old);
+            FlushInstructionCache(GetCurrentProcess(), relay, 16);
+            int relToRelay = (int)((long long)relay - (long long)(callAt + 5));
+            unsigned char patch[5] = { 0xE8, 0, 0, 0, 0 };
+            memcpy(patch + 1, &relToRelay, 4);
+            VirtualProtect(callAt, 5, PAGE_EXECUTE_READWRITE, &old);
+            memcpy(callAt, patch, 5);
+            VirtualProtect(callAt, 5, old, &old);
+            FlushInstructionCache(GetCurrentProcess(), callAt, 5);
+        }
+    }
     return a && b;
 }
 
@@ -2597,16 +2654,59 @@ static bool CallPlanStart(PlanStartFn fn, __int64 network, const RoadSyncPlanSta
     }
 }
 
+static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
+{
+    *outRemoved = 0;
+    __try {
+        __int64* begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
+        if (begin && end > begin) {
+            for (long long i = (end - begin) - 1; i >= 0; --i) {
+                __int64 seg = begin[i];
+                if (!seg || *(unsigned char*)(seg + EDGE_PLANNED_OFFSET) == 0) continue;
+                ((CancelSegFn)(g_exeBase + CANCEL_SEG_RVA))(network, seg, 0, -1, 0);
+                (*outRemoved)++;
+                begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+                end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
+                if (!begin || i > end - begin) i = end - begin;
+            }
+        }
+        ((void(*)(__int64))(g_exeBase + 0x4FAE50))(network);
+        if (category == ROAD_SYNC_CATEGORY_RAIL) {
+            ((void(*)(__int64))(g_exeBase + 0x592990))(GetWorldThisPtr() + 0xF908);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 {
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
-    PlanStartFn fn = m.exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
     __int64 network = 0;
     __try {
         network = info ? *(__int64*)(GetWorldThisPtr() + info->managerOffset) : 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         network = 0;
     }
+    if (m.exceptGroup == 2) {
+        if (!network) {
+            SendAck(m.seq, m.category, false, 1);
+            return;
+        }
+        int removed = 0;
+        InterlockedIncrement(&g_applyingSegment);
+        TerrainSync_BeginForeignReplay();
+        bool ok = CallCancelAllPlanned(network, m.category, &removed);
+        TerrainSync_EndForeignReplay();
+        InterlockedDecrement(&g_applyingSegment);
+        Logf("republicmp  ROAD_SYNC: cancel all planned %s - %s: %d plan(s) removed",
+             CategoryName(m.category), ok ? "applied" : "THREW", removed);
+        SendAck(m.seq, m.category, ok, 1);
+        return;
+    }
+    PlanStartFn fn = m.exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
     if (!network || !fn) {
         Logf("republicmp  ROAD_SYNC: plan start seq=%d %s - no network here, skipped", m.seq, CategoryName(m.category));
         SendAck(m.seq, m.category, false, 1);
@@ -2637,6 +2737,9 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 // ---------------------------------------------------------------------------
 
 #define GROUP_TOOL_RVA 0x21C110
+#define CTRL_RECT_DEMOLISH_RVA 0x213870
+#define CTRL_RECT_UPGRADE_RVA 0x214530
+#define SHIFT_CANCEL_PLAN_RVA 0x214220
 #define GROUP_TOOL_YAW_RVA 0x9E9D20   // float: camera yaw that turns the box
 #define GROUP_TOOL_DOWN_RVA 0xA54E90  // byte: mouse button held
 #define GROUP_TOOL_PRESS_RVA 0xA54E91 // byte: mouse button pressed this frame
@@ -2724,6 +2827,11 @@ static __int64 HookedGroupTool(__int64 world, int mode)
             commit = false;
         }
         if (!commit) return g_origGroupTool(world, mode);
+        if (!TwoStates_CheckBuildAllowed(s.box[0], s.box[2], "групповое строительство") ||
+            !TwoStates_CheckBuildAllowed(s.box[3], s.box[5], "групповое строительство")) {
+            *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+            return 0;
+        }
         RoadSyncGroupToolMsg m = {};
         m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
         m.mode = mode;
@@ -2770,6 +2878,110 @@ static __int64 HookedGroupTool(__int64 world, int mode)
     return result;
 }
 
+static void HandleCtrlRectTool(__int64 world, int mode, unsigned int rva)
+{
+    typedef void (*RectToolFn)(__int64);
+    RectToolFn orig = (RectToolFn)(g_exeBase + rva);
+    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
+        GroupToolState s;
+        bool commit = false;
+        __try {
+            BYTE* w = (BYTE*)world;
+            ReadGroupToolState(world, s);
+            commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            commit = false;
+        }
+        if (!commit) {
+            orig(world);
+            return;
+        }
+        bool allowed = mode == 10
+            ? (TwoStates_CheckDemolishAllowed(s.box[0], s.box[2], "групповой снос") &&
+               TwoStates_CheckDemolishAllowed(s.box[3], s.box[5], "групповой снос"))
+            : (TwoStates_CheckBuildAllowed(s.box[0], s.box[2], "групповая модернизация") &&
+               TwoStates_CheckBuildAllowed(s.box[3], s.box[5], "групповая модернизация"));
+        if (!allowed) {
+            *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+            return;
+        }
+        RoadSyncGroupToolMsg m = {};
+        m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
+        m.mode = mode;
+        memcpy(m.box, s.box, sizeof(m.box));
+        memcpy(m.cursor, s.cursor, sizeof(m.cursor));
+        m.yaw = s.yaw;
+        m.buildMode = BuildMode_Read();
+        __try {
+            const char* tool = *(const char**)(world + 0xD428);
+            if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
+            for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+                __int64 mgr = *(__int64*)(world + g_categories[c].managerOffset);
+                if (mgr) {
+                    m.managerTypes[c] = *(int*)(mgr + MGR_TYPE_OFFSET);
+                    m.managerVariants[c] = *(int*)(mgr + MGR_VARIANT_OFFSET);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        Commands_Submit(LS_CMD_GROUP_TOOL, &m, sizeof(m));
+        *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+        return;
+    }
+    orig(world);
+}
+
+void RoadSync_CtrlRectDemolishTool(__int64 world)
+{
+    HandleCtrlRectTool(world, 10, CTRL_RECT_DEMOLISH_RVA);
+}
+
+void RoadSync_CtrlRectUpgradeTool(__int64 world)
+{
+    HandleCtrlRectTool(world, 11, CTRL_RECT_UPGRADE_RVA);
+}
+
+void RoadSync_ShiftCancelTool(__int64 world)
+{
+    typedef void (*ShiftCancelFn)(__int64);
+    ShiftCancelFn orig = (ShiftCancelFn)(g_exeBase + SHIFT_CANCEL_PLAN_RVA);
+    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
+        BYTE* w = (BYTE*)world;
+        BYTE* press = g_exeBase + GROUP_TOOL_PRESS_RVA;
+        bool clicked = false;
+        __try {
+            clicked = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && *press != 0;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            clicked = false;
+        }
+        if (clicked) {
+            float cx = *(float*)(world + WORLD_CURSOR_OFFSET);
+            float cz = *(float*)(world + WORLD_CURSOR_OFFSET + 8);
+            if (TwoStates_CheckDemolishAllowed(cx, cz, "отмена планируемого участка")) {
+                RoadSyncGroupToolMsg m = {};
+                m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
+                m.mode = 12;
+                __try {
+                    memcpy(m.box, (const void*)(world + 0xF60), 12);
+                    memcpy(m.box + 3, (const void*)(g_exeBase + 0x9E9D10), 12);
+                    memcpy(m.cursor, (const void*)(world + WORLD_CURSOR_OFFSET), 12);
+                    m.buildMode = BuildMode_Read();
+                    const char* tool = *(const char**)(world + 0xD428);
+                    if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                }
+                Commands_Submit(LS_CMD_GROUP_TOOL, &m, sizeof(m));
+            }
+            BYTE savedPress = *press;
+            *press = 0;
+            orig(world);
+            *press = savedPress;
+            return;
+        }
+    }
+    orig(world);
+}
+
 bool RoadSync_InstallGroupToolHook()
 {
     return InstallInlineHook(g_exeBase + GROUP_TOOL_RVA, (void*)HookedGroupTool, (void**)&g_origGroupTool,
@@ -2794,10 +3006,52 @@ static void SendGroupToolCaptures()
     }
 }
 
-static bool CallGroupTool(__int64 world, int mode)
+static bool CallGroupTool(__int64 world, const RoadSyncGroupToolMsg& m)
 {
     __try {
-        g_origGroupTool(world, mode);
+        if (m.mode >= 0 && m.mode <= 3) {
+            g_origGroupTool(world, m.mode);
+            return true;
+        }
+        static char s_fakeToolRecord[0x400];
+        memset(s_fakeToolRecord, 0, sizeof(s_fakeToolRecord));
+        strncpy_s(s_fakeToolRecord, sizeof(s_fakeToolRecord), m.toolName, _TRUNCATE);
+        void* savedTool = *(void**)(world + 0xD428);
+        *(void**)(world + 0xD428) = s_fakeToolRecord;
+        if (m.mode == 10) {
+            ((void(*)(__int64))(g_exeBase + CTRL_RECT_DEMOLISH_RVA))(world);
+        } else if (m.mode == 11) {
+            int savedTypes[ROAD_SYNC_CATEGORY_COUNT] = {};
+            int savedVars[ROAD_SYNC_CATEGORY_COUNT] = {};
+            for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+                __int64 mgr = *(__int64*)(world + g_categories[c].managerOffset);
+                if (mgr) {
+                    savedTypes[c] = *(int*)(mgr + MGR_TYPE_OFFSET);
+                    savedVars[c] = *(int*)(mgr + MGR_VARIANT_OFFSET);
+                    *(int*)(mgr + MGR_TYPE_OFFSET) = m.managerTypes[c];
+                    *(int*)(mgr + MGR_VARIANT_OFFSET) = m.managerVariants[c];
+                }
+            }
+            ((void(*)(__int64))(g_exeBase + CTRL_RECT_UPGRADE_RVA))(world);
+            for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+                __int64 mgr = *(__int64*)(world + g_categories[c].managerOffset);
+                if (mgr) {
+                    *(int*)(mgr + MGR_TYPE_OFFSET) = savedTypes[c];
+                    *(int*)(mgr + MGR_VARIANT_OFFSET) = savedVars[c];
+                }
+            }
+        } else if (m.mode == 12) {
+            float savedRay[3], savedEye[3];
+            memcpy(savedRay, (const void*)(world + 0xF60), 12);
+            memcpy(savedEye, (const void*)(g_exeBase + 0x9E9D10), 12);
+            memcpy((void*)(world + 0xF60), m.box, 12);
+            memcpy((void*)(g_exeBase + 0x9E9D10), m.box + 3, 12);
+            g_exeBase[GROUP_TOOL_PRESS_RVA] = 1;
+            ((void(*)(__int64))(g_exeBase + SHIFT_CANCEL_PLAN_RVA))(world);
+            memcpy((void*)(world + 0xF60), savedRay, 12);
+            memcpy((void*)(g_exeBase + 0x9E9D10), savedEye, 12);
+        }
+        *(void**)(world + 0xD428) = savedTool;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -2808,7 +3062,8 @@ static bool CallGroupTool(__int64 world, int mode)
 static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
 {
     __int64 world = GetWorldThisPtr();
-    if (!g_origGroupTool || m.mode < 0 || m.mode > 3) {
+    bool validMode = (m.mode >= 0 && m.mode <= 3) || (m.mode >= 10 && m.mode <= 12);
+    if (!g_origGroupTool || !validMode) {
         Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d - not applied", m.seq, m.mode);
         SendAck(m.seq, m.category, false, 1);
         return;
@@ -2828,7 +3083,7 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
     BuildMode_Write(m.buildMode);
     InterlockedIncrement(&g_applyingSegment);
     TerrainSync_BeginForeignReplay();
-    bool ok = CallGroupTool(world, m.mode);
+    bool ok = CallGroupTool(world, m);
     TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     WriteGroupToolState(world, own); // this PC's own drag, cursor, camera and input

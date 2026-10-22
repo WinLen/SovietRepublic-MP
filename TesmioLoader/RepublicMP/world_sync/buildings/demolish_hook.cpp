@@ -10,6 +10,7 @@
 #include "../../session/two_states.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
+#pragma intrinsic(_AddressOfReturnAddress)
 
 #define WORLD_THIS_RVA 0x9D4F10
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // = thisPtr+0x11b08, finished buildings list
@@ -19,7 +20,7 @@
 #define OBJ_POS_OFFSET 0x350
 #define OBJ_TYPE_OFFSET 0x318          // building type record
 #define TYPE_CATEGORY_OFFSET 0x360     // int category in the type record
-#define OBJ_DEMOLISH_FLAG_OFFSET 0xeb1 // zeroed by both player paths before the call
+#define OBJ_DEMOLISH_FLAG_OFFSET 0xeb1 // zeroed by some player paths before the call, 1 in building window
 
 // mov rax,rsp / mov [rax+20],r9b / mov [rax+18],r8b / mov [rax+10],rdx -
 // 15 bytes, none RIP-relative (SOVIET64.exe, 2026-09-07).
@@ -49,9 +50,7 @@ bool DemolishHook_InDemolish()
 // Captured in the hook, sent from DemolishHook_Tick (game thread, after the
 // frame's terrain batch is closed, so the fence stamp covers it).
 struct DemolishCapture {
-    float pos[3];
-    int category;
-    unsigned long long args[5];
+    BuildSyncMsg msg;
     unsigned long long callerRva;
 };
 #define MAX_DEMOLISH_CAPTURES 32
@@ -77,6 +76,43 @@ static int BuildingCategory(__int64 building)
     return type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
 }
 
+static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigned long long args[5],
+                                unsigned long long callerRva, BuildSyncMsg& msg)
+{
+    const float* p = (const float*)(building + OBJ_POS_OFFSET);
+    msg.kind = BUILD_SYNC_KIND_DEMOLISH;
+    msg.mode = BuildMode_Read();
+    msg.x = p[0];
+    msg.y = p[1];
+    msg.z = p[2];
+    msg.demolishCategory = BuildingCategory(building);
+    for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
+    msg.demolishEb1 = *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET);
+    msg.demolishShift = (*(int*)(g_exeBase + 0x9D5A08) != 0) ? 1 : 0;
+    msg.demolishCtrl  = (*(int*)(g_exeBase + 0x9D5A0C) != 0) ? 1 : 0;
+    msg.fromDialog424 = (callerRva == 0x7FD000) ? 1 : 0;
+    msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC798);
+    msg.assignFromTool = (callerRva == 0x1DAA78 || callerRva == 0x1DAFFE) ? 1 : 0;
+    msg.assignPriority = (*(unsigned char*)(g_exeBase + 0xA54BAD) != 0) ? 1 : 0;
+    msg.assignIsDemolishOffice = 0;
+    msg.sliderValue = 0;
+    void* sliderWidget = *(void**)(thisPtr + 0xC790);
+    if (sliderWidget && (msg.demolishEb1 != 0 || msg.fromDialog424)) {
+        typedef float (*ReadSliderFn)(void*);
+        msg.sliderValue = (int)((ReadSliderFn)(g_exeBase + 0x0FF6A0))(sliderWidget);
+    }
+    msg.assignOffice = kNoRef;
+    msg.assignDist = 0.0f;
+    if (msg.assignFromTool) {
+        U64 office = *(U64*)(thisPtr + 0xD298);
+        if (office && Ref_Building(office, msg.assignOffice)) {
+            msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == 104) ? 1 : 0;
+        }
+        if (callerRva == 0x1DAFFE)
+            msg.assignDist = *(float*)(thisPtr + 0xF5C0);
+    }
+}
+
 static void Capture(__int64 thisPtr, __int64 building, const unsigned long long args[5], void* ret)
 {
     unsigned long long callerRva = (unsigned long long)((BYTE*)ret - g_exeBase);
@@ -95,10 +131,8 @@ static void Capture(__int64 thisPtr, __int64 building, const unsigned long long 
             return;
         }
         DemolishCapture& c = g_captures[g_captureCount++];
-        const float* p = (const float*)(building + OBJ_POS_OFFSET);
-        c.pos[0] = p[0]; c.pos[1] = p[1]; c.pos[2] = p[2];
-        c.category = BuildingCategory(building);
-        for (int k = 0; k < 5; k++) c.args[k] = args[k];
+        memset(&c, 0, sizeof(c));
+        PopulateDemolishMsg(thisPtr, building, args, callerRva, c.msg);
         c.callerRva = callerRva;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Logf("republicmp  DEMOLISH: <exception capturing demolition at caller 0x%llX>", callerRva);
@@ -109,7 +143,8 @@ static void Capture(__int64 thisPtr, __int64 building, const unsigned long long 
 // not made here; every PC demolishes the building at the next tick boundary
 // (BuildSync_ApplyDemolishCommand finds it by position and category, as the
 // replay does). True when it was taken.
-static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned long long args[5])
+static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned long long args[5],
+                              unsigned long long callerRva)
 {
     BuildSyncMsg msg = {};
     int bldId = 0;
@@ -117,13 +152,7 @@ static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned 
         if (thisPtr != (__int64)(g_exeBase + WORLD_THIS_RVA) || !building || !IsInBuildingsVector(building))
             return false;
         bldId = *(int*)building;
-        const float* p = (const float*)(building + OBJ_POS_OFFSET);
-        msg.kind = BUILD_SYNC_KIND_DEMOLISH;
-        msg.x = p[0];
-        msg.y = p[1];
-        msg.z = p[2];
-        msg.demolishCategory = BuildingCategory(building);
-        for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
+        PopulateDemolishMsg(thisPtr, building, args, callerRva, msg);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -139,6 +168,8 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
                            unsigned long long p7)
 {
     void* ret = _ReturnAddress();
+    void** retSlot = (void**)_AddressOfReturnAddress();
+    unsigned long long callerRva = (unsigned long long)((BYTE*)ret - g_exeBase);
     long depth = InterlockedIncrement(&g_depth);
 
     // Only outermost calls by local play; everything else is either a
@@ -146,7 +177,12 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
-        if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args)) {
+        if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args, callerRva)) {
+            if (callerRva == 0x7FD000) {
+                // Skip post-call 0x7FD000..0x7FD04E on the UI pass so it does not write
+                // +0x879/+0x630 before 0x168730 runs at the Lockstep boundary.
+                *retSlot = g_exeBase + 0x7FD04F;
+            }
             InterlockedDecrement(&g_depth);
             return;
         }
@@ -170,24 +206,70 @@ void DemolishHook_Tick()
     for (int k = 0; k < g_captureCount; k++) {
         const DemolishCapture& c = g_captures[k];
         Logf("republicmp  DEMOLISH: local demolition at (%.2f,%.2f,%.2f) category=%d caller=0x%llX "
-             "args=[%llx,%llx,%llx,%llx,%llx] - sending",
-             c.pos[0], c.pos[1], c.pos[2], c.category, c.callerRva,
-             c.args[0] & 0xff, c.args[1] & 0xff, c.args[2] & 0xff, c.args[3] & 0xff, c.args[4] & 0xff);
-        BuildSync_SendDemolish(c.pos, c.category, c.args);
+             "args=[%llx,%llx,%llx,%llx,%llx] eb1=%u shift=%u ctrl=%u - sending",
+             c.msg.x, c.msg.y, c.msg.z, c.msg.demolishCategory, c.callerRva,
+             c.msg.demolishArgs[0] & 0xff, c.msg.demolishArgs[1] & 0xff, c.msg.demolishArgs[2] & 0xff,
+             c.msg.demolishArgs[3] & 0xff, c.msg.demolishArgs[4] & 0xff,
+             c.msg.demolishEb1, c.msg.demolishShift, c.msg.demolishCtrl);
+        BuildSync_SendDemolish(c.msg);
     }
     g_captureCount = 0;
 }
 
-bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const unsigned long long args[5])
+bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyncMsg& msg)
 {
     DemolishFn fn = g_origDemolish ? g_origDemolish : (DemolishFn)(g_exeBase + HOOK_DEMOLISH_RVA);
     __try {
-        *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET) = 0;
+        BuildMode savedMode = BuildMode_Read();
+        int* shiftFlag = (int*)(g_exeBase + 0x9D5A08);
+        int* ctrlFlag  = (int*)(g_exeBase + 0x9D5A0C);
+        unsigned long long* af8Ptr = (unsigned long long*)(thisPtr + 0xAF8);
+        int savedShift = *shiftFlag;
+        int savedCtrl  = *ctrlFlag;
+        unsigned long long savedAf8 = *af8Ptr;
+
+        BuildMode_Write(msg.mode);
+        *shiftFlag = msg.demolishShift ? 1 : 0;
+        *ctrlFlag  = msg.demolishCtrl ? 1 : 0;
+        if (msg.assignFromTool)
+            *af8Ptr = 0;
+        *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET) = msg.demolishEb1;
+
         InterlockedIncrement(&g_depth);
         __try {
-            fn(thisPtr, building, args[0], args[1], args[2], args[3], args[4]);
+            fn(thisPtr, building, msg.demolishArgs[0], msg.demolishArgs[1], msg.demolishArgs[2],
+               msg.demolishArgs[3], msg.demolishArgs[4]);
         } __finally {
             InterlockedDecrement(&g_depth);
+            *af8Ptr = savedAf8;
+            *ctrlFlag = savedCtrl;
+            *shiftFlag = savedShift;
+            BuildMode_Write(savedMode);
+        }
+
+        if (IsInBuildingsVector(building)) {
+            if (msg.demolishEb1 != 0) {
+                *(int*)(building + 0x630) = msg.sliderValue;
+            }
+            if (msg.fromDialog424 && *(int*)(thisPtr + 0x5B8) > 1) {
+                if (msg.autoSearchOffices == 0)
+                    *(unsigned char*)(building + 0x879) = 0;
+                int maxW = *(int*)(building + 0x62C);
+                *(int*)(building + 0x630) = (msg.sliderValue < maxW) ? msg.sliderValue : maxW;
+            }
+            if (msg.assignFromTool && *(unsigned char*)(building + 0xEA8) != 0) {
+                U64 office = Ref_BuildingAt(msg.assignOffice);
+                if (office) {
+                    typedef void (*AssignOfficeFn)(__int64 world, __int64 office, __int64 target,
+                                                   float dist, unsigned char p5, unsigned char isDemolishOffice);
+                    ((AssignOfficeFn)(g_exeBase + 0x161C90))(thisPtr, (__int64)office, building,
+                                                             msg.assignDist, 0, msg.assignIsDemolishOffice);
+                    if (msg.assignPriority) {
+                        typedef void (*SetPriorityFn)(__int64 world, __int64 target, unsigned char prio);
+                        ((SetPriorityFn)(g_exeBase + 0x1A04F0))(thisPtr, building, 1);
+                    }
+                }
+            }
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {

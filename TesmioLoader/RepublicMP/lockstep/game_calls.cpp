@@ -151,6 +151,12 @@ static const GameCallSite kSites[] = {
     { 0x6FF31A, 0x3FFAD0, "building window: invite Soviet immigrants (tutorial)", "WxxB", 1, 0x187, false, CALL_INVITE_CITIZENS },
     { 0x6FF52D, 0x3FFAD0, "building window: invite Soviet immigrants (RUB)", "WxxB", 2, 0x1A2, false, CALL_INVITE_CITIZENS },
     { 0x6FFA4E, 0x3FFAD0, "building window: invite educated Soviet experts (RUB)", "WxxB", 3, 0x1FA, false, CALL_INVITE_CITIZENS },
+    { 0x1DAAD2, 0x161C90, "demolition tool: assign office to network building", "WOOFbb", 0, 0, false },
+    { 0x1DAAE9, 0x1A04F0, "demolition tool: set priority on network building", "WOb", 0, 0, false },
+    { 0x1DB07D, 0x161C90, "demolition tool: assign office to building", "WOOFbb", 0, 0, false },
+    { 0x1DB0A1, 0x1A04F0, "demolition tool: set priority on building", "WOb", 0, 0, false },
+    { 0x7702C4, 0x1A04F0, "office window: toggle building priority", "WOb", 0, 0, false },
+    { 0x77DBB7, 0x1A04F0, "building window: toggle construction/demolition priority", "WOb", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 

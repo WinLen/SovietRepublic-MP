@@ -38,7 +38,9 @@ void DemolishHook_Tick();
 // inside it are the demolition's own side effects and are not sent.
 bool DemolishHook_InDemolish();
 
+struct BuildSyncMsg;
+
 // Calls the original (unhooked) function, for replaying a remote demolition.
-// Writes building+0xeb1 = 0 first, as both player paths do. Returns false if
-// it threw.
-bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const unsigned long long args[5]);
+// Applies the sender's building+0xeb1, Shift/Ctrl modifiers, BuildMode, dialog 0x424
+// settings, and demolition office tool assignment. Returns false if it threw.
+bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyncMsg& msg);

@@ -13,6 +13,8 @@
 #define WORLD_RVA 0x9D4F10
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38
+#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
 #define BLD_TYPE_OFFSET 0x318
 #define TYPE_CATEGORY_OFFSET 0x360
 #define BLD_POS_OFFSET 0x350
@@ -163,15 +165,19 @@ static unsigned long long HashSlot(const float* data, int n)
 // Snapshot of the building list (pointers only valid for this scan).
 static int CopyBuildings(BYTE** out, int max)
 {
+    int n = 0;
     __try {
-        BYTE** it = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        BYTE** end = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
-        if (!it || end < it) return 0;
-        int n = 0;
-        for (; it < end && n < max; ++it) if (*it) out[n++] = *it;
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2; ++v) {
+            BYTE** it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
+            BYTE** end = *(BYTE***)(g_exeBase + kEndRvas[v]);
+            if (!it || end < it) continue;
+            for (; it < end && n < max; ++it) if (*it) out[n++] = *it;
+        }
         return n;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
+        return n;
     }
 }
 
@@ -192,16 +198,20 @@ static BYTE* FindBuilding(const float pos[3], int category)
     BYTE* found = nullptr;
     float best = 1e30f;
     __try {
-        BYTE** it = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        BYTE** end = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end; ++it) {
-            BYTE* b = *it;
-            if (!b || CategoryOf(b) != category) continue;
-            const float* p = (const float*)(b + BLD_POS_OFFSET);
-            float dx = p[0] - pos[0], dz = p[2] - pos[2];
-            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - pos[1]) >= 1.0f) continue;
-            float d = dx * dx + dz * dz;
-            if (d < best) { best = d; found = b; }
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2; ++v) {
+            BYTE** it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
+            BYTE** end = *(BYTE***)(g_exeBase + kEndRvas[v]);
+            for (; it && it < end; ++it) {
+                BYTE* b = *it;
+                if (!b || CategoryOf(b) != category) continue;
+                const float* p = (const float*)(b + BLD_POS_OFFSET);
+                float dx = p[0] - pos[0], dz = p[2] - pos[2];
+                if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - pos[1]) >= 1.0f) continue;
+                float d = dx * dx + dz * dz;
+                if (d < best) { best = d; found = b; }
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return nullptr;

@@ -11,6 +11,7 @@
 
 #define WORLD_RVA 0x9D4F10
 #define BUILDINGS_OFFSET 0x11B08
+#define CONSTRUCTIONS_OFFSET 0x11C28
 #define DOWN_RVA 0xA54E90
 #define PRESS_RVA 0xA54E91
 #define ENTER_RVA 0xA54CAC
@@ -162,23 +163,26 @@ static bool TakeSnapshot()
 {
     g_ranges.clear();
     g_bytes.clear();
-    U64 v[2] = {};
-    if (!Copy(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) / 8 > MAX_BUILDINGS) return true;
-    size_t n = (size_t)((v[1] - v[0]) / 8);
-    std::vector<U64> list(n);
-    if (n && !Copy(list.data(), (const void*)v[0], n * 8)) return true;
-    for (U64 b : list) {
-        if (!b) continue;
-        Add(b, KIND_BUILDING, 0, b, BUILDING_BYTES, 0);
-        U64 slots = 0;
-        unsigned count = SlotCount(b, &slots);
-        for (unsigned s = 0; s < count; s++) {
-            U64 slot = slots + (U64)s * SLOT_BYTES;
-            for (int r = 0; r < 4; r++) {
-                U64 at = 0;
-                unsigned elems = 0;
-                if (!Region(slot, r, &at, &elems)) continue;
-                Add(b, KIND_SLOT, s * SLOT_STRIDE + r * REGION_STRIDE, at, elems * kRegionEach[r], count * 0x10000 + elems);
+    const unsigned kOffsets[2] = { BUILDINGS_OFFSET, CONSTRUCTIONS_OFFSET };
+    for (unsigned vecOff : kOffsets) {
+        U64 v[2] = {};
+        if (!Copy(v, World() + vecOff, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) / 8 > MAX_BUILDINGS) continue;
+        size_t n = (size_t)((v[1] - v[0]) / 8);
+        std::vector<U64> list(n);
+        if (n && !Copy(list.data(), (const void*)v[0], n * 8)) continue;
+        for (U64 b : list) {
+            if (!b) continue;
+            Add(b, KIND_BUILDING, 0, b, BUILDING_BYTES, 0);
+            U64 slots = 0;
+            unsigned count = SlotCount(b, &slots);
+            for (unsigned s = 0; s < count; s++) {
+                U64 slot = slots + (U64)s * SLOT_BYTES;
+                for (int r = 0; r < 4; r++) {
+                    U64 at = 0;
+                    unsigned elems = 0;
+                    if (!Region(slot, r, &at, &elems)) continue;
+                    Add(b, KIND_SLOT, s * SLOT_STRIDE + r * REGION_STRIDE, at, elems * kRegionEach[r], count * 0x10000 + elems);
+                }
             }
         }
     }

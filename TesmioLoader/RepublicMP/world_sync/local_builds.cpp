@@ -435,7 +435,8 @@ static bool IsDemolishToolActive(__int64 manager = 0)
     char tool[64];
     if (!SafeReadStr(*(void**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET), tool, sizeof(tool)))
         return false;
-    return strcmp(tool, "terrain_demolish") == 0 || strstr(tool, "_cancel") != nullptr;
+    return strcmp(tool, "terrain_demolish") == 0 || strstr(tool, "_cancel") != nullptr ||
+           strstr(tool, "_destroy") != nullptr || strncmp(tool, "erase_", 6) == 0;
 }
 
 static int g_demolishCategory = -1;
@@ -793,6 +794,8 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             RoadSyncDemolishMsg m = {};
             __int64 thisPtr = GetPlacementManagerThisPtr();
             m.category = category;
+            m.demolishType = *(int*)(manager + MGR_TYPE_OFFSET);
+            m.mode = BuildMode_Read();
             m.cursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);

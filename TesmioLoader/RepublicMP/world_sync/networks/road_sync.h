@@ -229,6 +229,8 @@ struct RoadSyncDemolishMsg {
     int seq;
     int terrainFence;
     int category;
+    int demolishType;
+    BuildMode mode;
     float cursor[3];  // thisPtr+0xf6c at the sender's commit
     int hasRange;     // 0 = only the cursor is known
     float rangeA[3];  // start of the cut piece (point rs, or node 0 when rs = -1)
@@ -275,7 +277,7 @@ struct RoadSyncPlanStartMsg {
     int seq;
     int terrainFence;
     int category;
-    int exceptGroup; // 1 = FUN_140525c30
+    int exceptGroup; // 1 = FUN_140525c30, 2 = cancel all planned segments (0x39F497)
     int dollars;
     int rubles;
     int count;
@@ -298,12 +300,15 @@ struct RoadSyncGroupToolMsg {
     int seq;
     int terrainFence;
     int category;    // ROAD_SYNC_GROUP_TOOL_CATEGORY (for the ack log)
-    int mode;
-    float box[6];    // world+0x13f5c: the moving corner, then the press point
+    int mode;        // 0..3 = 0x21C110, 10 = Ctrl-rect demolish (0x213870), 11 = Ctrl-rect upgrade (0x214530), 12 = Shift+Click cancel plan (0x214220)
+    float box[6];    // world+0x13f5c: the moving corner, then the press point (or ray dir + cam eye for mode 12)
     float cursor[3]; // world+0xf6c
     float yaw;       // exe+0x9e9d20
     BuildMode buildMode;
     int started;     // planned pieces the call started on the sender (for the log)
+    int managerTypes[ROAD_SYNC_CATEGORY_COUNT];
+    int managerVariants[ROAD_SYNC_CATEGORY_COUNT];
+    char toolName[48];
 };
 
 #define ROAD_SYNC_GROUP_TOOL_CATEGORY (-2)
@@ -355,6 +360,9 @@ bool RoadSync_InstallPlanStartHooks();
 // Hooks FUN_14021c110 (see RoadSyncGroupToolMsg). Call once from
 // TsmPluginStart.
 bool RoadSync_InstallGroupToolHook();
+void RoadSync_CtrlRectUpgradeTool(__int64 world);
+void RoadSync_CtrlRectDemolishTool(__int64 world);
+void RoadSync_ShiftCancelTool(__int64 world);
 
 // Builds a path that a building laid as its own access road (sent on the
 // build_sync connection right after the building). Returns true if the
