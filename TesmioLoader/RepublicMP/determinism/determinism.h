@@ -65,6 +65,8 @@ void Determinism_Restart();
 unsigned long long Determinism_StepCount();
 // A lockstep session's pause and tick speed (1 normal, 2 fast, 3 Hyper, 4 Plaid; the host's on the player).
 void Determinism_SessionSpeed(bool* paused, int* speed);
+// Sub-tick phase [0..1) between simulation ticks for smooth visual interpolation on held frames.
+float Determinism_RenderAlpha();
 
 // Called after a complete tick (Early + Late) while active; after native Early otherwise.
 // Main thread, whether or not the layer

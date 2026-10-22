@@ -215,6 +215,7 @@
     <ClCompile Include="game\session_patches.cpp" />
     <ClCompile Include="world_sync\view_list_scope.cpp" />
     <ClCompile Include="world_sync\citizens\citizen_destinations.cpp" />
+    <ClCompile Include="world_sync\vehicles\vehicle_soft_sync.cpp" />
     <ClCompile Include="game\input_block.cpp" />
     <ClCompile Include="world_sync\buildings\build_sync.cpp" />
     <ClCompile Include="world_sync\networks\road_sync.cpp" />
@@ -284,6 +285,7 @@
     <ClInclude Include="game\session_patches.h" />
     <ClInclude Include="world_sync\view_list_scope.h" />
     <ClInclude Include="world_sync\citizens\citizen_destinations.h" />
+    <ClInclude Include="world_sync\vehicles\vehicle_soft_sync.h" />
     <ClInclude Include="world_sync\replay_menus.h" />
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />

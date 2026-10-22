@@ -19,6 +19,7 @@
 //                  produced in the current window.
 //   world+0x12810  vehicles (exe+0x9E7720). Vehicle: +0x04 int index,
 //                  +0x3B8 cargo vector (same 16-byte entries),
+//                  +0x698 int current schedule stop index,
 //                  +0xDE0 position (main C3D_NODE +0xD60, position +0x80).
 //   world+0x126A8  citizens (exe+0x9E75B8). Worker: +0x20 home Building*,
 //                  +0xD4 float age, +0x620 position (C3D_NODE +0x5A0).
@@ -42,10 +43,11 @@ struct StateSummary {
     double cargoTotal;      // all vehicle cargo amounts
     double productionTotal; // all buildings' current production windows
     double ageTotal;        // all citizens' ages
-    unsigned long long hashClock;     // day, year, progress, money
+    unsigned long long hashClock;       // day, year, progress, money
     unsigned long long hashBuildings;
-    unsigned long long hashVehicles;
-    unsigned long long hashCitizens;
+    unsigned long long hashVehicles;    // logical vehicle state (id, schedule stop, cargo)
+    unsigned long long hashVehiclesPos; // in-transit 3D positions (soft-synced in multiplayer)
+    unsigned long long hashCitizens;    // logical citizen state (home building, age)
 };
 
 void StateHash_Bind(const TsmHost* host);

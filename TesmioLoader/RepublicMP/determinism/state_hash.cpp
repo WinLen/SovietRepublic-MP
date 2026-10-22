@@ -2,6 +2,7 @@
 // See state_hash.h.
 #include "state_hash.h"
 #include "../session/two_states.h"
+#include "../core/diag_log.h"
 #include <string.h>
 
 #define WORLD_RVA 0x9D4F10
@@ -24,6 +25,7 @@
 
 #define VEH_INDEX_OFFSET 0x04
 #define VEH_CARGO_OFFSET 0x3B8
+#define VEH_SCHED_IDX_OFFSET 0x698
 #define VEH_POS_OFFSET 0xDE0
 
 #define CIT_HOME_OFFSET 0x20
@@ -56,6 +58,8 @@ static inline void MixFloat(unsigned long long& h, float v) { Mix(h, &v, sizeof(
 
 static inline void MixName(unsigned long long& h, const char* s)
 {
+    uintptr_t addr = (uintptr_t)s;
+    if (addr < 0x10000ull || addr >= 0x800000000000ull) return;
     for (int i = 0; i < MAX_NAME && s[i]; i++) Mix(h, &s[i], 1);
     Mix(h, "", 1);
 }
@@ -89,8 +93,10 @@ bool StateHash_Compute(StateSummary* out)
 {
     memset(out, 0, sizeof(*out));
     const unsigned long long seed = 0xcbf29ce484222325ull;
-    out->hashClock = out->hashBuildings = out->hashVehicles = out->hashCitizens = seed;
+    out->hashClock = out->hashBuildings = out->hashVehicles = out->hashVehiclesPos = out->hashCitizens = seed;
     BYTE* w = g_exeBase + WORLD_RVA;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         out->day = *(int*)(w + WORLD_DAY_OFFSET);
         out->year = *(int*)(w + WORLD_YEAR_OFFSET);
@@ -113,56 +119,63 @@ bool StateHash_Compute(StateSummary* out)
 
         BYTE* bvec = w + WORLD_BUILDINGS_OFFSET;
         long long nb = Count(bvec, 8);
-        if (nb == 0 && *(void**)bvec == nullptr) return false; // no world
-        out->buildings = (int)nb;
-        BYTE** bl = *(BYTE***)bvec;
-        for (long long i = 0; i < nb; i++) {
-            BYTE* b = bl[i];
-            if (!b) { MixInt(out->hashBuildings, -1); continue; }
-            MixInt(out->hashBuildings, *(int*)(b + BLD_INDEX_OFFSET));
-            MixFloat(out->hashBuildings, *(float*)(b + BLD_PROGRESS_OFFSET));
-            float produced = *(float*)(b + BLD_PRODUCED_OFFSET);
-            MixFloat(out->hashBuildings, produced);
-            out->productionTotal += produced;
-            MixInt(out->hashBuildings, (int)Count(b + BLD_WORKERS_OFFSET, 8));
-            BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
-            long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
-            if (ns > 64) ns = 64;
-            for (long long s = 0; s < ns; s++)
-                MixEntries(out->hashBuildings, slots + s * BLD_STORAGE_SLOT_SIZE, out->storageTotal);
-        }
+        if (nb > 0 || *(void**)bvec != nullptr) {
+            out->buildings = (int)nb;
+            BYTE** bl = *(BYTE***)bvec;
+            for (long long i = 0; i < nb; i++) {
+                BYTE* b = bl[i];
+                if (!b) { MixInt(out->hashBuildings, -1); continue; }
+                MixInt(out->hashBuildings, *(int*)(b + BLD_INDEX_OFFSET));
+                MixFloat(out->hashBuildings, *(float*)(b + BLD_PROGRESS_OFFSET));
+                float produced = *(float*)(b + BLD_PRODUCED_OFFSET);
+                MixFloat(out->hashBuildings, produced);
+                out->productionTotal += produced;
+                MixInt(out->hashBuildings, (int)Count(b + BLD_WORKERS_OFFSET, 8));
+                BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+                long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
+                if (ns > 64) ns = 64;
+                for (long long s = 0; s < ns; s++)
+                    MixEntries(out->hashBuildings, slots + s * BLD_STORAGE_SLOT_SIZE, out->storageTotal);
+            }
 
-        long long nv = Count(w + WORLD_VEHICLES_OFFSET, 8);
-        out->vehicles = (int)nv;
-        BYTE** vl = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
-        for (long long i = 0; i < nv; i++) {
-            BYTE* v = vl[i];
-            if (!v) { MixInt(out->hashVehicles, -1); continue; }
-            MixInt(out->hashVehicles, *(int*)(v + VEH_INDEX_OFFSET));
-            Mix(out->hashVehicles, v + VEH_POS_OFFSET, 12);
-            MixEntries(out->hashVehicles, v + VEH_CARGO_OFFSET, out->cargoTotal);
-        }
+            long long nv = Count(w + WORLD_VEHICLES_OFFSET, 8);
+            out->vehicles = (int)nv;
+            BYTE** vl = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
+            for (long long i = 0; i < nv; i++) {
+                BYTE* v = vl[i];
+                if (!v) {
+                    MixInt(out->hashVehicles, -1);
+                    MixInt(out->hashVehiclesPos, -1);
+                    continue;
+                }
+                int vid = *(int*)(v + VEH_INDEX_OFFSET);
+                MixInt(out->hashVehicles, vid);
+                MixInt(out->hashVehicles, *(int*)(v + VEH_SCHED_IDX_OFFSET));
+                MixEntries(out->hashVehicles, v + VEH_CARGO_OFFSET, out->cargoTotal);
 
-        long long nc = Count(w + WORLD_CITIZENS_OFFSET, 8);
-        out->citizens = (int)nc;
-        BYTE** cl = *(BYTE***)(w + WORLD_CITIZENS_OFFSET);
-        for (long long i = 0; i < nc; i++) {
-            BYTE* c = cl[i];
-            if (!c) { MixInt(out->hashCitizens, -1); continue; }
-            BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
-            MixInt(out->hashCitizens, home ? *(int*)(home + BLD_INDEX_OFFSET) : -1);
-            float age = *(float*)(c + CIT_AGE_OFFSET);
-            MixFloat(out->hashCitizens, age);
-            out->ageTotal += age;
-            // A citizen without a home, or in their first year, may not be
-            // placed yet: its position bytes are whatever the heap held (the
-            // object is not zeroed when made).
-            if (home && age >= CIT_PLACED_AGE) Mix(out->hashCitizens, c + CIT_POS_OFFSET, 12);
+                MixInt(out->hashVehiclesPos, vid);
+                Mix(out->hashVehiclesPos, v + VEH_POS_OFFSET, 12);
+            }
+
+            long long nc = Count(w + WORLD_CITIZENS_OFFSET, 8);
+            out->citizens = (int)nc;
+            BYTE** cl = *(BYTE***)(w + WORLD_CITIZENS_OFFSET);
+            for (long long i = 0; i < nc; i++) {
+                BYTE* c = cl[i];
+                if (!c) { MixInt(out->hashCitizens, -1); continue; }
+                BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
+                MixInt(out->hashCitizens, home ? *(int*)(home + BLD_INDEX_OFFSET) : -1);
+                float age = *(float*)(c + CIT_AGE_OFFSET);
+                MixFloat(out->hashCitizens, age);
+                out->ageTotal += age;
+            }
+            ok = true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
-    return true;
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,15 +188,21 @@ bool StateHash_Compute(StateSummary* out)
 
 static long long ListCount(int listOffset)
 {
+    long long res = -1;
+    DiagLog_BeginSafeSeh();
     __try {
-        return Count(g_exeBase + WORLD_RVA + listOffset, 8);
+        res = Count(g_exeBase + WORLD_RVA + listOffset, 8);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
+        res = -1;
     }
+    DiagLog_EndSafeSeh();
+    return res;
 }
 
 static bool FillBuildings(BuildingRecord* out, long long n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE** bl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_BUILDINGS_OFFSET);
         for (long long i = 0; i < n; i++) {
@@ -214,14 +233,18 @@ static bool FillBuildings(BuildingRecord* out, long long n)
             r.slots = (int)ns;
             r.storage = h;
         }
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
-    return true;
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool FillCitizens(CitizenRecord* out, long long n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE** cl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_CITIZENS_OFFSET);
         for (long long i = 0; i < n; i++) {
@@ -234,14 +257,18 @@ static bool FillCitizens(CitizenRecord* out, long long n)
             r.age = *(float*)(c + CIT_AGE_OFFSET);
             if (home && r.age >= CIT_PLACED_AGE) memcpy(r.pos, c + CIT_POS_OFFSET, 12); // not placed yet: left 0
         }
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
-    return true;
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool FillVehicles(VehicleRecord* out, long long n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE** vl = *(BYTE***)(g_exeBase + WORLD_RVA + WORLD_VEHICLES_OFFSET);
         for (long long i = 0; i < n; i++) {
@@ -256,10 +283,12 @@ static bool FillVehicles(VehicleRecord* out, long long n)
             MixEntries(h, v + VEH_CARGO_OFFSET, unused);
             r.cargo = h;
         }
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
-    return true;
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 bool StateHash_VehicleRecords(std::vector<VehicleRecord>& out)
@@ -292,6 +321,7 @@ unsigned long long StateHash_All(const StateSummary& s)
     Mix(h, &s.hashClock, 8);
     Mix(h, &s.hashBuildings, 8);
     Mix(h, &s.hashVehicles, 8);
+    Mix(h, &s.hashVehiclesPos, 8);
     Mix(h, &s.hashCitizens, 8);
     return h;
 }

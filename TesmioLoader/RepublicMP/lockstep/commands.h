@@ -53,6 +53,7 @@ enum LockstepCommandKind {
     LS_CMD_RENAME = 24,         // rename.cpp: a city's or a crossroad's new name
     LS_CMD_LEDGER = 25,         // brush_tools.cpp: the construction ledger row a terrain stroke wrote
     LS_CMD_STATE_TRANSFER = 26, // two_states.cpp: inter-state money transfer between West and East Republics
+    LS_CMD_VEHICLE_SOFT_SYNC = 27, // vehicle_soft_sync.cpp: authoritative soft vehicle sync (Host -> Client)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

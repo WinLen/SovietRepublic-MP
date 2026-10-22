@@ -5,6 +5,9 @@
 
 void HeldFrame_Bind(const TsmHost* host);
 bool HeldFrame_Verify();
+void HeldFrame_Reset();
+void HeldFrame_OnSimTick(unsigned long long tick);
+void HeldFrame_OnVehicleSoftSynced(BYTE* vehicle);
 // Main thread, under the renderer lock. False stops the probe on a guard fault.
 bool HeldFrame_Draw(bool entitiesReady);
 // Main thread, right after Early: the doors and the citizens this PC sees.

@@ -32,7 +32,7 @@
 #include "../determinism/state_hash.h"
 
 #define LOCKSTEP_PORT 5560
-#define LOCKSTEP_WINDOW 10      // ticks the host may run ahead of the player
+#define LOCKSTEP_WINDOW 24      // ticks the host may run ahead of the player (~800 ms buffer)
 #define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
 
 void LockstepNet_Bind(const TsmHost* host);
@@ -76,6 +76,7 @@ void LockstepNet_SendState(bool paused, int speed);
 
 // Player (game thread).
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed);
+int LockstepNet_GrantBacklog(unsigned long long nextTick);
 void LockstepNet_Ack(unsigned long long completed);
 // Any thread: the host announced a re-sync (taken once).
 bool LockstepNet_TakeResync();
@@ -105,5 +106,3 @@ PartnerCursorInfo LockstepNet_GetPartnerCursor();
 
 // Sends the client's compressed log bundle to the Host (on DESYNC, DISCONNECT, or CRASH).
 void LockstepNet_SendClientLogs(const char* reason);
-
-

@@ -372,9 +372,21 @@ struct VehSaveSnapshot {
 };
 static std::vector<VehSaveSnapshot> g_vehSaveSnaps;
 
+static void SnapshotOneVehicleBeforeSave(BYTE* v)
+{
+    if (!v) return;
+    VehSaveSnapshot s;
+    s.veh   = v;
+    s.f17E8 = *(unsigned long long*)(v + 0x17E8);
+    s.f1A54 = *(unsigned long long*)(v + 0x1A54);
+    s.f1A7C = *(unsigned long long*)(v + 0x1A7C);
+    g_vehSaveSnaps.push_back(s);
+}
+
 static void SnapshotVehiclesBeforeSave()
 {
     g_vehSaveSnaps.clear();
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE** vb = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
         BYTE** ve = *(BYTE***)(g_exeBase + VEC_VEHICLES_END_RVA);
@@ -383,20 +395,24 @@ static void SnapshotVehiclesBeforeSave()
             for (BYTE** it = vb; it < ve; ++it) {
                 BYTE* v = *it;
                 if (!v) continue;
-                VehSaveSnapshot s;
-                s.veh   = v;
-                s.f17E8 = *(unsigned long long*)(v + 0x17E8);
-                s.f1A54 = *(unsigned long long*)(v + 0x1A54);
-                s.f1A7C = *(unsigned long long*)(v + 0x1A7C);
-                g_vehSaveSnaps.push_back(s);
+                SnapshotOneVehicleBeforeSave(v);
+                BYTE** cBegin = *(BYTE***)(v + 0x3A0);
+                BYTE** cEnd = *(BYTE***)(v + 0x3A8);
+                if (cBegin && cEnd > cBegin && (cEnd - cBegin) <= 1024) {
+                    for (BYTE** cit = cBegin; cit < cEnd; ++cit) {
+                        if (*cit) SnapshotOneVehicleBeforeSave(*cit);
+                    }
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static void RestoreVehiclesAfterSave()
 {
+    DiagLog_BeginSafeSeh();
     __try {
         for (size_t i = 0; i < g_vehSaveSnaps.size(); ++i) {
             const VehSaveSnapshot& s = g_vehSaveSnaps[i];
@@ -406,6 +422,7 @@ static void RestoreVehiclesAfterSave()
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
     g_vehSaveSnaps.clear();
 }
 
@@ -427,10 +444,16 @@ static void __fastcall H_MasterSave(BYTE* world)
     DWORD oldProt = 0;
     bool autosaveJePatched = false;
 
+    BYTE searchPoolBackup[72] = {};
+    bool searchPoolSaved = false;
+
     SnapshotVehiclesBeforeSave();
 
+    DiagLog_BeginSafeSeh();
     __try {
         if (world) {
+            memcpy(searchPoolBackup, world + 0x14478, sizeof(searchPoolBackup));
+            searchPoolSaved = true;
             strncpy_s(saveRel, (const char*)(world + SAVE_NAME_FIELD_OFFSET), _TRUNCATE);
             if (isCoopSave && _stricmp(saveRel, "saved_last") == 0) {
                 // Redirect engine's automatic save-on-exit ("saved_last") into the Co-op save bank
@@ -472,6 +495,7 @@ static void __fastcall H_MasterSave(BYTE* world)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 
     if (o_masterSave) {
         Determinism_ToolScopeBegin();
@@ -481,7 +505,11 @@ static void __fastcall H_MasterSave(BYTE* world)
 
     RestoreVehiclesAfterSave();
 
+    DiagLog_BeginSafeSeh();
     __try {
+        if (searchPoolSaved && world) {
+            memcpy(world + 0x14478, searchPoolBackup, sizeof(searchPoolBackup));
+        }
         if (autosaveJePatched && autosaveJeAddr) {
             *autosaveJeAddr = prevAutosaveJe;
             VirtualProtect(autosaveJeAddr, 2, oldProt, &oldProt);
@@ -495,6 +523,7 @@ static void __fastcall H_MasterSave(BYTE* world)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 
     if (isCoopSave && fullSaveDir[0]) {
         if (g_expandBorders) {

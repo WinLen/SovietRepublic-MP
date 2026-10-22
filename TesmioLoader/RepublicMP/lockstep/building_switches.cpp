@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "../session/settings_sync.h"
 #include "../session/two_states.h"
+#include "../core/diag_log.h"
 #include <string.h>
 #include <vector>
 
@@ -77,12 +78,16 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
 static bool Copy(void* to, const void* from, size_t n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         memcpy(to, from, n);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static unsigned SlotCount(U64 building, U64* begin)
@@ -245,11 +250,15 @@ static unsigned NoiseIndex(const Range& r, unsigned inRange)
 
 static bool GuardedRef(U64 building, RouteRef& ref)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
-        return Ref_Building(building, ref);
+        ok = Ref_Building(building, ref);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static void Submit(const SwitchMsg& m)
@@ -477,6 +486,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     if (m.kind > KIND_WORLD || !m.count || m.count > MAX_WORDS) return false;
     const char* why = nullptr;
     unsigned differing = 0;
+    DiagLog_BeginSafeSeh();
     __try {
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
         if (m.kind != KIND_WORLD && !building) why = "the building is gone";
@@ -523,6 +533,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while writing";
     }
+    DiagLog_EndSafeSeh();
     Logf("republicmp  SWITCH: %s%s (category 0x%X), %u word(s) from +0x%X%s: %s", kKindText[m.kind],
          m.kind == KIND_WORLD ? "" : " of a building", m.kind == KIND_WORLD ? 0 : Category(Ref_BuildingAt(m.building)), m.count,
          m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");

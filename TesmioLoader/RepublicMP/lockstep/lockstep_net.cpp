@@ -5,15 +5,19 @@
 #include "../core/diag_log.h"
 #include "../session/two_states.h"
 #include "../determinism/determinism.h"
+#include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../transport/network.h"
 #include <deque>
 #include <vector>
 #include <string.h>
 #include <stdio.h>
 
+static void Locks();
+
 void LockstepNet_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    Locks();
 }
 
 enum LockstepMsgType {
@@ -61,7 +65,7 @@ static std::deque<LsMessage> g_inbox;
 static PartnerCursorInfo g_partnerCursor = {};
 
 // Host side.
-static unsigned long long g_playerCompleted = 0;
+static volatile unsigned long long g_playerCompleted = 0;
 static int g_pauseToggles = 0;
 static int g_speedRequest = 0;
 struct OwnHash { unsigned long long tick; StateSummary s; bool valid; };
@@ -70,6 +74,8 @@ static LsHash g_playerHashes[LS_HASH_KEEP];
 static int g_playerHashCount = 0;
 static char g_desync[256] = "";
 static volatile unsigned long long g_lastMatched = 0; // the last tick both summaries matched
+static int g_hardMismatchCount = 0;
+static unsigned long long g_lastSoftDriftLogTick = 0;
 
 // Player side.
 static std::deque<LsGrant> g_grants;
@@ -84,7 +90,7 @@ static volatile ULONGLONG g_rttMs = 0;
 static volatile bool g_rttKnown = false;
 static volatile ULONGLONG g_lastStallMs = 0;
 static volatile LONG g_stalls = 0;
-static unsigned long long g_lastGranted = 0;
+static volatile unsigned long long g_lastGranted = 0;
 static volatile LONG g_grantBacklog = 0; // the player's grants not run yet (for the interface)
 
 static void Locks()
@@ -216,8 +222,8 @@ static void ResetState()
 {
     EnterCriticalSection(&g_inLock);
     g_inbox.clear();
+    g_grants.clear();
     memset(&g_partnerCursor, 0, sizeof(g_partnerCursor));
-    LeaveCriticalSection(&g_inLock);
     g_playerCompleted = 0;
     g_pauseToggles = 0;
     g_speedRequest = 0;
@@ -225,7 +231,8 @@ static void ResetState()
     g_playerHashCount = 0;
     g_desync[0] = 0;
     g_lastMatched = 0;
-    g_grants.clear();
+    g_hardMismatchCount = 0;
+    g_lastSoftDriftLogTick = 0;
     g_hostStateKnown = false;
     g_hostState.paused = 1;
     g_hostState.speed = 1;
@@ -237,6 +244,7 @@ static void ResetState()
     g_stalls = 0;
     g_lastGranted = 0;
     g_grantBacklog = 0;
+    LeaveCriticalSection(&g_inLock);
 }
 
 static bool Started(SOCKET s, bool host)
@@ -276,19 +284,19 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 void LockstepNet_Close()
 {
     Locks();
-    if (g_sock != INVALID_SOCKET) {
+    SOCKET s = (SOCKET)InterlockedExchange64((volatile LONG64*)&g_sock, (LONG64)INVALID_SOCKET);
+    if (s != INVALID_SOCKET) {
         if (g_connected) {
             if (!g_isHost) LockstepNet_SendClientLogs("DISCONNECT");
             Send(LS_BYE, nullptr, 0);
         }
         g_connected = false;
-        NetworkCloseSocket(g_sock);
-        g_sock = INVALID_SOCKET;
+        NetworkCloseSocket(s);
     }
-    if (g_recvThread) {
-        WaitForSingleObject(g_recvThread, 5000);
-        CloseHandle(g_recvThread);
-        g_recvThread = nullptr;
+    HANDLE h = InterlockedExchangePointer(&g_recvThread, nullptr);
+    if (h) {
+        WaitForSingleObject(h, 5000);
+        CloseHandle(h);
     }
 }
 
@@ -313,15 +321,35 @@ static void Compare(const LsHash& theirs)
     }
     const StateSummary& a = mine->s;
     const StateSummary& b = theirs.s;
+
+    bool vehLogicalDiff = (a.hashVehicles != b.hashVehicles);
+    bool vehPosDiff = (a.hashVehiclesPos != b.hashVehiclesPos);
+    bool citDiff = (a.hashCitizens != b.hashCitizens);
+    if (vehLogicalDiff || vehPosDiff || citDiff) {
+        VehicleSoftSync_RequestImmediate();
+        if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
+            g_lastSoftDriftLogTick = theirs.tick;
+            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d, vehicles %d/%d) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
+                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, a.vehicles, b.vehicles);
+        }
+    }
+
     char what[160] = "";
     if (a.hashClock != b.hashClock) strcat_s(what, "clock/money ");
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
-    if (a.hashVehicles != b.hashVehicles) strcat_s(what, "vehicles ");
-    if (a.hashCitizens != b.hashCitizens) strcat_s(what, "citizens ");
     if (!what[0]) {
+        g_hardMismatchCount = 0;
         g_lastMatched = theirs.tick;
         return;
     }
+
+    VehicleSoftSync_RequestImmediate();
+    if (++g_hardMismatchCount < 3) {
+        Logf("republicmp  LOCKSTEP: transient %sdifference after tick %llu (%d/3) - awaiting soft sync convergence",
+             what, theirs.tick, g_hardMismatchCount);
+        return;
+    }
+
     _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s", theirs.tick, what);
     Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, player: %d %d %d)", g_desync,
          a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);
@@ -369,8 +397,12 @@ void LockstepNet_Poll()
         size_t n = m.data.size();
         switch (m.type) {
         case LS_GRANT:
-            if (n == sizeof(LsGrant)) g_grants.push_back(*(const LsGrant*)p);
-            g_grantBacklog = (LONG)g_grants.size();
+            if (n == sizeof(LsGrant)) {
+                EnterCriticalSection(&g_inLock);
+                g_grants.push_back(*(const LsGrant*)p);
+                g_grantBacklog = (LONG)g_grants.size();
+                LeaveCriticalSection(&g_inLock);
+            }
             break;
         case LS_CMD:
             if (n >= sizeof(LsCommandHead))
@@ -444,13 +476,30 @@ void LockstepNet_SendState(bool paused, int speed)
     Send(LS_STATE, &s, sizeof(s));
 }
 
+int LockstepNet_GrantBacklog(unsigned long long nextTick)
+{
+    if (!g_locksReady) return 0;
+    EnterCriticalSection(&g_inLock);
+    while (!g_grants.empty() && g_grants.front().tick < nextTick) g_grants.pop_front();
+    g_grantBacklog = (LONG)g_grants.size();
+    int count = (g_grants.empty() || g_grants.front().tick != nextTick) ? 0 : (int)g_grants.size();
+    LeaveCriticalSection(&g_inLock);
+    return count;
+}
+
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
 {
+    if (!g_locksReady) return false;
+    EnterCriticalSection(&g_inLock);
     while (!g_grants.empty() && g_grants.front().tick < tick) g_grants.pop_front();
-    if (g_grants.empty() || g_grants.front().tick != tick) return false;
+    if (g_grants.empty() || g_grants.front().tick != tick) {
+        LeaveCriticalSection(&g_inLock);
+        return false;
+    }
     *speed = g_grants.front().speed;
     g_grants.pop_front();
     g_grantBacklog = (LONG)g_grants.size();
+    LeaveCriticalSection(&g_inLock);
     return true;
 }
 
@@ -470,15 +519,24 @@ LockstepFlow LockstepNet_Flow()
 {
     LockstepFlow f = {};
     f.stalls = (int)g_stalls;
-    f.msSinceStall = g_lastStallMs ? GetTickCount64() - g_lastStallMs : ~0ull;
-    if (g_isHost) f.behind = g_lastGranted > g_playerCompleted ? g_lastGranted - g_playerCompleted : 0;
-    else f.behind = (unsigned long long)g_grantBacklog;
+    ULONGLONG stallMs = g_lastStallMs;
+    ULONGLONG now = GetTickCount64();
+    f.msSinceStall = stallMs ? (now >= stallMs ? now - stallMs : 0) : ~0ull;
+    if (g_isHost) {
+        unsigned long long granted = g_lastGranted;
+        unsigned long long completed = g_playerCompleted;
+        f.behind = granted > completed ? granted - completed : 0;
+    } else {
+        f.behind = (unsigned long long)g_grantBacklog;
+    }
     return f;
 }
 
 ULONGLONG LockstepNet_MsSinceReceived()
 {
-    return GetTickCount64() - g_lastReceived;
+    ULONGLONG last = g_lastReceived;
+    ULONGLONG now = GetTickCount64();
+    return now >= last ? now - last : 0;
 }
 
 void LockstepNet_SendResync()
@@ -538,4 +596,3 @@ PartnerCursorInfo LockstepNet_GetPartnerCursor()
     LeaveCriticalSection(&g_inLock);
     return out;
 }
-

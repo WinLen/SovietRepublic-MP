@@ -207,7 +207,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Deterministic live Lockstep save (snapshot/restore vehicle aging), CitizenDestinations Lockstep sync, realistic helicopter/tram delivery fix, VehicleSwitches low-heap pointer guard, full TwoStates territory/property checks");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Smooth 60-144+ FPS sub-tick 5-node C3D_NODE vehicle/wagon interpolation, adaptive client Lockstep clock pacing, and Soft Authoritative Vehicle & Citizen Sync (LS_CMD_VEHICLE_SOFT_SYNC)");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

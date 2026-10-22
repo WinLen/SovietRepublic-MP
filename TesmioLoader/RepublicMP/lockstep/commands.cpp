@@ -6,6 +6,7 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/replay_menus.h"
 #include "../world_sync/local_builds.h"
+#include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "lockstep_net.h"
 #include "../game/input_block.h"
 #include "../session/settings_sync.h"
@@ -44,6 +45,7 @@ void Commands_Bind(const TsmHost* host)
     CargoSettings_Bind(host);
     SourceSlots_Bind(host);
     Rename_Bind(host);
+    VehicleSoftSync_Bind(host);
 }
 
 struct Command {
@@ -132,14 +134,16 @@ static const char* KindName(int kind)
     case LS_CMD_RENAME: return "rename";
     case LS_CMD_LEDGER: return "ledger row";
     case LS_CMD_STATE_TRANSFER: return "inter-state money transfer";
+    case LS_CMD_VEHICLE_SOFT_SYNC: return "vehicle soft sync";
     }
     return "?";
 }
 
-// Terrain brushes and their cost come every frame a tool is used: not logged one by one.
+// Terrain brushes, their cost, and background soft-sync batches come frequently: not logged one by one.
 static bool Frequent(int kind)
 {
-    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_BRUSH || kind == LS_CMD_LEDGER;
+    return kind == LS_CMD_TERRAIN || kind == LS_CMD_MONEY || kind == LS_CMD_BRUSH || kind == LS_CMD_LEDGER ||
+           kind == LS_CMD_VEHICLE_SOFT_SYNC;
 }
 
 void Commands_Submit(int kind, const void* data, size_t size)
@@ -178,6 +182,12 @@ static void Apply(const Command& c)
 {
     const void* p = c.data.data();
     size_t n = c.data.size();
+    if (c.kind == LS_CMD_VEHICLE_SOFT_SYNC) {
+        bool ok = VehicleSoftSync_ApplyCommand(p, n);
+        if (!ok)
+            Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - not made", c.seq, KindName(c.kind), c.afterTick);
+        return;
+    }
     bool ok = false;
     int owner = (c.owner == 2) ? 2 : 1;
     g_applyThread = GetCurrentThreadId();
@@ -289,6 +299,9 @@ static void Apply(const Command& c)
         break;
     case LS_CMD_STATE_TRANSFER:
         if (n == sizeof(LsStateTransfer)) ok = TwoStates_ApplyTransferCommand(*(const LsStateTransfer*)p);
+        break;
+    case LS_CMD_VEHICLE_SOFT_SYNC:
+        ok = VehicleSoftSync_ApplyCommand(p, n);
         break;
     }
     InputBlock_EndNeutral();
@@ -627,6 +640,7 @@ void Commands_LateEnd()
 void Commands_SetSession(int role)
 {
     g_haveFrameRecord = false;
+    VehicleSoftSync_Reset();
     Lock();
     g_outbox.clear();
     g_record.clear();

@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../session/two_states.h"
+#include "../core/diag_log.h"
 #include <string.h>
 #include <vector>
 
@@ -53,12 +54,16 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
 static bool Copy(void* to, const void* from, size_t n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         memcpy(to, from, n);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 // A vehicle's record list: begin and count (0 when unreadable or too long).
@@ -127,11 +132,15 @@ static bool TakeSnapshot()
 
 static bool GuardedRef(U64 vehicle, RouteRef& r)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
-        return Ref_Vehicle(vehicle, r);
+        ok = Ref_Vehicle(vehicle, r);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool PointerLike(U64 v)
@@ -155,7 +164,9 @@ static bool TextWord(int kind, unsigned offset)
 // A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
 // their contents are cargo_settings.cpp's. The vehicle's internal vectors and
 // object pointers (+3a0..+3d0, +458..+4a0, +4f0..+500, +600..+608, +638..+658,
-// +680..+6b8, +738..+750, +1708..+1710, +1ad0..+1ad8) must never be overwritten as switches.
+// +680..+6b8, +738..+750, +1708..+1710, +1ad0..+1ad8) and dynamic simulation/render
+// fields (+770, +d24, +d60..+1140, +17e8..+17f0, +1a54..+1a5c, +1a7c..+1a84)
+// must never be overwritten as switches.
 #define HALF_BYTES 0xC8
 static bool ListWord(int kind, unsigned offset)
 {
@@ -167,7 +178,13 @@ static bool ListWord(int kind, unsigned offset)
                (offset >= 0x638 && offset < 0x658) ||
                (offset >= 0x680 && offset < 0x6B8) ||
                (offset >= 0x738 && offset < 0x750) ||
+               (offset >= 0x770 && offset < 0x774) ||
+               (offset >= 0xD24 && offset < 0xD28) ||
+               (offset >= 0xD60 && offset < 0x1140) ||
                (offset >= 0x1708 && offset < 0x1710) ||
+               (offset >= 0x17E8 && offset < 0x17F0) ||
+               (offset >= 0x1A54 && offset < 0x1A5C) ||
+               (offset >= 0x1A7C && offset < 0x1A84) ||
                (offset >= 0x1AD0 && offset < 0x1AD8);
     }
     if (kind == KIND_CARGO) return offset < 8; // Resource* pointer at cargo entry +0x00
@@ -283,6 +300,7 @@ bool VehicleSwitches_ApplyCommand(const void* data, size_t size)
     if (m.kind >= KIND_COUNT || !m.count || m.count > MAX_WORDS) return false;
     const char* why = nullptr;
     unsigned differing = 0;
+    DiagLog_BeginSafeSeh();
     __try {
         U64 vehicle = Ref_VehicleAt(m.vehicle);
         unsigned records = 1;
@@ -306,6 +324,7 @@ bool VehicleSwitches_ApplyCommand(const void* data, size_t size)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while writing";
     }
+    DiagLog_EndSafeSeh();
     Logf("republicmp  SWITCH: %s of vehicle #%d, %u word(s) from +0x%X%s: %s", kKindText[m.kind], m.vehicle.place, m.count,
          m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");
     return why == nullptr;
