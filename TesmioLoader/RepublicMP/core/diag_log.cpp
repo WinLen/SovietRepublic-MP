@@ -144,7 +144,11 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_STACK_OVERFLOW &&
         code != EXCEPTION_INT_DIVIDE_BY_ZERO &&
-        code != EXCEPTION_PRIV_INSTRUCTION) {
+        code != EXCEPTION_PRIV_INSTRUCTION &&
+        code != EXCEPTION_IN_PAGE_ERROR &&
+        code != EXCEPTION_ARRAY_BOUNDS_EXCEEDED &&
+        code != 0xC0000374UL /* STATUS_HEAP_CORRUPTION */ &&
+        code != 0xC0000409UL /* STATUS_STACK_BUFFER_OVERRUN */) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -208,6 +212,7 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
     DiagLog_Printf("CRASH", "=================================================================");
     if (!SaveSync_IsHostRole() && LockstepNet_IsConnected() && TwoStates_GetSendClientLogs()) {
         LockstepNet_SendClientLogs("CRASH");
+        Sleep(150);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }

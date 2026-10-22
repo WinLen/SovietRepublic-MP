@@ -832,7 +832,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                                                       0, 0, 0, (__int64)&route, 0, 0);
             // Explicitly assign seg.points (route) to manager+0x408 after fcaf0 in case fcaf0
             // took an early exit on its internal Bézier curve [rbp+0x170] or mutated +0x410.
-            ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + 0x408), &route);
+            ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + MGR_ROUTE_BEGIN_OFFSET), &route);
 
             // Restore startNode and endNode positions after fcaf0:
             // - fcaf0 can overwrite startNode->pos (0x140517BB1) and endNode->pos (0x1404FF420,

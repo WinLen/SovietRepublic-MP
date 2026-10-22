@@ -284,12 +284,12 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
 void LockstepNet_Close()
 {
     Locks();
+    if (g_sock != INVALID_SOCKET && g_connected) {
+        if (!g_isHost) LockstepNet_SendClientLogs("DISCONNECT");
+        Send(LS_BYE, nullptr, 0);
+    }
     SOCKET s = (SOCKET)InterlockedExchange64((volatile LONG64*)&g_sock, (LONG64)INVALID_SOCKET);
     if (s != INVALID_SOCKET) {
-        if (g_connected) {
-            if (!g_isHost) LockstepNet_SendClientLogs("DISCONNECT");
-            Send(LS_BYE, nullptr, 0);
-        }
         g_connected = false;
         NetworkCloseSocket(s);
     }

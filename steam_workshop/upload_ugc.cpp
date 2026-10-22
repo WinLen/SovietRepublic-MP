@@ -272,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Unified DLL deployment & Steam Workshop staging sync, semantic version comparison in updater, and active Co-op host friend filter");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Fix road/network construction crash (MGR_ROUTE_BEGIN_OFFSET 0x410 vs 0x408), fix LockstepNet_Close disconnect packet/logs, and catch STATUS_HEAP_CORRUPTION in crash logger");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;
