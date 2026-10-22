@@ -467,6 +467,8 @@ void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& 
     memset(&seg.endOwnLink, 0, sizeof(seg.endOwnLink));
     seg.snapModeStart = 0;
     seg.snapModeEnd = 0;
+    seg.needsTerrainLevel = 0;
+    seg.snapFlags = 0;
     memset(seg.snapOffsetStart, 0, sizeof(seg.snapOffsetStart));
     memset(seg.snapOffsetEnd, 0, sizeof(seg.snapOffsetEnd));
 
@@ -489,6 +491,11 @@ void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& 
 
         seg.snapModeStart = *(unsigned char*)(manager + 0x74A);
         seg.snapModeEnd   = *(unsigned char*)(manager + 0x74B);
+        seg.needsTerrainLevel = *(unsigned char*)(manager + 0x312);
+        seg.snapFlags = (*(unsigned char*)(manager + 0x748) ? 0x01 : 0) |
+                        (*(unsigned char*)(manager + 0x749) ? 0x02 : 0) |
+                        (*(unsigned char*)(manager + 0x5CB) ? 0x04 : 0) |
+                        (*(unsigned char*)(manager + 0x5CC) ? 0x08 : 0);
         memcpy(seg.snapOffsetStart, (const void*)(manager + 0x74C), 12);
         memcpy(seg.snapOffsetEnd,   (const void*)(manager + 0x758), 12);
 
@@ -505,6 +512,8 @@ void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& 
         memset(&seg.endOwnLink, 0, sizeof(seg.endOwnLink));
         seg.snapModeStart = 0;
         seg.snapModeEnd = 0;
+        seg.needsTerrainLevel = 0;
+        seg.snapFlags = 0;
     }
 }
 
@@ -771,10 +780,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
             ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
                 Fc040Param5ForCategory(seg.category, seg.typeId), 0, noDirection);
-            if (seg.snapModeStart != 0) {
-                *(unsigned char*)(manager + 0x74A) = seg.snapModeStart;
-                memcpy((void*)(manager + 0x74C), seg.snapOffsetStart, 12);
-            }
+            // Keep snapModeStart/End (+0x74A/+0x74B) zero while fcaf0 runs:
+            // 0x4FCAF0 (0x140514FB7..0x140515186) inserts startNode/endNode into manager+0x410
+            // whenever +0x74A/+0x74B == 1 or 3, and seg.points captured at 0x518A80 entry
+            // already contains those points. Setting +0x74A/+0x74B before fcaf0 duplicated
+            // the point at index 0/N-1 (distance == 0 -> 0/0 = -nan(ind) in 0x552090 -> crash).
+            *(unsigned char*)(manager + 0x74A) = 0;
+            *(unsigned char*)(manager + 0x74B) = 0;
             *(long long*)(manager + MGR_HOVER_SEGMENT_COPY_OFFSET) = 0;
             // A fresh start node gets manager+0x24 added to its height; the
             // sender's position already includes it.
@@ -817,29 +829,56 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *lmbHeld = 1;
             ((Fcaf0Fn)((uintptr_t)g_exe + FCAF0_RVA))(manager, end, seg.typeId, (unsigned int)seg.variant,
                                                       0, 0, 0, (__int64)&route, 0, 0);
-            if (seg.snapModeStart != 0) {
-                *(unsigned char*)(manager + 0x74A) = seg.snapModeStart;
-                memcpy((void*)(manager + 0x74C), seg.snapOffsetStart, 12);
-            }
-            if (seg.snapModeEnd != 0) {
-                *(unsigned char*)(manager + 0x74B) = seg.snapModeEnd;
-                memcpy((void*)(manager + 0x758), seg.snapOffsetEnd, 12);
-            }
-            if (*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) == 0)
+            // Explicitly assign seg.points (route) to manager+0x408 after fcaf0 in case fcaf0
+            // took an early exit on its internal Bézier curve [rbp+0x170] or mutated +0x410.
+            ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + 0x408), &route);
+
+            // Restore startNode and endNode positions after fcaf0:
+            // - fcaf0 can overwrite startNode->pos (0x140517BB1) and endNode->pos (0x1404FF420,
+            //   0x140511C44, 0x140515A5C).
+            // - manager+0x430 (endNode) is always a temporary node before 0x518A80 runs, and
+            //   0x518A80 uses endNode->pos with exact float equality (ucomiss) both to match
+            //   attached end nodes (0x14051AC30) and to split mid-segments (0x14051AD70).
+            if (*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0 && *(__int64*)(manager + MGR_START_NODE_OFFSET))
+                SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), seg.startNode);
+            if (*(__int64*)(manager + MGR_END_NODE_OFFSET))
                 SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
-            else if (IsPowerLine(seg.category))
+            if (IsPowerLine(seg.category) && *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) != 0)
                 CheckAttachedPowerNode(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode, "end");
             if (IsPowerLine(seg.category))
                 Logf("republicmp  ROAD_SYNC:   power line end: %s", endHoverNode ? "on an existing node (hovered)" : "free");
 
+            // Restore snap modes, offsets, +0x5CB/+0x5CC, and terrain auto-level flag (+0x312)
+            // for RoadCommit (0x518A80).
+            *(unsigned char*)(manager + 0x74A) = seg.snapModeStart;
+            memcpy((void*)(manager + 0x74C), seg.snapOffsetStart, 12);
+            *(unsigned char*)(manager + 0x5CB) = (seg.snapFlags & 0x04) ? 1 : 0;
+            *(unsigned char*)(manager + 0x74B) = seg.snapModeEnd;
+            memcpy((void*)(manager + 0x758), seg.snapOffsetEnd, 12);
+            *(unsigned char*)(manager + 0x5CC) = (seg.snapFlags & 0x08) ? 1 : 0;
+            *(unsigned char*)(manager + 0x312) = seg.needsTerrainLevel;
+
+            // Ensure hover globals are still set for RoadCommit (0x518A80)
+            SetHoveredPort(seg.endPort, "end");
+            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) SetRoadHover(seg.endLink, "end");
+            SetOwnHover(manager, seg.endOwnLink, "end");
+            if (endHoverNode) *(long long*)((uintptr_t)g_exe + HOVER_NODE_RVA) = endHoverNode;
+
+            // Force valid state so a false-positive obstacle/slope check on fcaf0's internal
+            // curve [rbp+0x170] never drops a segment that the sender already validated.
+            *(unsigned char*)(manager + MGR_VALID_OFFSET) = 1;
+            *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET) = -1;
+            *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET) = 0;
+
             unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
             int errCategory = *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET);
             unsigned int errSubcode = *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET);
-            Logf("republicmp  ROAD_SYNC:   attach start=%d end=%d snap=%d/%d valid=%d errCategory=%d errSubcode=0x%x",
+            Logf("republicmp  ROAD_SYNC:   attach start=%d end=%d snap=%d/%d terrLvl=%d valid=%d errCategory=%d errSubcode=0x%x",
                  (int)*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET),
                  (int)*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET),
                  (int)*(unsigned char*)(manager + 0x74A),
                  (int)*(unsigned char*)(manager + 0x74B),
+                 (int)*(unsigned char*)(manager + 0x312),
                  (int)valid, errCategory, errSubcode);
             *outEngineAccepted = (valid == 1) && (errCategory == -1);
 

@@ -829,10 +829,14 @@ static int SnapshotBuildings(__int64* out, int max)
 {
     int n = 0;
     __try {
-        __int64* it = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        __int64* end = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end && n < max; ++it)
-            if (*it) out[n++] = *it;
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2; ++v) {
+            __int64* it = *(__int64**)((uintptr_t)g_exeBase + kBeginRvas[v]);
+            __int64* end = *(__int64**)((uintptr_t)g_exeBase + kEndRvas[v]);
+            for (; it && it < end && n < max; ++it)
+                if (*it) out[n++] = *it;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return n;

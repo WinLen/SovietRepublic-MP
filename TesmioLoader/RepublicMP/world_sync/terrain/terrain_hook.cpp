@@ -588,6 +588,8 @@ void TerrainHook_LockstepFlush()
     g_lsTerrain.clear();
 }
 
+typedef void (*ClearGroundObjectsFn)(void* world, const float* pos, float radius, char flag);
+
 bool TerrainHook_ApplyCommand(const void* data, size_t size)
 {
     if (size % sizeof(LsTerrainEdit) != 0) return false;
@@ -595,20 +597,40 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     size_t n = size / sizeof(LsTerrainEdit);
     void* terrain = TerrainHook_GetTerrain();
     if (!terrain || !n) return false;
-    bool needMask = false;
-    for (size_t i = 0; i < n; i++) needMask |= (e[i].method == TM_MASK || e[i].method == TM_RAISE_LOWER_ANGLE);
-    bool needHeight = false;
-    for (size_t i = 0; i < n; i++) needHeight |= e[i].method != TM_MASK;
     InterlockedIncrement(&g_terrainApplyingRemote);
-    if (needHeight) TerrainHook_HeightmapOpen(terrain);
-    if (needMask) TerrainHook_MaskOpen(terrain);
-    for (size_t i = 0; i < n; i++) TerrainHook_ApplyEdit(terrain, e[i].method, e[i].args);
-    if (needMask) TerrainHook_MaskClose(terrain);
-    if (needHeight) {
-        TerrainHook_HeightmapClose(terrain);
-        if (o_RegenCollision) o_RegenCollision(terrain);
-        if (o_RegenCollisionNormal) o_RegenCollisionNormal(terrain);
+    bool heightOpen = false;
+    bool maskOpen = false;
+    ClearGroundObjectsFn clearGround = (ClearGroundObjectsFn)(g_exeBase + 0x3AE120);
+    void* world = (void*)(g_exeBase + 0x9D4F10);
+    for (size_t i = 0; i < n; i++) {
+        int m = e[i].method;
+        if (m == TM_SMOOTH_LIMITS) {
+            // C3D_TERRAIN::EditSmoothWithLimits opens and closes the heightmap staging buffer internally.
+            if (heightOpen) {
+                TerrainHook_HeightmapClose(terrain);
+                heightOpen = false;
+            }
+            TerrainHook_ApplyEdit(terrain, m, e[i].args);
+            continue;
+        }
+        bool wantHeight = (m != TM_MASK);
+        bool wantMask = (m == TM_MASK || m == TM_RAISE_LOWER_ANGLE);
+        if (wantHeight && !heightOpen) {
+            TerrainHook_HeightmapOpen(terrain);
+            heightOpen = true;
+        }
+        if (wantMask && !maskOpen) {
+            TerrainHook_MaskOpen(terrain);
+            maskOpen = true;
+        }
+        if (m == TM_RAISE_LOWER && e[i].args.f[1] > 0.0f) {
+            float p[3] = { e[i].args.pos[0], e[i].args.pos[1], e[i].args.pos[2] };
+            clearGround(world, p, e[i].args.f[1], 0);
+        }
+        TerrainHook_ApplyEdit(terrain, m, e[i].args);
     }
+    if (maskOpen) TerrainHook_MaskClose(terrain);
+    if (heightOpen) TerrainHook_HeightmapClose(terrain);
     InterlockedDecrement(&g_terrainApplyingRemote);
     return true;
 }

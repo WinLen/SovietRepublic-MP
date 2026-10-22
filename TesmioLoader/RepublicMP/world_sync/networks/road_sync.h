@@ -143,11 +143,12 @@ struct RoadSyncSegment {
     RoadSyncRoadLink endLink;
     RoadSyncRoadLink startOwnLink; // own-network hovered edge/node at start (rail switches, mid-segment T-junctions)
     RoadSyncRoadLink endOwnLink;   // own-network hovered edge/node at end
-    unsigned char snapModeStart;   // manager+0x74A
-    unsigned char snapModeEnd;     // manager+0x74B
-    unsigned char snapPad[2];
-    float snapOffsetStart[3];      // manager+0x74C..0x754
-    float snapOffsetEnd[3];        // manager+0x758..0x760
+    unsigned char snapModeStart;     // manager+0x74A
+    unsigned char snapModeEnd;       // manager+0x74B
+    unsigned char needsTerrainLevel; // manager+0x312: auto-level terrain along road/footpath in 0x518A80
+    unsigned char snapFlags;         // bit 0: +0x748, bit 1: +0x749, bit 2: +0x5CB, bit 3: +0x5CC
+    float snapOffsetStart[3];        // manager+0x74C..0x754
+    float snapOffsetEnd[3];          // manager+0x758..0x760
     int pointCount;     // interior points, 0..ROAD_SYNC_MAX_POINTS (power-line spans can have 0-1)
     RoadSyncPoint points[ROAD_SYNC_MAX_POINTS];
 };
