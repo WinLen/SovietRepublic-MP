@@ -13,15 +13,14 @@
 #include "../TesmioLoader/RepublicMP/core/version.h"
 
 #pragma pack(push, 8)
-struct CreateItemResult_t {
-    int32_t  m_eResult;
-    uint64_t m_nPublishedFileId;
-    bool     m_bUserNeedsToAcceptWorkshopLegalAgreement;
-};
-
 struct SubmitItemUpdateResult_t {
     int32_t  m_eResult;
     bool     m_bUserNeedsToAcceptWorkshopLegalAgreement;
+    uint64_t m_nPublishedFileId;
+};
+
+struct DeleteItemResult_t {
+    int32_t  m_eResult;
     uint64_t m_nPublishedFileId;
 };
 #pragma pack(pop)
@@ -33,7 +32,6 @@ typedef void (*Fn_SteamAPI_RunCallbacks)();
 typedef HSteamUser (*Fn_SteamAPI_GetHSteamUser)();
 typedef void* (*Fn_SteamInternal_FindOrCreateUserInterface)(HSteamUser hSteamUser, const char* pszVersion);
 
-typedef uint64_t (*Fn_ISteamUGC_CreateItem)(void* self, uint32_t nConsumerAppId, int32_t eFileType);
 typedef uint64_t (*Fn_ISteamUGC_StartItemUpdate)(void* self, uint32_t nConsumerAppId, uint64_t nPublishedFileID);
 typedef bool (*Fn_ISteamUGC_SetItemTitle)(void* self, uint64_t handle, const char* pchTitle);
 typedef bool (*Fn_ISteamUGC_SetItemDescription)(void* self, uint64_t handle, const char* pchDescription);
@@ -42,25 +40,26 @@ typedef bool (*Fn_ISteamUGC_SetItemContent)(void* self, uint64_t handle, const c
 typedef bool (*Fn_ISteamUGC_SetItemPreview)(void* self, uint64_t handle, const char* pszPreviewFile);
 typedef uint64_t (*Fn_ISteamUGC_SubmitItemUpdate)(void* self, uint64_t handle, const char* pchChangeNote);
 typedef int32_t (*Fn_ISteamUGC_GetItemUpdateProgress)(void* self, uint64_t handle, uint64_t* punBytesProcessed, uint64_t* punBytesTotal);
+typedef uint64_t (*Fn_ISteamUGC_DeleteItem)(void* self, uint64_t nPublishedFileID);
 
-typedef void (*CreateItemCallbackFn)(CreateItemResult_t* pParam, bool bIOFailure);
 typedef void (*SubmitItemCallbackFn)(SubmitItemUpdateResult_t* pParam, bool bIOFailure);
-typedef void* (*Fn_CCreateItemResult_t_SetCallResult)(uint64_t hAPICall, CreateItemCallbackFn fn);
+typedef void (*DeleteItemCallbackFn)(DeleteItemResult_t* pParam, bool bIOFailure);
 typedef void* (*Fn_CSubmitItemUpdateResult_t_SetCallResult)(uint64_t hAPICall, SubmitItemCallbackFn fn);
-
-static volatile bool g_createDone = false;
-static CreateItemResult_t g_createResult = {};
-static volatile bool g_createIOFail = false;
+typedef void* (*Fn_CDeleteItemResult_t_SetCallResult)(uint64_t hAPICall, DeleteItemCallbackFn fn);
 
 static volatile bool g_submitDone = false;
 static SubmitItemUpdateResult_t g_submitResult = {};
 static volatile bool g_submitIOFail = false;
 
-static void OnCreateItem(CreateItemResult_t* pParam, bool bIOFailure)
+static volatile bool g_deleteDone = false;
+static DeleteItemResult_t g_deleteResult = {};
+static volatile bool g_deleteIOFail = false;
+
+static void OnDeleteItem(DeleteItemResult_t* pParam, bool bIOFailure)
 {
-    if (pParam) g_createResult = *pParam;
-    g_createIOFail = bIOFailure;
-    g_createDone = true;
+    if (pParam) g_deleteResult = *pParam;
+    g_deleteIOFail = bIOFailure;
+    g_deleteDone = true;
 }
 
 static void OnSubmitItem(SubmitItemUpdateResult_t* pParam, bool bIOFailure)
@@ -179,7 +178,6 @@ int main(int argc, char** argv)
     auto pGetHSteamUser = (Fn_SteamAPI_GetHSteamUser)GetProcAddress(hDll, "SteamAPI_GetHSteamUser");
     auto pFindIface = (Fn_SteamInternal_FindOrCreateUserInterface)GetProcAddress(hDll, "SteamInternal_FindOrCreateUserInterface");
 
-    auto pCreateItem = (Fn_ISteamUGC_CreateItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_CreateItem");
     auto pStartUpdate = (Fn_ISteamUGC_StartItemUpdate)GetProcAddress(hDll, "SteamAPI_ISteamUGC_StartItemUpdate");
     auto pSetTitle = (Fn_ISteamUGC_SetItemTitle)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemTitle");
     auto pSetDesc = (Fn_ISteamUGC_SetItemDescription)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemDescription");
@@ -189,8 +187,9 @@ int main(int argc, char** argv)
     auto pSubmitUpdate = (Fn_ISteamUGC_SubmitItemUpdate)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SubmitItemUpdate");
     auto pGetProgress = (Fn_ISteamUGC_GetItemUpdateProgress)GetProcAddress(hDll, "SteamAPI_ISteamUGC_GetItemUpdateProgress");
 
-    auto pSetCreateCall = (Fn_CCreateItemResult_t_SetCallResult)GetProcAddress(hDll, "CCreateItemResult_t_SetCallResult");
     auto pSetSubmitCall = (Fn_CSubmitItemUpdateResult_t_SetCallResult)GetProcAddress(hDll, "CSubmitItemUpdateResult_t_SetCallResult");
+    auto pDeleteItem = (Fn_ISteamUGC_DeleteItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_DeleteItem");
+    auto pSetDeleteCall = (Fn_CDeleteItemResult_t_SetCallResult)GetProcAddress(hDll, "CDeleteItemResult_t_SetCallResult");
 
     if (!pInit || !pInit()) {
         printf("[ERROR] SteamAPI_Init() failed! Make sure Steam desktop client is running and logged in.\n");
@@ -201,6 +200,27 @@ int main(int argc, char** argv)
     if (!pUGC) {
         printf("[ERROR] Could not acquire STEAMUGC_INTERFACE_VERSION012!\n");
         return 1;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "--delete") == 0) {
+        uint64_t delId = _strtoui64(argv[2], nullptr, 10);
+        if (delId == 3823543010ULL) {
+            printf("[ERROR] Refusing to delete the main RepublicMP Workshop item 3823543010!\n");
+            return 1;
+        }
+        printf("[UGC] Deleting duplicate Workshop item %llu...\n", (unsigned long long)delId);
+        g_deleteDone = false;
+        uint64_t hDelCall = pDeleteItem(pUGC, delId);
+        pSetDeleteCall(hDelCall, OnDeleteItem);
+        while (!g_deleteDone) {
+            pRunCallbacks();
+            Sleep(50);
+        }
+        DeleteFileA("steam_appid.txt");
+        if (pShutdown) pShutdown();
+        printf("[UGC] DeleteItem(%llu) finished: EResult=%d, IOFail=%d\n",
+               (unsigned long long)delId, (int)g_deleteResult.m_eResult, (int)g_deleteIOFail);
+        return (g_deleteResult.m_eResult == 1 && !g_deleteIOFail) ? 0 : 1;
     }
 
     char rootDir[MAX_PATH] = {};
@@ -218,43 +238,19 @@ int main(int argc, char** argv)
 
     SyncLatestModBinaries(repoRoot, wsDir, contentDir);
 
-    uint64_t publishedId = 0;
+    // Always default to the existing RepublicMP Workshop item 3823543010 — NEVER create a duplicate item!
+    uint64_t publishedId = 3823543010ULL;
     std::string existingIdStr = ReadFileUtf8(idFile.c_str());
     if (!existingIdStr.empty()) {
-        publishedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
+        uint64_t parsedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
+        if (parsedId > 0) publishedId = parsedId;
     }
-    if (argc > 1 && argv[1][0]) {
+    if (argc > 1 && argv[1][0] != '-') {
         uint64_t argId = _strtoui64(argv[1], nullptr, 10);
         if (argId > 0) publishedId = argId;
     }
 
-    if (publishedId == 0) {
-        printf("[UGC] Creating new Steam Workshop item for AppID 784150...\n");
-        g_createDone = false;
-        uint64_t hCall = pCreateItem(pUGC, 784150, 0 /* k_EWorkshopFileTypeCommunity */);
-        pSetCreateCall(hCall, OnCreateItem);
-        while (!g_createDone) {
-            pRunCallbacks();
-            Sleep(50);
-        }
-        if (g_createIOFail || g_createResult.m_eResult != 1) {
-            printf("[ERROR] CreateItem failed! EResult=%d, IOFail=%d\n",
-                   (int)g_createResult.m_eResult, (int)g_createIOFail);
-            return 1;
-        }
-        publishedId = g_createResult.m_nPublishedFileId;
-        printf("[UGC] Created Workshop item! PublishedFileId = %llu\n", (unsigned long long)publishedId);
-        if (g_createResult.m_bUserNeedsToAcceptWorkshopLegalAgreement) {
-            printf("[NOTE] You may need to accept the Steam Workshop Legal Agreement on the item page.\n");
-        }
-        FILE* fid = nullptr;
-        if (fopen_s(&fid, idFile.c_str(), "wb") == 0 && fid) {
-            fprintf(fid, "%llu\n", (unsigned long long)publishedId);
-            fclose(fid);
-        }
-    } else {
-        printf("[UGC] Updating existing Steam Workshop item: %llu\n", (unsigned long long)publishedId);
-    }
+    printf("[UGC] Updating existing Steam Workshop item: %llu\n", (unsigned long long)publishedId);
 
     std::string desc = ReadFileUtf8(descFile.c_str());
     if (desc.empty()) {

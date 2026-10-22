@@ -21,11 +21,12 @@ if (-not (Test-Path $steamcmdExe)) {
     Expand-Archive -Path $zipPath -DestinationPath $steamcmdDir -Force
 }
 
-# 3. Read or ask for Workshop ID (0 = create new item)
+# 3. Read or ask for Workshop ID (always default to existing RepublicMP item 3823543010)
 $idFile = Join-Path $wsDir 'published_file_id.txt'
-$defaultId = "0"
+$defaultId = "3823543010"
 if (Test-Path $idFile) {
-    $defaultId = (Get-Content $idFile -Raw).Trim()
+    $idVal = (Get-Content $idFile -Raw).Trim()
+    if ($idVal -and $idVal -ne "0") { $defaultId = $idVal }
 }
 $steamUser = Read-Host "Enter your Steam Username (login)"
 $pubId = Read-Host "Enter existing Workshop ID or press Enter for [$defaultId] (0 = create new)"

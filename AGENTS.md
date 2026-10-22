@@ -14,6 +14,7 @@
 >      - `steam_workshop\content\TesmioLoader\build\plugins\republicmp_updater.ini` (с актуальной `current_version=<REPUBLICMP_VERSION>`)
 >    - Одновременно те же свежие файлы ОБЯЗАНЫ синхронизироваться в живую папку подписки Steam на ПК (`C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\...`, через переименование `.old`, если игра запущена) и в папку игры Steam (`C:\Program Files (x86)\Steam\steamapps\common\SovietRepublic\dinput8.dll`).
 >    - **КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО** класть `RepublicMP.dll` в корень `d:\SovietRepublic MP\steam_workshop\RepublicMP.dll` или в корень `...\3823543010\RepublicMP.dll` — игра загружает плагин только из подпапки `TesmioLoader\build\plugins\RepublicMP.dll`, а корневые дубликаты создают путаницу.
+>    - **КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО** создавать новый элемент в Steam Workshop (`ISteamUGC::CreateItem` удалён из `upload_ugc.cpp`): публикация ВСЕГДА обновляет только существующий мод **`3823543010`**.
 
 ---
 
