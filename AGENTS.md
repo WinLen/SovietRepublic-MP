@@ -4,7 +4,16 @@
 > 1. Перед внесением любых изменений в код, UI, хуки, сохранения или сетевую синхронизацию изучи релевантные разделы этого файла (`AGENTS.md`).
 > 2. **При каждом добавлении, удалении или изменении файлов, хуков, RVA-адресов, структур данных, форматов сохранений или экранов меню ты ОБЯЗАН автоматически обновить этот файл (`d:\SovietRepublic MP\AGENTS.md`) в рамках того же шага до завершения ответа пользователю.**
 > 3. Всегда проверяй отсутствие мёртвого кода (неиспользуемых функций, `#define`, переменных) после рефакторинга.
-> 4. **При каждом пуше в Git и публикации обновления в Steam Workshop ты ОБЯЗАН инкрементировать версию `REPUBLICMP_VERSION` в [`TesmioLoader/RepublicMP/core/version.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/version.h) (например, `1.0.1` -> `1.0.2`), а при изменении сетевых сообщений — также инкрементировать `REPUBLICMP_PROTOCOL`, после чего пересобрать `RepublicMP.dll`, развернуть во все целевые пути, загрузить в Steam Workshop (`3823543010`) и запушить коммит и тег `v<REPUBLICMP_VERSION>` в Git (`origin main`).**
+> 4. **При каждом пуше в Git и публикации обновления в Steam Workshop ты ОБЯЗАН инкрементировать версию `REPUBLICMP_VERSION` в [`TesmioLoader/RepublicMP/core/version.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/version.h) (например, `1.0.1` -> `1.0.2`), а при изменении сетевых сообщений — также инкрементировать `REPUBLICMP_PROTOCOL`, после чего пересобрать проект (`build.bat`), развернуть все бинарники (`RepublicMP.dll`, `tesmioloader.dll`, `dinput8.dll`, `tesmiolauncher.exe`) и `republicmp_updater.ini` в стейджинг мода для Steam (`steam_workshop\content`), в локальную подписку Steam Workshop (`3823543010`) и в тестовые стенды (`local\test-host`, `local\test-client`), загрузить в Steam Workshop (`3823543010` через `upload_ugc.cpp`) и запушить коммит и тег `v<REPUBLICMP_VERSION>` в Git (`origin main`).**
+> 5. **СТРОГОЕ ПРАВИЛО ПО DLL (ЗАПРЕТ ДУБЛИКАТОВ И СТАРЫХ ВЕРСИЙ):**
+>    - В мод, который летит в Steam Workshop (`d:\SovietRepublic MP\steam_workshop\content\`), ВСЕГДА должны копироваться свежие бинарники из `TesmioLoader\build\`:
+>      - `steam_workshop\content\TesmioLoader\build\plugins\RepublicMP.dll`
+>      - `steam_workshop\content\TesmioLoader\build\tesmioloader.dll`
+>      - `steam_workshop\content\TesmioLoader\build\tesmiolauncher.exe`
+>      - `steam_workshop\content\dinput8.dll`
+>      - `steam_workshop\content\TesmioLoader\build\plugins\republicmp_updater.ini` (с актуальной `current_version=<REPUBLICMP_VERSION>`)
+>    - Одновременно те же свежие файлы ОБЯЗАНЫ синхронизироваться в живую папку подписки Steam на ПК (`C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\...`, через переименование `.old`, если игра запущена) и в папку игры Steam (`C:\Program Files (x86)\Steam\steamapps\common\SovietRepublic\dinput8.dll`).
+>    - **КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО** класть `RepublicMP.dll` в корень `d:\SovietRepublic MP\steam_workshop\RepublicMP.dll` или в корень `...\3823543010\RepublicMP.dll` — игра загружает плагин только из подпапки `TesmioLoader\build\plugins\RepublicMP.dll`, а корневые дубликаты создают путаницу.
 
 ---
 
@@ -14,13 +23,26 @@
   ```powershell
   cmd.exe /c "d:\SovietRepublic MP\TesmioLoader\build.bat"
   ```
-- **Выходной артефакт плагина:**
-  `d:\SovietRepublic MP\TesmioLoader\build\plugins\RepublicMP.dll`
-- **Обязательные точки развёртывания после каждой сборки:**
-  1. `d:\SovietRepublic MP\local\test-host\plugins\RepublicMP.dll`
-  2. `d:\SovietRepublic MP\local\test-client\plugins\RepublicMP.dll`
-  3. `d:\SovietRepublic MP\steam_workshop\RepublicMP.dll`
-  4. `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\plugins\RepublicMP.dll`
+- **Выходные артефакты сборки:**
+  - `d:\SovietRepublic MP\TesmioLoader\build\plugins\RepublicMP.dll`
+  - `d:\SovietRepublic MP\TesmioLoader\build\tesmioloader.dll`
+  - `d:\SovietRepublic MP\TesmioLoader\build\tesmiolauncher.exe`
+  - `d:\SovietRepublic MP\TesmioLoader\build\dinput8.dll`
+- **Обязательные точки развёртывания после каждой сборки (выполняются автоматически в [`upload_ugc.cpp`](file:///d:/SovietRepublic%20MP/steam_workshop/upload_ugc.cpp) и [`pack_friend.ps1`](file:///d:/SovietRepublic%20MP/pack_friend.ps1)):**
+  1. **Мод для отправки в Steam Workshop (`steam_workshop\content`):**
+     - `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\plugins\RepublicMP.dll`
+     - `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\tesmioloader.dll`
+     - `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\tesmiolauncher.exe`
+     - `d:\SovietRepublic MP\steam_workshop\content\dinput8.dll`
+     - `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\plugins\republicmp_updater.ini`
+  2. **Живая папка подписки Steam Workshop на ПК (`3823543010`, откуда реально грузится Steam-игра):**
+     - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\TesmioLoader\build\plugins\RepublicMP.dll`
+     - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\TesmioLoader\build\tesmioloader.dll`
+     - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\dinput8.dll`
+     - `C:\Program Files (x86)\Steam\steamapps\common\SovietRepublic\dinput8.dll`
+  3. **Локальные тестовые стенды:**
+     - `d:\SovietRepublic MP\local\test-host\plugins\RepublicMP.dll` (+ `tesmioloader.dll`, `dinput8.dll`)
+     - `d:\SovietRepublic MP\local\test-client\plugins\RepublicMP.dll` (+ `tesmioloader.dll`, `dinput8.dll`)
 - **Правило запуска `SOVIET64.exe` из агента:**
   - Запускать через `CreateProcessW` с `si.lpDesktop = "WinSta0\\Default"`, `IsDaemon: true`, и **обязательно** держать процесс через `Wait-Process -Id $pidLaunched` внутри фоновой задачи (`WaitMsBeforeAsync: 1500`), иначе по завершении синхронной команды Job Object закроет игру.
 - **Логи для диагностики:**

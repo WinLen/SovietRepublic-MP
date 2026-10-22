@@ -84,6 +84,64 @@ static std::string ReadFileUtf8(const char* path)
     return s;
 }
 
+static bool SafeReplaceDll(const std::string& srcPath, const std::string& dstPath)
+{
+    if (GetFileAttributesA(srcPath.c_str()) == INVALID_FILE_ATTRIBUTES) return false;
+    if (CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE)) return true;
+    // If locked by running SOVIET64.exe, rename locked file to .old first
+    std::string oldPath = dstPath + ".old";
+    DeleteFileA(oldPath.c_str());
+    MoveFileExA(dstPath.c_str(), oldPath.c_str(), MOVEFILE_REPLACE_EXISTING);
+    return CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE) != 0;
+}
+
+static void SyncLatestModBinaries(const std::string& repoRoot, const std::string& wsDir, const std::string& contentDir)
+{
+    std::string buildDir = repoRoot + "\\TesmioLoader\\build";
+    std::string srcRepublicMp = buildDir + "\\plugins\\RepublicMP.dll";
+    std::string srcLoader     = buildDir + "\\tesmioloader.dll";
+    std::string srcLauncher   = buildDir + "\\tesmiolauncher.exe";
+    std::string srcDinput8    = buildDir + "\\dinput8.dll";
+
+    // Remove dead duplicate DLLs from root folders
+    DeleteFileA((wsDir + "\\RepublicMP.dll").c_str());
+    DeleteFileA((contentDir + "\\RepublicMP.dll").c_str());
+
+    // 1. Always stage fresh binaries into steam_workshop\content (uploaded to Steam Workshop)
+    CreateDirectoryA((contentDir + "\\TesmioLoader").c_str(), nullptr);
+    CreateDirectoryA((contentDir + "\\TesmioLoader\\build").c_str(), nullptr);
+    CreateDirectoryA((contentDir + "\\TesmioLoader\\build\\plugins").c_str(), nullptr);
+
+    SafeReplaceDll(srcRepublicMp, contentDir + "\\TesmioLoader\\build\\plugins\\RepublicMP.dll");
+    SafeReplaceDll(srcLoader,     contentDir + "\\TesmioLoader\\build\\tesmioloader.dll");
+    SafeReplaceDll(srcLauncher,   contentDir + "\\TesmioLoader\\build\\tesmiolauncher.exe");
+    SafeReplaceDll(srcDinput8,    contentDir + "\\dinput8.dll");
+
+    std::string iniPath = contentDir + "\\TesmioLoader\\build\\plugins\\republicmp_updater.ini";
+    WritePrivateProfileStringA("updater", "github_repo", REPUBLICMP_GITHUB_REPO, iniPath.c_str());
+    WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, iniPath.c_str());
+    printf("[UGC] Synced latest v%s DLLs into %s\n", REPUBLICMP_VERSION, contentDir.c_str());
+
+    // 2. Also sync into local subscribed Steam Workshop folder (3823543010) and Steam game dir if present
+    const char* localWs3823543010 = "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3823543010";
+    if (GetFileAttributesA(localWs3823543010) != INVALID_FILE_ATTRIBUTES) {
+        std::string lws(localWs3823543010);
+        DeleteFileA((lws + "\\RepublicMP.dll").c_str());
+        SafeReplaceDll(srcRepublicMp, lws + "\\TesmioLoader\\build\\plugins\\RepublicMP.dll");
+        SafeReplaceDll(srcLoader,     lws + "\\TesmioLoader\\build\\tesmioloader.dll");
+        SafeReplaceDll(srcLauncher,   lws + "\\TesmioLoader\\build\\tesmiolauncher.exe");
+        SafeReplaceDll(srcDinput8,    lws + "\\dinput8.dll");
+        std::string localIni = lws + "\\TesmioLoader\\build\\plugins\\republicmp_updater.ini";
+        WritePrivateProfileStringA("updater", "github_repo", REPUBLICMP_GITHUB_REPO, localIni.c_str());
+        WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, localIni.c_str());
+        printf("[UGC] Synced latest v%s DLLs into local Steam Workshop folder (%s)\n", REPUBLICMP_VERSION, localWs3823543010);
+    }
+    const char* steamGameDir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SovietRepublic";
+    if (GetFileAttributesA(steamGameDir) != INVALID_FILE_ATTRIBUTES) {
+        SafeReplaceDll(srcDinput8, std::string(steamGameDir) + "\\dinput8.dll");
+    }
+}
+
 int main(int argc, char** argv)
 {
     SetEnvironmentVariableA("SteamAppId", "784150");
@@ -147,11 +205,18 @@ int main(int argc, char** argv)
 
     char rootDir[MAX_PATH] = {};
     GetCurrentDirectoryA(MAX_PATH, rootDir);
-    std::string wsDir = std::string(rootDir) + "\\steam_workshop";
+    std::string repoRoot(rootDir);
+    // Support running upload_ugc.exe either from repo root or from inside steam_workshop directory
+    if (repoRoot.size() > 15 && _stricmp(repoRoot.c_str() + repoRoot.size() - 15, "\\steam_workshop") == 0) {
+        repoRoot.resize(repoRoot.size() - 15);
+    }
+    std::string wsDir = repoRoot + "\\steam_workshop";
     std::string idFile = wsDir + "\\published_file_id.txt";
     std::string contentDir = wsDir + "\\content";
     std::string previewFile = wsDir + "\\preview.png";
     std::string descFile = wsDir + "\\description_ru.txt";
+
+    SyncLatestModBinaries(repoRoot, wsDir, contentDir);
 
     uint64_t publishedId = 0;
     std::string existingIdStr = ReadFileUtf8(idFile.c_str());
@@ -207,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Join menu now displays only Steam friends actively playing W&R (AppID 784150) who have an open Co-op server waiting for a player (hybrid Steam Rich Presence + instant P2P host ping)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Unified DLL deployment & Steam Workshop staging sync, semantic version comparison in updater, and active Co-op host friend filter");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

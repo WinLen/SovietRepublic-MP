@@ -190,6 +190,17 @@ static std::string NormalizeVersion(const std::string& v)
     return v;
 }
 
+static bool IsRemoteVersionNewer(const std::string& remoteVer, const std::string& localVer)
+{
+    int rMaj = 0, rMin = 0, rPat = 0;
+    int lMaj = 0, lMin = 0, lPat = 0;
+    if (sscanf_s(remoteVer.c_str(), "%d.%d.%d", &rMaj, &rMin, &rPat) < 2) return false;
+    if (sscanf_s(localVer.c_str(), "%d.%d.%d", &lMaj, &lMin, &lPat) < 2) return false;
+    if (rMaj != lMaj) return rMaj > lMaj;
+    if (rMin != lMin) return rMin > lMin;
+    return rPat > lPat;
+}
+
 // Checks local Steam Workshop folder (steamapps/workshop/content/784150/*/TesmioLoader/build/plugins/RepublicMP.dll)
 static bool CheckWorkshopNewerDll(std::string& outDllPath)
 {
@@ -298,7 +309,7 @@ static DWORD WINAPI CheckThreadProc(LPVOID)
     strncpy_s(g_downloadUrl, dllUrl.c_str(), _TRUNCATE);
     LeaveCriticalSection(&g_updLock);
 
-    if (normRemote != normLocal && !dllUrl.empty()) {
+    if (IsRemoteVersionNewer(normRemote, normLocal) && !dllUrl.empty()) {
         char msg[256];
         _snprintf_s(msg, sizeof(msg), _TRUNCATE,
                     Tr("Доступно обновление на GitHub: %s (текущая v%s)", "Update available on GitHub: %s (current v%s)"),

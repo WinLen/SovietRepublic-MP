@@ -157,6 +157,25 @@ if not exist build\tesmioloader.ini (
 ) else (
     echo [build] build\tesmioloader.ini kept - delete it to take the repo defaults
 )
+rem Auto-deploy fresh DLLs into Steam Workshop staging content and local test instances
+if exist "..\steam_workshop\RepublicMP.dll" del /q "..\steam_workshop\RepublicMP.dll" >nul 2>&1
+if exist "..\steam_workshop\content\TesmioLoader\build\plugins" (
+    copy /y "build\plugins\RepublicMP.dll" "..\steam_workshop\content\TesmioLoader\build\plugins\RepublicMP.dll" >nul 2>&1
+    copy /y "build\tesmioloader.dll" "..\steam_workshop\content\TesmioLoader\build\tesmioloader.dll" >nul 2>&1
+    copy /y "build\tesmiolauncher.exe" "..\steam_workshop\content\TesmioLoader\build\tesmiolauncher.exe" >nul 2>&1
+    copy /y "build\dinput8.dll" "..\steam_workshop\content\dinput8.dll" >nul 2>&1
+    echo [build] synced DLLs -^> ..\steam_workshop\content
+)
+if exist "..\local\test-host\plugins" (
+    copy /y "build\plugins\RepublicMP.dll" "..\local\test-host\plugins\RepublicMP.dll" >nul 2>&1
+    copy /y "build\tesmioloader.dll" "..\local\test-host\tesmioloader.dll" >nul 2>&1
+    copy /y "build\dinput8.dll" "..\local\test-host\dinput8.dll" >nul 2>&1
+)
+if exist "..\local\test-client\plugins" (
+    copy /y "build\plugins\RepublicMP.dll" "..\local\test-client\plugins\RepublicMP.dll" >nul 2>&1
+    copy /y "build\tesmioloader.dll" "..\local\test-client\tesmioloader.dll" >nul 2>&1
+    copy /y "build\dinput8.dll" "..\local\test-client\dinput8.dll" >nul 2>&1
+)
 echo [build] ok -^> build\tesmiolauncher.exe
 endlocal
 exit /b 0

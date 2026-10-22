@@ -1,10 +1,20 @@
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "",
     [string]$GithubRepo = $(if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { "WinLen/SovietRepublic-MP" })
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $Version) {
+    $verHeader = Join-Path $root 'TesmioLoader\RepublicMP\core\version.h'
+    if (Test-Path $verHeader) {
+        $vh = Get-Content $verHeader -Raw
+        if ($vh -match '#define\s+REPUBLICMP_VERSION\s+"([^"]+)"') {
+            $Version = $Matches[1]
+        }
+    }
+    if (-not $Version) { $Version = "1.0.9" }
+}
 $stage = Join-Path $root 'local\friend_pack_stage'
 $wsContent = Join-Path $root 'steam_workshop\content'
 $zip = Join-Path $root 'RepublicMP_Friend_Pack.zip'
@@ -54,7 +64,9 @@ $updatePs1Lines = @(
     '    $rel = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 4 -Headers @{ "User-Agent" = "RepublicMP-Updater" }',
     '    if ($rel -and $rel.tag_name) {',
     '        $remoteVer = $rel.tag_name.Trim().TrimStart("v","V")',
-    '        if ($remoteVer -ne $curVer) {',
+    '        $isNewer = $false',
+    '        try { if ($curVer) { $isNewer = ([version]$remoteVer -gt [version]$curVer) } } catch {}',
+    '        if ($isNewer) {',
     '            $asset = $rel.assets | Where-Object { $_.name -eq "RepublicMP.dll" } | Select-Object -First 1',
     '            if ($asset -and $asset.browser_download_url) {',
     '                Write-Host "[Updater] Downloading update $($rel.tag_name) from GitHub Releases..."',
