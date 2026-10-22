@@ -102,9 +102,11 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
     std::string srcLauncher   = buildDir + "\\tesmiolauncher.exe";
     std::string srcDinput8    = buildDir + "\\dinput8.dll";
 
-    // Remove dead duplicate DLLs from root folders
+    // Remove dead duplicate DLLs and obsolete updater scripts from root folders
     DeleteFileA((wsDir + "\\RepublicMP.dll").c_str());
     DeleteFileA((contentDir + "\\RepublicMP.dll").c_str());
+    DeleteFileA((contentDir + "\\update_mod.ps1").c_str());
+    DeleteFileA((contentDir + "\\CREATE-DESKTOP-SHORTCUT.bat").c_str());
 
     // 1. Always stage fresh binaries into steam_workshop\content (uploaded to Steam Workshop)
     CreateDirectoryA((contentDir + "\\TesmioLoader").c_str(), nullptr);
@@ -126,6 +128,8 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
     if (GetFileAttributesA(localWs3823543010) != INVALID_FILE_ATTRIBUTES) {
         std::string lws(localWs3823543010);
         DeleteFileA((lws + "\\RepublicMP.dll").c_str());
+        DeleteFileA((lws + "\\update_mod.ps1").c_str());
+        DeleteFileA((lws + "\\CREATE-DESKTOP-SHORTCUT.bat").c_str());
         SafeReplaceDll(srcRepublicMp, lws + "\\TesmioLoader\\build\\plugins\\RepublicMP.dll");
         SafeReplaceDll(srcLoader,     lws + "\\TesmioLoader\\build\\tesmioloader.dll");
         SafeReplaceDll(srcLauncher,   lws + "\\TesmioLoader\\build\\tesmiolauncher.exe");
