@@ -515,7 +515,7 @@ static BYTE* LastVehicle(BYTE* world)
 
 // Kinds 1/2: a vehicle into a depot (810951..812f46).
 static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, BYTE* depot, BYTE* customsRub,
-                                 BYTE* customsUsd, int campaign, BYTE** bought)
+                                 BYTE* customsUsd, int campaign)
 {
     SlotFn slotOf = (SlotFn)(g_exeBase + 0x3E3F40);
     CreateFn create = (CreateFn)(g_exeBase + 0x3E4A00);
@@ -544,7 +544,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     if (m.used) {
         market = *(BYTE**)(world + MARKET_OFFSET);
         if (!market) return "not carried (no used market)";
-        if (!customsDepot && realistic && (cat == 1 || cat == 4) && !customs) return "not carried (used, no customs house)";
+        if (!customsDepot && realistic && (cat == 1 || cat - 4 <= 1) && !customs) return "not carried (used, no customs house)";
     }
     int slot = -1;
     const char* fail = nullptr;
@@ -580,7 +580,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
         BYTE* v = LastVehicle(world);
         if (!v) return "no vehicle created";
         addToSlot(slotList(depot), v);
-        *bought = v;
         for (__int64 i = 1; i <= trailers; i++) {
             BYTE* t = *(BYTE**)(type + 0x7C08) + (i - 1) * 0x110;
             create(world, *(BYTE**)(t + 0x100), depot, 1, (unsigned)i, t[0x108], 0, (unsigned)slot, 0, 1, 0);
@@ -610,7 +609,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
         }
         BYTE* v = create(world, type, depot, 1, trailers ? 0 : minusOne, 0, 0, (unsigned)slot, 0, 1, 0);
         addToSlot(slotList(depot), v);
-        *bought = v;
         for (__int64 i = 1; i <= trailers; i++) {
             BYTE* t = *(BYTE**)(type + 0x7C08) + (i - 1) * 0x110;
             create(world, *(BYTE**)(t + 0x100), depot, 1, (unsigned)i, t[0x108], 0, (unsigned)slot, 0, 1, 0);
@@ -621,9 +619,8 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
         return nullptr;
     }
     // Another depot.
-    if (realistic && (cat == 1 || cat == 4) && slot < 0) return "refused (no slot)";
+    if (realistic && (cat == 1 || cat - 4 <= 1) && slot < 0) return "refused (no slot)";
     BYTE* v = create(world, type, depot, 1, trailers ? 0 : minusOne, 0, 0, minusOne, 0, 1, 0);
-    *bought = v;
     if (trailers) {
         if (realistic) *(BYTE**)(v + 0x4F0) = *(BYTE**)(v + 0x4F8) = customs;
         for (__int64 i = 1; i <= trailers; i++) {
@@ -639,9 +636,9 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     if (m.used && v) usedStep(v);
     if (realistic && v) {
         unsigned vcat = *(unsigned*)(*(BYTE**)(v + 0x1708) + 0x294);
-        if (vcat == 1 || vcat == 4) {
+        if (vcat == 1 || vcat - 4 <= 1) {
             push(customs + 0xC70, &v);
-            if (vcat == 4) {
+            if (vcat == 4 || vcat == 5) {
                 BYTE** a = *(BYTE***)(v + 0x3A0);
                 BYTE** e = *(BYTE***)(v + 0x3A8);
                 for (; a && a < e; ++a) push(customs + 0xC70, a);
@@ -650,7 +647,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
             *(BYTE**)(v + 0x4F0) = *(BYTE**)(v + 0x4F8) = customs;
             *(BYTE**)(v + 0x600) = depot;
             addToSlot(slotList(customs), v);
-        } else if (vcat == 6 || vcat == 8 || vcat == 10) {
+        } else if (vcat == 6 || vcat == 7 || vcat == 8 || vcat == 10) {
             struct Vec3 { float x, y, z; };
             struct Vec2 { float x, z; };
             typedef Vec3* (*GetBldPosFn)(BYTE* bld320, Vec3* out);
@@ -664,7 +661,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
             Vec3 depotPos = {}, borderPos = {};
             (*(GetBldPosFn*)(g_exeBase + 0x86C7B8))(depot + 0x320, &depotPos);
             ((FindBorderFn)(g_exeBase + 0x42B9B0))(world, &borderPos, &depotPos, 0xA, m.kind == 2 ? 1 : 0);
-            if (vcat == 8 || vcat == 10) *(int*)(v + 0x1A04) = 2;
+            if (vcat == 7 || vcat == 8 || vcat == 10) *(int*)(v + 0x1A04) = 2;
             Vec2 pos2 = {};
             (*(Vec3To2Fn*)(g_exeBase + 0x86C010))(&pos2, &borderPos);
             ((PlaceAtBorderFn)(g_exeBase + 0x6AD960))(v, &pos2, 0.0f, 0, borderPos.y, 0.0f);
@@ -687,7 +684,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     return nullptr;
 }
 
-static const char* Replay(const PurchaseMsg& m, BYTE** bought)
+static const char* Replay(const PurchaseMsg& m)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     __try {
@@ -699,7 +696,7 @@ static const char* Replay(const PurchaseMsg& m, BYTE** bought)
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         if (m.kind >= 5) return ReplayBlueprint(world, m, type, depot, campaign);
         return ReplayVehicle(world, m, type, depot, BuildingAt(world, m.customsRub), BuildingAt(world, m.customsUsd),
-                             campaign, bought);
+                             campaign);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "fault";
     }
@@ -714,8 +711,7 @@ bool Purchase_ApplyCommand(const void* data, size_t size)
         Logf("republicmp  PURCHASE: not made - this PC's game routines differ");
         return false;
     }
-    BYTE* bought = nullptr;
-    const char* why = Replay(m, &bought);
+    const char* why = Replay(m);
     static const char* const kKinds[] = { "?", "vehicle", "vehicle", "?", "?", "licence", "licence", "factory blueprint" };
     Logf("republicmp  PURCHASE: %s%s (window kind %u), type #%u, depot #%d, %.0f rubles %.0f dollars: %s",
          m.kind < 8 ? kKinds[m.kind] : "?", m.used ? " used" : "", m.kind, m.typeIndex, m.depot.place, m.rubles, m.dollars,

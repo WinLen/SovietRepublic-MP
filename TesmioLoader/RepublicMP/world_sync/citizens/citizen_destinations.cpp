@@ -2,8 +2,11 @@
 // See citizen_destinations.h.
 #include "citizen_destinations.h"
 #include "../buildings/build_sync.h"
+#include "../../lockstep/commands.h"
+#include "../../session/two_states.h"
 #include <string.h>
 #include <unordered_map>
+#include <vector>
 #include <math.h>
 #include <stdint.h>
 
@@ -31,6 +34,20 @@ struct State {
     bool oversized[4] = {};
 };
 std::unordered_map<BYTE*, State> g_states;
+
+struct LsDestBuilding {
+    BYTE* b = nullptr;
+    uint32_t type = 0;
+    float pos[3] = {};
+    signed char count[4] = { -1, -1, -1, -1 };
+    size_t entryAt = 0;
+};
+struct LsSentState {
+    unsigned long long hash[4] = {};
+};
+std::vector<LsDestBuilding> g_lsBuildings;
+std::vector<Entry> g_lsEntries;
+std::unordered_map<BYTE*, LsSentState> g_lsLastSent;
 
 uint32_t Bits(float value) { uint32_t result; memcpy(&result, &value, 4); return result; }
 void StoreBits(float* dest, uint32_t value) { memcpy(dest, &value, 4); }
@@ -165,6 +182,44 @@ PendingReason DiagnosePending(const SettingWire& wire) {
     return {"all endpoints present; see application log", -1};
 }
 
+bool NativeHelpersReady() {
+    const unsigned char addPrefix[] = {0x48,0x89,0x4C,0x24,0x08,0x53,0x48,0x83,0xEC,0x40};
+    const unsigned char removePrefix[] = {0x40,0x53,0x48,0x83,0xEC,0x30,0x49,0x8B,0x00,0x49};
+    return memcmp(g_exeBase+kAdd, addPrefix, sizeof(addPrefix)) == 0 &&
+           memcmp(g_exeBase+kRemove, removePrefix, sizeof(removePrefix)) == 0;
+}
+
+void RestoreVector(BYTE* source, int group, const Entry* oldEntries, int oldCount) {
+    __try {
+        if (group < 0 || group >= 4 || oldCount < 0 || oldCount > kMax) return;
+        Vector* vec = (Vector*)(source + kOffsets[group]);
+        if (!ValidVector(vec) || !NativeHelpersReady()) return;
+        int count = vec->begin ? (int)(vec->end - vec->begin) : 0;
+        bool sameTargets = count == oldCount;
+        for (int i = 0; sameTargets && i < count; ++i) sameTargets = vec->begin[i].target == oldEntries[i].target;
+        if (!sameTargets) {
+            typedef void (*RemoveFn)(BYTE*, int, Vector*);
+            typedef void (*AddFn)(BYTE*, BYTE*, Vector*);
+            for (int i = count - 1; i >= 0; --i) {
+                ((RemoveFn)(g_exeBase + kRemove))(g_exeBase + kWorld, i, vec);
+                if (!ValidVector(vec) || (vec->begin && vec->end - vec->begin != i)) return;
+            }
+            for (int i = 0; i < oldCount; ++i) {
+                if (oldEntries[i].target && !Listed(oldEntries[i].target)) return;
+                ((AddFn)(g_exeBase + kAdd))(g_exeBase + kWorld, oldEntries[i].target, vec);
+                if (!ValidVector(vec) || !vec->begin || vec->end - vec->begin != i + 1) return;
+            }
+        }
+        if (ValidVector(vec) && ((oldCount == 0) || (vec->begin && (int)(vec->end - vec->begin) == oldCount))) {
+            for (int i = 0; i < oldCount; ++i) {
+                vec->begin[i].share = oldEntries[i].share;
+                memcpy(vec->begin[i].flags, oldEntries[i].flags, 4);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // 0=wait for endpoint, 1=consumed. No retry after a possibly partial native write.
 int ApplyNative(const SettingWire& wire, BYTE** changedSource) {
     *changedSource = nullptr;
@@ -198,10 +253,7 @@ int ApplyNative(const SettingWire& wire, BYTE** changedSource) {
         Vector* vec = (Vector*)(source+kOffsets[wire.slot]);
         if (!ValidVector(vec)) { Logf("republicmp  DESTINATIONS: local vector rejected"); return 1; }
         // Native helpers traced from this exact game's destination panel.
-        const unsigned char addPrefix[] = {0x48,0x89,0x4C,0x24,0x08,0x53,0x48,0x83,0xEC,0x40};
-        const unsigned char removePrefix[] = {0x40,0x53,0x48,0x83,0xEC,0x30,0x49,0x8B,0x00,0x49};
-        if (memcmp(g_exeBase+kAdd, addPrefix, sizeof(addPrefix)) ||
-            memcmp(g_exeBase+kRemove, removePrefix, sizeof(removePrefix))) {
+        if (!NativeHelpersReady()) {
             Logf("republicmp  DESTINATIONS: unsupported native helper - rejected"); return 1;
         }
         int count = vec->begin ? (int)(vec->end-vec->begin) : 0;
@@ -248,7 +300,80 @@ int ApplyNative(const SettingWire& wire, BYTE** changedSource) {
 }
 
 void CitizenDestinations_Bind(const TsmHost* host) { TsmBind(host); }
-void CitizenDestinations_Reset() { g_states.clear(); }
+void CitizenDestinations_Reset() {
+    g_states.clear();
+    g_lsBuildings.clear();
+    g_lsEntries.clear();
+    g_lsLastSent.clear();
+}
+
+void CitizenDestinations_LockstepBaseline(BYTE** buildings, int count) {
+    g_lsBuildings.resize(count);
+    g_lsEntries.clear();
+    for (int i = 0; i < count; ++i) {
+        LsDestBuilding& s = g_lsBuildings[i];
+        s = {};
+        BYTE* b = buildings[i];
+        if (!b) continue;
+        __try {
+            uint32_t type = TypeHash(b);
+            if (!type) continue;
+            s.b = b;
+            s.type = type;
+            memcpy(s.pos, b + 0x350, 12);
+            s.entryAt = g_lsEntries.size();
+            for (int g = 0; g < 4; ++g) {
+                Vector* vec = (Vector*)(b + kOffsets[g]);
+                if (!ValidVector(vec)) {
+                    s.count[g] = -1;
+                    continue;
+                }
+                int n = vec->begin ? (int)(vec->end - vec->begin) : 0;
+                s.count[g] = (signed char)n;
+                if (n > 0) g_lsEntries.insert(g_lsEntries.end(), vec->begin, vec->begin + n);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            s.b = nullptr;
+        }
+    }
+}
+
+void CitizenDestinations_LockstepDetect() {
+    for (const LsDestBuilding& old : g_lsBuildings) {
+        if (!old.b) continue;
+        BYTE* b = old.b;
+        __try {
+            if (TypeHash(b) != old.type || memcmp(b + 0x350, old.pos, 12) != 0) continue;
+            size_t at = old.entryAt;
+            for (int g = 0; g < 4; ++g) {
+                int oldCount = old.count[g];
+                if (oldCount < 0) continue;
+                const Entry* oldEntries = oldCount > 0 ? &g_lsEntries[at] : nullptr;
+                at += oldCount;
+                Vector* vec = (Vector*)(b + kOffsets[g]);
+                if (!ValidVector(vec)) continue;
+                int nowCount = vec->begin ? (int)(vec->end - vec->begin) : 0;
+                if (nowCount == oldCount && (nowCount == 0 || memcmp(vec->begin, oldEntries, nowCount * sizeof(Entry)) == 0))
+                    continue;
+                if (!TwoStates_CheckBuildingControlAllowed(b)) {
+                    RestoreVector(b, g, oldEntries, oldCount);
+                    continue;
+                }
+                SettingWire wire;
+                if (ReadWire(b, g, &wire)) {
+                    unsigned long long h = Hash(wire);
+                    LsSentState& sent = g_lsLastSent[b];
+                    if (sent.hash[g] != h) {
+                        sent.hash[g] = h;
+                        Commands_Submit(LS_CMD_SETTING, &wire, sizeof(wire));
+                    }
+                    RestoreVector(b, g, oldEntries, oldCount);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
 
 void CitizenDestinations_Scan(BYTE** buildings, int count, bool sendChanges, bool clicked) {
     for (auto& kv : g_states) kv.second.seen = false;
@@ -332,6 +457,22 @@ bool CitizenDestinations_Apply(const SettingWire& wire) {
             State& state = g_states[changed];
             if (state.type != (uint32_t)actual.value) { state = {}; state.type = (uint32_t)actual.value; }
             state.hash[wire.slot] = Hash(actual); // remote application must not echo
+            state.known[wire.slot] = true;
+        }
+    }
+    return result != 0;
+}
+
+bool CitizenDestinations_ApplyLockstep(const SettingWire& wire) {
+    BYTE* changed = nullptr;
+    int result = ApplyNative(wire, &changed);
+    if (changed && wire.slot >= 0 && wire.slot < 4) {
+        g_lsLastSent[changed].hash[wire.slot] = 0;
+        SettingWire actual;
+        if (ReadWire(changed, wire.slot, &actual)) {
+            State& state = g_states[changed];
+            if (state.type != (uint32_t)actual.value) { state = {}; state.type = (uint32_t)actual.value; }
+            state.hash[wire.slot] = Hash(actual);
             state.known[wire.slot] = true;
         }
     }

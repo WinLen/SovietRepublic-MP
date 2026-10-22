@@ -4,6 +4,7 @@
 #include "cargo_settings.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../session/two_states.h"
 #include <algorithm>
 #include <string.h>
 #include <vector>
@@ -399,6 +400,9 @@ static void Take(const Watched& s, unsigned record, unsigned half, U64 at, const
                                                          : Encode(s.kind, ref, s.records, record, half, now, w);
     // Put back at once: the command makes the change on every PC.
     bool back = Replace(at, s.halves[(size_t)record * HALVES + half]);
+    bool allowed = s.kind == KIND_STOP ? TwoStates_CheckVehicleControlAllowed((const BYTE*)s.object, "настройка груза чужого транспорта")
+                                       : TwoStates_CheckBuildingControlAllowed((const BYTE*)s.object, "настройка груза чужого здания");
+    if (!allowed) return;
     if (why || !back) {
         Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s", kRecordText[s.kind], record, half ? "unloading" : "loading",
              kObjectText[s.kind], why ? why : "it could not be put back", back ? "nothing is done" : "it stays on this PC");

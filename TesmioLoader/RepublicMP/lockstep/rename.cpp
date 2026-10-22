@@ -3,6 +3,7 @@
 // the disassembly of 1.1.1.9).
 #include "rename.h"
 #include "commands.h"
+#include "../session/two_states.h"
 #include <string.h>
 
 typedef unsigned __int64 U64;
@@ -71,8 +72,9 @@ static bool List(U64 at, unsigned max, U64& begin, unsigned& count)
 }
 
 // The field's owner: a listed city (its index) or a junction (its first node's index).
-static bool Identify(U64 field, RenameMsg& m)
+static bool Identify(U64 field, RenameMsg& m, bool* allowed)
 {
+    *allowed = true;
     U64 world = (U64)World(), begin = 0;
     unsigned n = 0;
     if (List(world + CITY_LIST, MAX_CITIES, begin, n))
@@ -82,6 +84,8 @@ static bool Identify(U64 field, RenameMsg& m)
                 m.kind = KIND_CITY;
                 m.index = i;
                 m.check = CityCheck(city);
+                *allowed = TwoStates_CheckBuildAllowed(*(float*)(city + CITY_POSITION), *(float*)(city + CITY_POSITION + 8),
+                                                       "переименование города");
                 return true;
             }
         }
@@ -99,15 +103,16 @@ static bool Identify(U64 field, RenameMsg& m)
             m.kind = KIND_CROSSROAD;
             m.index = i;
             m.check = NodeCheck(first);
+            *allowed = TwoStates_CheckBuildAllowed(*(float*)(first + 4), *(float*)(first + 0xC), "переименование перекрёстка");
             return true;
         }
     return false;
 }
 
-static bool GuardedIdentify(U64 field, RenameMsg& m)
+static bool GuardedIdentify(U64 field, RenameMsg& m, bool* allowed)
 {
     __try {
-        return Identify(field, m);
+        return Identify(field, m, allowed);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
@@ -133,7 +138,9 @@ bool Rename_Capture(U64 field, U64 length, U64 text)
     RenameMsg m;
     memset(&m, 0, sizeof(m));
     m.magic = MAGIC;
-    if (!field || !text || !GuardedIdentify(field, m)) return false;
+    bool allowed = true;
+    if (!field || !text || !GuardedIdentify(field, m, &allowed)) return false;
+    if (!allowed) return true;
     unsigned want = m.kind == KIND_CITY ? CITY_CHARS : JUNCTION_CHARS;
     if ((unsigned)length != want || !CopyText(text, want, m)) {
         Logf("republicmp  RENAME: a %s name not shared - unexpected length %u; written on this PC only",

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See settings_sync.h.
 #include "settings_sync.h"
+#include "two_states.h"
 #include "../world_sync/citizens/citizen_destinations.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../ui/sync_block.h"
@@ -498,6 +499,7 @@ void SettingsSync_LockstepBaseline()
     g_lsBuildings.resize(n);
     g_lsSlotData.clear();
     for (int i = 0; i < n; i++) ReadLsBuilding(g_lsList[i], g_lsBuildings[i]);
+    CitizenDestinations_LockstepBaseline(g_lsList.data(), n);
 }
 
 static void SubmitSetting(const LsBuilding& s, int field, unsigned long long value, int slot, const float* data, int count)
@@ -534,7 +536,8 @@ void SettingsSync_LockstepDetect()
             if (!(old.hasMask & (1u << f))) continue;
             unsigned long long v;
             if (!ReadField(b, kFields[f], &v) || v == old.values[f]) continue;
-            SubmitSetting(old, f, v, 0, nullptr, 0);
+            if (TwoStates_CheckBuildingControlAllowed(b))
+                SubmitSetting(old, f, v, 0, nullptr, 0);
             BYTE* p = FieldAddress(b, kFields[f]);
             if (p) RawWrite(p, &old.values[f], kFields[f].size);
         }
@@ -542,11 +545,13 @@ void SettingsSync_LockstepDetect()
         unsigned char stopped;
         if (ReadConstruction(b, &pay, &stopped)) {
             if (pay != old.pay) {
-                SubmitSetting(old, SETTINGS_FIELD_PAY, pay, 0, nullptr, 0);
+                if (TwoStates_CheckBuildingControlAllowed(b))
+                    SubmitSetting(old, SETTINGS_FIELD_PAY, pay, 0, nullptr, 0);
                 RawWrite(b + BLD_PAY_OFFSET, &old.pay, 2);
             }
             if (stopped != old.stopped) {
-                SubmitSetting(old, SETTINGS_FIELD_STOP, stopped, 0, nullptr, 0);
+                if (TwoStates_CheckBuildingControlAllowed(b))
+                    SubmitSetting(old, SETTINGS_FIELD_STOP, stopped, 0, nullptr, 0);
                 RawWrite(b + BLD_STOPPED_OFFSET, &old.stopped, 1);
             }
         }
@@ -563,10 +568,12 @@ void SettingsSync_LockstepDetect()
                     Logf("republicmp  SETTINGS: storage slot %d changed its resource list locally - not carried", i);
                 continue;
             }
-            SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
+            if (TwoStates_CheckBuildingControlAllowed(b))
+                SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
             WriteSlot(b, i, before, n);
         }
     }
+    CitizenDestinations_LockstepDetect();
 }
 
 typedef void (*SetPayFn)(__int64 world, __int64 bld, int rub, int usd);
@@ -600,7 +607,7 @@ bool SettingsSync_ApplyCommand(const SettingWire& w)
              w.value, w.pos[0], w.pos[2], ok ? "applied" : "NOT applied");
         return ok;
     }
-    if (w.field == CITIZEN_DESTINATIONS_FIELD) return false;
+    if (w.field == CITIZEN_DESTINATIONS_FIELD) return CitizenDestinations_ApplyLockstep(w);
     return FindBuilding(w.pos, w.category) && Apply(w);
 }
 

@@ -592,16 +592,9 @@ static void HookedLate(__int64 world)
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
-    // No save on one PC alone in a lockstep session (DET-20): a save writes
-    // every vehicle and ages it (42cc70 -> 6c6770 -> 6c1bd0). The save window
-    // sets the word +14d35 and the body counts +14d38 down and saves; one that
-    // stays in the game is refused here, one that leaves it (+5030) is left
-    // alone, as that PC leaves the session. (by SoylentGreed)
-    if (Determinism_SessionRunning() && *(unsigned short*)(world + 0x14D35) && !*(int*)(world + 0x5030)) {
-        *(unsigned short*)(world + 0x14D35) = 0;
-        *(int*)(world + 0x14D38) = 0;
-        Logf("republicmp  LOCKSTEP: a save was refused - saving is not shared in a lockstep session yet");
-    }
+    // Note (DET-20): H_MasterSave (0x42CC70 in two_states.cpp) snapshots and restores
+    // vehicle aging fields (+0x17E8, +0x1A54, +0x1A7C) and runs under Determinism_ToolScopeBegin,
+    // so saving during a Lockstep session does not mutate simulation state or RNG.
     bool step = Determinism_IsStepFrame();
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     if (step) RecountPopulation(world);

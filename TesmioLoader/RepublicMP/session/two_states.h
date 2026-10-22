@@ -96,6 +96,7 @@ bool TwoStates_CanControlVehicle(const BYTE* vehiclePtr, int state = 0);
 bool TwoStates_CheckBuildAllowed(float x, float z, const char* actionDesc);
 bool TwoStates_CheckDemolishAllowed(float x, float z, const char* actionDesc);
 bool TwoStates_CheckBuildingControlAllowed(int buildingId, float x, float z, const char* actionDesc);
+bool TwoStates_CheckBuildingControlAllowed(const BYTE* buildingPtr, const char* actionDesc = nullptr);
 bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* actionDesc);
 
 // Current cursor & camera position in the world (for HUD & partner sync).

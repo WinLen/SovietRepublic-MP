@@ -207,7 +207,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Full object destructibility & demolition sync (buildings, construction sites, Dialog 0x424, demolition offices, Ctrl+drag demolish/upgrade, Shift+click & bottom-bar cancel planned segments, ground tree/bush removal)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Deterministic live Lockstep save (snapshot/restore vehicle aging), CitizenDestinations Lockstep sync, realistic helicopter/tram delivery fix, VehicleSwitches low-heap pointer guard, full TwoStates territory/property checks");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

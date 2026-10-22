@@ -834,10 +834,13 @@ void Determinism_ToolScopeEnd()
     --g_toolScope;
 }
 
+static int g_sentPaused = -1, g_sentSpeed = -1;
+
 bool Determinism_BeginSession(bool host)
 {
     if (!g_framesReady || g_probeBusy) return false;
     g_remoteBoost = g_sentBoost = 0;
+    g_sentPaused = g_sentSpeed = -1;
     g_sessionHost = host;
     g_sessionRunning = false;
     g_sessionArmed = true;
@@ -865,6 +868,7 @@ void Determinism_EndSession()
     g_sessionArmed = false;
     g_sessionRunning = false;
     g_sessionLoadPending = false;
+    g_sentPaused = g_sentSpeed = -1;
     Commands_SetSession(COMMANDS_OFF);
     Determinism_SetActive(false, 0);
     Logf("republicmp  LOCKSTEP: session ended after %llu ticks", (unsigned long long)g_stepCount);
@@ -1151,11 +1155,10 @@ static void SessionAdmission(BYTE* timer)
     int wanted = LockstepNet_TakeSpeedRequest();
     if (wanted >= 10) g_remoteBoost = wanted - 10 > 2 ? 2 : wanted - 10;
     else if (wanted > 0) g_requestedSpeed = wanted > 1 ? 2 : 1;
-    static int s_sentPaused = -1, s_sentSpeed = -1;
-    if ((int)g_paused != s_sentPaused || g_requestedSpeed != s_sentSpeed) {
+    if ((int)g_paused != g_sentPaused || g_requestedSpeed != g_sentSpeed) {
         LockstepNet_SendState(g_paused, g_requestedSpeed);
-        s_sentPaused = g_paused;
-        s_sentSpeed = g_requestedSpeed;
+        g_sentPaused = g_paused;
+        g_sentSpeed = g_requestedSpeed;
     }
     bool hold = g_paused || timer[13] != 0 || !LockstepNet_IsConnected();
     if (!hold) g_tickDebt += elapsed * DETERMINISM_FIXED_FPS;

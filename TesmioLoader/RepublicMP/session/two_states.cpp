@@ -364,6 +364,51 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
     return r;
 }
 
+struct VehSaveSnapshot {
+    BYTE* veh;
+    unsigned long long f17E8;
+    unsigned long long f1A54;
+    unsigned long long f1A7C;
+};
+static std::vector<VehSaveSnapshot> g_vehSaveSnaps;
+
+static void SnapshotVehiclesBeforeSave()
+{
+    g_vehSaveSnaps.clear();
+    __try {
+        BYTE** vb = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
+        BYTE** ve = *(BYTE***)(g_exeBase + VEC_VEHICLES_END_RVA);
+        if (vb && ve > vb && (ve - vb) <= 65536) {
+            g_vehSaveSnaps.reserve((size_t)(ve - vb));
+            for (BYTE** it = vb; it < ve; ++it) {
+                BYTE* v = *it;
+                if (!v) continue;
+                VehSaveSnapshot s;
+                s.veh   = v;
+                s.f17E8 = *(unsigned long long*)(v + 0x17E8);
+                s.f1A54 = *(unsigned long long*)(v + 0x1A54);
+                s.f1A7C = *(unsigned long long*)(v + 0x1A7C);
+                g_vehSaveSnaps.push_back(s);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void RestoreVehiclesAfterSave()
+{
+    __try {
+        for (size_t i = 0; i < g_vehSaveSnaps.size(); ++i) {
+            const VehSaveSnapshot& s = g_vehSaveSnaps[i];
+            *(unsigned long long*)(s.veh + 0x17E8) = s.f17E8;
+            *(unsigned long long*)(s.veh + 0x1A54) = s.f1A54;
+            *(unsigned long long*)(s.veh + 0x1A7C) = s.f1A7C;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_vehSaveSnaps.clear();
+}
+
 static void __fastcall H_MasterSave(BYTE* world)
 {
     bool isCoopSave = g_inSession || NativeMenu_IsHostOnNextLoad() || TwoStates_IsCoopBankMounted();
@@ -381,6 +426,8 @@ static void __fastcall H_MasterSave(BYTE* world)
     BYTE prevAutosaveJe = 0x74;
     DWORD oldProt = 0;
     bool autosaveJePatched = false;
+
+    SnapshotVehiclesBeforeSave();
 
     __try {
         if (world) {
@@ -427,8 +474,12 @@ static void __fastcall H_MasterSave(BYTE* world)
     }
 
     if (o_masterSave) {
+        Determinism_ToolScopeBegin();
         o_masterSave(world);
+        Determinism_ToolScopeEnd();
     }
+
+    RestoreVehiclesAfterSave();
 
     __try {
         if (autosaveJePatched && autosaveJeAddr) {
@@ -872,8 +923,6 @@ void TwoStates_RequestTransfer(double rubles, double dollars)
     }
 }
 
-static double g_stepRubWeight[2] = { 0.0, 0.0 };
-static double g_stepUsdWeight[2] = { 0.0, 0.0 };
 static int g_stepBldCount[2] = { 0, 0 };
 
 void TwoStates_BeforeStep(BYTE* world)
@@ -885,8 +934,6 @@ void TwoStates_BeforeStep(BYTE* world)
         g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
         return;
     }
-    g_stepRubWeight[0] = g_stepRubWeight[1] = 0.0;
-    g_stepUsdWeight[0] = g_stepUsdWeight[1] = 0.0;
     g_stepBldCount[0] = g_stepBldCount[1] = 0;
 
     __try {
@@ -911,14 +958,8 @@ void TwoStates_BeforeStep(BYTE* world)
             g_stepBldCount[idx]++;
             float prog = *(float*)(b + BLD_PROGRESS_OFFSET);
             if (prog < 1.0f) {
-                if (b[BLD_PAY_RUB_OFFSET]) {
-                    if (g_stateRub[idx] <= 0.0) b[BLD_PAY_RUB_OFFSET] = 0;
-                    else g_stepRubWeight[idx] += 1.0;
-                }
-                if (b[BLD_PAY_USD_OFFSET]) {
-                    if (g_stateUsd[idx] <= 0.0) b[BLD_PAY_USD_OFFSET] = 0;
-                    else g_stepUsdWeight[idx] += 1.0;
-                }
+                if (b[BLD_PAY_RUB_OFFSET] && g_stateRub[idx] <= 0.0) b[BLD_PAY_RUB_OFFSET] = 0;
+                if (b[BLD_PAY_USD_OFFSET] && g_stateUsd[idx] <= 0.0) b[BLD_PAY_USD_OFFSET] = 0;
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -940,14 +981,12 @@ void TwoStates_AfterStep(BYTE* world)
         g_unattributedRub = 0.0;
         g_unattributedUsd = 0.0;
 
+        double w0 = 0.5;
+        if (g_stepBldCount[0] + g_stepBldCount[1] > 0) {
+            w0 = (double)g_stepBldCount[0] / (double)(g_stepBldCount[0] + g_stepBldCount[1]);
+        }
+
         if (fabs(dRub) > 1e-6) {
-            double w0 = 0.5;
-            double wSum = g_stepRubWeight[0] + g_stepRubWeight[1];
-            if (wSum > 0.0) {
-                w0 = g_stepRubWeight[0] / wSum;
-            } else if (g_stepBldCount[0] + g_stepBldCount[1] > 0) {
-                w0 = (double)g_stepBldCount[0] / (double)(g_stepBldCount[0] + g_stepBldCount[1]);
-            }
             double d0 = dRub * w0;
             g_stateRub[0] += d0;
             g_stateRub[1] += (dRub - d0);
@@ -955,13 +994,6 @@ void TwoStates_AfterStep(BYTE* world)
             g_netTradeRub[1] += (dRub - d0);
         }
         if (fabs(dUsd) > 1e-6) {
-            double w0 = 0.5;
-            double wSum = g_stepUsdWeight[0] + g_stepUsdWeight[1];
-            if (wSum > 0.0) {
-                w0 = g_stepUsdWeight[0] / wSum;
-            } else if (g_stepBldCount[0] + g_stepBldCount[1] > 0) {
-                w0 = (double)g_stepBldCount[0] / (double)(g_stepBldCount[0] + g_stepBldCount[1]);
-            }
             double d0 = dUsd * w0;
             g_stateUsd[0] += d0;
             g_stateUsd[1] += (dUsd - d0);
@@ -1180,6 +1212,22 @@ bool TwoStates_CheckBuildingControlAllowed(int buildingId, float x, float z, con
     if (TwoStates_CanControlBuilding(buildingId, x, z)) return true;
     NotifyTerritoryRefused(actionDesc, x);
     return false;
+}
+
+bool TwoStates_CheckBuildingControlAllowed(const BYTE* buildingPtr, const char* actionDesc)
+{
+    if (!TwoStates_IsActive() || !buildingPtr) return true;
+    int id = -1;
+    float x = 0.0f, z = 0.0f;
+    __try {
+        id = *(const int*)buildingPtr;
+        x  = *(const float*)(buildingPtr + 0x350);
+        z  = *(const float*)(buildingPtr + 0x358);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return true;
+    }
+    return TwoStates_CheckBuildingControlAllowed(id, x, z,
+                                                 actionDesc ? actionDesc : Tr("настройка чужого здания", "configuring foreign building"));
 }
 
 bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* actionDesc)

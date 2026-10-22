@@ -3,6 +3,7 @@
 // read against the disassembly of 1.1.1.9).
 #include "hover_tools.h"
 #include "commands.h"
+#include "../session/two_states.h"
 #include "../world_sync/view_list_scope.h"
 #include <math.h>
 #include <string.h>
@@ -287,7 +288,15 @@ static U64 Run(int kind, U64 world, U64 a2)
     *press = 0;
     U64 r = tool(world, a2);
     *press = kept;
-    if (ok) Commands_Submit(LS_CMD_HOVER, &m, sizeof(m));
+    if (ok) {
+        float cx = 0.0f, cz = 0.0f;
+        memcpy(&cx, &m.pick.cursor[0], 4);
+        memcpy(&cz, &m.pick.cursor[2], 4);
+        bool allowed = (kind == 1 || kind == RAIL_REMOVE) ? TwoStates_CheckDemolishAllowed(cx, cz, kKindText[kind])
+                                                          : TwoStates_CheckBuildAllowed(cx, cz, kKindText[kind]);
+        if (!allowed) return r;
+        Commands_Submit(LS_CMD_HOVER, &m, sizeof(m));
+    }
     else Logf("republicmp  HOVER: %s not shared - %s; nothing is done", kKindText[kind], why);
     return r;
 }

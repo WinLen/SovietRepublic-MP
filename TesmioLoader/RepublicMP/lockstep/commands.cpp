@@ -307,11 +307,12 @@ static void Apply(const Command& c)
 
 bool Commands_Due(unsigned long long completed)
 {
-    if (g_session == COMMANDS_PLAYER && g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed)
-        return true;
-    if (g_replaying) return g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed;
     Lock();
-    bool any = !g_outbox.empty();
+    bool any = false;
+    if ((g_session == COMMANDS_PLAYER || g_replaying) && g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed)
+        any = true;
+    else if (!g_replaying && !g_outbox.empty())
+        any = true;
     Unlock();
     return any;
 }
@@ -321,20 +322,23 @@ bool Commands_Due(unsigned long long completed)
 static void PlayerBoundary(unsigned long long completed)
 {
     std::vector<Command> mine;
+    std::vector<Command> due;
     Lock();
     mine.swap(g_outbox);
-    Unlock();
-    for (const Command& c : mine) LockstepNet_SendCommand(c.kind, 0, c.data.data(), c.data.size());
     while (g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed) {
-        const Command& c = g_record[g_replayAt++];
-        if (c.afterTick < completed)
-            Logf("republicmp  LOCKSTEP: #%u was made by the host after tick %llu, here after %llu - the games will differ",
-                 c.seq, c.afterTick, completed);
-        Apply(c);
+        due.push_back(std::move(g_record[g_replayAt++]));
     }
     if (g_replayAt > 256) {
         g_record.erase(g_record.begin(), g_record.begin() + g_replayAt);
         g_replayAt = 0;
+    }
+    Unlock();
+    for (const Command& c : mine) LockstepNet_SendCommand(c.kind, 0, c.data.data(), c.data.size());
+    for (const Command& c : due) {
+        if (c.afterTick < completed)
+            Logf("republicmp  LOCKSTEP: #%u was made by the host after tick %llu, here after %llu - the games will differ",
+                 c.seq, c.afterTick, completed);
+        Apply(c);
     }
 }
 
@@ -345,13 +349,18 @@ void Commands_Boundary(unsigned long long completed)
         return;
     }
     if (g_replaying) {
+        std::vector<Command> due;
+        Lock();
         while (g_replayAt < g_record.size() && g_record[g_replayAt].afterTick <= completed) {
-            const Command& c = g_record[g_replayAt++];
+            due.push_back(g_record[g_replayAt++]);
+            g_replayed++;
+        }
+        Unlock();
+        for (const Command& c : due) {
             if (c.afterTick < completed)
                 Logf("republicmp  LOCKSTEP: #%u was recorded after tick %llu, made after %llu - the runs cannot match",
                      c.seq, c.afterTick, completed);
             Apply(c);
-            g_replayed++;
         }
         return;
     }
@@ -365,7 +374,11 @@ void Commands_Boundary(unsigned long long completed)
         Apply(c);
         int wireKind = (c.kind & 0xFFFF) | (((c.owner == 2) ? 2 : 1) << 16);
         if (g_session == COMMANDS_HOST) LockstepNet_SendCommand(wireKind, c.afterTick, c.data.data(), c.data.size());
-        else if (g_capturing) g_record.push_back(std::move(c));
+        else if (g_capturing) {
+            Lock();
+            g_record.push_back(std::move(c));
+            Unlock();
+        }
     }
 }
 
@@ -616,13 +629,13 @@ void Commands_SetSession(int role)
     g_haveFrameRecord = false;
     Lock();
     g_outbox.clear();
-    Unlock();
     g_record.clear();
     g_replayAt = g_replayed = 0;
     g_replaying = false;
     g_seq = 0;
     g_session = role;
     g_capturing = role != COMMANDS_OFF;
+    Unlock();
     Logf("republicmp  LOCKSTEP: commands %s", role == COMMANDS_HOST ? "ordered here (host)"
                                               : role == COMMANDS_PLAYER ? "ordered by the host" : "off");
 }
@@ -650,9 +663,11 @@ void Commands_Receive(int kind, unsigned long long afterTick, const void* data, 
     c.kind = kind & 0xFFFF;
     c.owner = (owner == 2) ? 2 : 1;
     c.afterTick = afterTick;
-    c.seq = ++g_seq;
     c.data.assign((const BYTE*)data, (const BYTE*)data + size);
+    Lock();
+    c.seq = ++g_seq;
     g_record.push_back(std::move(c));
+    Unlock();
 }
 
 void Commands_ProbeRun(int run, bool record)
@@ -660,7 +675,6 @@ void Commands_ProbeRun(int run, bool record)
     g_haveFrameRecord = false;
     Lock();
     g_outbox.clear();
-    Unlock();
     g_replaying = record && run == 1;
     g_capturing = record && run == 0;
     if (run == 0) {
@@ -669,6 +683,7 @@ void Commands_ProbeRun(int run, bool record)
     }
     g_replayAt = 0;
     g_replayed = 0;
+    Unlock();
     if (record)
         Logf("republicmp  LOCKSTEP: probe run %d - %s", run + 1,
              run == 0 ? "player actions become commands and are recorded"
@@ -677,13 +692,13 @@ void Commands_ProbeRun(int run, bool record)
 
 void Commands_ProbeEnd(size_t* recorded, size_t* replayed)
 {
+    Lock();
     g_capturing = false;
     g_replaying = false;
     if (recorded) *recorded = g_record.size();
     if (replayed) *replayed = g_replayed;
-    Lock();
     g_outbox.clear();
-    Unlock();
     std::vector<Command>().swap(g_record);
     g_replayAt = g_replayed = 0;
+    Unlock();
 }

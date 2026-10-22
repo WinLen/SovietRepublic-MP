@@ -137,7 +137,14 @@ static bool GuardedRef(U64 vehicle, RouteRef& r)
 static bool PointerLike(U64 v)
 {
     unsigned high = (unsigned)(v >> 32);
-    return high >= 0x100 && high <= 0x7FFF;
+    if (high >= 0x100 && high <= 0x7FFF) return true;
+    // Windows x64 low-heap segments (4 GB .. 1 TB): any 4-byte aligned value
+    // with high in 1..0xFF that points to readable memory is a heap pointer.
+    if (high >= 1 && high < 0x100 && (v & 3) == 0) {
+        U64 probe = 0;
+        if (Copy(&probe, (const void*)v, 8)) return true;
+    }
+    return false;
 }
 
 static bool TextWord(int kind, unsigned offset)
@@ -146,14 +153,24 @@ static bool TextWord(int kind, unsigned offset)
 }
 
 // A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
-// their contents are cargo_settings.cpp's. The vehicle's cargo summary (+458,
-// +470) is a cache the vehicle window rebuilds on each PC (game_calls).
+// their contents are cargo_settings.cpp's. The vehicle's internal vectors and
+// object pointers (+3a0..+3d0, +458..+4a0, +4f0..+500, +600..+608, +638..+658,
+// +680..+6b8, +738..+750, +1708..+1710, +1ad0..+1ad8) must never be overwritten as switches.
 #define HALF_BYTES 0xC8
-#define SUMMARY_BEGIN 0x458
-#define SUMMARY_END 0x488
 static bool ListWord(int kind, unsigned offset)
 {
-    if (kind == KIND_VEHICLE) return offset >= SUMMARY_BEGIN && offset < SUMMARY_END;
+    if (kind == KIND_VEHICLE) {
+        return (offset >= 0x3A0 && offset < 0x3D0) ||
+               (offset >= 0x458 && offset < 0x4A0) ||
+               (offset >= 0x4F0 && offset < 0x500) ||
+               (offset >= 0x600 && offset < 0x608) ||
+               (offset >= 0x638 && offset < 0x658) ||
+               (offset >= 0x680 && offset < 0x6B8) ||
+               (offset >= 0x738 && offset < 0x750) ||
+               (offset >= 0x1708 && offset < 0x1710) ||
+               (offset >= 0x1AD0 && offset < 0x1AD8);
+    }
+    if (kind == KIND_CARGO) return offset < 8; // Resource* pointer at cargo entry +0x00
     if (kind != KIND_STOP || offset >= 2 * HALF_BYTES) return false;
     unsigned l = offset % HALF_BYTES;
     return (l >= 0x8 && l < 0x20) || l >= 0x38;
@@ -276,7 +293,12 @@ bool VehicleSwitches_ApplyCommand(const void* data, size_t size)
             for (unsigned i = 0; i < m.count && !why; i++)
                 if (m.words[i].offset % 4 || m.words[i].offset + 4 > (U64)records * kRecordBytes[m.kind]) why = "a word is outside";
             for (unsigned i = 0; i < m.count && !why; i++) {
-                unsigned* p = (unsigned*)(begin + m.words[i].offset);
+                unsigned off = m.words[i].offset;
+                unsigned inRec = off % kRecordBytes[m.kind];
+                if (ListWord(m.kind, inRec)) continue;
+                U64 qAddr = (begin + off) & ~7ull;
+                if (!TextWord(m.kind, inRec) && PointerLike(*(U64*)qAddr)) continue;
+                unsigned* p = (unsigned*)(begin + off);
                 if (*p != m.words[i].old && *p != m.words[i].now) differing++;
                 *p = m.words[i].now;
             }

@@ -507,6 +507,9 @@ U64 RouteTools_JoinHubStopTool(U64 world)
         if (!hubBeg || hubEnd <= hubBeg) return r;
         U64 firstNode = Q(hubBeg);
         if (!firstNode) return r;
+        if (!TwoStates_CheckBuildAllowed(*(float*)(firstNode + 4), *(float*)(firstNode + 0xC), "объединение перекрёстков") ||
+            !TwoStates_CheckBuildAllowed(*(float*)(stopNode + 4), *(float*)(stopNode + 0xC), "объединение перекрёстков"))
+            return r;
         RouteMsg m;
         memset(&m, 0, sizeof(m));
         m.kind = ROUTE_JOIN_HUB_STOP;
