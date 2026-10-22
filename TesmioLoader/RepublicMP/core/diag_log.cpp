@@ -13,6 +13,8 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
+#include "../third_party/miniz/miniz.h"
+#include "../ui/lang.h"
 
 #include <windows.h>
 #include <cstdio>
@@ -173,6 +175,9 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         }
     }
     DiagLog_Printf("CRASH", "=================================================================");
+    if (!SaveSync_IsHostRole() && LockstepNet_IsConnected() && TwoStates_GetSendClientLogs()) {
+        LockstepNet_SendClientLogs("CRASH");
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -352,3 +357,237 @@ void DiagLog_FrameTick(void)
         DumpLiveSnapshot("HEARTBT");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Remote Client Log Bundle Packaging & Saving
+// ---------------------------------------------------------------------------
+
+#pragma pack(push, 1)
+struct RemoteLogBundleHeader {
+    char magic[8];        // "RPMPLOG1"
+    char reason[32];      // e.g. "DESYNC", "DISCONNECT", "CRASH", "PREV_SESSION"
+    char peerName[64];    // Steam persona name or IP
+    unsigned int rawSize; // uncompressed size of entries
+    unsigned int compSize; // compressed size (0 = uncompressed)
+};
+struct RemoteLogFileEntry {
+    char fileName[48];
+    unsigned int size;
+};
+#pragma pack(pop)
+
+static void ReadLogFileTail(const char* fullPath, size_t maxBytes, std::vector<unsigned char>& outBuf)
+{
+    outBuf.clear();
+    HANDLE h = CreateFileA(fullPath, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    LARGE_INTEGER fileSize = {};
+    if (GetFileSizeEx(h, &fileSize) && fileSize.QuadPart > 0) {
+        LONGLONG toRead = fileSize.QuadPart;
+        if (toRead > (LONGLONG)maxBytes) {
+            LARGE_INTEGER seekPos = {};
+            seekPos.QuadPart = fileSize.QuadPart - (LONGLONG)maxBytes;
+            SetFilePointerEx(h, seekPos, nullptr, FILE_BEGIN);
+            toRead = (LONGLONG)maxBytes;
+        }
+        outBuf.resize((size_t)toRead);
+        DWORD bytesRead = 0;
+        if (ReadFile(h, outBuf.data(), (DWORD)toRead, &bytesRead, nullptr)) {
+            outBuf.resize(bytesRead);
+        } else {
+            outBuf.clear();
+        }
+    }
+    CloseHandle(h);
+}
+
+bool DiagLog_HasPrevCrashOrDesyncLog(void)
+{
+    static bool s_checkedAndSent = false;
+    if (s_checkedAndSent || !g_gameDir[0]) return false;
+
+    char prevPath[MAX_PATH] = {};
+    _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
+    std::vector<unsigned char> tail;
+    ReadLogFileTail(prevPath, 128 * 1024, tail);
+    if (tail.empty()) return false;
+    tail.push_back(0);
+    const char* text = (const char*)tail.data();
+    if (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr) {
+        s_checkedAndSent = true;
+        return true;
+    }
+    return false;
+}
+
+bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const char* reason)
+{
+    outPayload.clear();
+    if (!TwoStates_GetSendClientLogs() || !g_gameDir[0]) return false;
+
+    DumpLiveSnapshot("LOGSEND");
+
+    const char* kFiles[3] = {
+        "tesmioloader.log",
+        "RepublicMP_Diagnostics.log",
+        "RepublicMP_Diagnostics.prev.log"
+    };
+    const size_t kMaxTailPerFile = 256 * 1024;
+
+    std::vector<unsigned char> rawEntries;
+    rawEntries.reserve(512 * 1024);
+
+    for (int i = 0; i < 3; ++i) {
+        char path[MAX_PATH] = {};
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_gameDir, kFiles[i]);
+        std::vector<unsigned char> content;
+        ReadLogFileTail(path, kMaxTailPerFile, content);
+        if (content.empty()) continue;
+
+        RemoteLogFileEntry entry = {};
+        strncpy_s(entry.fileName, kFiles[i], _TRUNCATE);
+        entry.size = (unsigned int)content.size();
+        size_t off = rawEntries.size();
+        rawEntries.resize(off + sizeof(entry) + content.size());
+        memcpy(rawEntries.data() + off, &entry, sizeof(entry));
+        memcpy(rawEntries.data() + off + sizeof(entry), content.data(), content.size());
+    }
+
+    if (rawEntries.empty()) return false;
+
+    RemoteLogBundleHeader hdr = {};
+    memcpy(hdr.magic, "RPMPLOG1", 8);
+    strncpy_s(hdr.reason, reason && reason[0] ? reason : "SESSION", _TRUNCATE);
+    const char* stmName = SteamP2P_GetLocalPersonaName();
+    uint64_t stmId = SteamP2P_GetLocalSteamId();
+    if (stmName && stmName[0]) {
+        _snprintf_s(hdr.peerName, sizeof(hdr.peerName), _TRUNCATE, "%s (%llu)", stmName, (unsigned long long)stmId);
+    } else {
+        strncpy_s(hdr.peerName, "Client", _TRUNCATE);
+    }
+    hdr.rawSize = (unsigned int)rawEntries.size();
+
+    mz_ulong compBound = mz_compressBound((mz_ulong)rawEntries.size());
+    std::vector<unsigned char> compBuf(compBound);
+    mz_ulong compLen = compBound;
+    if (mz_compress2(compBuf.data(), &compLen, rawEntries.data(), (mz_ulong)rawEntries.size(), MZ_DEFAULT_COMPRESSION) == MZ_OK &&
+        compLen < (mz_ulong)rawEntries.size() && sizeof(hdr) + compLen <= (900 * 1024)) {
+        hdr.compSize = (unsigned int)compLen;
+        outPayload.resize(sizeof(hdr) + compLen);
+        memcpy(outPayload.data(), &hdr, sizeof(hdr));
+        memcpy(outPayload.data() + sizeof(hdr), compBuf.data(), compLen);
+    } else if (sizeof(hdr) + rawEntries.size() <= (900 * 1024)) {
+        hdr.compSize = 0;
+        outPayload.resize(sizeof(hdr) + rawEntries.size());
+        memcpy(outPayload.data(), &hdr, sizeof(hdr));
+        memcpy(outPayload.data() + sizeof(hdr), rawEntries.data(), rawEntries.size());
+    } else {
+        return false;
+    }
+
+    DiagLog_Printf("REMLOG", "Packaged client log bundle (reason='%s', raw=%u B, wire=%u B)",
+                   hdr.reason, hdr.rawSize, (unsigned int)outPayload.size());
+    return true;
+}
+
+bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size)
+{
+    if (!data || size < sizeof(RemoteLogBundleHeader) || !g_gameDir[0]) return false;
+    const RemoteLogBundleHeader* hdr = (const RemoteLogBundleHeader*)data;
+    if (memcmp(hdr->magic, "RPMPLOG1", 8) != 0) return false;
+    if (hdr->rawSize == 0 || hdr->rawSize > (4u << 20)) return false;
+
+    const unsigned char* body = (const unsigned char*)data + sizeof(RemoteLogBundleHeader);
+    size_t bodySize = size - sizeof(RemoteLogBundleHeader);
+
+    std::vector<unsigned char> rawBuf;
+    if (hdr->compSize > 0) {
+        if (bodySize < hdr->compSize) return false;
+        rawBuf.resize(hdr->rawSize);
+        mz_ulong destLen = (mz_ulong)hdr->rawSize;
+        if (mz_uncompress(rawBuf.data(), &destLen, body, (mz_ulong)hdr->compSize) != MZ_OK || destLen != hdr->rawSize) {
+            DiagLog_Printf("REMLOG", "Failed to decompress remote client log bundle");
+            return false;
+        }
+    } else {
+        if (bodySize < hdr->rawSize) return false;
+        rawBuf.assign(body, body + hdr->rawSize);
+    }
+
+    char reasonClean[32] = {};
+    char peerSafe[64] = {};
+    memcpy(reasonClean, hdr->reason, sizeof(reasonClean) - 1);
+    memcpy(peerSafe, hdr->peerName, sizeof(peerSafe) - 1);
+    for (char* p = reasonClean; *p; ++p) {
+        char c = *p;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'))
+            *p = '_';
+    }
+    if (!reasonClean[0]) strncpy_s(reasonClean, "CLIENT", _TRUNCATE);
+
+    char baseRemoteDir[MAX_PATH] = {};
+    _snprintf_s(baseRemoteDir, sizeof(baseRemoteDir), _TRUNCATE, "%s\\RemoteLogs", g_gameDir);
+    CreateDirectoryA(baseRemoteDir, nullptr);
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char sessionDir[MAX_PATH] = {};
+    _snprintf_s(sessionDir, sizeof(sessionDir), _TRUNCATE,
+                "%s\\%s_%04d%02d%02d_%02d%02d%02d",
+                baseRemoteDir, reasonClean,
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond);
+    CreateDirectoryA(sessionDir, nullptr);
+
+    // Write summary info.txt
+    char infoPath[MAX_PATH] = {};
+    _snprintf_s(infoPath, sizeof(infoPath), _TRUNCATE, "%s\\info.txt", sessionDir);
+    FILE* fInfo = nullptr;
+    if (fopen_s(&fInfo, infoPath, "wb") == 0 && fInfo) {
+        fprintf(fInfo, "Reason: %s\r\nPeer: %s\r\nReceived: %04d-%02d-%02d %02d:%02d:%02d.%03d\r\n",
+                reasonClean, peerSafe,
+                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        fclose(fInfo);
+    }
+
+    size_t pos = 0;
+    int filesSaved = 0;
+    while (pos + sizeof(RemoteLogFileEntry) <= rawBuf.size()) {
+        RemoteLogFileEntry entry = {};
+        memcpy(&entry, rawBuf.data() + pos, sizeof(entry));
+        entry.fileName[sizeof(entry.fileName) - 1] = '\0';
+        pos += sizeof(RemoteLogFileEntry);
+        if (pos + entry.size > rawBuf.size()) break;
+
+        // Sanitize filename (strip any path separators)
+        const char* baseName = strrchr(entry.fileName, '\\');
+        if (!baseName) baseName = strrchr(entry.fileName, '/');
+        baseName = baseName ? (baseName + 1) : entry.fileName;
+        if (baseName[0] && strstr(baseName, "..") == nullptr) {
+            char outPath[MAX_PATH] = {};
+            _snprintf_s(outPath, sizeof(outPath), _TRUNCATE, "%s\\%s", sessionDir, baseName);
+            FILE* fOut = nullptr;
+            if (fopen_s(&fOut, outPath, "wb") == 0 && fOut) {
+                fwrite(rawBuf.data() + pos, 1, entry.size, fOut);
+                fclose(fOut);
+                filesSaved++;
+            }
+        }
+        pos += entry.size;
+    }
+
+    DiagLog_Printf("REMLOG", "Saved %d remote client log file(s) from '%s' (reason=%s) to %s",
+                   filesSaved, peerSafe, reasonClean, sessionDir);
+    if (filesSaved > 0) {
+        char toast[256] = {};
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("Получены логи клиента (%s) -> RemoteLogs", "Received client logs (%s) -> RemoteLogs"),
+                    reasonClean);
+        TwoStates_AddToast(toast, 1);
+    }
+    return filesSaved > 0;
+}
+

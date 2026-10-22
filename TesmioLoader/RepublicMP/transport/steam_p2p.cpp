@@ -86,6 +86,15 @@ typedef bool (*Fn_ISteamNetworking_AllowP2PPacketRelay)(void* self, bool bAllow)
 static HMODULE s_hSteamDll = nullptr;
 static bool s_initAttempted = false;
 static bool s_available = false;
+static volatile bool s_shuttingDown = false;
+
+struct SteamExitGuard {
+    ~SteamExitGuard() {
+        s_shuttingDown = true;
+        s_available = false;
+    }
+};
+static SteamExitGuard s_steamExitGuard;
 
 static Fn_SteamAPI_IsSteamRunning pSteamAPI_IsSteamRunning = nullptr;
 static Fn_SteamAPI_RunCallbacks pSteamAPI_RunCallbacks = nullptr;
@@ -335,7 +344,16 @@ bool SteamP2P_Init()
 
 bool SteamP2P_IsAvailable()
 {
-    if (!s_available) SteamP2P_Init();
+    if (s_shuttingDown) return false;
+    if (s_available) {
+        if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
+            s_shuttingDown = true;
+            s_available = false;
+            return false;
+        }
+        return true;
+    }
+    SteamP2P_Init();
     return s_available;
 }
 
@@ -522,7 +540,12 @@ static SOCKET MakeSteamSocket(int idx)
 static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
                             uint32_t connId, const void* payload, uint32_t payloadLen)
 {
-    if (!s_available || !s_pSteamNetworking) return false;
+    if (s_shuttingDown || !s_available || !s_pSteamNetworking) return false;
+    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
+        s_shuttingDown = true;
+        s_available = false;
+        return false;
+    }
     std::vector<uint8_t> packet(sizeof(P2PFrameHeader) + payloadLen);
     P2PFrameHeader* hdr = (P2PFrameHeader*)packet.data();
     hdr->magic = P2P_FRAME_MAGIC;
@@ -544,7 +567,12 @@ static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t
 
 static void PumpChannelLocked(int channel)
 {
-    if (!s_available || !s_pSteamNetworking) return;
+    if (s_shuttingDown || !s_available || !s_pSteamNetworking) return;
+    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
+        s_shuttingDown = true;
+        s_available = false;
+        return;
+    }
     uint32_t msgSize = 0;
     while (pISteamNetworking_IsP2PPacketAvailable(s_pSteamNetworking, &msgSize, channel)) {
         if (msgSize == 0 || msgSize > (1024 * 1024)) {

@@ -2,6 +2,8 @@
 // See lockstep_net.h.
 #include "lockstep_net.h"
 #include "commands.h"
+#include "../core/diag_log.h"
+#include "../session/two_states.h"
 #include "../determinism/determinism.h"
 #include "../transport/network.h"
 #include <deque>
@@ -24,6 +26,7 @@ enum LockstepMsgType {
     LS_PING = 11,  // either way: still here (LsPing; a request is answered with the same time)
     LS_DESYNC = 12, // host -> player: the first state difference (text)
     LS_CURSOR = 13, // either way: partner 3D cursor + optional map ping (LsCursor)
+    LS_CLIENT_LOGS = 14, // player -> host: compressed client diagnostic log bundle
     LS_PAUSE = 7, // player -> host: a pause toggle
     LS_SPEED = 8, // player -> host: int speed
     LS_STATE = 9, // host -> player: LsState
@@ -111,6 +114,21 @@ static bool Send(unsigned type, const void* a, size_t na, const void* b = nullpt
     return ok;
 }
 
+void LockstepNet_SendClientLogs(const char* reason)
+{
+    if (!g_connected || g_isHost || !TwoStates_GetSendClientLogs()) return;
+    static ULONGLONG s_lastLogSendMs = 0;
+    ULONGLONG now = GetTickCount64();
+    bool isCrash = (reason && strcmp(reason, "CRASH") == 0);
+    if (!isCrash && s_lastLogSendMs != 0 && (now - s_lastLogSendMs) < 5000ULL) return;
+    s_lastLogSendMs = now;
+
+    std::vector<unsigned char> bundle;
+    if (DiagLog_BuildClientLogBundle(bundle, reason)) {
+        Send(LS_CLIENT_LOGS, bundle.data(), bundle.size());
+    }
+}
+
 static DWORD WINAPI RecvThread(LPVOID)
 {
     while (g_connected) {
@@ -159,6 +177,12 @@ static DWORD WINAPI RecvThread(LPVOID)
             }
             continue;
         }
+        if (h.type == LS_CLIENT_LOGS) {
+            if (g_isHost && !m.data.empty()) {
+                DiagLog_SaveRemoteClientLogBundle(m.data.data(), m.data.size());
+            }
+            continue;
+        }
         if (h.type == LS_DESYNC) {
             size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
             memcpy(g_desync, m.data.data(), n);
@@ -166,6 +190,7 @@ static DWORD WINAPI RecvThread(LPVOID)
             Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
             unsigned long long tick = 0;
             if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
+            LockstepNet_SendClientLogs("DESYNC");
             continue;
         }
         if (h.type == LS_BYE) {
@@ -252,7 +277,10 @@ void LockstepNet_Close()
 {
     Locks();
     if (g_sock != INVALID_SOCKET) {
-        if (g_connected) Send(LS_BYE, nullptr, 0);
+        if (g_connected) {
+            if (!g_isHost) LockstepNet_SendClientLogs("DISCONNECT");
+            Send(LS_BYE, nullptr, 0);
+        }
         g_connected = false;
         NetworkCloseSocket(g_sock);
         g_sock = INVALID_SOCKET;

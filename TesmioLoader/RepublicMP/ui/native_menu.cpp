@@ -422,6 +422,7 @@ enum SettingsMenuAction {
     SACT_MAP_BORDERS,
     SACT_MODS,
     SACT_DLC_CHECK,
+    SACT_SEND_LOGS,
     SACT_LANG,
     SACT_BACK,
 };
@@ -480,6 +481,11 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
             ? TrW(L"Проверка DLC: ВКЛ",  L"DLC Check: ON")
             : TrW(L"Проверка DLC: ВЫКЛ", L"DLC Check: OFF"));
 
+        bool sendLogs = TwoStates_GetSendClientLogs();
+        addEntry(SACT_SEND_LOGS, sendLogs
+            ? TrW(L"Логи Хосту: ВКЛ",  L"Logs to Host: ON")
+            : TrW(L"Логи Хосту: ВЫКЛ", L"Logs to Host: OFF"));
+
         addEntry(SACT_LANG, (Lang_Get() == MP_LANG_EN)
             ? L"Language: English"
             : L"Язык: Русский");
@@ -526,6 +532,15 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
         } else if (act == SACT_DLC_CHECK) {
             SaveSync_SetDlcCheck(!SaveSync_GetDlcCheck());
             TwoStates_SaveSettings();
+        } else if (act == SACT_SEND_LOGS) {
+            bool next = !TwoStates_GetSendClientLogs();
+            TwoStates_SetSendClientLogs(next);
+            TwoStates_SaveSettings();
+            TwoStates_AddToast(next
+                ? Tr("Авто-отправка логов Хосту включена (при рассинхроне, вылете и выходе)",
+                     "Auto-upload of client logs to Host enabled (on desync, crash & disconnect)")
+                : Tr("Авто-отправка логов Хосту отключена",
+                     "Auto-upload of client logs to Host disabled"), next ? 1 : 0);
         } else if (act == SACT_LANG) {
             Lang_Toggle();
             TwoStates_SaveSettings();

@@ -54,6 +54,7 @@ static WireLayout LayoutFor(int method)
     case TM_SMOOTH:            return { true, false, 3, 0, false, true,  false };
     case TM_LEVEL:             return { true, false, 3, 0, false, true,  false };
     case TM_TO_HEIGHT:         return { true, true,  3, 0, false, true,  false };
+    case TM_SMOOTH_LIMITS:     return { true, false, 9, 0, false, true,  false };
     case TM_MASK:              return { true, false, 2, 3, true,  false, true  };
     default:                   return { false, false, 0, 0, false, false, false };
     }

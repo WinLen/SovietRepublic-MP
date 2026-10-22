@@ -9,6 +9,7 @@
 #include "../../ui/sync_block.h"
 #include "../view_list_scope.h"
 #include "../replay_menus.h"
+#include "../../determinism/determinism.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -30,6 +31,8 @@
 #define UNIVERSAL_THIS_RVA 0x9D4F10       // placement god-object (thisPtr)
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18  // city buildings vector
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // unfinished / demolition sites vector (thisPtr+0x11C28)
+#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
 
 #define FC040_RVA 0x4FC040                // drag start
 #define FCAF0_RVA 0x4FCAF0                // drag tick
@@ -307,14 +310,18 @@ void RoadSync_ClearHover()
 static __int64 FindLocalBuildingAt(const float pos[3])
 {
     __try {
-        __int64* it = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        __int64* end = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end; ++it) {
-            __int64 b = *it;
-            if (!b) continue;
-            const float* p = (const float*)(b + BUILDING_POS_OFFSET);
-            if (fabsf(p[0] - pos[0]) < 0.5f && fabsf(p[2] - pos[2]) < 0.5f && fabsf(p[1] - pos[1]) < 1.0f)
-                return b;
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2; ++v) {
+            __int64* it = *(__int64**)((uintptr_t)g_exeBase + kBeginRvas[v]);
+            __int64* end = *(__int64**)((uintptr_t)g_exeBase + kEndRvas[v]);
+            for (; it && it < end; ++it) {
+                __int64 b = *it;
+                if (!b) continue;
+                const float* p = (const float*)(b + BUILDING_POS_OFFSET);
+                if (fabsf(p[0] - pos[0]) < 0.5f && fabsf(p[2] - pos[2]) < 0.5f && fabsf(p[1] - pos[1]) < 1.0f)
+                    return b;
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -407,17 +414,8 @@ static void CheckAttachedPowerNode(__int64 node, const float want[3], const char
 }
 
 // ---------------------------------------------------------------------------
-// Footpath road links
+// Footpath road links & Own-network hover links (rail switches, T-junctions)
 // ---------------------------------------------------------------------------
-//
-// The footpath commit (FUN_14051c9f6 onwards) joins each end to a road: the
-// start to the edge in manager+0x360 split at point +0x368 and/or the node in
-// +0x370 (copied from the hover globals when the drag began, FUN_1404fc040 at
-// 0x4FC650), the end to the hover globals themselves. It splits the road
-// edge there and links the road node and the path node (+0xd0 both ways) -
-// the pedestrian crossing - and the tool then refreshes the roads. A replay
-// with the globals cleared joined nothing: no crossing, the path only touching
-// the road. The sender's links travel by position and are resolved here.
 
 static bool InPointerList(__int64 list, __int64 p)
 {
@@ -434,12 +432,11 @@ static __int64 RoadNetwork()
 }
 
 // Caller wraps in __try.
-static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLink& out)
+static void ReadNetworkLink(__int64 network, __int64 edge, int pointIndex, __int64 node, RoadSyncRoadLink& out)
 {
     memset(&out, 0, sizeof(out));
-    __int64 roads = RoadNetwork();
-    if (!roads) return;
-    if (edge && InPointerList(roads + MGR_SEGMENTS_BEGIN_OFFSET, edge)) {
+    if (!network) return;
+    if (edge && InPointerList(network + MGR_SEGMENTS_BEGIN_OFFSET, edge)) {
         __int64 n0 = *(__int64*)(edge + SEG_NODE0_OFFSET);
         __int64 n1 = *(__int64*)(edge + SEG_NODE1_OFFSET);
         if (n0 && n1) {
@@ -451,35 +448,72 @@ static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLin
                                     *(__int64*)(edge + SEG_POINTS_BEGIN_OFFSET)) / 0x18);
         }
     }
-    if (node && InPointerList(roads + NET_NODES_OFFSET, node)) {
+    if (node && InPointerList(network + NET_NODES_OFFSET, node)) {
         out.hasNode = 1;
         memcpy(out.node, (const float*)(node + NODE_POS_OFFSET), 12);
     }
+}
+
+static void ReadLink(__int64 edge, int pointIndex, __int64 node, RoadSyncRoadLink& out)
+{
+    ReadNetworkLink(RoadNetwork(), edge, pointIndex, node, out);
 }
 
 void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& seg)
 {
     memset(&seg.startLink, 0, sizeof(seg.startLink));
     memset(&seg.endLink, 0, sizeof(seg.endLink));
-    if (category != ROAD_SYNC_CATEGORY_PEDESTRIAN) return;
+    memset(&seg.startOwnLink, 0, sizeof(seg.startOwnLink));
+    memset(&seg.endOwnLink, 0, sizeof(seg.endOwnLink));
+    seg.snapModeStart = 0;
+    seg.snapModeEnd = 0;
+    memset(seg.snapOffsetStart, 0, sizeof(seg.snapOffsetStart));
+    memset(seg.snapOffsetEnd, 0, sizeof(seg.snapOffsetEnd));
+
     __try {
-        ReadLink(*(__int64*)(manager + MGR_ROAD_LINK_OFFSET), *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET),
-                 *(__int64*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET), seg.startLink);
-        ReadLink(*(__int64*)((uintptr_t)g_exe + HOVER_ROAD_EDGE_RVA), *(int*)((uintptr_t)g_exe + HOVER_ROAD_POINT_RVA),
-                 *(__int64*)((uintptr_t)g_exe + HOVER_ROAD_NODE_RVA), seg.endLink);
+        // Own-network hover links for ALL categories (rail switches, mid-segment T-junctions):
+        // fc040 copies the start hover edge/node from 0x9E4558/0x9E45D8 & 0x9E4560/0x9E45E0
+        // into manager+0x340 (edge) and manager+0x348 (node). At commit time, the end hover
+        // edge/node is still in 0x9E4558/0x9E45D8 & 0x9E4560/0x9E45E0.
+        __int64 startOwnEdge = *(__int64*)(manager + 0x340);
+        __int64 startOwnNode = *(__int64*)(manager + 0x348);
+        ReadNetworkLink(manager, startOwnEdge, 0, startOwnNode, seg.startOwnLink);
+
+        __int64 endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0x9E4558);
+        if (!endOwnEdge || !InPointerList(manager + MGR_SEGMENTS_BEGIN_OFFSET, endOwnEdge))
+            endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0x9E45D8);
+        __int64 endOwnNode = *(__int64*)((uintptr_t)g_exe + 0x9E4560);
+        if (!endOwnNode || !InPointerList(manager + NET_NODES_OFFSET, endOwnNode))
+            endOwnNode = *(__int64*)((uintptr_t)g_exe + 0x9E45E0);
+        ReadNetworkLink(manager, endOwnEdge, 0, endOwnNode, seg.endOwnLink);
+
+        seg.snapModeStart = *(unsigned char*)(manager + 0x74A);
+        seg.snapModeEnd   = *(unsigned char*)(manager + 0x74B);
+        memcpy(seg.snapOffsetStart, (const void*)(manager + 0x74C), 12);
+        memcpy(seg.snapOffsetEnd,   (const void*)(manager + 0x758), 12);
+
+        if (category == ROAD_SYNC_CATEGORY_PEDESTRIAN) {
+            ReadLink(*(__int64*)(manager + MGR_ROAD_LINK_OFFSET), *(int*)(manager + MGR_ROAD_LINK_POINT_OFFSET),
+                     *(__int64*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET), seg.startLink);
+            ReadLink(*(__int64*)((uintptr_t)g_exe + HOVER_ROAD_EDGE_RVA), *(int*)((uintptr_t)g_exe + HOVER_ROAD_POINT_RVA),
+                     *(__int64*)((uintptr_t)g_exe + HOVER_ROAD_NODE_RVA), seg.endLink);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         memset(&seg.startLink, 0, sizeof(seg.startLink));
         memset(&seg.endLink, 0, sizeof(seg.endLink));
+        memset(&seg.startOwnLink, 0, sizeof(seg.startOwnLink));
+        memset(&seg.endOwnLink, 0, sizeof(seg.endOwnLink));
+        seg.snapModeStart = 0;
+        seg.snapModeEnd = 0;
     }
 }
 
-// The local road edge / node of a link, 0 if not here. Caller wraps in __try.
-static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
+// The local edge / node of a link in `network`, 0 if not here. Caller wraps in __try.
+static __int64 FindNetworkLinkEdge(__int64 network, const RoadSyncRoadLink& l)
 {
-    __int64 roads = RoadNetwork();
-    if (!roads || !l.hasEdge) return 0;
-    __int64* it = *(__int64**)(roads + MGR_SEGMENTS_BEGIN_OFFSET);
-    __int64* end = *(__int64**)(roads + MGR_SEGMENTS_END_OFFSET);
+    if (!network || !l.hasEdge) return 0;
+    __int64* it = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
+    __int64* end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
     for (; it && it < end; ++it) {
         __int64 e = *it;
         if (!e) continue;
@@ -492,15 +526,43 @@ static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
     return 0;
 }
 
-static __int64 FindLinkNode(const RoadSyncRoadLink& l)
+static __int64 FindNetworkLinkNode(__int64 network, const RoadSyncRoadLink& l)
 {
-    __int64 roads = RoadNetwork();
-    if (!roads || !l.hasNode) return 0;
-    __int64* it = *(__int64**)(roads + NET_NODES_OFFSET);
-    __int64* end = *(__int64**)(roads + NET_NODES_OFFSET + 8);
+    if (!network || !l.hasNode) return 0;
+    __int64* it = *(__int64**)(network + NET_NODES_OFFSET);
+    __int64* end = *(__int64**)(network + NET_NODES_OFFSET + 8);
     for (; it && it < end; ++it)
         if (*it && NodeNear(*it, l.node)) return *it;
     return 0;
+}
+
+static __int64 FindLinkEdge(const RoadSyncRoadLink& l)
+{
+    return FindNetworkLinkEdge(RoadNetwork(), l);
+}
+
+static __int64 FindLinkNode(const RoadSyncRoadLink& l)
+{
+    return FindNetworkLinkNode(RoadNetwork(), l);
+}
+
+// Sets own-network hover globals (0x9E4558/0x9E45D8 for edge, 0x9E4560/0x9E45E0 for node)
+// so fc040 and fcaf0/518A80 split the target segment or attach to the target node identically.
+static void SetOwnHover(__int64 manager, const RoadSyncRoadLink& l, const char* which)
+{
+    if (!l.hasEdge && !l.hasNode) return;
+    __try {
+        __int64 edge = FindNetworkLinkEdge(manager, l);
+        __int64 node = FindNetworkLinkNode(manager, l);
+        *(long long*)((uintptr_t)g_exe + 0x9E4558) = edge;
+        *(long long*)((uintptr_t)g_exe + 0x9E45D8) = edge;
+        *(long long*)((uintptr_t)g_exe + 0x9E4560) = node;
+        *(long long*)((uintptr_t)g_exe + 0x9E45E0) = node;
+        Logf("republicmp  ROAD_SYNC:   %s own-network link: edge %s, node %s", which,
+             !l.hasEdge ? "-" : edge ? "found" : "NOT FOUND",
+             !l.hasNode ? "-" : node ? "found" : "NOT FOUND");
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 // Puts a link into the hover globals (what the footpath tool reads); false
@@ -691,8 +753,10 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // Drag start: the wrapper sets up its drag state and calls fc040;
             // fc040 is then re-run with fuzzy node matching so the start
             // attaches to the node already at this position. A footpath takes
-            // its start's road link from the hover globals there.
+            // its start's road link from the hover globals there; own-network
+            // hover links (rail switches, mid-segment T-junctions) are also set.
             if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) SetRoadHover(seg.startLink, "start");
+            SetOwnHover(manager, seg.startOwnLink, "start");
             SetHoveredPort(seg.startPort, "start");
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.startNode[0];
             *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.startNode[1];
@@ -704,8 +768,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
 
             float start[3] = { seg.startNode[0], seg.startNode[1], seg.startNode[2] };
             float noDirection[3] = { 0.0f, 0.0f, 0.0f };
-            ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, 1,
+            char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
+            ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
                 Fc040Param5ForCategory(seg.category, seg.typeId), 0, noDirection);
+            if (seg.snapModeStart != 0) {
+                *(unsigned char*)(manager + 0x74A) = seg.snapModeStart;
+                memcpy((void*)(manager + 0x74C), seg.snapOffsetStart, 12);
+            }
             *(long long*)(manager + MGR_HOVER_SEGMENT_COPY_OFFSET) = 0;
             // A fresh start node gets manager+0x24 added to its height; the
             // sender's position already includes it.
@@ -718,10 +787,18 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // One drag tick with the sender's route as param_8: the engine
             // copies it into its route buffer instead of routing itself, and
             // matches the end node against existing nodes within +-1m.
+            HoverGlobals_Clear();
             SetHoveredPort(seg.endPort, "end");
             if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) {
-                HoverGlobals_Clear();
                 SetRoadHover(seg.endLink, "end");
+            }
+            SetOwnHover(manager, seg.endOwnLink, "end");
+            if (seg.snapModeEnd == 2) {
+                *(unsigned char*)((uintptr_t)g_exe + 0x9E4578) = 1;
+                float* snapPt = (float*)((uintptr_t)g_exe + 0x9E457C);
+                snapPt[0] = seg.endNode[0] - seg.snapOffsetEnd[0];
+                snapPt[1] = seg.endNode[1] - seg.snapOffsetEnd[1];
+                snapPt[2] = seg.endNode[2] - seg.snapOffsetEnd[2];
             }
             // Power lines: the tick then lifts the end by the pole height
             // (manager+0x24, 0x4FF3D4) unless a node or an edge is hovered -
@@ -740,6 +817,14 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *lmbHeld = 1;
             ((Fcaf0Fn)((uintptr_t)g_exe + FCAF0_RVA))(manager, end, seg.typeId, (unsigned int)seg.variant,
                                                       0, 0, 0, (__int64)&route, 0, 0);
+            if (seg.snapModeStart != 0) {
+                *(unsigned char*)(manager + 0x74A) = seg.snapModeStart;
+                memcpy((void*)(manager + 0x74C), seg.snapOffsetStart, 12);
+            }
+            if (seg.snapModeEnd != 0) {
+                *(unsigned char*)(manager + 0x74B) = seg.snapModeEnd;
+                memcpy((void*)(manager + 0x758), seg.snapOffsetEnd, 12);
+            }
             if (*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) == 0)
                 SetNodePos(*(__int64*)(manager + MGR_END_NODE_OFFSET), seg.endNode);
             else if (IsPowerLine(seg.category))
@@ -750,9 +835,11 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             unsigned char valid = *(unsigned char*)(manager + MGR_VALID_OFFSET);
             int errCategory = *(int*)(manager + MGR_ERROR_CATEGORY_OFFSET);
             unsigned int errSubcode = *(unsigned int*)(manager + MGR_ERROR_SUBCODE_OFFSET);
-            Logf("republicmp  ROAD_SYNC:   attach start=%d end=%d valid=%d errCategory=%d errSubcode=0x%x",
+            Logf("republicmp  ROAD_SYNC:   attach start=%d end=%d snap=%d/%d valid=%d errCategory=%d errSubcode=0x%x",
                  (int)*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET),
                  (int)*(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET),
+                 (int)*(unsigned char*)(manager + 0x74A),
+                 (int)*(unsigned char*)(manager + 0x74B),
                  (int)valid, errCategory, errSubcode);
             *outEngineAccepted = (valid == 1) && (errCategory == -1);
 
@@ -774,8 +861,9 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 *(float*)(manager + MGR_CURVE_OFFSET) = savedCurve;
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
             }
+            *(unsigned char*)((uintptr_t)g_exe + 0x9E4578) = 0;
             ClearHoveredPort();
-            if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) HoverGlobals_Clear();
+            HoverGlobals_Clear();
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         threw = true;
@@ -808,11 +896,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
 static bool ApplySegment(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
     InterlockedIncrement(&g_applyingSegment);
-    // The sender's terrain deformation arrives over terrain sync; the
-    // replay's own would apply it a second time.
-    TerrainSync_BeginForeignReplay();
+    // In legacy non-lockstep mode, the sender's terrain deformation arrives over
+    // terrain sync; in Lockstep, the commit was intercepted before running locally,
+    // so both PCs must execute the commit's own terrain deformation identically.
+    bool foreignReplay = !Determinism_IsActive();
+    if (foreignReplay) TerrainSync_BeginForeignReplay();
     bool result = ApplySegmentImpl(seg, outEngineAccepted);
-    TerrainSync_EndForeignReplay();
+    if (foreignReplay) TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return result;
 }
@@ -944,12 +1034,13 @@ static int ApplyUpgrade(const RoadSyncUpgradeMsg& msg)
 
     HoverGlobals_Clear();
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
+    bool foreignReplay = !Determinism_IsActive();
+    if (foreignReplay) TerrainSync_BeginForeignReplay();
     int applied = 0;
     for (int i = 0; i < msg.pieceCount; i++) {
         if (ApplyUpgradePiece(msg.category, msg, msg.pieces[i])) applied++;
     }
-    TerrainSync_EndForeignReplay();
+    if (foreignReplay) TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     return applied;
 }
@@ -1235,7 +1326,8 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
 
     bool threw = false;
     InterlockedIncrement(&g_applyingSegment);
-    TerrainSync_BeginForeignReplay();
+    bool foreignReplay = !Determinism_IsActive();
+    if (foreignReplay) TerrainSync_BeginForeignReplay();
     __try {
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
         if (manager) {
@@ -1337,7 +1429,7 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         threw = true;
     }
-    TerrainSync_EndForeignReplay();
+    if (foreignReplay) TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     if (threw) Logf("republicmp  ROAD_SYNC: <exception applying demolish>");
     else if (*outRemoved) {
@@ -2134,7 +2226,6 @@ void RoadSync_ClearCategoryPreview(int category)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    HoverGlobals_Clear();
 }
 
 void RoadSync_CancelLocalDrag()

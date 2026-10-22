@@ -71,6 +71,7 @@ static float g_borderHalfWidth = 250.0f; // [-250m .. +250m] = 500m shared borde
 static bool g_fullStartingCapital = true;
 static volatile bool g_expandBorders = false; // default: standard 20x20 km map with borders (16x16 km playable zone)
 static bool g_show3DBorder = true;
+static volatile bool g_sendClientLogs = true;
 
 static double g_stateRub[2] = { 0.0, 0.0 };
 static double g_stateUsd[2] = { 0.0, 0.0 };
@@ -1911,6 +1912,9 @@ void TwoStates_LoadSettings()
     int dlc = GetPrivateProfileIntA("coop", "dlc_check", SaveSync_GetDlcCheck() ? 1 : 0, ini.c_str());
     SaveSync_SetDlcCheck(dlc != 0);
 
+    int sendLogs = GetPrivateProfileIntA("coop", "send_client_logs", g_sendClientLogs ? 1 : 0, ini.c_str());
+    g_sendClientLogs = (sendLogs != 0);
+
     char addr[64] = {};
     GetPrivateProfileStringA("coop", "last_join_address", "", addr, sizeof(addr), ini.c_str());
     if (addr[0]) {
@@ -1919,9 +1923,10 @@ void TwoStates_LoadSettings()
 
     ModSync_LoadSettingsFromIni(ini.c_str());
 
-    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, dlc=%d, addr='%s')",
+    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, dlc=%d, sendLogs=%d, addr='%s')",
          ini.c_str(), (int)g_chosenMode, g_fullStartingCapital ? 1 : 0, (int)g_borderHalfWidth,
-         g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, SaveSync_GetDlcCheck() ? 1 : 0, g_savedJoinAddress);
+         g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, SaveSync_GetDlcCheck() ? 1 : 0,
+         g_sendClientLogs ? 1 : 0, g_savedJoinAddress);
 }
 
 void TwoStates_SaveSettings()
@@ -1940,6 +1945,7 @@ void TwoStates_SaveSettings()
     WritePrivateProfileStringA("coop", "expand_borders", g_expandBorders ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "show_3d_border", g_show3DBorder ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "dlc_check", SaveSync_GetDlcCheck() ? "1" : "0", ini.c_str());
+    WritePrivateProfileStringA("coop", "send_client_logs", g_sendClientLogs ? "1" : "0", ini.c_str());
 
     if (g_savedJoinAddress[0]) {
         WritePrivateProfileStringA("coop", "last_join_address", g_savedJoinAddress, ini.c_str());
@@ -1956,6 +1962,16 @@ void TwoStates_SetSavedJoinAddress(const char* addr)
 {
     if (!addr || !addr[0]) return;
     strncpy_s(g_savedJoinAddress, addr, _TRUNCATE);
+}
+
+bool TwoStates_GetSendClientLogs()
+{
+    return g_sendClientLogs;
+}
+
+void TwoStates_SetSendClientLogs(bool send)
+{
+    g_sendClientLogs = send;
 }
 
 // ---------------------------------------------------------------------------

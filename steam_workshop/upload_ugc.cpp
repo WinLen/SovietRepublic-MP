@@ -207,7 +207,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Fix client road building crash/desync in Lockstep (RoadSync_ClearCategoryPreview + compact LS_CMD_SEGMENT + 4FCAF0 ledger)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Remote client logs upload to Host, terrain edit crash/desync fix, rail switches & mid-segment junctions sync, full demolition sync");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

@@ -420,15 +420,22 @@ static void CaptureAccessRoad(__int64 manager, int category)
     if (FillSegment(manager, category, g_accessRoads[g_accessCount])) g_accessCount++;
 }
 
-// terrain_demolish works through the path managers' upgrade branch; it is
-// recognised by the active tool and sent as the cursor plus the cut piece
-// (see RoadSyncDemolishMsg).
-static bool IsDemolishToolActive()
+// terrain_demolish and category *_cancel tools work through the path managers'
+// upgrade/demolish branch (manager+0x528 >= 100 or == -20); they are recognised
+// by the manager type or active tool and sent as RoadSyncDemolishMsg.
+static bool IsDemolishToolActive(__int64 manager = 0)
 {
+    __try {
+        if (manager) {
+            int mtype = *(int*)(manager + MGR_TYPE_OFFSET);
+            if (mtype >= TOOL_TYPE_DEMOLISH_MIN || mtype == -20) return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     char tool[64];
     if (!SafeReadStr(*(void**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET), tool, sizeof(tool)))
         return false;
-    return strcmp(tool, "terrain_demolish") == 0 || strcmp(tool, "second_road_cancel") == 0;
+    return strcmp(tool, "terrain_demolish") == 0 || strstr(tool, "_cancel") != nullptr;
 }
 
 static int g_demolishCategory = -1;
@@ -777,7 +784,7 @@ static bool SegmentListed(__int64 manager, __int64 seg)
 static bool TakeCommitAsCommand(__int64 manager, int category)
 {
     __try {
-        if (IsDemolishToolActive()) {
+        if (IsDemolishToolActive(manager)) {
             bool multi = *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) != 0;
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
             // No piece under the brush: the commit removes only with +0x390 set (518a80).
@@ -922,7 +929,7 @@ void HookedRoadCommit(__int64 manager,
                     __int64 thisPtr = GetPlacementManagerThisPtr();
                     float cx = *(float*)(thisPtr + CURSOR_X_OFFSET);
                     float cz = *(float*)(thisPtr + CURSOR_Z_OFFSET);
-                    if (IsDemolishToolActive())
+                    if (IsDemolishToolActive(manager))
                         allowed = TwoStates_CheckDemolishAllowed(cx, cz, "снос инфраструктуры");
                     else
                         allowed = TwoStates_CheckBuildAllowed(cx, cz, "строительство дороги/сети");
@@ -932,7 +939,7 @@ void HookedRoadCommit(__int64 manager,
             }
             bool demolish = false;
             __try {
-                if (IsDemolishToolActive())
+                if (IsDemolishToolActive(manager))
                     demolish = CaptureDemolish(manager, category);
                 else if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0)
                     CaptureUpgrade(manager, category);

@@ -194,6 +194,7 @@ enum SessionMsgCode {
     MSG_READY = 2,       // client -> host: world loaded
     MSG_ABORT = 3,       // either way: giving up, text says why
     MSG_MOD_SYNC = 4,    // host -> client: ModSync handshake begins now
+    MSG_CLIENT_LOGS = 5, // client -> host: compressed diagnostic log bundle follows (step = byte count)
 };
 struct SessionMsg {
     int code;
@@ -785,6 +786,14 @@ static bool RunHostJoin(SOCKET sock)
                 SaveStatus("[HOST] the player gave up: %s", m.text);
                 break;
             }
+            if (m.code == MSG_CLIENT_LOGS) {
+                if (m.step > 0 && m.step <= (2 << 20)) {
+                    std::vector<unsigned char> logBuf((size_t)m.step);
+                    if (!NetworkRecvExact(sock, logBuf.data(), logBuf.size())) break;
+                    DiagLog_SaveRemoteClientLogBundle(logBuf.data(), logBuf.size());
+                }
+                continue;
+            }
             if (m.code == MSG_STEP) {
                 char text[96];
                 _snprintf_s(text, sizeof(text), _TRUNCATE, Tr("Ожидание игрока — %s", "Waiting for the player - %s"), m.text);
@@ -1061,6 +1070,16 @@ static bool RunClientJoin(bool rejoin)
         if (g_disconnectRequested) {
             SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled");
             break;
+        }
+
+        // 5b. If a previous session crashed or desynced (or this is a re-sync), upload diagnostic logs to Host.
+        if (TwoStates_GetSendClientLogs() && (rejoin || DiagLog_HasPrevCrashOrDesyncLog())) {
+            std::vector<unsigned char> logBundle;
+            if (DiagLog_BuildClientLogBundle(logBundle, rejoin ? "RESYNC" : "PREV_CRASH")) {
+                if (SendMsg(sock, MSG_CLIENT_LOGS, (int)logBundle.size(), -1, "")) {
+                    NetworkSendExact(sock, logBundle.data(), logBundle.size());
+                }
+            }
         }
 
         // 6. Load.

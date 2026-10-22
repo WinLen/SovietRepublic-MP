@@ -103,3 +103,7 @@ struct PartnerCursorInfo {
 void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, bool isPing);
 PartnerCursorInfo LockstepNet_GetPartnerCursor();
 
+// Sends the client's compressed log bundle to the Host (on DESYNC, DISCONNECT, or CRASH).
+void LockstepNet_SendClientLogs(const char* reason);
+
+

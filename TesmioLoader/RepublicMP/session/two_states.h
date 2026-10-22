@@ -121,6 +121,8 @@ void TwoStates_LoadSettings();
 void TwoStates_SaveSettings();
 const char* TwoStates_GetSavedJoinAddress();
 void TwoStates_SetSavedJoinAddress(const char* addr);
+bool TwoStates_GetSendClientLogs();
+void TwoStates_SetSendClientLogs(bool send);
 
 // Separate Singleplayer vs Co-op Save Banks (media_soviet\save <-> save_sp / save_coop)
 bool TwoStates_MountSaveBank(bool wantCoop);

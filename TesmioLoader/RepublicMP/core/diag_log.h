@@ -24,3 +24,10 @@ void DiagLog_FrameTick(void);
 // Suppresses VectoredExceptionHandler crash logging inside guarded __try/__except probes.
 void DiagLog_BeginSafeSeh(void);
 void DiagLog_EndSafeSeh(void);
+
+// Remote client log upload to Host (<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\)
+#include <vector>
+bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const char* reason);
+bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size);
+bool DiagLog_HasPrevCrashOrDesyncLog(void);
+

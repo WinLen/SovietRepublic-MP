@@ -7,6 +7,7 @@
 // escape into the game.
 #include "terrain_hook.h"
 #include "../../lockstep/commands.h"
+#include "../networks/road_sync.h"
 #include <vector>
 #include "terrain_sync.h"
 #include <intrin.h>
@@ -352,7 +353,7 @@ static std::vector<LsTerrainEdit> g_lsTerrain; // main thread (the tools run in 
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 {
-    bool remote = g_terrainApplyingRemote != 0;
+    bool remote = g_terrainApplyingRemote != 0 || RoadSync_IsApplyingSegment();
     if (!remote && Commands_TakeLocal()) {
         g_lsTerrain.push_back({ method, x });
         x.suppressed = 1;
@@ -366,7 +367,7 @@ static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 
 static void EndEdit(int method, const TerrainArgs& x)
 {
-    if (g_terrainApplyingRemote == 0) TerrainSync_CaptureEdit(method, x);
+    if (g_terrainApplyingRemote == 0 && !RoadSync_IsApplyingSegment()) TerrainSync_CaptureEdit(method, x);
 }
 
 static void H_RaiseLower(void* t, const float* pos, float a, float b, float c, float d, bool e)
@@ -445,8 +446,9 @@ static void H_SmoothLimits(void* t, const float* pos, float a, float b, float c,
     CopyPos(x.pos, pos); x.hasPos = 1;
     x.f[0] = a; x.f[1] = b; x.f[2] = c; x.f[3] = d; x.f[4] = e;
     x.f[5] = f; x.f[6] = g; x.f[7] = h; x.f[8] = k; x.nf = 9;
-    Record(TM_SMOOTH_LIMITS, _ReturnAddress(), x);
+    if (!BeginEdit(TM_SMOOTH_LIMITS, _ReturnAddress(), x)) return;
     o_SmoothLimits(t, pos, a, b, c, d, e, f, g, h, k);
+    EndEdit(TM_SMOOTH_LIMITS, x);
 }
 
 // i[0] = channel, i[1], i[2] = the two ints after the floats.
@@ -550,19 +552,23 @@ void* TerrainHook_GetTerrain()
 
 // A by-value C3DVECTOR3 is passed as a pointer to a copy the callee owns and
 // may modify, so every call gets fresh local copies.
+// Always pass false for the trailing `bool close` parameter: C3D_TERRAIN::Edit*
+// calls TextureAccessClose() when `close == true`, which unmaps the D3D11 staging
+// buffer ([terrain + 0x158] / [terrain + 0x168]) mid-batch while subsequent edits
+// in the same batch still write to it.
 bool TerrainHook_ApplyEdit(void* t, int method, const TerrainArgs& a)
 {
     float p[3] = { a.pos[0], a.pos[1], a.pos[2] };
     float p2[3] = { a.pos2[0], a.pos2[1], a.pos2[2] };
     const float* f = a.f;
-    bool b = a.b != 0;
     switch (method) {
-    case TM_RAISE_LOWER:       o_RaiseLower(t, p, f[0], f[1], f[2], f[3], b); return true;
-    case TM_RAISE_LOWER_ANGLE: o_RaiseLowerAngle(t, p, f[0], f[1], f[2], f[3], b, f[4]); return true;
-    case TM_SMOOTH:            o_Smooth(t, p, f[0], f[1], f[2], b); return true;
-    case TM_LEVEL:             o_Level(t, p, f[0], f[1], f[2], b); return true;
-    case TM_TO_HEIGHT:         o_ToHeight(t, p, p2, f[0], f[1], f[2], b); return true;
-    case TM_MASK:              o_Mask(t, p, a.i[0], f[0], f[1], a.i[1], a.i[2], b); return true;
+    case TM_RAISE_LOWER:       o_RaiseLower(t, p, f[0], f[1], f[2], f[3], false); return true;
+    case TM_RAISE_LOWER_ANGLE: o_RaiseLowerAngle(t, p, f[0], f[1], f[2], f[3], false, f[4]); return true;
+    case TM_SMOOTH:            o_Smooth(t, p, f[0], f[1], f[2], false); return true;
+    case TM_LEVEL:             o_Level(t, p, f[0], f[1], f[2], false); return true;
+    case TM_TO_HEIGHT:         o_ToHeight(t, p, p2, f[0], f[1], f[2], false); return true;
+    case TM_SMOOTH_LIMITS:     o_SmoothLimits(t, p, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8]); return true;
+    case TM_MASK:              o_Mask(t, p, a.i[0], f[0], f[1], a.i[1], a.i[2], false); return true;
     default:                   return false;
     }
 }
@@ -590,7 +596,7 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     void* terrain = TerrainHook_GetTerrain();
     if (!terrain || !n) return false;
     bool needMask = false;
-    for (size_t i = 0; i < n; i++) needMask |= e[i].method == TM_MASK;
+    for (size_t i = 0; i < n; i++) needMask |= (e[i].method == TM_MASK || e[i].method == TM_RAISE_LOWER_ANGLE);
     bool needHeight = false;
     for (size_t i = 0; i < n; i++) needHeight |= e[i].method != TM_MASK;
     InterlockedIncrement(&g_terrainApplyingRemote);
@@ -598,7 +604,11 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     if (needMask) TerrainHook_MaskOpen(terrain);
     for (size_t i = 0; i < n; i++) TerrainHook_ApplyEdit(terrain, e[i].method, e[i].args);
     if (needMask) TerrainHook_MaskClose(terrain);
-    if (needHeight) TerrainHook_HeightmapClose(terrain);
+    if (needHeight) {
+        TerrainHook_HeightmapClose(terrain);
+        if (o_RegenCollision) o_RegenCollision(terrain);
+        if (o_RegenCollisionNormal) o_RegenCollisionNormal(terrain);
+    }
     InterlockedDecrement(&g_terrainApplyingRemote);
     return true;
 }

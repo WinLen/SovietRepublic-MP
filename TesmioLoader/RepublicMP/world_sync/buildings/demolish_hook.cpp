@@ -12,8 +12,10 @@
 #pragma intrinsic(_ReturnAddress)
 
 #define WORLD_THIS_RVA 0x9D4F10
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // = thisPtr+0x11b08, the list terrain_demolish hovers over
+#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // = thisPtr+0x11b08, finished buildings list
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // = thisPtr+0x11c28, unfinished / demolition sites list
+#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
 #define OBJ_POS_OFFSET 0x350
 #define OBJ_TYPE_OFFSET 0x318          // building type record
 #define TYPE_CATEGORY_OFFSET 0x360     // int category in the type record
@@ -58,10 +60,14 @@ static int g_captureCount = 0;
 
 static bool IsInBuildingsVector(__int64 building)
 {
-    __int64* it = *(__int64**)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    __int64* end = *(__int64**)(g_exeBase + VEC_BUILDINGS_END_RVA);
-    for (; it && it < end; ++it)
-        if (*it == building) return true;
+    const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+    const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+    for (int v = 0; v < 2; ++v) {
+        __int64* it = *(__int64**)(g_exeBase + kBeginRvas[v]);
+        __int64* end = *(__int64**)(g_exeBase + kEndRvas[v]);
+        for (; it && it < end; ++it)
+            if (*it == building) return true;
+    }
     return false;
 }
 

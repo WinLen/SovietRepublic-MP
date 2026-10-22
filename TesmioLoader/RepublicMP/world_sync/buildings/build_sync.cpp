@@ -30,6 +30,8 @@
 #define UNIVERSAL_THIS_RVA 0x9D4F10      // placement god-object (thisPtr)
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // city buildings vector
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // unfinished / demolition sites vector (thisPtr+0x11c28)
+#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
 #define OBJ_TYPE_OFFSET 0x318            // building type record
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
@@ -762,19 +764,23 @@ static __int64 FindBuildingAt(float x, float y, float z, int category)
     __int64 found = 0;
     float bestD = 1e30f;
     __try {
-        __int64* it = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        __int64* end = *(__int64**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-        for (; it && it < end; ++it) {
-            __int64 b = *it;
-            if (!b) continue;
-            const float* p = (const float*)(b + OBJ_POS_OFFSET);
-            float dx = p[0] - x, dz = p[2] - z;
-            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - y) >= 1.0f) continue;
-            __int64 type = *(__int64*)(b + OBJ_TYPE_OFFSET);
-            int cat = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
-            if (category >= 0 && cat != category) continue;
-            float d = dx * dx + dz * dz;
-            if (d < bestD) { bestD = d; found = b; }
+        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+        for (int v = 0; v < 2; ++v) {
+            __int64* it = *(__int64**)((uintptr_t)g_exeBase + kBeginRvas[v]);
+            __int64* end = *(__int64**)((uintptr_t)g_exeBase + kEndRvas[v]);
+            for (; it && it < end; ++it) {
+                __int64 b = *it;
+                if (!b) continue;
+                const float* p = (const float*)(b + OBJ_POS_OFFSET);
+                float dx = p[0] - x, dz = p[2] - z;
+                if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - y) >= 1.0f) continue;
+                __int64 type = *(__int64*)(b + OBJ_TYPE_OFFSET);
+                int cat = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
+                if (category >= 0 && cat != category) continue;
+                float d = dx * dx + dz * dz;
+                if (d < bestD) { bestD = d; found = b; }
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         found = 0;
