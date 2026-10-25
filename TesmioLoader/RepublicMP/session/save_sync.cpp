@@ -1074,10 +1074,11 @@ static bool RunClientJoin(bool rejoin)
             break;
         }
 
-        // 5b. If a previous session crashed or desynced (or this is a re-sync), upload diagnostic logs to Host.
-        if (TwoStates_GetSendClientLogs() && (rejoin || DiagLog_HasPrevCrashOrDesyncLog())) {
+        // 5b. Upload client diagnostic logs (including any previous session crash/desync logs) to Host.
+        if (TwoStates_GetSendClientLogs()) {
+            const char* logReason = rejoin ? "RESYNC" : (DiagLog_HasPrevCrashOrDesyncLog() ? "PREV_CRASH" : "CLIENT_JOIN");
             std::vector<unsigned char> logBundle;
-            if (DiagLog_BuildClientLogBundle(logBundle, rejoin ? "RESYNC" : "PREV_CRASH")) {
+            if (DiagLog_BuildClientLogBundle(logBundle, logReason)) {
                 if (SendMsg(sock, MSG_CLIENT_LOGS, (int)logBundle.size(), -1, "")) {
                     NetworkSendExact(sock, logBundle.data(), logBundle.size());
                 }

@@ -684,23 +684,24 @@ static void ResetManagerDragState(__int64 manager)
 {
     if (!manager) return;
     __try {
-        typedef void (*PreviewDtorFn)(void* obj);
-        typedef void (*GameFreeFn)(void* ptr, unsigned __int64 sz);
-        GameFreeFn gameFree = (GameFreeFn)((uintptr_t)g_exe + 0x84DFE0);
+        typedef void (*QueueDeleteMeshFn)(__int64 mgr, void* mesh);
+        QueueDeleteMeshFn queueDeleteMesh = (QueueDeleteMeshFn)((uintptr_t)g_exe + 0x542900);
         const int kExtraPreviewOffsets[2] = { 0x5F8, 0x600 };
         for (int off : kExtraPreviewOffsets) {
             void* p = *(void**)(manager + off);
             if (p) {
-                void** vt = *(void***)p;
-                if (vt && vt[3]) ((PreviewDtorFn)vt[3])(p);
-                gameFree(p, 0x10);
+                queueDeleteMesh(manager, p);
                 *(void**)(manager + off) = nullptr;
             }
         }
         *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
         *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
+        *(long long*)(manager + 0x340) = 0;
+        *(long long*)(manager + 0x348) = 0;
         *(long long*)(manager + 0x350) = 0;
+        *(int*)(manager + 0x358) = 0;
         *(long long*)(manager + 0x360) = 0;
+        *(int*)(manager + 0x368) = 0;
         *(long long*)(manager + 0x370) = 0;
         *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
         *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
@@ -844,12 +845,12 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 (seg.snapModeStart == 2) ? (seg.startNode[1] - seg.snapOffsetStart[1]) : 0.0f,
                 (seg.snapModeStart == 2) ? (seg.startNode[2] - seg.snapOffsetStart[2]) : 0.0f
             };
-            if (wantStartAttached && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0) {
+            if (wantStartAttached) {
                 unsigned __int64 existingStartHover = *(unsigned __int64*)((uintptr_t)g_exe + 0x9E4560);
                 char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
                 ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
                     Fc040Param5ForCategory(seg.category, seg.typeId), existingStartHover, startDir);
-            } else if (!wantStartAttached && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) != 0) {
+            } else {
                 ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, 0,
                     Fc040Param5ForCategory(seg.category, seg.typeId), 0, startDir);
             }
@@ -1036,9 +1037,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
         // the demolish replay do.
         __try {
             *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
-            *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
-            *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
-            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+            ResetManagerDragState(manager);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             Logf("republicmp  ROAD_SYNC: resetting the tool after the exception threw too");
         }
@@ -2367,8 +2366,7 @@ static void ClearCommandPreview(int category)
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
         if (manager && *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) {
             ResetManagerDragState(manager);
-        } else if (false)
-            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }

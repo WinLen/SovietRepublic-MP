@@ -800,7 +800,6 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             __int64 seg = *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET);
             // No piece under the brush: the commit removes only with +0x390 set (518a80).
             if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) == 0) {
-                RoadSync_ClearCategoryPreview(category);
                 return true;
             }
             bool listed = multi || SegmentListed(manager, seg);

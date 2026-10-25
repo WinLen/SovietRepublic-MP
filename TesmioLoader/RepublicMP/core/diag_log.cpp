@@ -208,9 +208,20 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         }
     }
     DiagLog_Printf("CRASH", "=================================================================");
+    if (g_gameDir[0] && g_diagFilePath[0]) {
+        if (g_hDiagFile != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(g_hDiagFile);
+        }
+        char crashLogPath[MAX_PATH] = {};
+        _snprintf_s(crashLogPath, sizeof(crashLogPath), _TRUNCATE, "%s\\RepublicMP_LastCrash.log", g_gameDir);
+        CopyFileA(g_diagFilePath, crashLogPath, FALSE);
+    }
     if (!SaveSync_IsHostRole() && LockstepNet_IsConnected() && TwoStates_GetSendClientLogs()) {
         LockstepNet_SendClientLogs("CRASH");
-        Sleep(150);
+        for (int i = 0; i < 16; ++i) {
+            SteamP2P_FrameTick();
+            Sleep(25);
+        }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -231,7 +242,9 @@ const TsmHost* DiagLog_InitAndWrapHost(const TsmHost* origHost)
     char prevPath[MAX_PATH] = {};
     _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
 
-    // If dinput8.dll did not already rotate the log in this process, rotate it if older than 5 seconds
+    // If dinput8.dll did not already rotate the log in this process, rotate it only if it is
+    // both older than 3 seconds AND larger than 4 KB (so dinput8.dll's 220-byte [BOOT] stub
+    // written a few seconds earlier never overwrites the previous session's .prev.log).
     WIN32_FILE_ATTRIBUTE_DATA fad = {};
     if (GetFileAttributesExA(g_diagFilePath, GetFileExInfoStandard, &fad)) {
         FILETIME nowFt = {};
@@ -239,8 +252,8 @@ const TsmHost* DiagLog_InitAndWrapHost(const TsmHost* origHost)
         ULARGE_INTEGER uNow, uFile;
         uNow.LowPart = nowFt.dwLowDateTime; uNow.HighPart = nowFt.dwHighDateTime;
         uFile.LowPart = fad.ftLastWriteTime.dwLowDateTime; uFile.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-        // If existing file was written more than 3 seconds ago, it's from a previous run
-        if (uNow.QuadPart > uFile.QuadPart && (uNow.QuadPart - uFile.QuadPart) > 30000000ULL) {
+        if (uNow.QuadPart > uFile.QuadPart && (uNow.QuadPart - uFile.QuadPart) > 30000000ULL &&
+            (fad.nFileSizeHigh > 0 || fad.nFileSizeLow > 4096)) {
             CopyFileA(g_diagFilePath, prevPath, FALSE);
             DeleteFileA(g_diagFilePath);
         }
@@ -457,13 +470,6 @@ bool DiagLog_HasPrevCrashOrDesyncLog(void)
     static bool s_checkedAndSent = false;
     if (s_checkedAndSent || !g_gameDir[0]) return false;
 
-    char prevPath[MAX_PATH] = {};
-    _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
-    std::vector<unsigned char> tail;
-    ReadLogFileTail(prevPath, 128 * 1024, tail);
-    if (tail.empty()) return false;
-    tail.push_back(0);
-    const char* text = (const char*)tail.data();
     bool hadCrashInLoader = false;
     if (g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
         const char* kLoaderLogs[2] = { "tesmioloader.prev.log", "tesmioloader.log" };
@@ -474,15 +480,32 @@ bool DiagLog_HasPrevCrashOrDesyncLog(void)
             ReadLogFileTail(loaderLogPath, 64 * 1024, loaderTail);
             if (!loaderTail.empty()) {
                 loaderTail.push_back(0);
-                if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr)
+                if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
+                    strstr((const char*)loaderTail.data(), "FAULT ") != nullptr)
                     hadCrashInLoader = true;
             }
         }
     }
-    bool abnormalInGameExit = (strstr(text, "State=CLIENT_IN_GAME") != nullptr &&
-                               strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
-    if (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr ||
-        hadCrashInLoader || abnormalInGameExit) {
+
+    char crashLogPath[MAX_PATH] = {};
+    _snprintf_s(crashLogPath, sizeof(crashLogPath), _TRUNCATE, "%s\\RepublicMP_LastCrash.log", g_gameDir);
+    bool hasLastCrashFile = (GetFileAttributesA(crashLogPath) != INVALID_FILE_ATTRIBUTES);
+
+    char prevPath[MAX_PATH] = {};
+    _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
+    std::vector<unsigned char> tail;
+    ReadLogFileTail(prevPath, 128 * 1024, tail);
+    bool hadCrashInDiagPrev = false;
+    bool abnormalInGameExit = false;
+    if (!tail.empty()) {
+        tail.push_back(0);
+        const char* text = (const char*)tail.data();
+        hadCrashInDiagPrev = (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr);
+        abnormalInGameExit = (strstr(text, "State=CLIENT_IN_GAME") != nullptr &&
+                              strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
+    }
+
+    if (hadCrashInDiagPrev || hadCrashInLoader || abnormalInGameExit || hasLastCrashFile) {
         s_checkedAndSent = true;
         return true;
     }
@@ -496,18 +519,19 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
 
     DumpLiveSnapshot("LOGSEND");
 
-    const char* kFiles[4] = {
+    const char* kFiles[5] = {
         "tesmioloader.log",
         "tesmioloader.prev.log",
         "RepublicMP_Diagnostics.log",
-        "RepublicMP_Diagnostics.prev.log"
+        "RepublicMP_Diagnostics.prev.log",
+        "RepublicMP_LastCrash.log"
     };
     const size_t kMaxTailPerFile = 256 * 1024;
 
     std::vector<unsigned char> rawEntries;
     rawEntries.reserve(512 * 1024);
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         char path[MAX_PATH] = {};
         _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_gameDir, kFiles[i]);
         std::vector<unsigned char> content;
