@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See diag_log.h.
 #include "diag_log.h"
+#include "safe_mem.h"
 #include "version.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
@@ -25,8 +26,8 @@
 #include <string>
 #include <vector>
 
+static INIT_ONCE g_diagLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_diagLock;
-static bool g_diagLockInit = false;
 static HANDLE g_hDiagFile = INVALID_HANDLE_VALUE;
 static char g_diagFilePath[MAX_PATH] = "";
 static char g_gameDir[MAX_PATH] = "";
@@ -47,10 +48,7 @@ void DiagLog_EndSafeSeh(void)
 
 static void EnsureDiagLock()
 {
-    if (!g_diagLockInit) {
-        InitializeCriticalSection(&g_diagLock);
-        g_diagLockInit = true;
-    }
+    TsmEnsureCriticalSection(&g_diagLockOnce, &g_diagLock);
 }
 
 static void WriteRawLine(const char* category, const char* body)
@@ -468,14 +466,17 @@ bool DiagLog_HasPrevCrashOrDesyncLog(void)
     const char* text = (const char*)tail.data();
     bool hadCrashInLoader = false;
     if (g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
-        char loaderLogPath[MAX_PATH] = {};
-        _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\tesmioloader.log", g_origHost->baseDir);
-        std::vector<unsigned char> loaderTail;
-        ReadLogFileTail(loaderLogPath, 64 * 1024, loaderTail);
-        if (!loaderTail.empty()) {
-            loaderTail.push_back(0);
-            if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr)
-                hadCrashInLoader = true;
+        const char* kLoaderLogs[2] = { "tesmioloader.prev.log", "tesmioloader.log" };
+        for (int i = 0; i < 2 && !hadCrashInLoader; ++i) {
+            char loaderLogPath[MAX_PATH] = {};
+            _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\%s", g_origHost->baseDir, kLoaderLogs[i]);
+            std::vector<unsigned char> loaderTail;
+            ReadLogFileTail(loaderLogPath, 64 * 1024, loaderTail);
+            if (!loaderTail.empty()) {
+                loaderTail.push_back(0);
+                if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr)
+                    hadCrashInLoader = true;
+            }
         }
     }
     bool abnormalInGameExit = (strstr(text, "State=CLIENT_IN_GAME") != nullptr &&
@@ -495,8 +496,9 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
 
     DumpLiveSnapshot("LOGSEND");
 
-    const char* kFiles[3] = {
+    const char* kFiles[4] = {
         "tesmioloader.log",
+        "tesmioloader.prev.log",
         "RepublicMP_Diagnostics.log",
         "RepublicMP_Diagnostics.prev.log"
     };
@@ -505,12 +507,12 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
     std::vector<unsigned char> rawEntries;
     rawEntries.reserve(512 * 1024);
 
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         char path[MAX_PATH] = {};
         _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_gameDir, kFiles[i]);
         std::vector<unsigned char> content;
         ReadLogFileTail(path, kMaxTailPerFile, content);
-        if (content.empty() && i == 0 && g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
+        if (content.empty() && i <= 1 && g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
             _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_origHost->baseDir, kFiles[i]);
             ReadLogFileTail(path, kMaxTailPerFile, content);
         }

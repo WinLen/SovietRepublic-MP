@@ -1,0 +1,509 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DEFECTS>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+      <FILENAME>ws2tcpip.h</FILENAME>
+      <LINE>968</LINE>
+      <COLUMN>0</COLUMN>
+    </SFA>
+    <DEFECTCODE>6101</DEFECTCODE>
+    <DESCRIPTION>Возвращение неинициализированной памяти "*Mtu".  Успешный путь через функцию не устанавливает именованный параметр _Out_. </DESCRIPTION>
+    <FUNCTION>WSAGetIPUserMtu</FUNCTION>
+    <DECORATED>WSAGetIPUserMtu</DECORATED>
+    <FUNCLINE>968</FUNCLINE>
+    <PROBABILITY>1</PROBABILITY>
+    <RANK>3</RANK>
+    <CATEGORY>
+      <RULECATEGORY>mspft</RULECATEGORY>
+    </CATEGORY>
+    <PATH>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>968</LINE>
+        <COLUMN>0</COLUMN>
+        <KEYEVENT>
+          <ID>1</ID>
+          <KIND>declaration</KIND>
+          <IMPORTANCE>Essential</IMPORTANCE>
+          <MESSAGE>Инициализация "*Mtu" не выполнена</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>973</LINE>
+        <COLUMN>22</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>974</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>975</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>976</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>978</LINE>
+        <COLUMN>10</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>979</LINE>
+        <COLUMN>14</COLUMN>
+        <KEYEVENT>
+          <ID>2</ID>
+          <KIND>branch</KIND>
+          <IMPORTANCE>Full</IMPORTANCE>
+          <MESSAGE>Пропустить эту ветвь (предполагается, что "Error!=((-1))" равно false)</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>994</LINE>
+        <COLUMN>4</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>968</LINE>
+        <COLUMN>0</COLUMN>
+        <KEYEVENT>
+          <ID>3</ID>
+          <KIND>usage</KIND>
+          <IMPORTANCE>Essential</IMPORTANCE>
+          <MESSAGE>"*Mtu" является параметром _Out_, который, возможно, не был назначен</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+    </PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+      <FILENAME>ws2tcpip.h</FILENAME>
+      <LINE>1136</LINE>
+      <COLUMN>0</COLUMN>
+    </SFA>
+    <DEFECTCODE>6101</DEFECTCODE>
+    <DESCRIPTION>Возвращение неинициализированной памяти "*Enabled".  Успешный путь через функцию не устанавливает именованный параметр _Out_. </DESCRIPTION>
+    <FUNCTION>WSAGetRecvIPEcn</FUNCTION>
+    <DECORATED>WSAGetRecvIPEcn</DECORATED>
+    <FUNCLINE>1136</FUNCLINE>
+    <PROBABILITY>1</PROBABILITY>
+    <RANK>3</RANK>
+    <CATEGORY>
+      <RULECATEGORY>mspft</RULECATEGORY>
+    </CATEGORY>
+    <PATH>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1136</LINE>
+        <COLUMN>0</COLUMN>
+        <KEYEVENT>
+          <ID>1</ID>
+          <KIND>declaration</KIND>
+          <IMPORTANCE>Essential</IMPORTANCE>
+          <MESSAGE>Инициализация "*Enabled" не выполнена</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1141</LINE>
+        <COLUMN>22</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1142</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1143</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1144</LINE>
+        <COLUMN>8</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1146</LINE>
+        <COLUMN>10</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1147</LINE>
+        <COLUMN>14</COLUMN>
+        <KEYEVENT>
+          <ID>2</ID>
+          <KIND>branch</KIND>
+          <IMPORTANCE>Full</IMPORTANCE>
+          <MESSAGE>Пропустить эту ветвь (предполагается, что "Error!=((-1))" равно false)</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1162</LINE>
+        <COLUMN>4</COLUMN>
+      </SFA>
+      <SFA>
+        <FILEPATH>C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um\</FILEPATH>
+        <FILENAME>ws2tcpip.h</FILENAME>
+        <LINE>1136</LINE>
+        <COLUMN>0</COLUMN>
+        <KEYEVENT>
+          <ID>3</ID>
+          <KIND>usage</KIND>
+          <IMPORTANCE>Essential</IMPORTANCE>
+          <MESSAGE>"*Enabled" является параметром _Out_, который, возможно, не был назначен</MESSAGE>
+        </KEYEVENT>
+      </SFA>
+    </PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>133</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>ApplyRuntimeTerrainBounds</FUNCTION>
+    <DECORATED>?ApplyRuntimeTerrainBounds@@YAXPEAE@Z</DECORATED>
+    <FUNCLINE>119</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>266</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>EndEconAttribution</FUNCTION>
+    <DECORATED>?EndEconAttribution@@YAXH@Z</DECORATED>
+    <FUNCLINE>248</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>380</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>SnapshotVehiclesBeforeSave</FUNCTION>
+    <DECORATED>?SnapshotVehiclesBeforeSave@@YAXXZ</DECORATED>
+    <FUNCLINE>358</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>395</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>RestoreVehiclesAfterSave</FUNCTION>
+    <DECORATED>?RestoreVehiclesAfterSave@@YAXXZ</DECORATED>
+    <FUNCLINE>385</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>468</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>H_MasterSave</FUNCTION>
+    <DECORATED>?H_MasterSave@@YAXPEAE@Z</DECORATED>
+    <FUNCLINE>401</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>496</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>H_MasterSave</FUNCTION>
+    <DECORATED>?H_MasterSave@@YAXPEAE@Z</DECORATED>
+    <FUNCLINE>401</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>662</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_PrepareHostSave</FUNCTION>
+    <DECORATED>?TwoStates_PrepareHostSave@@YAX_NPEAN1@Z</DECORATED>
+    <FUNCLINE>615</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>706</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_OnSessionJoined</FUNCTION>
+    <DECORATED>?TwoStates_OnSessionJoined@@YAX_NHM0QEBN1@Z</DECORATED>
+    <FUNCLINE>668</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>742</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_OnWorldLoaded</FUNCTION>
+    <DECORATED>?TwoStates_OnWorldLoaded@@YAXXZ</DECORATED>
+    <FUNCLINE>728</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>827</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_BeginCommand</FUNCTION>
+    <DECORATED>?TwoStates_BeginCommand@@YAXH@Z</DECORATED>
+    <FUNCLINE>814</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>842</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_EndCommand</FUNCTION>
+    <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
+    <FUNCLINE>831</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>853</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_EndCommand</FUNCTION>
+    <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
+    <FUNCLINE>831</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>866</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_EndCommand</FUNCTION>
+    <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
+    <FUNCLINE>831</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>895</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_ApplyTransferCommand</FUNCTION>
+    <DECORATED>?TwoStates_ApplyTransferCommand@@YA_NAEBULsStateTransfer@@@Z</DECORATED>
+    <FUNCLINE>870</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>966</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_BeforeStep</FUNCTION>
+    <DECORATED>?TwoStates_BeforeStep@@YAXPEAE@Z</DECORATED>
+    <FUNCLINE>929</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1012</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_AfterStep</FUNCTION>
+    <DECORATED>?TwoStates_AfterStep@@YAXPEAE@Z</DECORATED>
+    <FUNCLINE>979</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1050</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_UiEnd</FUNCTION>
+    <DECORATED>?TwoStates_UiEnd@@YAXXZ</DECORATED>
+    <FUNCLINE>1041</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1062</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_ToolMoneyBegin</FUNCTION>
+    <DECORATED>?TwoStates_ToolMoneyBegin@@YAXPEAN0@Z</DECORATED>
+    <FUNCLINE>1054</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1072</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_ToolMoneyEnd</FUNCTION>
+    <DECORATED>?TwoStates_ToolMoneyEnd@@YAXNN@Z</DECORATED>
+    <FUNCLINE>1066</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1134</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_GetVehicleOwner</FUNCTION>
+    <DECORATED>?TwoStates_GetVehicleOwner@@YAHHPEBE@Z</DECORATED>
+    <FUNCLINE>1112</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1244</LINE>
+      <COLUMN>118</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_CheckVehicleControlAllowed</FUNCTION>
+    <DECORATED>?TwoStates_CheckVehicleControlAllowed@@YA_NPEBEPEBD@Z</DECORATED>
+    <FUNCLINE>1240</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1782</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_DrawOverlay</FUNCTION>
+    <DECORATED>?TwoStates_DrawOverlay@@YAXXZ</DECORATED>
+    <FUNCLINE>1709</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>2267</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>SafeWriteWorldMoney</FUNCTION>
+    <DECORATED>?SafeWriteWorldMoney@@YAXNN@Z</DECORATED>
+    <FUNCLINE>2262</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+</DEFECTS>

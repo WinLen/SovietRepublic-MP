@@ -2,6 +2,7 @@
 // See updater.h.
 #include "updater.h"
 #include "../core/version.h"
+#include "../core/safe_mem.h"
 #include "../ui/ui_log.h"
 #include "../ui/lang.h"
 #include "../third_party/miniz/miniz.h"
@@ -16,8 +17,8 @@
 
 #pragma comment(lib, "winhttp.lib")
 
+static INIT_ONCE g_updLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_updLock;
-static bool g_updLockInit = false;
 static volatile UpdateStatus g_status = UPDATE_IDLE;
 static char g_latestVersion[64] = "";
 static char g_statusMessage[256] = "";
@@ -28,10 +29,7 @@ static volatile bool g_workerRunning = false;
 
 static void EnsureLock()
 {
-    if (!g_updLockInit) {
-        InitializeCriticalSection(&g_updLock);
-        g_updLockInit = true;
-    }
+    TsmEnsureCriticalSection(&g_updLockOnce, &g_updLock);
 }
 
 static std::string GetOwnDllPath()

@@ -7,19 +7,20 @@
 #include "../session/settings_sync.h"
 #include "../session/two_states.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
 #include <string.h>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
-#define BUILDINGS_OFFSET 0x11B08
-#define CONSTRUCTIONS_OFFSET 0x11C28
+#define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
+#define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define DOWN_RVA 0xA54E90
 #define PRESS_RVA 0xA54E91
 #define ENTER_RVA 0xA54CAC
 #define KEYPAD_ENTER_RVA 0xA54D2C
-#define BUILDING_BYTES 0x1420
-#define SLOTS_OFFSET 0x970
-#define SLOT_BYTES 0xE0
+#define BUILDING_BYTES BUILDING_STRUCT_BYTES
+#define SLOTS_OFFSET BLD_STORAGE_OFFSET
+#define SLOT_BYTES BLD_STORAGE_SLOT_SIZE
 #define SLOT_STRIDE 0x4000   // a slot word's offset: slot * 0x4000 + region * 0x1000 + offset in the region
 #define REGION_STRIDE 0x1000
 #define MAX_SLOTS 64
@@ -78,16 +79,7 @@ static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
 static bool Copy(void* to, const void* from, size_t n)
 {
-    bool ok = false;
-    DiagLog_BeginSafeSeh();
-    __try {
-        memcpy(to, from, n);
-        ok = true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = false;
-    }
-    DiagLog_EndSafeSeh();
-    return ok;
+    return SafeMemcpyPod(to, from, n);
 }
 
 static unsigned SlotCount(U64 building, U64* begin)
@@ -196,13 +188,7 @@ static bool TakeSnapshot()
 
 static bool PointerLike(U64 v)
 {
-    unsigned high = (unsigned)(v >> 32);
-    if (high >= 0x100 && high <= 0x7FFF) return true;
-    if (high >= 1 && high < 0x100 && (v & 3) == 0) {
-        U64 probe = 0;
-        if (Copy(&probe, (const void*)v, 8)) return true;
-    }
-    return false;
+    return IsPointerLikeX64(v);
 }
 
 static bool InRanges(const WorldRange* list, size_t n, unsigned offset)
@@ -210,6 +196,11 @@ static bool InRanges(const WorldRange* list, size_t n, unsigned offset)
     for (size_t i = 0; i < n; i++)
         if (offset + 4 > list[i].at && offset < list[i].at + list[i].size) return true;
     return false;
+}
+
+bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset)
+{
+    return InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
 }
 
 // Words this module leaves alone: the settings sync's own, and the view's.
@@ -515,11 +506,13 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
             unsigned off = m.words[i].offset;
             if (m.kind == KIND_WORLD && off == 0xB08) {
                 BYTE* pb = (BYTE*)WordAddress(building, m, off);
+                if (!pb) continue;
                 unsigned curVal = *pb;
                 if (curVal != (m.words[i].old & 0xFF) && curVal != (m.words[i].now & 0xFF)) differing++;
                 *pb = (BYTE)(m.words[i].now & 0xFF);
             } else {
                 unsigned* p = (unsigned*)WordAddress(building, m, off);
+                if (!p) continue;
                 if (*p != m.words[i].old && *p != m.words[i].now) differing++;
                 *p = m.words[i].now;
             }

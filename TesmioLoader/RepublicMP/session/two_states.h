@@ -137,4 +137,11 @@ void TwoStates_BeforeAnyWorldLoad();
 void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad);
 bool TwoStates_TriggerQuickCoopSave();
 
+// Testable domain helpers (used by runtime and unit test suite)
+bool   TwoStates_IsSafeSaveScriptPath(const char* saveDir);
+double TwoStates_ComputeStepWeightState1(int countState1, int countState2);
+bool   TwoStates_WriteSaveMetaToDir(const char* fullSaveDir);
+bool   TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAndMode);
+
+
 

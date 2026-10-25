@@ -60,7 +60,6 @@ static volatile bool g_connected = false;
 static bool g_isHost = false;
 static HANDLE g_recvThread = nullptr;
 static CRITICAL_SECTION g_inLock, g_sendLock;
-static bool g_locksReady = false;
 static std::deque<LsMessage> g_inbox;
 static PartnerCursorInfo g_partnerCursor = {};
 
@@ -93,12 +92,19 @@ static volatile LONG g_stalls = 0;
 static volatile unsigned long long g_lastGranted = 0;
 static volatile LONG g_grantBacklog = 0; // the player's grants not run yet (for the interface)
 
+static INIT_ONCE g_inLockOnce = INIT_ONCE_STATIC_INIT;
+static INIT_ONCE g_sendLockOnce = INIT_ONCE_STATIC_INIT;
+
 static void Locks()
 {
-    if (g_locksReady) return;
-    InitializeCriticalSection(&g_inLock);
-    InitializeCriticalSection(&g_sendLock);
-    g_locksReady = true;
+    InitOnceExecuteOnce(&g_inLockOnce, [](PINIT_ONCE, PVOID p, PVOID*) -> BOOL {
+        InitializeCriticalSection((CRITICAL_SECTION*)p);
+        return TRUE;
+    }, &g_inLock, nullptr);
+    InitOnceExecuteOnce(&g_sendLockOnce, [](PINIT_ONCE, PVOID p, PVOID*) -> BOOL {
+        InitializeCriticalSection((CRITICAL_SECTION*)p);
+        return TRUE;
+    }, &g_sendLock, nullptr);
 }
 
 static bool Send(unsigned type, const void* a, size_t na, const void* b = nullptr, size_t nb = 0)
@@ -397,7 +403,7 @@ void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
 
 void LockstepNet_Poll()
 {
-    if (!g_locksReady) return;
+    Locks();
     std::deque<LsMessage> in;
     EnterCriticalSection(&g_inLock);
     in.swap(g_inbox);
@@ -488,7 +494,7 @@ void LockstepNet_SendState(bool paused, int speed)
 
 int LockstepNet_GrantBacklog(unsigned long long nextTick)
 {
-    if (!g_locksReady) return 0;
+    Locks();
     EnterCriticalSection(&g_inLock);
     while (!g_grants.empty() && g_grants.front().tick < nextTick) g_grants.pop_front();
     g_grantBacklog = (LONG)g_grants.size();
@@ -499,7 +505,7 @@ int LockstepNet_GrantBacklog(unsigned long long nextTick)
 
 bool LockstepNet_TakeGrant(unsigned long long tick, int* speed)
 {
-    if (!g_locksReady) return false;
+    Locks();
     EnterCriticalSection(&g_inLock);
     while (!g_grants.empty() && g_grants.front().tick < tick) g_grants.pop_front();
     if (g_grants.empty() || g_grants.front().tick != tick) {
@@ -600,7 +606,8 @@ void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, b
 PartnerCursorInfo LockstepNet_GetPartnerCursor()
 {
     PartnerCursorInfo out = {};
-    if (!g_locksReady || !g_connected) return out;
+    if (!g_connected) return out;
+    Locks();
     EnterCriticalSection(&g_inLock);
     out = g_partnerCursor;
     LeaveCriticalSection(&g_inLock);

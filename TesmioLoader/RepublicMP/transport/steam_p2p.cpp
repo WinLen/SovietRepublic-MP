@@ -180,16 +180,16 @@ static RawSteamCallback s_cbP2PFail = {};
 static RawSteamCallback s_cbRichPresenceJoin = {};
 static bool s_callbacksRegistered = false;
 
+static INIT_ONCE s_lockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION s_lock;
-static bool s_lockReady = false;
 static char s_pendingJoinTarget[64] = "";
 
 static void EnsureLock()
 {
-    if (!s_lockReady) {
-        InitializeCriticalSection(&s_lock);
-        s_lockReady = true;
-    }
+    InitOnceExecuteOnce(&s_lockOnce, [](PINIT_ONCE, PVOID param, PVOID*) -> BOOL {
+        InitializeCriticalSection((CRITICAL_SECTION*)param);
+        return TRUE;
+    }, &s_lock, nullptr);
 }
 
 static void OnP2PSessionRequest(void* pvParam)
@@ -424,7 +424,7 @@ static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short por
 
 bool SteamP2P_ConsumeHostProbeDirty()
 {
-    if (!s_lockReady) return false;
+    EnsureLock();
     bool dirty = false;
     EnterCriticalSection(&s_lock);
     dirty = s_hostProbeDirty;
@@ -545,7 +545,7 @@ void SteamP2P_SetHostingPresence(bool hosting)
 
 bool SteamP2P_ConsumePendingJoin(char* outTarget, size_t outSize)
 {
-    if (!s_lockReady) return false;
+    EnsureLock();
     bool found = false;
     EnterCriticalSection(&s_lock);
     if (s_pendingJoinTarget[0] != 0) {

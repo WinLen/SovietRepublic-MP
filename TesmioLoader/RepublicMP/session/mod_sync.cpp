@@ -7,6 +7,8 @@
 #include "../ui/ui_log.h"
 #include "../ui/lang.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,20 +17,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
-
-// ---------------------------------------------------------------------------
-// Engine RVAs & Offsets (SOVIET64.exe, PE 6A3EB6AD)
-// ---------------------------------------------------------------------------
-
-#define WORKSHOP_MGR_PTR_RVA   0x9E22B8 // Pointer to heap-allocated SOVIET_WORKSHOP_MANAGER (WORLD_RVA + 0xD3A8)
-#define RVA_WORKSHOP_REFRESH   0x8407C0 // SOVIET_WORKSHOP_MANAGER::RefreshItems(this, a2, skipWip, a4)
-
-// Offsets inside SOVIET_WORKSHOP_ITEM (0x21118 bytes):
-#define ITEM_IS_SUBSCRIBED_OFF 0x0000   // WORD: 1 = workshop_subscribed, 0 = workshop_wip
-#define ITEM_TYPE_OFF          0x0004   // int: 0=Vehicle, 1=Building, 2=Map, 3=BldSkin, 4=Text, 5=VehSkin, 6=Elem, 7=Script
-#define ITEM_NAME_OFF          0x006C   // char[0x400]: $ITEM_NAME
-#define ITEM_ID_QWORD_OFF      0x40F0   // uint64_t: $ITEM_ID
-#define ITEM_ID_STR_OFF        0x4500   // char[0x400]: folder/Steam ID string ("%llu")
 
 static const BYTE kRefreshPrologue[16] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, // mov [rsp+10h], rbx
@@ -84,8 +72,8 @@ static const TsmPluginManagerApi* g_pluginMgr = nullptr;
 // State
 // ---------------------------------------------------------------------------
 
+static INIT_ONCE g_modLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_modLock;
-static bool g_modLockReady = false;
 
 struct LocalModEntry {
     uint64_t id;
@@ -117,10 +105,7 @@ static std::vector<std::pair<uint64_t, std::string>> g_sessionSandboxForwards;
 
 static void LockMods()
 {
-    if (!g_modLockReady) {
-        InitializeCriticalSection(&g_modLock);
-        g_modLockReady = true;
-    }
+    TsmEnsureCriticalSection(&g_modLockOnce, &g_modLock);
     EnterCriticalSection(&g_modLock);
 }
 
@@ -358,7 +343,7 @@ static int SafeFilterAndSortWorkshopMgr(void* mgrPtr, const uint64_t* allowedIds
                     int itemType = SafeGetRawItemType(item);
 
                     bool keep = (itemType == 4); // WORKSHOP_ITEMTYPE_TEXT (localization)
-                    if (!keep) {
+                    if (!keep && allowedIds) {
                         for (int k = 0; k < allowedCount; ++k) {
                             if (allowedIds[k] == id) {
                                 keep = true;
@@ -452,33 +437,17 @@ static bool IsValidWorkshopModId(uint64_t id)
     return false;
 }
 
-static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t>& outIds)
+void ModSync_ExtractHeaderBinModIdsFromBuffer(const void* data, size_t size, uint64_t* outIds, int maxOut, int* ioCount)
 {
-    FILE* f = nullptr;
-    if (fopen_s(&f, headerPath, "rb") != 0 || !f) return;
+    if (!data || !outIds || maxOut <= 0 || !ioCount) return;
+    if (size < HEADER_BIN_DATA_OFFSET + HEADER_BIN_RECORD_SIZE) return;
 
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    // header.bin / headerE.bin have a 0x260-byte header followed by 0x80-byte records.
-    if (fileSize < 0x260 + 0x80) {
-        fclose(f);
-        return;
-    }
-
-    auto pushUnique = [&](uint64_t id) {
-        if (!IsValidWorkshopModId(id)) return;
-        if (std::find(outIds.begin(), outIds.end(), id) == outIds.end())
-            outIds.push_back(id);
-    };
-
-    fseek(f, 0x260, SEEK_SET);
-    long numRecords = (fileSize - 0x260) / 0x80;
+    const BYTE* base = (const BYTE*)data + HEADER_BIN_DATA_OFFSET;
+    size_t numRecords = (size - HEADER_BIN_DATA_OFFSET) / HEADER_BIN_RECORD_SIZE;
     if (numRecords > 100000) numRecords = 100000;
 
-    char rec[0x80];
-    for (long i = 0; i < numRecords; ++i) {
-        if (fread(rec, 1, 0x80, f) != 0x80) break;
+    for (size_t i = 0; i < numRecords; ++i) {
+        const char* rec = (const char*)(base + i * HEADER_BIN_RECORD_SIZE);
         char nameBuf[104] = {};
         memcpy(nameBuf, rec, 100);
         nameBuf[100] = '\0';
@@ -487,7 +456,6 @@ static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t
         if (_strnicmp(p, "MIRRORZ_", 8) == 0) {
             p += 8;
         }
-        // Workshop items in header.bin are formatted as "<WorkshopID>/<item_name>"
         const char* slash = strchr(p, '/');
         if (!slash) slash = strchr(p, '\\');
         if (slash && slash > p && (slash - p) <= 20) {
@@ -500,8 +468,63 @@ static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t
             }
             if (allDigits) {
                 uint64_t wsId = _strtoui64(p, nullptr, 10);
-                pushUnique(wsId);
+                if (!IsValidWorkshopModId(wsId)) continue;
+                bool exists = false;
+                for (int k = 0; k < *ioCount; ++k) {
+                    if (outIds[k] == wsId) { exists = true; break; }
+                }
+                if (!exists && *ioCount < maxOut) {
+                    outIds[(*ioCount)++] = wsId;
+                }
             }
+        }
+    }
+}
+
+int ModSync_FilterAndSortWorkshopMgrForTest(void* mgrPtr, const uint64_t* allowedIds, int allowedCount, int* ioHiddenTail)
+{
+    return SafeFilterAndSortWorkshopMgr(mgrPtr, allowedIds, allowedCount, ioHiddenTail);
+}
+
+void ModSync_RestoreWorkshopMgrForTest(void* mgrPtr, int* ioHiddenTail)
+{
+    SafeRestoreWorkshopMgr(mgrPtr, ioHiddenTail);
+}
+
+static void ExtractHeaderFileModIds(const char* headerPath, std::vector<uint64_t>& outIds)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, headerPath, "rb") != 0 || !f) return;
+
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    // header.bin / headerE.bin have a 0x260-byte header followed by 0x80-byte records.
+    if (fileSize < HEADER_BIN_DATA_OFFSET + HEADER_BIN_RECORD_SIZE) {
+        fclose(f);
+        return;
+    }
+
+    auto pushUnique = [&](uint64_t id) {
+        if (!IsValidWorkshopModId(id)) return;
+        if (std::find(outIds.begin(), outIds.end(), id) == outIds.end())
+            outIds.push_back(id);
+    };
+
+    fseek(f, HEADER_BIN_DATA_OFFSET, SEEK_SET);
+    long numRecords = (fileSize - HEADER_BIN_DATA_OFFSET) / HEADER_BIN_RECORD_SIZE;
+    if (numRecords > 100000) numRecords = 100000;
+
+    char rec[HEADER_BIN_RECORD_SIZE];
+    for (long i = 0; i < numRecords; ++i) {
+        if (fread(rec, 1, HEADER_BIN_RECORD_SIZE, f) != HEADER_BIN_RECORD_SIZE) break;
+        uint64_t parsedId = 0;
+        int parsedCount = 0;
+        BYTE singleRecBuf[HEADER_BIN_DATA_OFFSET + HEADER_BIN_RECORD_SIZE] = {};
+        memcpy(singleRecBuf + HEADER_BIN_DATA_OFFSET, rec, HEADER_BIN_RECORD_SIZE);
+        ModSync_ExtractHeaderBinModIdsFromBuffer(singleRecBuf, sizeof(singleRecBuf), &parsedId, 1, &parsedCount);
+        if (parsedCount == 1) {
+            pushUnique(parsedId);
         }
     }
 

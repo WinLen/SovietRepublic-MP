@@ -25,6 +25,7 @@
 #include "source_slots.h"
 #include "rename.h"
 #include "../session/two_states.h"
+#include "../core/safe_mem.h"
 #include <vector>
 #include <string.h>
 #include <math.h>
@@ -56,8 +57,8 @@ struct Command {
     std::vector<BYTE> data;
 };
 
+static INIT_ONCE g_commandsLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_commandsLock;
-static bool g_commandsLockReady = false;
 static std::vector<Command> g_outbox;    // captured, not yet given a boundary
 static std::vector<Command> g_record;    // probe run 1: made, in order
 static size_t g_replayAt = 0;            // probe run 2: next recorded command
@@ -73,10 +74,7 @@ static int g_session = COMMANDS_OFF; // in a session the player keeps the host's
 
 static void Lock()
 {
-    if (!g_commandsLockReady) {
-        InitializeCriticalSection(&g_commandsLock);
-        g_commandsLockReady = true;
-    }
+    TsmEnsureCriticalSection(&g_commandsLockOnce, &g_commandsLock);
     EnterCriticalSection(&g_commandsLock);
 }
 
@@ -198,7 +196,8 @@ static void Apply(const Command& c)
     InputBlock_BeginNeutral();
     // A drag the local player has under way would share the tool manager with
     // the replay and change what it builds on this PC only: it is cancelled.
-    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH || c.kind == LS_CMD_PLACE)
+    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH ||
+        c.kind == LS_CMD_PLACE || c.kind == LS_CMD_GROUP_TOOL || c.kind == LS_CMD_DIRECTION)
         RoadSync_CancelLocalDrag();
     // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
     // the tools return at once: a command is made with them closed, as the
@@ -657,8 +656,9 @@ void Commands_SetSession(int role)
 void Commands_SubmitRemote(int kind, const void* data, size_t size)
 {
     if (g_session != COMMANDS_HOST) return;
+    int cleanKind = kind & 0xFFFF;
     Command c;
-    c.kind = kind & 0xFFFF;
+    c.kind = cleanKind;
     c.owner = 2;
     c.afterTick = 0;
     c.seq = 0;
@@ -666,7 +666,7 @@ void Commands_SubmitRemote(int kind, const void* data, size_t size)
     Lock();
     g_outbox.push_back(std::move(c));
     Unlock();
-    Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(c.kind));
+    Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(cleanKind));
 }
 
 void Commands_Receive(int kind, unsigned long long afterTick, const void* data, size_t size)

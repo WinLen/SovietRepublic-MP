@@ -11,22 +11,15 @@
 #pragma once
 
 #include "tesmio_plugin.h"
+#include "../core/engine_rva.h"
 
 // Load side (plain globals).
-#define SAVE_NAME_DAT_RVA     0x9962b0  // char[]: "save\\<name>"
-#define LOAD_TRIGGER_DAT_RVA  0x993c66  // byte: load request
-#define TERRAIN_FLAG_DAT_RVA  0x995298  // must be 0, else a built-in terrain is loaded instead
 #define RETURN_MENU_DAT_RVA   0x995289  // cleared together with the trigger
 #define SAVE_NAME_MAX_LEN     120
 #define SAVE_FOLDER_PREFIX    "save\\"
 
 // Save side (fields of the world object at WORLD_THIS_RVA).
-#define WORLD_THIS_RVA              0x9D4F10
-#define SAVE_NAME_FIELD_OFFSET      0x9F8     // char[]: "save/<name>"
-#define SAVE_TRIGGER_FLAG_OFFSET    0x14D35   // byte: 1 = save requested, cleared when done
-#define SAVE_ZIP_AFTER_FLAG_OFFSET  0x14D36   // byte: game's own 7z after saving - forced to 0
 #define SAVE_DELAY_COUNTER_OFFSET   0x14D38   // float: frames to wait - forced to 0
-#define SAVE_NAME_FIELD_MAX_LEN     120
 #define SAVE_NAME_FIELD_PREFIX      "save/"
 
 void SaveLoad_Bind(const TsmHost* host);

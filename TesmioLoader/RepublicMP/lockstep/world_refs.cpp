@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See world_refs.h.
 #include "world_refs.h"
+#include "../core/engine_rva.h"
 
-#define WORLD_RVA 0x9D4F10
-#define LINES_OFFSET 0x12800
-#define VEHICLES_OFFSET 0x12810
-#define BUILDINGS_OFFSET 0x11B08
-#define CONSTRUCTIONS_OFFSET 0x11C28
+#define LINES_OFFSET WORLD_LINES_OFFSET
+#define VEHICLES_OFFSET WORLD_VEHICLES_OFFSET
+#define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
+#define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define NODE_LIST 0x298
 
 static const unsigned kNodeFields[2] = { 0xF908, 0xFA28 };

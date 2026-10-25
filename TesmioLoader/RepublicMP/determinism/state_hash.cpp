@@ -3,30 +3,11 @@
 #include "state_hash.h"
 #include "../session/two_states.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
 #include <string.h>
 
-#define WORLD_RVA 0x9D4F10
-
-#define WORLD_DAY_OFFSET 0x590
-#define WORLD_YEAR_OFFSET 0x594
-#define WORLD_PROGRESS_OFFSET 0x59c
-#define WORLD_USD_OFFSET 0x580
-#define WORLD_RUB_OFFSET 0x588
-#define WORLD_BUILDINGS_OFFSET 0x11B08
-#define WORLD_VEHICLES_OFFSET 0x12810
-#define WORLD_CITIZENS_OFFSET 0x126A8
-
 #define BLD_INDEX_OFFSET 0x00
-#define BLD_PROGRESS_OFFSET 0x604
-#define BLD_STORAGE_OFFSET 0x970
-#define BLD_STORAGE_SLOT_SIZE 0xE0
-#define BLD_WORKERS_OFFSET 0xBC0
-#define BLD_PRODUCED_OFFSET 0xDE4
-
-#define VEH_INDEX_OFFSET 0x04
-#define VEH_CARGO_OFFSET 0x3B8
-#define VEH_SCHED_IDX_OFFSET 0x698
-#define VEH_POS_OFFSET 0xDE0
+#define VEH_INDEX_OFFSET VEH_ID_OFFSET
 
 #define CIT_HOME_OFFSET 0x20
 #define CIT_AGE_OFFSET 0xD4

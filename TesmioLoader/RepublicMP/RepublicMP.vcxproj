@@ -290,6 +290,8 @@
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\diag_log.h" />
+    <ClInclude Include="core\engine_rva.h" />
+    <ClInclude Include="core\safe_mem.h" />
     <ClInclude Include="world_sync\buildings\build_sync.h" />
     <ClInclude Include="world_sync\networks\road_sync.h" />
     <ClInclude Include="world_sync\terrain\terrain_sync.h" />

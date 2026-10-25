@@ -28,3 +28,7 @@ void BuildingSwitches_After(bool simBusy);
 
 // The command (lockstep/commands).
 bool BuildingSwitches_ApplyCommand(const void* data, size_t size);
+
+// Testable predicate: true if `offset` in a BUILDING struct (0x1420 bytes) is excluded as a view/vector field.
+bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset);
+

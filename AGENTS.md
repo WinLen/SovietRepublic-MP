@@ -24,11 +24,16 @@
   ```powershell
   cmd.exe /c "d:\SovietRepublic MP\TesmioLoader\build.bat"
   ```
-- **Выходные артефакты сборки:**
+- **Единый конвейер сборки, автотестов и статического анализа C++ (`build.bat` + `republicmp_tests.exe` + `MSVC /analyze` + `LLVM clang-tidy`):**
+  ```powershell
+  cmd.exe /c "d:\SovietRepublic MP\TesmioLoader\run_checks.bat"
+  ```
+- **Выходные артефакты сборки и тестирования:**
   - `d:\SovietRepublic MP\TesmioLoader\build\plugins\RepublicMP.dll`
   - `d:\SovietRepublic MP\TesmioLoader\build\tesmioloader.dll`
   - `d:\SovietRepublic MP\TesmioLoader\build\tesmiolauncher.exe`
   - `d:\SovietRepublic MP\TesmioLoader\build\dinput8.dll`
+  - `d:\SovietRepublic MP\TesmioLoader\build\republicmp_tests.exe` (автономный раннер юнит- и интеграционных тестов с 16 МБ `MockEngineHarness`)
 - **Обязательные точки развёртывания после каждой сборки (выполняются автоматически в [`upload_ugc.cpp`](file:///d:/SovietRepublic%20MP/steam_workshop/upload_ugc.cpp) и [`pack_friend.ps1`](file:///d:/SovietRepublic%20MP/pack_friend.ps1)):**
   1. **Мод для отправки в Steam Workshop (`steam_workshop\content`):**
      - `d:\SovietRepublic MP\steam_workshop\content\TesmioLoader\build\plugins\RepublicMP.dll`
@@ -49,17 +54,20 @@
 - **Логи для диагностики:**
   - `d:\SovietRepublic MP\local\test-host\tesmioloader.log` (основной лог хуков, игры и креш-репортов SEH)
   - `d:\SovietRepublic MP\local\test-host\RepublicMP_Diagnostics.log` (и `.prev.log` — детальный лог UI, сессии, `MOD_SYNC`, телеметрии Lockstep и VEH-дампов)
-  - `<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\` — автоматически принятые от Клиента логи (`tesmioloader.log`, `RepublicMP_Diagnostics.log`, `RepublicMP_Diagnostics.prev.log`, `info.txt`) при `DESYNC`, `CRASH`, `DISCONNECT` и `RECONNECT_PREV_CRASH`
+  - `<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\` — автоматически принятые от Клиента логи (`tesmioloader.log`, `tesmioloader.prev.log`, `RepublicMP_Diagnostics.log`, `RepublicMP_Diagnostics.prev.log`, `info.txt`) при `DESYNC`, `CRASH`, `DISCONNECT` и `RECONNECT_PREV_CRASH` (при старте игры `tesmioloader.cpp` автоматически ротирует непустой `tesmioloader.log` в `tesmioloader.prev.log`)
 
 ---
 
 ## 2. Архитура модулей `TesmioLoader/RepublicMP`
 
-### `core/` — Ядро плагина и рендер-перехват
+### `core/` и `tests/` — Ядро плагина, RVA-константы, безопасная память, рендер-перехват и автотесты
 - [`main.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/main.cpp) — Точка входа плагина (`TsmPluginInit`, `TsmPluginStart`), порядок инициализации всех подсистем.
 - [`version.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/version.h) — Версия мода (`REPUBLICMP_VERSION`) и номер сетевого протокола (`REPUBLICMP_PROTOCOL`).
+- [`engine_rva.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/engine_rva.h) — Единый канонический заголовок ключевых RVA-адресов и смещений структур `SOVIET64.exe` (`WORLD_RVA`, `VEC_BUILDINGS_BEGIN_RVA`, `VEC_CONSTRUCTIONS_BEGIN_RVA`, `WORKSHOP_MGR_PTR_RVA`, `MANAGER_RESET_STATE_OFFSET`, `MGR_ROUTE_BEGIN_OFFSET`, `HEADER_BIN_DATA_OFFSET` и др.) с проверками `static_assert` на этапе компиляции.
+- [`safe_mem.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/safe_mem.h) — Потокобезопасная однократная инициализация `CRITICAL_SECTION` через `InitOnceExecuteOnce` (`TsmEnsureCriticalSection`, RAII-обёртка `TsmScopedCsLock`), изолированные POD-функции SEH-доступа к памяти (`SafeMemcpyPod`, `SafeReadPod<T>`, `SafeWritePod<T>` с автоматическим `DiagLog_BeginSafeSeh`/`DiagLog_EndSafeSeh`), `SafeCountStdVector` и детектор x64 heap-указателей `IsPointerLikeX64` (`4 GB .. 128 TB`).
 - [`present_hook.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/present_hook.cpp) / [`imgui_hook.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/imgui_hook.cpp) — Перехват `IDXGISwapChain::Present`, инициализация ImGui, вызов `NativeMenu_DrawOverlay()` и `TwoStates_DrawOverlay()`.
 - [`diag_log.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/diag_log.cpp) — Логирование в `RepublicMP_Diagnostics.log`, подавление VEH внутри защищённых SEH-блоков (`DiagLog_BeginSafeSeh` / `DiagLog_EndSafeSeh`), периодический дамп состояния (`TwoStates`, `ModSync`, `Lockstep`, `HeldFrameDiagStats`, `VehicleSoftSyncDiagStats`, `DeterminismDiagInfo`), а также сборка и сохранение бандла клиентских логов (`DiagLog_BuildClientLogBundle` / `DiagLog_SaveRemoteClientLogBundle`), дамп контекста фазы кадра/интерполяции (`FrameContext`, `HeldFrameCtx`, `SoftSyncCtx`) и экстренная отправка логов Хосту прямо из `DiagVectoredExceptionHandler` при фатальном краше Клиента.
+- [`tests/test_main.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/tests/test_main.cpp), [`.clang-tidy`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/.clang-tidy), [`run_checks.ps1`](file:///d:/SovietRepublic%20MP/TesmioLoader/run_checks.ps1) и [`run_checks.bat`](file:///d:/SovietRepublic%20MP/TesmioLoader/run_checks.bat) — Автономный тестовый раннер C++20 (`MockEngineHarness` на 16 МБ) с 7 наборами тестов (`RvaAndSafeMem`, `WorldRefs`, `StateHash`, `TwoStates_ZonesAndEconomy`, `TwoStates_SaveMetaAndScriptIni`, `ModSync_HeaderBinAndWorkshopFilter`, `BuildingSwitches_Commands_SaveZip`) и конвейер статического анализа кода (`MSVC /analyze` + `LLVM clang-tidy` с `WarningsAsErrors: '*'`).
 
 ### `ui/` — Нативный интерфейс игры и локализация
 - [`native_menu.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/ui/native_menu.h) / [`native_menu.cpp`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/ui/native_menu.cpp) — Полная интеграция кооператива в нативный интерфейс `SOVIET64.exe`:
@@ -211,7 +219,7 @@
     - Смещение `world + 0xB08` в `building_switches.cpp` — это 1-байтовая настройка; начиная с `world + 0xB0A` функция `FormatMoney` (`0x336420`) пишет форматированную строку стоимости во время превью строительства дорог и зданий.
 13. **Обязательный сброс превью менеджера сети (`RoadSync_ClearCategoryPreview`) без обнуления `HoverGlobals` при перехвате `0x518A80` (`TakeCommitAsCommand`):**
     - В оригинальном `0x518A80` (`COMMIT_RVA`) эпилог всегда очищает превью-сегмент `manager + 0x408` (аналогично `0x542A30(manager, manager + 0x408)`), а обёртка инструмента (`0x3D00F0` и др.) сразу после возврата из `0x518A80` сбрасывает `*(BYTE*)(world + 0xD2AC) = 0` (`TOOL_DRAG_ACTIVE_OFFSET = 0`).
-    - Однако `RoadSync_ClearCategoryPreview` **не должен** вызывать `HoverGlobals_Clear()`, так как при быстром клике профильного инструмента удаления (`*_cancel`, `D2C4 <= 0.2f`) обёртка делает два последовательных вызова `0x518A80` (`type = 100`, затем `0x4FCAF0(101)` + `0x518A80`), где второй вызов опирается на `0x9E4558`/`0x9E4560`.
+    - Однако `RoadSync_ClearCategoryPreview` **не должен** вызывать `HoverGlobals_Clear()` (чтобы не стереть `0x9E4558`/`0x9E4560`), так как при быстром клике профильного инструмента удаления (`*_cancel`, `D2C4 <= 0.2f`) обёртка делает два последовательных вызова `0x518A80` (`type = 100`, затем `0x4FCAF0(101)` + `0x518A80`), где второй вызов опирается на `0x9E4558`/`0x9E4560`. При этом для `ROAD_SYNC_CATEGORY_PEDESTRIAN` функция `RoadSync_ClearCategoryPreview` обязана обнулять `HOVER_ROAD_EDGE_RVA` (`0x9E4590`) и `HOVER_ROAD_NODE_RVA` (`0x9E45A0`), иначе в `0x3D68B0` сразу после `call 0x518A80` (`0x3D6A29`) обёртка вызовет `0x5518B0(roadManager)` до выполнения Lockstep-команды.
 14. **Запрет передачи `close = true` внутри пакета `TerrainHook_ApplyCommand` и подавления терраформинга при Lockstep-реплее дорог:**
     - В `C3DDLL64.dll` вызов методов терраформинга (`RaiseLowerTerrain`, `SmoothTerrain`, `SetTerrainMask` и др.) с последним аргументом `bool close = true` немедленно вызывает `CloseHeightmap(true)` / `CloseMask(true)` и анмапит D3D11 staging-буфер (`terrain + 0x628` / `+0x5B0`), из-за чего вторая и последующие операции в пакете `TerrainHook_ApplyCommand` падают с `ACCESS_VIOLATION`. Внутри `TerrainHook_ApplyEdit` всегда передавай `close = false`, а закрытие буферов выполняй один раз в конце `TerrainHook_ApplyCommand`.
     - При активном `Determinism_IsActive()` функции `ApplySegment`, `ApplyUpgrade` и `ApplyDemolishInner` **не должны** вызывать `TerrainSync_BeginForeignReplay()`, иначе выравнивание земли внутри коммита дороги подавляется на обоих ПК.
@@ -224,3 +232,5 @@
     - В `0x4FCAF0` (`0x1404FF0C6`) проверка `cmp byte ptr [0x1409E4568], 0; jne 0x1404FF1CC` пропускает поиск узла привязки конца сегмента, если `0x9E4568 != 0`, а `0x9E4560 == 0`. Поэтому `HoverGlobals_Clear()` обязан обнулять не только указатели `kHoverPtrRvas`, но и `0x9E4568`, `0x9E456C..0x9E4574`, `0x9E4578`, `0x9E457C..0x9E4584` и `0x9E45A8` (флаг шага вырубки деревьев в `0x518A80` на `0x140519DFC`), а `SetOwnHover` при `node != 0` обязан выставлять `0x9E4568 = 1` и копировать координаты узла в `0x9E456C`.
     - После вызова `0x4FCAF0` внутри `ApplySegmentImplInner` необходимо принудительно сбрасывать `MGR_UPG_GATE_OFFSET` (`+0x390 = 0`), `MGR_UPG_MULTI_OFFSET` (`+0x3D0 = 0`) и `MGR_UPG_SEGMENT_OFFSET` (`+0x380 = 0`), а также синхронизировать `MGR_END_ATTACHED_OFFSET` (`+0x749`) и `manager + 0x740` с `seg.snapFlags & 0x02` (при найденном `existingEnd` копируя его точные `float[3]` в `endNode->pos` для точного `ucomiss` в `0x518A80` на `0x14051AC30`, а при отсутствии `existingEnd` — сбрасывая `+0x749 = 0`, чтобы `0x518A80` добавил `endNode` в `manager->nodes`).
     - В обёртке `SECOND_ROAD` (`0x3CF6F0`) переход `RVA 0x3CFA48` патчен с `74 11` на `74 0B` (`RoadSync_InstallPlanStartHooks`), чтобы при перехвате первого коммита в Lockstep (когда вектор `manager->segments` ещё пуст: `0 == 0`) обёртка переходила на `je 0x1403D00C8`, а не читала `[0 - 8]`.
+    - При старте драга в `ApplySegmentImplInner` поля `0x9E4560`/`0x9E4568` (при `(seg.snapFlags & 0x01) != 0`) и `0x9E4578`/`0x9E457C` (при `seg.snapModeStart == 2`) выставляются **до** первого вызова `wrapper(thisPtr, seg.typeId, seg.variant)`, чтобы внутренний вызов `0x4FC040` сразу получил `existingNode` (`r11`) и `directionHint` и вычислил касательный вектор `manager + 0x328..0x330`; повторный вызов `0x4FC040` выполняется только если состояние `MGR_START_ATTACHED_OFFSET` (`+0x748`) после `wrapper` не совпало с `seg.snapFlags & 0x01`.
+    - В `RouteTools_SecondRoadTool`, `ApplySquareRoad` и `RoadSync_CancelLocalDrag` перед сбросом `*(U64*)(world + 0xF610) = *(U64*)(world + 0xF608)` все временные превью-сегменты прямоугольной площади должны удаляться из `*(U64*)(world + 0xF7A8)` вызовом `0x5434C0` (`CANCEL_SEG_RVA`), а угол поворота камеры `*(float*)(g_exeBase + 0x9E9D20)` (`GROUP_TOOL_YAW_RVA`) передаётся в `RouteMsg::object.check` (`object.list = 1`).

@@ -11,6 +11,7 @@
 #include "../replay_menus.h"
 #include "../../determinism/determinism.h"
 #include "../../session/two_states.h"
+#include "../../core/engine_rva.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -29,18 +30,11 @@
 // Engine addresses (RVAs into SOVIET64.exe) and object offsets
 // ---------------------------------------------------------------------------
 
-#define UNIVERSAL_THIS_RVA 0x9D4F10       // placement god-object (thisPtr)
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18  // city buildings vector
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
-#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // unfinished / demolition sites vector (thisPtr+0x11C28)
-#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
-
 #define FC040_RVA 0x4FC040                // drag start
 #define FCAF0_RVA 0x4FCAF0                // drag tick
 #define COMMIT_RVA 0x518A80               // commit
 #define VEC_ASSIGN_RVA 0x21D2B0           // std::vector<24-byte record>::operator=
 #define MANAGER_RESET_RVA 0x542A30        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
-#define MANAGER_RESET_STATE_OFFSET 0x408
 #define ROAD_DEMOLISH_TYPE 0x65           // fcaf0 type argument of the demolish tool
 
 #define LMB_HELD_RVA 0xA54E90             // byte: left mouse button held
@@ -76,14 +70,10 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define TOOL_GUARD1_OFFSET 0xfbc          // any nonzero -> wrappers do nothing (blocking UI)
 #define TOOL_GUARD2_OFFSET 0xfbe
 #define TOOL_GUARD3_OFFSET 0xfc3
-#define CURSOR_X_OFFSET 0xf6c
-#define CURSOR_Y_OFFSET 0xf70
-#define CURSOR_Z_OFFSET 0xf74
 #define CONTINUING_Y_OFFSET_OFFSET 0xf90  // added to cursor Y on drag ticks
 #define SNAP_TARGET_PTR_OFFSET 0xf6d8     // drag-start snap target
 #define SNAP_MODE_A_OFFSET 0xf658
 #define SNAP_MODE_B_OFFSET 0xf668
-#define TOOL_DRAG_ACTIVE_OFFSET 0xd2ac
 
 // Manager fields.
 #define MGR_CURVE_OFFSET 0x48
@@ -94,8 +84,6 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define MGR_HOVER_SEGMENT_COPY_OFFSET 0x3b8
 #define MGR_ROAD_LINK_OFFSET 0x360        // footpath tool: road segment the path joins (fc040 copies 0x9E4590)
 #define MGR_ROAD_LINK_EXTRA_OFFSET 0x370  // ... and 0x9E45A0
-#define MGR_ROUTE_BEGIN_OFFSET 0x410      // interior route records (24 bytes each)
-#define MGR_ROUTE_END_OFFSET 0x418
 #define MGR_START_NODE_OFFSET 0x428
 #define MGR_END_NODE_OFFSET 0x430
 #define MGR_START_ATTACHED_OFFSET 0x748   // byte: start is an existing node
@@ -792,14 +780,13 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                  seg.startNode[0], seg.startNode[1], seg.startNode[2],
                  seg.endNode[0], seg.endNode[1], seg.endNode[2]);
 
-            HoverGlobals_Clear();
-
-            // Save and neutralise the local player's input state.
+            // Save and neutralise the local player's input state before clearing hover globals.
             savedLmbHeld = *lmbHeld;
             savedLmbJustPressed = *lmbJustPressed;
             savedSnapTarget = *(long long*)(thisPtr + SNAP_TARGET_PTR_OFFSET);
             savedSnapModeA = *(unsigned char*)(thisPtr + SNAP_MODE_A_OFFSET);
             savedSnapModeB = *(unsigned char*)(thisPtr + SNAP_MODE_B_OFFSET);
+            HoverGlobals_Clear();
             savedContinuingY = *(float*)(thisPtr + CONTINUING_Y_OFFSET_OFFSET);
             savedCursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             savedCursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
@@ -826,6 +813,23 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             if (seg.category == ROAD_SYNC_CATEGORY_PEDESTRIAN) SetRoadHover(seg.startLink, "start");
             SetOwnHover(manager, seg.startOwnLink, "start");
             SetHoveredPort(seg.startPort, "start");
+            bool wantStartAttached = (seg.snapFlags & 0x01) != 0;
+            if (wantStartAttached && *(long long*)((uintptr_t)g_exe + 0x9E4560) == 0) {
+                __int64 fallbackStart = FindNetworkNodeAt(manager, seg.startNode);
+                if (fallbackStart) {
+                    *(long long*)((uintptr_t)g_exe + 0x9E4560) = fallbackStart;
+                    *(long long*)((uintptr_t)g_exe + 0x9E45E0) = fallbackStart;
+                    *(unsigned char*)((uintptr_t)g_exe + 0x9E4568) = 1;
+                    memcpy((void*)((uintptr_t)g_exe + 0x9E456C), (const void*)(fallbackStart + NODE_POS_OFFSET), 12);
+                }
+            }
+            if (seg.snapModeStart == 2) {
+                *(unsigned char*)((uintptr_t)g_exe + 0x9E4578) = 1;
+                float* snapPtA = (float*)((uintptr_t)g_exe + 0x9E457C);
+                snapPtA[0] = seg.startNode[0] - seg.snapOffsetStart[0];
+                snapPtA[1] = seg.startNode[1] - seg.snapOffsetStart[1];
+                snapPtA[2] = seg.startNode[2] - seg.snapOffsetStart[2];
+            }
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.startNode[0];
             *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.startNode[1];
             *(float*)(thisPtr + CURSOR_Z_OFFSET) = seg.startNode[2];
@@ -835,10 +839,20 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *lmbJustPressed = 0;
 
             float start[3] = { seg.startNode[0], seg.startNode[1], seg.startNode[2] };
-            float noDirection[3] = { 0.0f, 0.0f, 0.0f };
-            char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
-            ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
-                Fc040Param5ForCategory(seg.category, seg.typeId), 0, noDirection);
+            float startDir[3] = {
+                (seg.snapModeStart == 2) ? (seg.startNode[0] - seg.snapOffsetStart[0]) : 0.0f,
+                (seg.snapModeStart == 2) ? (seg.startNode[1] - seg.snapOffsetStart[1]) : 0.0f,
+                (seg.snapModeStart == 2) ? (seg.startNode[2] - seg.snapOffsetStart[2]) : 0.0f
+            };
+            if (wantStartAttached && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0) {
+                unsigned __int64 existingStartHover = *(unsigned __int64*)((uintptr_t)g_exe + 0x9E4560);
+                char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
+                ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
+                    Fc040Param5ForCategory(seg.category, seg.typeId), existingStartHover, startDir);
+            } else if (!wantStartAttached && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) != 0) {
+                ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, 0,
+                    Fc040Param5ForCategory(seg.category, seg.typeId), 0, startDir);
+            }
             if ((seg.snapFlags & 0x01) != 0 && *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0) {
                 __int64 existingStart = FindNetworkNodeAt(manager, seg.startNode);
                 if (existingStart) {
@@ -1157,6 +1171,7 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
 
         RoadCommitFn commit = g_origRoadCommit ? g_origRoadCommit : (RoadCommitFn)((uintptr_t)g_exe + COMMIT_RVA);
         commit(manager, 0, 0, 0, 0, 0, 0);
+        ResetManagerDragState(manager);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Logf("republicmp  ROAD_SYNC: <exception applying upgrade piece>");
@@ -2366,13 +2381,12 @@ void RoadSync_ClearCategoryPreview(int category)
         __int64 thisPtr = GetWorldThisPtr();
         __int64 manager = *(__int64*)(thisPtr + info->managerOffset);
         if (manager) {
-            *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = 0;
-            *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
-            *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
-            *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
-            *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
             ResetManagerDragState(manager);
-            ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
+        }
+        if (category == ROAD_SYNC_CATEGORY_PEDESTRIAN) {
+            *(long long*)((uintptr_t)g_exe + HOVER_ROAD_EDGE_RVA) = 0;
+            *(int*)((uintptr_t)g_exe + HOVER_ROAD_POINT_RVA) = 0;
+            *(long long*)((uintptr_t)g_exe + HOVER_ROAD_NODE_RVA) = 0;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -2383,11 +2397,23 @@ void RoadSync_CancelLocalDrag()
     __try {
         __int64 thisPtr = GetWorldThisPtr();
         if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
+        __int64 secondRoadMgr = *(__int64*)(thisPtr + 0xF7A8);
+        __int64* sqBegin = *(__int64**)(thisPtr + 0xF608);
+        __int64* sqEnd = *(__int64**)(thisPtr + 0xF610);
+        if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
+            typedef void (*CancelSegFn)(__int64, __int64, int, int, unsigned char);
+            CancelSegFn cancelSeg = (CancelSegFn)((uintptr_t)g_exe + 0x5434C0);
+            for (__int64* it = sqBegin; it < sqEnd; ++it) {
+                if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
+            }
+            *(__int64**)(thisPtr + 0xF610) = sqBegin;
+        }
         for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
             __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
             if (manager) ResetManagerDragState(manager);
-        HoverGlobals_Clear();
         }
+        ClearHoveredPort();
+        HoverGlobals_Clear();
         *(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
         Logf("republicmp  ROAD_SYNC: the local drag was cancelled for a lockstep command");
     } __except (EXCEPTION_EXECUTE_HANDLER) {

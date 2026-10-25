@@ -13,6 +13,7 @@
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../session/two_states.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
+#include "../core/safe_mem.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -605,6 +606,7 @@ static void ResetDetail()
     ProbeWatch_Reset();
 }
 
+static INIT_ONCE g_statusLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_statusLock;
 static char g_probeStatus[320] = "not run yet";
 
@@ -615,6 +617,7 @@ static void SetProbeStatus(const char* fmt, ...)
     va_start(ap, fmt);
     _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
     va_end(ap);
+    TsmEnsureCriticalSection(&g_statusLockOnce, &g_statusLock);
     EnterCriticalSection(&g_statusLock);
     strcpy_s(g_probeStatus, body);
     LeaveCriticalSection(&g_statusLock);
@@ -1361,7 +1364,7 @@ static void* H_malloc(size_t size)
 
 bool Determinism_Install()
 {
-    InitializeCriticalSection(&g_statusLock);
+    TsmEnsureCriticalSection(&g_statusLockOnce, &g_statusLock);
     int ok = 0;
     ok += PatchIat(g_exe, DLL_CRT_UTILITY, "rand", (void*)&H_rand, (void**)&o_rand, "det rand");
     ok += PatchIat(g_exe, DLL_CRT_UTILITY, "srand", (void*)&H_srand, (void**)&o_srand, "det srand");
@@ -1673,6 +1676,7 @@ bool Probe_IsRunning() { return g_probeBusy; }
 const char* Probe_Status()
 {
     static char copy[320];
+    TsmEnsureCriticalSection(&g_statusLockOnce, &g_statusLock);
     EnterCriticalSection(&g_statusLock);
     strcpy_s(copy, g_probeStatus);
     LeaveCriticalSection(&g_statusLock);

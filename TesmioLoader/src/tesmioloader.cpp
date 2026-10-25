@@ -2222,6 +2222,19 @@ static HANDLE OpenLog(const char* name)
 {
     char p[MAX_PATH];
     _snprintf_s(p, sizeof(p), _TRUNCATE, "%s\\%s", g_baseDir, name);
+    WIN32_FILE_ATTRIBUTE_DATA fad = {};
+    if (GetFileAttributesExA(p, GetFileExInfoStandard, &fad) &&
+        (fad.nFileSizeHigh > 0 || fad.nFileSizeLow > 0)) {
+        char prev[MAX_PATH];
+        const char* dot = strrchr(name, '.');
+        if (dot) {
+            _snprintf_s(prev, sizeof(prev), _TRUNCATE, "%s\\%.*s.prev%s",
+                        g_baseDir, (int)(dot - name), name, dot);
+        } else {
+            _snprintf_s(prev, sizeof(prev), _TRUNCATE, "%s\\%s.prev", g_baseDir, name);
+        }
+        CopyFileA(p, prev, FALSE);
+    }
     return CreateFileA(p, GENERIC_WRITE,
                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

@@ -57,3 +57,9 @@ bool ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize);
 // Called when a Co-op session ends or returns to the main menu:
 // clears the session mod filter and restores singleplayer mods & plugins.
 void ModSync_EndSession();
+
+// Testable domain helpers (used by runtime and unit test suite)
+void ModSync_ExtractHeaderBinModIdsFromBuffer(const void* data, size_t size, uint64_t* outIds, int maxOut, int* ioCount);
+int  ModSync_FilterAndSortWorkshopMgrForTest(void* mgrPtr, const uint64_t* allowedIds, int allowedCount, int* ioHiddenTail);
+void ModSync_RestoreWorkshopMgrForTest(void* mgrPtr, int* ioHiddenTail);
+

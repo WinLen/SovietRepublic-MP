@@ -409,6 +409,17 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
         float start[3], end[3];
         memcpy(start, (const void*)(world + 0xF620), 12);
         memcpy(end, (const void*)(world + 0xF62C), 12);
+        float squareYaw = *(float*)(g_exeBase + 0x9E9D20);
+        U64 secondRoadMgr = Q(world + 0xF7A8);
+        U64* sqBegin = (U64*)Q(world + 0xF608);
+        U64* sqEnd = (U64*)Q(world + 0xF610);
+        if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
+            typedef void (*CancelSegFn)(U64, U64, int, int, BYTE);
+            CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x5434C0);
+            for (U64* it = sqBegin; it < sqEnd; ++it) {
+                if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
+            }
+        }
         *(U64*)(world + 0xF610) = *(U64*)(world + 0xF608);
         *(BYTE*)(world + 0xD2AC) = 0;
         if (!valid) return r;
@@ -421,6 +432,8 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
         m.origin = g_origin;
         m.index = (int)type;
         m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        m.object.list = 1;
+        memcpy(&m.object.check, &squareYaw, sizeof(float));
         m.ctrl = *(BYTE*)(world + 0xF63C);
         memcpy(m.posA, start, 12);
         memcpy(m.posB, end, 12);
@@ -944,15 +957,29 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     memcpy(keptStart, (const void*)(world + 0xF620), 12);
     memcpy(keptEnd, (const void*)(world + 0xF62C), 12);
     memcpy(keptCur, (const void*)(world + 0xF6C), 12);
+    float* groupYaw = (float*)(g_exeBase + 0x9E9D20);
+    float keptYaw = *groupYaw;
     BYTE keptDrag = *(BYTE*)(world + 0xD2AC), keptPlan = *(BYTE*)(world + 0xF63C);
     BYTE keptDown = *down, keptPress = *press, keptRPress = *rpress;
     U64 own428 = Q(world + SELECTED_OFFSET);
     BYTE menus[3];
     for (int i = 0; i < 3; i++) menus[i] = *(BYTE*)(world + kMenus[i]);
+    U64 secondRoadMgr = Q(world + 0xF7A8);
+    U64* sqBegin = (U64*)Q(world + 0xF608);
+    U64* sqEnd = (U64*)Q(world + 0xF610);
+    if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
+        typedef void (*CancelSegFn)(U64, U64, int, int, BYTE);
+        CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x5434C0);
+        for (U64* it = sqBegin; it < sqEnd; ++it) {
+            if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
+        }
+        *(U64*)(world + 0xF610) = (U64)sqBegin;
+    }
     memset(g_standInTool, 0, sizeof(g_standInTool));
     memcpy((void*)(world + 0xF620), m.posA, 12);
     memcpy((void*)(world + 0xF62C), m.posB, 12);
     memcpy((void*)(world + 0xF6C), m.posB, 12);
+    if (m.object.list == 1) memcpy(groupYaw, &m.object.check, sizeof(float));
     *(BYTE*)(world + 0xD2AC) = 1;
     *(BYTE*)(world + 0xF63C) = m.ctrl;
     *down = 0;
@@ -967,10 +994,11 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         faulted = true;
     }
+    *groupYaw = keptYaw;
     memcpy((void*)(world + 0xF620), keptStart, 12);
     memcpy((void*)(world + 0xF62C), keptEnd, 12);
     memcpy((void*)(world + 0xF6C), keptCur, 12);
-    *(BYTE*)(world + 0xD2AC) = keptDrag;
+    *(BYTE*)(world + 0xD2AC) = 0;
     *(BYTE*)(world + 0xF63C) = keptPlan;
     *down = keptDown;
     *press = keptPress;

@@ -4,6 +4,8 @@
 #include "save_sync.h"
 #include "mod_sync.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
 #include "../game/save_load.h"
 #include "../game/window_focus.h"
 #include "../lockstep/commands.h"
@@ -24,33 +26,6 @@
 #include <filesystem>
 #include <system_error>
 #include <algorithm>
-
-#define WORLD_RVA 0x9D4F10
-#define WORLD_UNLIMITED_MONEY_OFFSET 0x578
-#define WORLD_USD_OFFSET 0x580
-#define WORLD_RUB_OFFSET 0x588
-#define CURSOR_X_OFFSET 0xF6C
-#define CURSOR_Y_OFFSET 0xF70
-#define CURSOR_Z_OFFSET 0xF74
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
-#define VEC_VEHICLES_BEGIN_RVA (0x9D4F10 + 0x12810)
-#define VEC_VEHICLES_END_RVA   (0x9D4F10 + 0x12818)
-#define OBJ_POS_OFFSET 0x350
-#define BLD_PROGRESS_OFFSET 0x604
-#define BLD_PAY_RUB_OFFSET 0x608
-#define BLD_PAY_USD_OFFSET 0x609
-#define VEH_ID_OFFSET 0x04
-#define VEH_HOME_OFFSET 0x4F8
-#define VEH_DEPOT_OFFSET 0x600
-#define VEH_POS_OFFSET 0xDE0
-
-#define ENGINE_RVA 0x9941F0
-#define ENGINE_TERRAIN_OFFSET 0xED8
-#define CAMERA_RVA 0x9E9C90
-#define CAMERA_POS_OFFSET 0x80
-#define CAMERA_LOOKAT_OFFSET 0x98
-#define CAMERA_VIEWPROJ_OFFSET 0x1F0
 
 #define DLL_C3D "C3DDLL64.dll"
 
@@ -82,8 +57,8 @@ static bool g_loadedFromCoopSave = false;
 static volatile bool g_importingSpSave = false;
 static char g_savedJoinAddress[64] = "";
 
+static INIT_ONCE g_ownerLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_ownerLock;
-static bool g_ownerLockReady = false;
 static std::unordered_map<int, int> g_buildingOwners; // buildingId -> 1 (West) or 2 (East)
 static std::unordered_map<int, int> g_vehicleOwners;  // vehicleId  -> 1 (West) or 2 (East)
 
@@ -97,10 +72,7 @@ static std::deque<ToastMessage> g_toasts;
 
 static void EnsureOwnerLock()
 {
-    if (!g_ownerLockReady) {
-        InitializeCriticalSection(&g_ownerLock);
-        g_ownerLockReady = true;
-    }
+    TsmEnsureCriticalSection(&g_ownerLockOnce, &g_ownerLock);
 }
 
 void TwoStates_AddToast(const char* text, int colorKind)
@@ -995,6 +967,15 @@ void TwoStates_BeforeStep(BYTE* world)
     }
 }
 
+double TwoStates_ComputeStepWeightState1(int countState1, int countState2)
+{
+    if (countState1 < 0) countState1 = 0;
+    if (countState2 < 0) countState2 = 0;
+    int total = countState1 + countState2;
+    if (total <= 0) return 0.5;
+    return (double)countState1 / (double)total;
+}
+
 void TwoStates_AfterStep(BYTE* world)
 {
     if (!TwoStates_IsActive() || !world || IsUnlimitedMoney()) {
@@ -1010,10 +991,7 @@ void TwoStates_AfterStep(BYTE* world)
         g_unattributedRub = 0.0;
         g_unattributedUsd = 0.0;
 
-        double w0 = 0.5;
-        if (g_stepBldCount[0] + g_stepBldCount[1] > 0) {
-            w0 = (double)g_stepBldCount[0] / (double)(g_stepBldCount[0] + g_stepBldCount[1]);
-        }
+        double w0 = TwoStates_ComputeStepWeightState1(g_stepBldCount[0], g_stepBldCount[1]);
 
         if (fabs(dRub) > 1e-6) {
             double d0 = dRub * w0;
@@ -1841,9 +1819,34 @@ bool TwoStates_GetExpandBorders()
     return g_expandBorders;
 }
 
-bool TwoStates_PatchSaveScriptIni(const char* saveDir, float customWorldSizeMeters)
+// Invariant #4 (AGENTS.md): Base terrain maps (media_soviet\terrains, dlc*\terrains) are inviolable.
+// TwoStates_PatchSaveScriptIni may ONLY modify script.ini inside save directories (save, save_coop, mp_syncsave_*).
+bool TwoStates_IsSafeSaveScriptPath(const char* saveDir)
 {
     if (!saveDir || !saveDir[0]) return false;
+    std::string lower(saveDir);
+    for (char& c : lower) {
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c == '/') c = '\\';
+    }
+    if (lower.find("\\terrains\\") != std::string::npos ||
+        lower.find("\\terrains") == (lower.size() >= 9 ? lower.size() - 9 : std::string::npos) ||
+        lower.rfind("terrains\\", 0) == 0) {
+        return false;
+    }
+    if (lower.find("\\save\\") != std::string::npos ||
+        lower.find("\\save_coop\\") != std::string::npos ||
+        lower.find("mp_syncsave_") != std::string::npos ||
+        lower.rfind("save\\", 0) == 0) {
+        return true;
+    }
+    return false;
+}
+
+bool TwoStates_PatchSaveScriptIni(const char* saveDir, float customWorldSizeMeters)
+{
+    if (!TwoStates_IsSafeSaveScriptPath(saveDir)) return false;
+    if (!g_expandBorders && customWorldSizeMeters <= 0.0f) return false;
     char path[MAX_PATH] = {};
     _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\script.ini", saveDir);
 
@@ -1977,7 +1980,7 @@ void TwoStates_LoadSettings()
     int fullCap = GetPrivateProfileIntA("coop", "full_starting_capital", g_fullStartingCapital ? 1 : 0, ini.c_str());
     g_fullStartingCapital = (fullCap != 0);
 
-    int bw = GetPrivateProfileIntA("coop", "border_half_width_m", (int)(g_borderHalfWidth + 0.5f), ini.c_str());
+    int bw = GetPrivateProfileIntA("coop", "border_half_width_m", (int)lroundf(g_borderHalfWidth), ini.c_str());
     if (bw >= 50 && bw <= 2000) g_borderHalfWidth = (float)bw;
 
     int expB = GetPrivateProfileIntA("coop", "expand_borders", g_expandBorders ? 1 : 0, ini.c_str());
@@ -2016,7 +2019,7 @@ void TwoStates_SaveSettings()
 
     WritePrivateProfileStringA("coop", "full_starting_capital", g_fullStartingCapital ? "1" : "0", ini.c_str());
 
-    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", (int)(g_borderHalfWidth + 0.5f));
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", (int)lroundf(g_borderHalfWidth));
     WritePrivateProfileStringA("coop", "border_half_width_m", buf, ini.c_str());
 
     WritePrivateProfileStringA("coop", "expand_borders", g_expandBorders ? "1" : "0", ini.c_str());
@@ -2311,7 +2314,7 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "[republicmp_coop]\r\n";
     out << "version=1\r\n";
     out << "coop_mode=" << mode << "\r\n";
-    out << "border_half_width_m=" << (int)(g_borderHalfWidth + 0.5f) << "\r\n";
+    out << "border_half_width_m=" << (int)lroundf(g_borderHalfWidth) << "\r\n";
     out << "expand_borders=" << (g_expandBorders ? 1 : 0) << "\r\n";
     out << "state1_rub_cents=" << (long long)llround(rub0 * 100.0) << "\r\n";
     out << "state2_rub_cents=" << (long long)llround(rub1 * 100.0) << "\r\n";
@@ -2393,7 +2396,7 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     fclose(f);
 
     int mode = (int)g_chosenMode;
-    int bw = (int)(g_borderHalfWidth + 0.5f);
+    int bw = (int)lroundf(g_borderHalfWidth);
     int expB = g_expandBorders ? 1 : 0;
     long long rubCents[2] = { 0, 0 };
     long long usdCents[2] = { 0, 0 };
@@ -2470,6 +2473,20 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
          metaPath, updateBudgetsAndMode ? 1 : 0, (int)g_chosenMode,
          g_stateRub[0], g_stateRub[1], g_stateUsd[0], g_stateUsd[1], bldCount, vehCount);
     return true;
+}
+
+bool TwoStates_WriteSaveMetaToDir(const char* fullSaveDir)
+{
+    if (!fullSaveDir || !fullSaveDir[0]) return false;
+    WriteCoopSaveMetaInternal(fullSaveDir);
+    char metaPath[MAX_PATH] = {};
+    _snprintf_s(metaPath, sizeof(metaPath), _TRUNCATE, "%s\\%s", fullSaveDir, COOP_SAVE_META_NAME);
+    return GetFileAttributesA(metaPath) != INVALID_FILE_ATTRIBUTES;
+}
+
+bool TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAndMode)
+{
+    return ReadCoopSaveMetaInternal(fullSaveDir, updateBudgetsAndMode);
 }
 
 void TwoStates_BeforeAnyWorldLoad()
