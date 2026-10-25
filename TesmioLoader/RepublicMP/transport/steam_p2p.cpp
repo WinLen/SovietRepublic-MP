@@ -586,7 +586,8 @@ uint64_t SteamP2P_ParseTargetSteamId(const char* target)
 #define STEAM_SOCKET_MASK   0xFFFFFF0000000000ULL
 #define MAX_STEAM_SOCKETS   32
 #define P2P_FRAME_MAGIC     0x504D5052U // 'RPMP'
-#define P2P_MAX_CHUNK       32768U      // 32 KB reliable chunks
+#define P2P_MAX_CHUNK       16384U      // 16 KB reliable chunks
+#define P2P_SEND_QUEUE_CAP  (256 * 1024) // Keep at most 256 KB in flight in Steam's reliable buffer
 
 enum P2PFrameType : uint8_t {
     P2P_FRAME_SYN       = 1,
@@ -1007,21 +1008,110 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
     size_t sent = 0;
     while (sent < size) {
         uint32_t chunk = (uint32_t)std::min(size - sent, (size_t)P2P_MAX_CHUNK);
+        ULONGLONG stallStart = GetTickCount64();
+        int32_t minQueuedSeen = INT32_MAX;
+
+        for (;;) {
+            EnterCriticalSection(&s_lock);
+            SteamSocketSlot& slot = s_slots[idx];
+            if (!slot.inUse || slot.localClosed || slot.remoteFin) {
+                LeaveCriticalSection(&s_lock);
+                return false;
+            }
+            PumpChannelLocked((int)slot.port);
+
+            int32_t queuedBytes = 0;
+            uint8_t sessionErr = 0;
+            if (s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+                P2PSessionState_t state = {};
+                if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+                    queuedBytes = state.m_nBytesQueuedForSend;
+                    sessionErr = state.m_eP2PSessionError;
+                }
+            }
+            if (sessionErr != 0) {
+                unsigned short port = slot.port;
+                LeaveCriticalSection(&s_lock);
+                Logf("republicmp  STEAM_P2P: SendExact aborted, P2P session error=%u on channel %u",
+                     (unsigned)sessionErr, (unsigned)port);
+                return false;
+            }
+            if (queuedBytes <= P2P_SEND_QUEUE_CAP) {
+                bool ok = SendFrameLocked(slot.remoteSteamId, slot.port, P2P_FRAME_DATA, slot.connId, bytes + sent, chunk);
+                unsigned short port = slot.port;
+                LeaveCriticalSection(&s_lock);
+                if (!ok) {
+                    Logf("republicmp  STEAM_P2P: SendP2PPacket failed on channel %u (queued=%d, sent=%zu/%zu)",
+                         (unsigned)port, (int)queuedBytes, sent, size);
+                    return false;
+                }
+                break;
+            }
+            unsigned short port = slot.port;
+            LeaveCriticalSection(&s_lock);
+
+            if (queuedBytes < minQueuedSeen) {
+                minQueuedSeen = queuedBytes;
+                stallStart = GetTickCount64();
+            } else if (GetTickCount64() - stallStart > 30000) {
+                Logf("republicmp  STEAM_P2P: SendExact backpressure timeout on channel %u (queued=%d, sent=%zu/%zu)",
+                     (unsigned)port, (int)queuedBytes, sent, size);
+                return false;
+            }
+            Sleep(2);
+        }
+        sent += chunk;
+    }
+    return true;
+}
+
+bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
+{
+    int idx = SlotIndexFromSocket(s);
+    if (idx < 0) return false;
+
+    ULONGLONG stallStart = GetTickCount64();
+    int32_t minQueuedSeen = INT32_MAX;
+
+    for (;;) {
         EnterCriticalSection(&s_lock);
         SteamSocketSlot& slot = s_slots[idx];
         if (!slot.inUse || slot.localClosed || slot.remoteFin) {
             LeaveCriticalSection(&s_lock);
             return false;
         }
-        bool ok = SendFrameLocked(slot.remoteSteamId, slot.port, P2P_FRAME_DATA, slot.connId, bytes + sent, chunk);
+        PumpChannelLocked((int)slot.port);
+
+        int32_t queuedBytes = 0;
+        uint8_t sessionErr = 0;
+        if (s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+            P2PSessionState_t state = {};
+            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+                queuedBytes = state.m_nBytesQueuedForSend;
+                sessionErr = state.m_eP2PSessionError;
+            }
+        }
+        unsigned short port = slot.port;
         LeaveCriticalSection(&s_lock);
-        if (!ok) {
-            Logf("republicmp  STEAM_P2P: SendP2PPacket failed on channel %u", (unsigned)s_slots[idx].port);
+
+        if (sessionErr != 0) {
+            Logf("republicmp  STEAM_P2P: FlushSend aborted, P2P session error=%u on channel %u",
+                 (unsigned)sessionErr, (unsigned)port);
             return false;
         }
-        sent += chunk;
+        if (queuedBytes <= 0) {
+            return true;
+        }
+        if (queuedBytes < minQueuedSeen) {
+            minQueuedSeen = queuedBytes;
+            stallStart = GetTickCount64();
+        } else if (timeoutMs != 0 && (GetTickCount64() - stallStart) >= timeoutMs) {
+            Logf("republicmp  STEAM_P2P: FlushSend timeout on channel %u (queued=%d)",
+                 (unsigned)port, (int)queuedBytes);
+            return false;
+        }
+        Sleep(2);
     }
-    return true;
 }
 
 bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
@@ -1060,7 +1150,11 @@ bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
             s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
             P2PSessionState_t state = {};
             if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
-                if (state.m_eP2PSessionError != 0) eof = true;
+                if (state.m_eP2PSessionError != 0) {
+                    eof = true;
+                } else if (!state.m_bConnectionActive && !state.m_bConnecting && (GetTickCount64() - waitStart) > 10000) {
+                    eof = true;
+                }
             }
         }
         DWORD timeoutMs = slot.ioTimeoutMs;

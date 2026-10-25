@@ -68,6 +68,7 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
                         volatile bool* cancelFlag);
 
 bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size);
+bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs);
 bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size);
 bool SteamP2P_PeerGone(SOCKET s);
 void SteamP2P_ShutdownSocket(SOCKET s);

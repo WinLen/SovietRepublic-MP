@@ -727,6 +727,17 @@ static bool RunHostJoin(SOCKET sock)
             break;
         }
 
+        // 2c. If diagnostic log sharing is enabled, also exchange diagnostic logs before packing/sending the world.
+        if (TwoStates_GetSendClientLogs()) {
+            const char* hostLogReason = DiagLog_HasPrevCrashOrDesyncLog() ? "HOST_PREV_CRASH" : "HOST_JOIN";
+            std::vector<unsigned char> hostLogBundle;
+            if (DiagLog_BuildClientLogBundle(hostLogBundle, hostLogReason)) {
+                if (SendMsg(sock, MSG_CLIENT_LOGS, (int)hostLogBundle.size(), -1, "")) {
+                    NetworkSendExact(sock, hostLogBundle.data(), hostLogBundle.size());
+                }
+            }
+        }
+
         // 3. Pack.
         char zipPath[MAX_PATH] = {};
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
@@ -1041,6 +1052,14 @@ static bool RunClientJoin(bool rejoin)
                     SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
                     SaveStatus("[CLIENT] mod sync failed: %s", modWhy);
                     break;
+                }
+                continue;
+            }
+            if (m.code == MSG_CLIENT_LOGS) {
+                if (m.step > 0 && m.step <= (2 << 20)) {
+                    std::vector<unsigned char> logBuf((size_t)m.step);
+                    if (!NetworkRecvExact(sock, logBuf.data(), logBuf.size())) break;
+                    DiagLog_SaveRemoteClientLogBundle(logBuf.data(), logBuf.size());
                 }
                 continue;
             }

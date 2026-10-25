@@ -359,6 +359,12 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
     }
 
     fclose(f);
+    if (SteamP2P_IsSteamSocket(sock)) {
+        if (!SteamP2P_FlushSend(sock, 30000)) {
+            Logf("republicmp  NETWORK: failed flushing SteamP2P send queue for [%s]", filePath);
+            return false;
+        }
+    }
     Logf("republicmp  NETWORK: finished sending [%s], %llu bytes", filePath, sentTotal);
     return true;
 }
@@ -380,9 +386,11 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
 
     char buffer[65536];
     unsigned long long receivedTotal = 0;
+    unsigned long long nextLogMark = 4ULL * 1024ULL * 1024ULL;
     while (receivedTotal < fileSize) {
         size_t toRead = (size_t)std::min((unsigned long long)sizeof(buffer), fileSize - receivedTotal);
         if (!NetworkRecvExact(sock, buffer, toRead)) {
+            Logf("republicmp  NETWORK: NetworkReceiveFile interrupted at %llu / %llu bytes", receivedTotal, fileSize);
             fclose(f);
             return false;
         }
@@ -392,6 +400,11 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
             return false;
         }
         receivedTotal += toRead;
+        if (receivedTotal >= nextLogMark || receivedTotal == fileSize) {
+            Logf("republicmp  NETWORK: received %llu / %llu bytes (%llu%%)",
+                 receivedTotal, fileSize, fileSize ? (receivedTotal * 100ULL) / fileSize : 100ULL);
+            nextLogMark = receivedTotal + (4ULL * 1024ULL * 1024ULL);
+        }
         if (onProgress) onProgress(receivedTotal, fileSize, userData);
     }
 
