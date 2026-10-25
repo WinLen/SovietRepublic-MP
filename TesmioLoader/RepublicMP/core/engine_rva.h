@@ -43,6 +43,9 @@
 #ifndef LOAD_TRIGGER_DAT_RVA
 #define LOAD_TRIGGER_DAT_RVA        0x993C66
 #endif
+#ifndef WINDOW_FOCUS_BYTE_RVA
+#define WINDOW_FOCUS_BYTE_RVA       0x99208F
+#endif
 #ifndef TERRAIN_FLAG_DAT_RVA
 #define TERRAIN_FLAG_DAT_RVA        0x995298
 #endif

@@ -92,8 +92,34 @@ static volatile bool g_lockstep = false; // the current session's mode
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
 static const char* const kResyncReason = "re-sync";
+static const char* const kLocalHostOpenEventName = "Local\\RepublicMP_LocalHostOpen_5556";
+static HANDLE g_localHostOpenEvent = nullptr;
 
-static void SetState(SessionState s) { g_state = s; }
+static void SetState(SessionState s)
+{
+    g_state = s;
+    if (s == SESSION_HOST_LISTENING) {
+        if (!g_localHostOpenEvent) {
+            g_localHostOpenEvent = CreateEventA(nullptr, TRUE, TRUE, kLocalHostOpenEventName);
+        } else {
+            SetEvent(g_localHostOpenEvent);
+        }
+    } else if (g_localHostOpenEvent) {
+        ResetEvent(g_localHostOpenEvent);
+        CloseHandle(g_localHostOpenEvent);
+        g_localHostOpenEvent = nullptr;
+    }
+}
+
+bool SaveSync_IsLocalPcHostWaiting()
+{
+    if (g_state != SESSION_IDLE) return false;
+    HANDLE h = OpenEventA(SYNCHRONIZE, FALSE, kLocalHostOpenEventName);
+    if (!h) return false;
+    bool open = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
+    CloseHandle(h);
+    return open;
+}
 
 static void SetPeerIp(const char* ip)
 {

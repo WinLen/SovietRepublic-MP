@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See session_patches.h.
 #include "session_patches.h"
+#include "../session/save_sync.h"                 // SaveSync_IsBusy
 #include "../world_sync/buildings/build_sync.h" // BuildSync_IsConnected
 #include "../determinism/determinism.h"        // Determinism_IsActive (the probe)
 #include <string.h>
@@ -33,6 +34,16 @@ static SessionPatch kPatches[] = {
     { 0x7645ae, 5, { 0xe8, 0x3d, 0xff, 0x0b, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 761300" },
     { 0x7bb8b3, 5, { 0xe8, 0x38, 0x8c, 0x06, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 7bada0" },
     { 0x8243c2, 5, { 0xe8, 0x29, 0x01, 0x00, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: getter 8243b0" },
+    // Background window / Alt-Tab responsiveness: eliminate 1600ms/1000ms WndProc Sleep() on focus loss,
+    // never minimize the window (ShowWindow SW_MINIMIZE) when losing focus, and never freeze or skip 3D
+    // rendering in the main loop when unfocused.
+    { 0x10366e, 5, { 0xb9, 0x40, 0x06, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_KILLFOCUS: Sleep(1600) -> Sleep(0)" },
+    { 0x103690, 2, { 0x74, 0x19 }, { 0x66, 0x90 }, "WndProc WM_KILLFOCUS: never minimize on WINDOW_MINIMIZE" },
+    { 0x1036a9, 2, { 0x75, 0x12 }, { 0xeb, 0x12 }, "WndProc WM_KILLFOCUS: never call ShowWindow(SW_MINIMIZE)" },
+    { 0x103748, 5, { 0xb9, 0xe8, 0x03, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_ACTIVATE: Sleep(1000) -> Sleep(0)" },
+    { 0x103771, 6, { 0x0f, 0x84, 0x34, 0xff, 0xff, 0xff }, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }, "WndProc WM_ACTIVATE: never jump to ShowWindow(SW_MINIMIZE)" },
+    { 0x105b94, 6, { 0x0f, 0x85, 0xa4, 0x00, 0x00, 0x00 }, { 0x90, 0xe9, 0xa4, 0x00, 0x00, 0x00 }, "main loop: never freeze when unfocused (WINDOW_PAUSE)" },
+    { 0x105c7f, 3, { 0x0f, 0x44, 0xdd }, { 0x90, 0x90, 0x90 }, "main loop: never skip 3D render when unfocused" },
     // The call shared by Late and the interface -> the gate's relay (simulation thread only)
     { CITIZEN_INIT_GATED_CALL, 5, { 0xe8, 0xd4, 0x6f, 0x52, 0x00 }, { 0 }, "citizen init: Late / interface" },
 };
@@ -173,7 +184,18 @@ static void Restore()
 
 void SessionPatches_Tick()
 {
-    bool want = BuildSync_IsConnected() || Determinism_IsActive();
+    static int s_dualWindowCheck = -1;
+    if (s_dualWindowCheck < 0) {
+        char envBuf[32] = {};
+        bool dual = (GetEnvironmentVariableA("REPUBLICMP_ROLE", envBuf, sizeof(envBuf)) > 0);
+        if (!dual) {
+            char exePath[MAX_PATH] = {};
+            GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+            dual = (strstr(exePath, "test-host") != nullptr || strstr(exePath, "test-client") != nullptr);
+        }
+        s_dualWindowCheck = dual ? 1 : 0;
+    }
+    bool want = (s_dualWindowCheck == 1) || SaveSync_IsBusy() || BuildSync_IsConnected() || Determinism_IsActive();
     if (want && !g_applied && !g_refused) Apply();
     else if (!want && g_applied) Restore();
 }

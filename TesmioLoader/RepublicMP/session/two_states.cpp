@@ -2470,7 +2470,7 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     }
 
     Logf("republicmp  COOP_META: loaded [%s] (updateBudgets=%d, mode=%d, rub=[%.0f, %.0f], usd=[%.0f, %.0f], blds=%zu, vehs=%zu)",
-         metaPath, updateBudgetsAndMode ? 1 : 0, (int)g_chosenMode,
+         metaPath, updateBudgetsAndMode ? 1 : 0, g_inSession ? (int)g_sessionMode : (int)g_chosenMode,
          g_stateRub[0], g_stateRub[1], g_stateUsd[0], g_stateUsd[1], bldCount, vehCount);
     return true;
 }

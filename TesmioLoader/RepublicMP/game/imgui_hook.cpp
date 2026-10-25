@@ -4,12 +4,17 @@
 #include "../ui/sync_block.h"
 #include "../ui/lang.h"
 #include "../session/two_states.h"
+#include "../session/save_sync.h"
+#include "../core/version.h"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 
 #include <d3d11.h>
+#include <cstdio>
+#include <cstring>
+#include <cwchar>
 
 // Declared in imgui_impl_win32.h only under IMGUI_IMPL_API; re-declared here.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(
@@ -79,6 +84,94 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     return CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam);
 }
 
+static int g_testbedRole = 0; // 0 = normal, 1 = test-host (left), 2 = test-client (right)
+static bool g_testbedWindowArranged = false;
+static ULONGLONG g_lastTitleUpdateMs = 0;
+static wchar_t g_lastWindowTitle[256] = {};
+
+static bool IsCurrentThreadWindowOwner(HWND hwnd)
+{
+    if (!hwnd) return false;
+    DWORD wndTid = GetWindowThreadProcessId(hwnd, nullptr);
+    return wndTid != 0 && wndTid == GetCurrentThreadId();
+}
+
+static void DetectAndArrangeTestbedWindow(HWND hwnd)
+{
+    if (g_testbedWindowArranged || !IsCurrentThreadWindowOwner(hwnd)) return;
+    g_testbedWindowArranged = true;
+
+    char roleEnv[32] = {};
+    const char* cmdLine = GetCommandLineA();
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+
+    if ((GetEnvironmentVariableA("REPUBLICMP_ROLE", roleEnv, sizeof(roleEnv)) > 0 && _stricmp(roleEnv, "HOST") == 0) ||
+        (cmdLine && (strstr(cmdLine, "--mp-host") || strstr(cmdLine, "--mp-left"))) ||
+        strstr(exePath, "test-host") != nullptr) {
+        g_testbedRole = 1;
+    } else if ((GetEnvironmentVariableA("REPUBLICMP_ROLE", roleEnv, sizeof(roleEnv)) > 0 && _stricmp(roleEnv, "CLIENT") == 0) ||
+               (cmdLine && (strstr(cmdLine, "--mp-client") || strstr(cmdLine, "--mp-right"))) ||
+               strstr(exePath, "test-client") != nullptr) {
+        g_testbedRole = 2;
+    }
+
+    if (g_testbedRole != 0) {
+        RECT workArea = { 0, 0, 2560, 1400 };
+        SystemParametersInfoA(SPI_GETWORKAREA, 0, &workArea, 0);
+        int workW = workArea.right - workArea.left;
+        int targetX = (g_testbedRole == 1)
+            ? (workArea.left - 7)
+            : (workArea.left + (workW / 2) - 7);
+        int targetY = workArea.top + 8;
+        SetWindowPos(hwnd, nullptr, targetX, targetY, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+        Logf("republicmp  IMGUI: arranged Dual-Window Testbed [%s] at (%d, %d)",
+             g_testbedRole == 1 ? "HOST/LEFT" : "CLIENT/RIGHT", targetX, targetY);
+    }
+}
+
+static void UpdateWindowTitlePeriodic(HWND hwnd)
+{
+    // Critical: never call SetWindowTextW from a background worker/loading thread
+    // (e.g. during WaitForLoadToFinish), as SetWindowTextW sends a synchronous cross-thread
+    // WM_SETTEXT message to the main thread which is blocked waiting for the loader thread.
+    if (!IsCurrentThreadWindowOwner(hwnd)) return;
+
+    DetectAndArrangeTestbedWindow(hwnd);
+
+    ULONGLONG now = GetTickCount64();
+    if (g_lastTitleUpdateMs != 0 && (now - g_lastTitleUpdateMs) < 500) return;
+    g_lastTitleUpdateMs = now;
+
+    SessionState st = SaveSync_GetState();
+    if (g_testbedRole == 0 && st == SESSION_IDLE) return;
+
+    bool isHost = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME) ||
+                  (st == SESSION_IDLE && g_testbedRole == 1);
+    bool twoStates = (TwoStates_GetMode() == COOP_MODE_TWO_STATES);
+
+    const wchar_t* roleTag = isHost
+        ? (twoStates ? L"[ХОСТ — Западная ССР]" : L"[ХОСТ]")
+        : (twoStates ? L"[КЛИЕНТ — Восточная ССР]" : L"[КЛИЕНТ]");
+
+    const wchar_t* stateTag = L"Главное меню / Одиночная";
+    if (st == SESSION_HOST_LISTENING)      stateTag = L"Ожидание второго игрока (:5556)";
+    else if (st == SESSION_HOST_JOINING)   stateTag = L"Передача сохранения...";
+    else if (st == SESSION_HOST_IN_GAME)   stateTag = L"В ИГРЕ (Lockstep активен)";
+    else if (st == SESSION_CLIENT_JOINING) stateTag = L"Подключение и загрузка мира...";
+    else if (st == SESSION_CLIENT_IN_GAME) stateTag = L"В ИГРЕ (Lockstep активен)";
+    else if (SaveSync_IsWorldLoaded())     stateTag = L"Мир загружен";
+
+    wchar_t title[256] = {};
+    _snwprintf_s(title, _TRUNCATE, L"%ls %ls — Workers & Resources (RepublicMP v" REPUBLICMP_VERSION_W L")",
+                 roleTag, stateTag);
+    if (wcscmp(title, g_lastWindowTitle) != 0) {
+        wcsncpy_s(g_lastWindowTitle, title, _TRUNCATE);
+        SetWindowTextW(hwnd, title);
+    }
+}
+
 void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
 {
     if (g_initialized || !swapChain)
@@ -109,6 +202,8 @@ void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dContext);
 
     g_originalWndProc = (WNDPROC)SetWindowLongPtr(g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
+    DetectAndArrangeTestbedWindow(g_hwnd);
+    UpdateWindowTitlePeriodic(g_hwnd);
 
     g_initialized = true;
     Logf("republicmp  IMGUI: initialized, hwnd=%p", (void*)g_hwnd);
@@ -118,6 +213,8 @@ void ImGuiHook_NewFrameAndRender()
 {
     if (!g_initialized)
         return;
+
+    UpdateWindowTitlePeriodic(g_hwnd);
 
     bool syncBlocking = SyncBlock_IsActive();
     bool overlayActive = NativeMenu_WantsInput();

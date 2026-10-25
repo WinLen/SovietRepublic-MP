@@ -2,6 +2,7 @@
 // See input_block.h.
 #include "input_block.h"
 #include "../ui/sync_block.h"
+#include "../core/engine_rva.h"
 
 #define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA54E91 // byte: left mouse button pressed this frame
@@ -11,9 +12,19 @@ void InputBlock_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
+static bool Unfocused()
+{
+    if (!g_exeBase) return false;
+    __try {
+        return *(volatile unsigned char*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static bool Blocked()
 {
-    return SyncBlock_IsActive();
+    return SyncBlock_IsActive() || Unfocused();
 }
 
 static volatile LONG g_neutral = 0;
@@ -141,13 +152,13 @@ bool InstallInputBlockHooks()
 
 void InputBlock_Tick()
 {
-    static bool s_wasBlocked = false;
-    bool blocked = Blocked();
-    if (blocked != s_wasBlocked) {
-        Logf("republicmp  INPUT_BLOCK: game input %s", blocked ? "BLOCKED" : "released");
-        s_wasBlocked = blocked;
+    static bool s_wasSyncBlocked = false;
+    bool syncBlocked = SyncBlock_IsActive();
+    if (syncBlocked != s_wasSyncBlocked) {
+        Logf("republicmp  INPUT_BLOCK: game input %s", syncBlocked ? "BLOCKED" : "released");
+        s_wasSyncBlocked = syncBlocked;
     }
-    if (!blocked) return;
+    if (!Blocked()) return;
 
     __try {
         *(unsigned char*)(g_exeBase + LMB_HELD_RVA) = 0;

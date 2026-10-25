@@ -163,7 +163,14 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
 {
     uint64_t remoteSteamId = SteamP2P_ParseTargetSteamId(hostIp);
     if (remoteSteamId != 0) {
-        return SteamP2P_Connect(remoteSteamId, port, connectTimeoutMs, ioTimeoutMs, cancelFlag);
+        uint64_t mySteamId = SteamP2P_GetLocalSteamId();
+        if (mySteamId != 0 && remoteSteamId == mySteamId) {
+            Logf("republicmp  NETWORK: target SteamID %llu is local Steam account -> routing via TCP 127.0.0.1:%u",
+                 (unsigned long long)remoteSteamId, port);
+            hostIp = "127.0.0.1";
+        } else {
+            return SteamP2P_Connect(remoteSteamId, port, connectTimeoutMs, ioTimeoutMs, cancelFlag);
+        }
     }
 
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);

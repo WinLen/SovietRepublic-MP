@@ -128,3 +128,7 @@ const char* SaveSync_GetTargetIp();
 
 // Kept for the debug UI; true while hosting with nobody connected.
 bool SaveSync_IsHostAwaitingClient();
+
+// True when another SOVIET64.exe instance on this same PC is currently hosting
+// an open Co-op server in SESSION_HOST_LISTENING on 127.0.0.1:5556.
+bool SaveSync_IsLocalPcHostWaiting();

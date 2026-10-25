@@ -289,7 +289,32 @@ static uintptr_t __cdecl H_beginThread(void (__cdecl* start)(void*), unsigned st
 #define FILLING_START_EVENT_OFFSET 0x60
 
 typedef BOOL (WINAPI* SetEventFn)(HANDLE);
+typedef HANDLE (WINAPI* CreateEventWFn)(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCWSTR);
+typedef BOOL (WINAPI* ClipCursorFn)(const RECT*);
 static SetEventFn o_setEvent;
+static CreateEventWFn o_createEventW;
+static ClipCursorFn o_clipCursor;
+
+static BOOL WINAPI H_clipCursor(const RECT* /*lpRect*/)
+{
+    // Never trap the mouse cursor inside a single window rectangle so the user
+    // can freely move between side-by-side windows or second monitors without Alt-Tab.
+    return o_clipCursor ? o_clipCursor(nullptr) : TRUE;
+}
+
+static HANDLE WINAPI H_createEventW(LPSECURITY_ATTRIBUTES attr, BOOL manualReset, BOOL initialState, LPCWSTR name)
+{
+    // SOVIET64.exe creates L"RenderStart", L"RenderFinished", and L"FillingrStart"
+    // as named Win32 kernel events (0x47D22D, 0x47D248, 0x2592EA). When two game
+    // instances run on the same PC (Dual-Window Testbed), both processes open the
+    // same kernel event objects and signal/reset each other's RenderThread, MainThread,
+    // and Filling worker thread! Stripping `name` makes each event anonymous and
+    // strictly private to this process.
+    if (name && name[0]) {
+        Logf("republicmp  DETERMINISM: isolated named engine event '%ls' to process-private anonymous event", name);
+    }
+    return o_createEventW(attr, manualReset, initialState, nullptr);
+}
 
 static BOOL WINAPI H_setEvent(HANDLE h)
 {
@@ -1377,16 +1402,18 @@ bool Determinism_Install()
     ok += PatchIat(g_exe, DLL_C3D, "?GetKeyDown@C3D_INPUT@@QEAA_NH@Z", (void*)&H_getKeyDown, (void**)&o_getKeyDown, "det GetKeyDown");
     g_doneThreadHandle = CreateEventW(nullptr, TRUE, TRUE, nullptr);
     ok += PatchIat(g_exe, "api-ms-win-crt-runtime-l1-1-0.dll", "_beginthread", (void*)&H_beginThread, (void**)&o_beginThread, "det _beginthread");
+    ok += PatchIat(g_exe, "KERNEL32.dll", "CreateEventW", (void*)&H_createEventW, (void**)&o_createEventW, "det CreateEventW");
     ok += PatchIat(g_exe, "KERNEL32.dll", "SetEvent", (void*)&H_setEvent, (void**)&o_setEvent, "det SetEvent");
+    ok += PatchIat(g_exe, "USER32.dll", "ClipCursor", (void*)&H_clipCursor, (void**)&o_clipCursor, "det ClipCursor");
     ok += PatchIat(g_exe, "api-ms-win-crt-heap-l1-1-0.dll", "malloc", (void*)&H_malloc, (void**)&o_malloc, "det malloc");
     bool step = InstallInlineHook(g_exeBase + SIM_STEP_RVA, (void*)&HookedSimStep, (void**)&o_simStep,
                                   kSimStepExpect, sizeof(kSimStepExpect), "republicmp sim step");
     bool load = InstallInlineHook(g_exeBase + LOAD_WORLD_RVA, (void*)&HookedLoadWorld, (void**)&o_loadWorld,
                                   kLoadWorldExpect, sizeof(kLoadWorldExpect), "republicmp load world");
-    Logf("republicmp  DETERMINISM: %d/12 imports redirected, sim step hook %d, load hook %d", ok, step, load);
+    Logf("republicmp  DETERMINISM: %d/14 imports redirected, sim step hook %d, load hook %d", ok, step, load);
     bool presentation = HeldFrame_Verify();
     bool phases = SimPatches_Install();
-    g_framesReady = ok == 12 && step && load && presentation && phases;
+    g_framesReady = ok == 14 && step && load && presentation && phases;
     Logf("republicmp  DETERMINISM: frame control ready %d (presentation %d, phases %d)", g_framesReady, presentation, phases);
     return g_framesReady;
 }

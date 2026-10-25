@@ -272,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Fix road stroke desync & crash (HoverGlobals 0x9E4568/0x9E45A8, endNode attachment +0x749, upgrade gate reset +0x390/+0x3D0, SECOND_ROAD empty-vector guard 0x3CFA48)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Single-PC Dual-Window Co-op Testbed (CreateEventW RenderStart/RenderFinished/FillingrStart isolation, WndProc SW_MINIMIZE & Sleep(0) patches, ClipCursor unlock, Unfocused InputBlock, Local PC Host auto-discovery)");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

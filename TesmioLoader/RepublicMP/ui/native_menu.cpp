@@ -7,6 +7,7 @@
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../session/mod_sync.h"
+#include "../determinism/determinism.h"
 #include "../lockstep/lockstep_net.h"
 #include "../transport/steam_p2p.h"
 #include "../game/save_load.h"
@@ -577,6 +578,7 @@ enum JoinMenuAction {
     JACT_PASTE_CLIPBOARD = 3,
     JACT_REFRESH_FRIENDS = 4,
     JACT_BACK = 5,
+    JACT_LOCAL_PC_HOST = 6,
 };
 
 struct JoinMenuEntry {
@@ -611,6 +613,11 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
 
     auto populateEntries = [&]() {
         entries.clear();
+        if (SaveSync_IsLocalPcHostWaiting()) {
+            addEntry(JACT_LOCAL_PC_HOST, 0,
+                     TrW(L"Сервер на ПК (127.0.0.1)", L"Local PC Host (127.0.0.1)"));
+        }
+
         size_t maxFriends = g_cachedFriends.size() < 6 ? g_cachedFriends.size() : 6;
         for (size_t i = 0; i < maxFriends; ++i) {
             const auto& f = g_cachedFriends[i];
@@ -661,6 +668,10 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
                         (unsigned long long)sel.steamId);
             DiagLog_Printf("UI", "Native Co-op Join menu: connecting to hosting Steam friend %s", g_joinAddress);
             SaveSync_StartClient(g_joinAddress);
+        } else if (sel.action == JACT_LOCAL_PC_HOST) {
+            strncpy_s(g_joinAddress, "127.0.0.1", _TRUNCATE);
+            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to Local PC Host (127.0.0.1)");
+            SaveSync_StartClient("127.0.0.1");
         } else if (sel.action == JACT_CONNECT_ADDR) {
             DiagLog_Printf("UI", "Native Co-op Join menu: connecting to address %s", g_joinAddress);
             SaveSync_StartClient(g_joinAddress);
@@ -1509,6 +1520,91 @@ void NativeMenu_DrawOverlay(void)
     g_lastScreenId = screenId;
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+
+    // 2b. Single-PC Dual-Window Testbed automation (--mp-autohost / --mp-autojoin or env vars):
+    static bool s_autoFlagsChecked = false;
+    static bool s_autoHostPending = false;
+    static bool s_autoUnpausePending = false;
+    static int  s_autoInGameFrames = 0;
+    static bool s_autoJoinPending = false;
+    static int  s_menuReadyFrames = 0;
+    if (!s_autoFlagsChecked) {
+        s_autoFlagsChecked = true;
+        char envBuf[32] = {};
+        const char* cmdLine = GetCommandLineA();
+        if ((GetEnvironmentVariableA("REPUBLICMP_AUTO_HOST", envBuf, sizeof(envBuf)) > 0 && envBuf[0] == '1') ||
+            (cmdLine && strstr(cmdLine, "--mp-autohost") != nullptr)) {
+            s_autoHostPending = true;
+            s_autoUnpausePending = true;
+            DiagLog_Printf("UI", "Dual-Window Testbed: REPUBLICMP_AUTO_HOST=1 active (will auto-load & host from Main Menu)");
+        }
+        if ((GetEnvironmentVariableA("REPUBLICMP_AUTO_JOIN", envBuf, sizeof(envBuf)) > 0 && envBuf[0] != '0') ||
+            (cmdLine && strstr(cmdLine, "--mp-autojoin") != nullptr)) {
+            s_autoJoinPending = true;
+            DiagLog_Printf("UI", "Dual-Window Testbed: REPUBLICMP_AUTO_JOIN=1 active (will auto-join 127.0.0.1 when local Host opens)");
+        }
+    }
+
+    if (s_autoUnpausePending && worldLoaded && SaveSync_GetState() == SESSION_HOST_IN_GAME) {
+        if (++s_autoInGameFrames >= 30) {
+            s_autoUnpausePending = false;
+            bool paused = false;
+            int speed = 1;
+            Determinism_SessionSpeed(&paused, &speed);
+            if (paused) {
+                DiagLog_Printf("UI", "Dual-Window Testbed: both instances in game -> auto-resuming Lockstep simulation at Speed 1");
+                Determinism_RequestPauseToggle();
+            }
+        }
+    }
+
+    if (!worldLoaded && screenId == 1 && SaveSync_GetState() == SESSION_IDLE) {
+        ++s_menuReadyFrames;
+        if (s_autoHostPending && s_menuReadyFrames >= 45) {
+            s_autoHostPending = false;
+            TwoStates_MountSaveBank(true);
+            TwoStates_SetImportingSpSave(false);
+            char autoSaveName[128] = {};
+            if (TwoStates_GetLatestCoopSaveName(autoSaveName, sizeof(autoSaveName)) && autoSaveName[0]) {
+                g_hostOnNextLoad = true;
+                g_delegatedToLaunchScreen = false;
+                g_nativePage = NATIVE_PAGE_ROOT;
+                DiagLog_Printf("UI", "Dual-Window Testbed: auto-starting Host with latest Co-op save [%s]", autoSaveName);
+                TriggerLoadSave(autoSaveName);
+            } else {
+                DiagLog_Printf("UI", "Dual-Window Testbed: no Co-op save found for auto-host; opening Host menu");
+                g_nativePage = NATIVE_PAGE_HOST;
+            }
+        } else if (s_autoJoinPending && s_menuReadyFrames >= 45) {
+            if (SaveSync_IsLocalPcHostWaiting()) {
+                s_autoJoinPending = false;
+                strncpy_s(g_joinAddress, "127.0.0.1", _TRUNCATE);
+                DiagLog_Printf("UI", "Dual-Window Testbed: detected open Local PC Host -> auto-connecting to 127.0.0.1");
+                SaveSync_StartClient("127.0.0.1");
+            } else {
+                ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14f, 0.10f, 0.07f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.75f, 0.25f, 0.95f));
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+                ImGuiWindowFlags wflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
+                if (ImGui::Begin("##RepublicMP_AutoJoinWait", nullptr, wflags)) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.35f, 1.0f), "%s",
+                                       Tr("Тестовый стенд: ожидание запуска окна Хоста (127.0.0.1)...",
+                                          "Testbed: waiting for Host window to open server (127.0.0.1)..."));
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(Tr("Отмена", "Cancel"))) {
+                        s_autoJoinPending = false;
+                    }
+                }
+                ImGui::End();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(2);
+            }
+        }
+    }
 
     // 3. On Load Game (2), Campaign (0x62), Custom Game Map (0x63), or Custom Game Settings (3):
     //    Place a neat badge in the TOP-RIGHT corner so it never overlaps the game's centered window title!
