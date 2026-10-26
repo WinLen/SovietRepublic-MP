@@ -74,6 +74,7 @@ void SettingsSync_SetFieldDiff(bool on);
 // 1) or 161440(world, building). Citizen destination lists are not covered.
 #define SETTINGS_FIELD_PAY 2000
 #define SETTINGS_FIELD_STOP 2001
+void SettingsSync_LockstepReset();
 void SettingsSync_LockstepBaseline();
 void SettingsSync_LockstepDetect();
 

@@ -492,6 +492,16 @@ bool SettingsSync_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned reg
     return false;
 }
 
+void SettingsSync_LockstepReset()
+{
+    g_lsBuildings.clear();
+    g_lsSlotData.clear();
+    g_lsList.clear();
+    g_states.clear();
+    g_pending.clear();
+    CitizenDestinations_Reset();
+}
+
 void SettingsSync_LockstepBaseline()
 {
     g_lsList.resize(200000);
@@ -769,11 +779,17 @@ void SettingsSync_Tick()
         FieldDiffScan(ClickedRecently(now));
     }
 
+    if (Commands_Capturing()) {
+        return;
+    }
+
     bool syncing = BuildSync_IsConnected() && !SyncBlock_IsActive();
     if (!syncing) {
-        CitizenDestinations_Reset();
-        g_states.clear();
-        g_pending.clear();
+        if (!g_states.empty() || !g_pending.empty()) {
+            CitizenDestinations_Reset();
+            g_states.clear();
+            g_pending.clear();
+        }
         return;
     }
     // A setting for a building whose placement is still on its way waits for it.

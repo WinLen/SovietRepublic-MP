@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See save_load.h.
 #include "save_load.h"
+#include "../session/two_states.h"
 #include <string.h>
 
 void SaveLoad_Bind(const TsmHost* host)
@@ -105,13 +106,13 @@ bool TriggerSaveGame(const char* saveName)
 
 bool WaitForSaveToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
 {
-    volatile BYTE* trigger = (volatile BYTE*)(GetWorldStatePtr() + SAVE_TRIGGER_FLAG_OFFSET);
+    volatile BYTE* saveTrigger = (volatile BYTE*)(GetWorldStatePtr() + SAVE_TRIGGER_FLAG_OFFSET);
     const DWORD stepMs = 100;
 
     if (timeoutMs == 0) {
         // No timeout: the save writes dozens of files.
         for (;;) {
-            if (*trigger == 0) return true; // dispatcher (FUN_14030d1a0) cleared it - FUN_14042cc70 is done
+            if (*saveTrigger == 0 && !TwoStates_IsSaveInProgress()) return true; // dispatcher (FUN_14030d1a0) cleared it - FUN_14042cc70 is done
             if (cancelFlag && *cancelFlag) {
                 Logf("republicmp  SAVE_LOAD: WaitForSaveToFinish cancelled");
                 return false;
@@ -121,7 +122,7 @@ bool WaitForSaveToFinish(DWORD timeoutMs, volatile bool* cancelFlag)
     }
 
     for (DWORD waited = 0; waited < timeoutMs; waited += stepMs) {
-        if (*trigger == 0) return true;
+        if (*saveTrigger == 0 && !TwoStates_IsSaveInProgress()) return true;
         if (cancelFlag && *cancelFlag) {
             Logf("republicmp  SAVE_LOAD: WaitForSaveToFinish cancelled");
             return false;

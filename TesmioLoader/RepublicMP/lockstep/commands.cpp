@@ -640,6 +640,9 @@ void Commands_SetSession(int role)
 {
     g_haveFrameRecord = false;
     VehicleSoftSync_Reset();
+    SettingsSync_LockstepReset();
+    BuildingSwitches_Reset();
+    VehicleSwitches_Reset();
     Lock();
     g_outbox.clear();
     g_record.clear();

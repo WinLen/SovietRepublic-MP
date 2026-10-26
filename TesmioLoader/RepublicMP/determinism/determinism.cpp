@@ -404,6 +404,7 @@ static bool g_probeFuzz = false;
 static volatile bool g_sessionLoadPending = false;
 static volatile bool g_sessionRunning = false;
 static volatile bool g_sessionArmed = false; // BeginSession turned the layer on for a session
+static volatile bool g_postLoadInitPending = false;
 static bool g_sessionHost = false;
 #define LOCKSTEP_SEED 0x5EED10C557E90001ull
 static bool g_probeRecord = false;
@@ -758,9 +759,7 @@ static void HookedLoadWorld(void)
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     bool session = g_sessionLoadPending;
-    if (!session) {
-        TwoStates_BeforeAnyWorldLoad();
-    }
+    TwoStates_BeforeAnyWorldLoad();
     if (g_probeState == PROBE_WAIT_LOAD || session) {
         if (!SimPatches_Apply()) {
             if (session) {
@@ -773,6 +772,7 @@ static void HookedLoadWorld(void)
             TwoStates_OnAnyWorldLoaded(false);
             return;
         }
+        g_simThread = GetCurrentThreadId();
         Determinism_Restart();
         g_simDraws = 0;
         g_simDrawHash = 1469598103934665603ull;
@@ -793,6 +793,7 @@ static void HookedLoadWorld(void)
         g_stepCount = 0;
         g_sessionLoadPending = false;
         g_sessionRunning = true;
+        g_postLoadInitPending = true;
         TwoStates_OnAnyWorldLoaded(true);
         Commands_SetSession(g_sessionHost ? COMMANDS_HOST : COMMANDS_PLAYER);
         Logf("republicmp  LOCKSTEP: shared simulation starts at this load (%s)", g_sessionHost ? "host" : "player");
@@ -804,6 +805,7 @@ static void HookedLoadWorld(void)
         SimPatches_ResetSearches();
         g_runStep = 0;
         ResetFrames();
+        g_postLoadInitPending = true;
         WriteGameSpeed(g_probeSpeed); // the first step already at the probe's speed
         if (g_probeRun == 0) {
             g_dataSnapshot.assign(g_exeBase + DATA_RVA, g_exeBase + DATA_RVA + DATA_SIZE);
@@ -835,6 +837,7 @@ static void RecordSample()
 // the admitted tick's timer restored. (by SoylentGreed)
 static void ResetFrames()
 {
+    g_framePhase = 0;
     g_frameStep = g_frameEarly = g_frameFault = g_paused = g_buttonsArmed = false;
     g_tickSpeed = g_requestedSpeed = g_probeSpeed > 1 ? 2 : 1;
     g_holdsLeft = g_menuFrames = 0;
@@ -869,6 +872,11 @@ void Determinism_GetDiagInfo(DeterminismDiagInfo* out)
 bool Determinism_IsStepFrame()
 {
     return g_active && g_frameStep && GetCurrentThreadId() == g_simThread;
+}
+
+int Determinism_GetFramePhase()
+{
+    return (int)g_framePhase;
 }
 
 static int g_toolScope = 0; // main thread only
@@ -919,6 +927,8 @@ void Determinism_EndSession()
     g_sessionArmed = false;
     g_sessionRunning = false;
     g_sessionLoadPending = false;
+    g_postLoadInitPending = false;
+    g_framePhase = 0;
     g_sentPaused = g_sentSpeed = -1;
     Commands_SetSession(COMMANDS_OFF);
     Determinism_SetActive(false, 0);
@@ -1112,10 +1122,17 @@ static void LogSessionProgress(const StateSummary& s)
 
 void Determinism_BeforePrepare()
 {
-    if (!g_active) return;
+    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
     g_simThread = GetCurrentThreadId();
     ++g_frameBeats;
     g_framePhase = 1;
+    TwoStates_RestoreUiMoneySwap();
+    if (g_postLoadInitPending) {
+        g_postLoadInitPending = false;
+        EmptySearchPool();
+        SimPatches_ResetSearches();
+        TwoStates_OnWorldLoaded();
+    }
     if (g_exeBase[GAME_TIMER_RVA + 13]) g_menuFrames = 30;
     else if (g_menuFrames) --g_menuFrames;
     TakeSpeedInput();
@@ -1261,7 +1278,7 @@ static void SessionAdmission(BYTE* timer)
 
 static void HookedSimStep(__int64 world)
 {
-    if (!g_active) {
+    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) {
         o_simStep(world);
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         return;
@@ -1301,7 +1318,7 @@ static void HookedSimStep(__int64 world)
 
 void Determinism_BeforeLate()
 {
-    if (!g_active) return;
+    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
     g_framePhase = 5;
     TakeSpeedInput();
     g_inEarly = g_frameStep;
@@ -1319,7 +1336,7 @@ void Determinism_BeforeLate()
 
 void Determinism_AfterLate()
 {
-    if (!g_active) return;
+    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
     g_framePhase = 6;
     g_inEarly = false;
     if (g_frameStep && g_frameEarly) {
@@ -1354,6 +1371,7 @@ void Determinism_AfterLate()
     Commands_AfterFrame(g_frameStep && g_frameEarly);
     memcpy(g_exeBase + GAME_TIMER_RVA, g_uiTimer, sizeof(g_uiTimer));
     g_frameStep = g_frameEarly = false;
+    g_framePhase = 0;
     // Publish completion only after the final Late and all frame cleanup.
     if (g_probeState == PROBE_RUNNING && (g_frameFault || g_runStep >= (unsigned long long)g_probeSteps))
         InterlockedExchange(&g_probeState, PROBE_RUN_DONE);

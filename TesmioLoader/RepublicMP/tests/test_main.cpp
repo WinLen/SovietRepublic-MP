@@ -647,6 +647,19 @@ static bool Test_TwoStates_SaveMetaAndScriptIniSafety()
     TEST_CHECK_NEAR(TwoStates_GetDollars(2), 10999.95, 1e-2);
     TEST_CHECK(TwoStates_GetBuildingOwner(777, -500.0f, 0.0f) == 2);
 
+    // Calling TwoStates_OnSessionJoined again (SaveSync_StartHost -> RunHostJoin) must NOT wipe building/vehicle owners
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 350.0f, true, saveRub, saveUsd);
+    TEST_CHECK(TwoStates_GetBuildingOwner(777, -500.0f, 0.0f) == 2);
+
+    // Ending a session while the world remains loaded must NOT double treasuries on subsequent PrepareHostSave/save
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // WORLD_ROAD_NETWORK_RVA != 0 (world loaded)
+    TwoStates_OnSessionEnded();
+    double prepRub[2] = {}, prepUsd[2] = {};
+    TwoStates_PrepareHostSave(false, prepRub, prepUsd);
+    TEST_CHECK_NEAR(prepRub[0], 1234567.89, 1e-2);
+    TEST_CHECK_NEAR(prepRub[1], 987654.32, 1e-2);
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+
     TwoStates_OnSessionEnded();
     return true;
 }

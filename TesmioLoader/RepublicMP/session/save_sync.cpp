@@ -529,6 +529,10 @@ static void ZipProgressCb(size_t done, size_t total, void* userData)
 
 static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
 {
+    if (!saveName) return false;
+    if (_strnicmp(saveName, "save\\", 5) == 0 || _strnicmp(saveName, "save/", 5) == 0) {
+        saveName += 5;
+    }
     char exePath[MAX_PATH] = {};
     DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
     if (len == 0 || len == MAX_PATH) return false;
@@ -671,6 +675,38 @@ static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
     (void)sock;
 }
 
+static void SafeSaveHostWorldSaveNames(char* outField, size_t fieldSize, char* outDat, size_t datSize)
+{
+    outField[0] = '\0';
+    outDat[0] = '\0';
+    __try {
+        const char* curField = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
+        if (curField && curField[0] && strstr(curField, "mp_syncsave_") == nullptr) {
+            strncpy_s(outField, fieldSize, curField, _TRUNCATE);
+        }
+        const char* curDat = (const char*)((uintptr_t)g_exe + SAVE_NAME_DAT_RVA);
+        if (curDat && curDat[0] && strstr(curDat, "mp_syncsave_") == nullptr) {
+            strncpy_s(outDat, datSize, curDat, _TRUNCATE);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static void SafeRestoreHostWorldSaveNames(const char* origField, const char* origDat)
+{
+    __try {
+        if (origField && origField[0]) {
+            char* dstField = (char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
+            strncpy_s(dstField, SAVE_NAME_FIELD_MAX_LEN, origField, _TRUNCATE);
+        }
+        if (origDat && origDat[0]) {
+            char* dstDat = (char*)((uintptr_t)g_exe + SAVE_NAME_DAT_RVA);
+            strncpy_s(dstDat, SAVE_NAME_MAX_LEN, origDat, _TRUNCATE);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 // One join, from the accepted connection to the lifted sync screen. The
 // caller's session loop decides what happens next. Returns true when the
 // player is in the game with all channels up.
@@ -684,6 +720,9 @@ static bool RunHostJoin(SOCKET sock)
     bool joined = false;
     char madeSaveDir[MAX_PATH] = {}; // cleaned up below
     char madeZip[MAX_PATH] = {};
+    char origSaveField[128] = {};
+    char origSaveDat[128] = {};
+    SafeSaveHostWorldSaveNames(origSaveField, sizeof(origSaveField), origSaveDat, sizeof(origSaveDat));
 
     do {
         // 1. Versions.
@@ -876,6 +915,7 @@ static bool RunHostJoin(SOCKET sock)
     // The zip only existed to be sent.
     if (madeZip[0]) DeleteFileA(madeZip);
     if (madeSaveDir[0]) KeepOnlyNewestHostSave(madeSaveDir);
+    SafeRestoreHostWorldSaveNames(origSaveField, origSaveDat);
 
     g_activeSock = INVALID_SOCKET;
     NetworkCloseSocket(sock);
@@ -1108,8 +1148,14 @@ static bool RunClientJoin(bool rejoin)
         // 5. Unpack (relayed to the host).
         ClientStep(5, Tr("Распаковка мира", "Unpacking"), 0);
         SendMsg(sock, MSG_STEP, 5, 0, Tr("распаковка мира", "unpacking"));
+        {
+            std::error_code rmEc;
+            std::filesystem::remove_all(destDir, rmEc);
+        }
         ProgressCtx unpackCtx = { sock, 5, Tr("распаковка мира", "unpacking"), -100 };
-        if (!UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx)) {
+        bool unzippedOk = UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx);
+        DeleteFileA(zipPath);
+        if (!unzippedOk) {
             SetSessionError(Tr("Ошибка распаковки мира", "unpacking the world failed"));
             SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
             break;
@@ -1146,7 +1192,12 @@ static bool RunClientJoin(bool rejoin)
                                       theirs.stateRub, theirs.stateUsd);
         }
         TriggerLoadSave(receivedSaveName);
-        if (!WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock)) {
+        bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
+        {
+            std::error_code rmEc;
+            std::filesystem::remove_all(destDir, rmEc);
+        }
+        if (!loadFinished) {
             if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
             else SetSessionError(Tr("Хост отключился во время загрузки мира", "the host dropped while the world was loading"));
             if (g_lockstep) TwoStates_OnSessionEnded();

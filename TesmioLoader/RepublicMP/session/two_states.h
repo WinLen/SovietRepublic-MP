@@ -76,6 +76,7 @@ void TwoStates_AfterStep(BYTE* world);
 //   - Around local UI / tool frames so the game HUD and windows show the local state's balance
 void TwoStates_UiBegin();
 void TwoStates_UiEnd();
+void TwoStates_RestoreUiMoneySwap();
 void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd);
 void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd);
 
@@ -136,6 +137,8 @@ bool TwoStates_IsImportingSpSave();
 void TwoStates_BeforeAnyWorldLoad();
 void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad);
 bool TwoStates_TriggerQuickCoopSave();
+bool TwoStates_IsSaveInProgress();
+unsigned long long TwoStates_GetCompletedSaveCount();
 
 // Testable domain helpers (used by runtime and unit test suite)
 bool   TwoStates_IsSafeSaveScriptPath(const char* saveDir);

@@ -272,6 +272,13 @@ static void Compare(const Snap& s, int kind, bool click)
     if (m.count) Submit(m);
 }
 
+void VehicleSwitches_Reset()
+{
+    g_taken = false;
+    g_snaps.clear();
+    g_bytes.clear();
+}
+
 void VehicleSwitches_Before(bool simBusy)
 {
     g_taken = false;

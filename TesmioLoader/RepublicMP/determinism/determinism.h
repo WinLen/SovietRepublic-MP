@@ -107,6 +107,7 @@ void Determinism_BeforePrepare();
 void Determinism_BeforeLate();
 void Determinism_AfterLate();
 bool Determinism_IsStepFrame();
+int Determinism_GetFramePhase();
 
 // This PC's own tool work on a tick's frame (Prepare, the tool handlers in
 // Late; determinism/sim_patches): random draws are private and the actions

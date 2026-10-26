@@ -360,7 +360,16 @@ static unsigned g_worldAt[WORLD_WORDS];
 static int g_worldCount = 0;
 static unsigned g_auth[WORLD_WORDS], g_stale[WORLD_WORDS], g_sent[WORLD_WORDS];
 static bool g_sentValid[WORLD_WORDS], g_authReady = false, g_worldFrame = false;
-static unsigned long long g_worldEpoch = 0;
+
+void BuildingSwitches_Reset()
+{
+    g_taken = false;
+    g_worldFrame = false;
+    g_authReady = false;
+    g_ranges.clear();
+    g_bytes.clear();
+    memset(g_sentValid, 0, sizeof(g_sentValid));
+}
 
 static void WorldWords()
 {

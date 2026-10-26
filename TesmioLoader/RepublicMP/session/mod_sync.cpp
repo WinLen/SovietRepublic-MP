@@ -2,6 +2,7 @@
 // See mod_sync.h.
 #include "mod_sync.h"
 #include "two_states.h"
+#include "../determinism/determinism.h"
 #include "../save/save_zip.h"
 #include "../ui/sync_block.h"
 #include "../ui/ui_log.h"
@@ -613,8 +614,29 @@ static void CatalogFromEngineManager(void* mgrPtr)
     }
 }
 
+static bool g_inWorkshopRefreshHook = false;
+static bool g_rebuildHostActiveOnRefresh = false;
+static std::vector<uint64_t> g_pendingHostSaveIds;
+static void BuildHostActiveModListLocked(const std::vector<uint64_t>& saveIds, std::vector<uint64_t>& outActiveIds);
+
+static bool IsWorldLoadPending()
+{
+    if (Determinism_WorldLoading()) return true;
+    BYTE trigger = 0;
+    if (g_exeBase && SafeReadPod(g_exeBase + LOAD_TRIGGER_DAT_RVA, &trigger) && trigger != 0) {
+        return true;
+    }
+    return false;
+}
+
 static void __fastcall Hook_WorkshopRefresh(void* thisPtr, bool a2, bool skipWip, bool a4)
 {
+    if (!g_inWorkshopRefreshHook && IsWorldLoadPending()) {
+        g_inWorkshopRefreshHook = true;
+        TwoStates_BeforeAnyWorldLoad();
+        g_inWorkshopRefreshHook = false;
+    }
+
     LockMods();
     // Restore any hidden tail items BEFORE o_workshopRefresh runs so the engine
     // frees 100% of previously allocated SOVIET_WORKSHOP_ITEM* objects without leaking.
@@ -635,6 +657,11 @@ static void __fastcall Hook_WorkshopRefresh(void* thisPtr, bool a2, bool skipWip
     LockMods();
     g_needMainThreadWorkshopRefresh = false;
     CatalogFromEngineManager(thisPtr);
+    if (g_rebuildHostActiveOnRefresh) {
+        g_rebuildHostActiveOnRefresh = false;
+        BuildHostActiveModListLocked(g_pendingHostSaveIds, g_sessionAllowedIds);
+        g_pendingHostSaveIds.clear();
+    }
 
     if (g_sessionFilterActive) {
         int before = SafeGetWorkshopMgrCount(thisPtr);
@@ -1200,7 +1227,7 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
         }
 
         void* mgrPtr = SafeGetEngineWorkshopMgr();
-        if (g_needMainThreadWorkshopRefresh && mgrPtr && o_workshopRefresh) {
+        if (!g_inWorkshopRefreshHook && g_needMainThreadWorkshopRefresh && mgrPtr && o_workshopRefresh) {
             DiagLog_Printf("MOD_SYNC", "[HOST] Refreshing SOVIET_WORKSHOP_MANAGER after downloading save mods");
             Hook_WorkshopRefresh(mgrPtr, false, false, false);
             ModSync_RefreshCatalog();
@@ -1210,7 +1237,10 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
         LockMods();
         BuildHostActiveModListLocked(saveIds, g_sessionAllowedIds);
         g_sessionFilterActive = true;
-        if (mgrPtr) {
+        if (g_inWorkshopRefreshHook) {
+            g_pendingHostSaveIds = saveIds;
+            g_rebuildHostActiveOnRefresh = true;
+        } else if (mgrPtr) {
             int before = SafeGetWorkshopMgrCount(mgrPtr) + g_hiddenTailCount;
             int kept = SafeFilterAndSortWorkshopMgr(
                 mgrPtr,
@@ -1221,6 +1251,10 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
                  before, kept, (int)g_packMode, saveIds.size());
         }
         UnlockMods();
+        return;
+    }
+
+    if (g_inWorkshopRefreshHook) {
         return;
     }
 

@@ -588,7 +588,7 @@ static void PrivateLate(__int64 world)
 
 static void HookedLate(__int64 world)
 {
-    bool active = g_on && Determinism_IsActive() && world == (__int64)(g_exeBase + WORLD_RVA);
+    bool active = g_on && Determinism_IsActive() && !Determinism_WorldLoading() && world == (__int64)(g_exeBase + WORLD_RVA);
     if (!active) { o_late(world); return; }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
@@ -931,7 +931,7 @@ static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
     UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
-    if (!g_on || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
+    if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
     BYTE saved[SEARCH_WORKSPACE_SIZE];
     memcpy(saved, shared, sizeof(saved));
@@ -1002,7 +1002,7 @@ static void DetPrepare(__int64 world)
 {
     typedef void (*PrepareFn)(__int64);
     PrepareFn original = (PrepareFn)(g_exeBase + PREPARE_RVA);
-    if (!g_on || world != (__int64)(g_exeBase + WORLD_RVA)) {
+    if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || world != (__int64)(g_exeBase + WORLD_RVA)) {
         original(world);
         return;
     }

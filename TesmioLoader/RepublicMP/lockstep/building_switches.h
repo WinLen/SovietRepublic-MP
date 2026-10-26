@@ -20,6 +20,7 @@
 #include "tesmio_plugin.h"
 
 void BuildingSwitches_Bind(const TsmHost* host);
+void BuildingSwitches_Reset();
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (the comparison is skipped).

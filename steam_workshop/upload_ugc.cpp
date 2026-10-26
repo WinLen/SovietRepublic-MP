@@ -272,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Single-PC Dual-Window Co-op Testbed (CreateEventW RenderStart/RenderFinished/FillingrStart isolation, WndProc SW_MINIMIZE & Sleep(0) patches, ClipCursor unlock, Unfocused InputBlock, Local PC Host auto-discovery)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Save/Load sync pipeline & Client Join synchronization fixes (WaitForSaveToFinish atomicity, early Hook_WorkshopRefresh world-load prep, UI money swap lockstep guard, treasury/ownership persistence, SettingsSync thread safety)");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

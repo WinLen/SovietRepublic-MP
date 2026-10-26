@@ -16,6 +16,7 @@
 #include "tesmio_plugin.h"
 
 void VehicleSwitches_Bind(const TsmHost* host);
+void VehicleSwitches_Reset();
 
 // Render thread, around the interface routine. simBusy: the simulation's phase
 // runs now (the comparison is skipped).
