@@ -149,13 +149,6 @@ static U64 RelayLedger(U64 world, U64 row, U64 ledger, float a4, U64 a5, float a
         strncpy_s(m.resource, (const char*)resource, _TRUNCATE);
         m.value8 = *(float*)(row + 8);
         m.valueC = *(unsigned*)(row + 12);
-        // The caller (3A8A70, 2BADE0, or 4FCAF0) subtracted `a4` from world+0x580 (USD) or world+0x588 (RUB)
-        // immediately before calling 0x2FDB00. Refund it locally so the deduction only happens deterministically
-        // inside BrushTools_ApplyLedger on both PCs (under TwoStates_BeginCommand/EndCommand).
-        if (*(int*)(world + 0x578) == 0) {
-            if (m.ledger == 0x11330) *(double*)(world + 0x580) += (double)a4;
-            else if (m.ledger == 0x11360) *(double*)(world + 0x588) += (double)a4;
-        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return original(world, row, ledger, a4, a5, a6, a7);
     }
@@ -180,10 +173,6 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
         if (!resource) {
             Logf("republicmp  BRUSH: no resource [%s] here - the ledger row is not written", m.resource);
             return false;
-        }
-        if (*(int*)(world + 0x578) == 0) {
-            if (m.ledger == 0x11330) *(double*)(world + 0x580) -= (double)m.a4;
-            else if (m.ledger == 0x11360) *(double*)(world + 0x588) -= (double)m.a4;
         }
         unsigned char row[16];
         memcpy(row, &resource, 8);

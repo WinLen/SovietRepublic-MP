@@ -331,19 +331,20 @@ static void Compare(const LsHash& theirs)
     bool vehLogicalDiff = (a.hashVehicles != b.hashVehicles);
     bool vehPosDiff = (a.hashVehiclesPos != b.hashVehiclesPos);
     bool citDiff = (a.hashCitizens != b.hashCitizens);
-    if (vehLogicalDiff || vehPosDiff || citDiff) {
+    bool moneyDiff = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05);
+    if (vehLogicalDiff || vehPosDiff || citDiff || moneyDiff) {
         VehicleSoftSync_RequestImmediate();
         if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
             g_lastSoftDriftLogTick = theirs.tick;
-            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d, vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
-                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff,
+            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d money=%d, vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
+                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, (int)moneyDiff,
                  a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
-                 a.citizens, b.citizens, a.ageTotal, b.ageTotal);
+                 a.citizens, b.citizens, a.ageTotal, b.ageTotal, a.rub, b.rub);
         }
     }
 
     char what[160] = "";
-    if (a.hashClock != b.hashClock) strcat_s(what, "clock/money ");
+    if (a.hashClock != b.hashClock) strcat_s(what, "clock ");
     if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
     if (!what[0]) {
         g_hardMismatchCount = 0;

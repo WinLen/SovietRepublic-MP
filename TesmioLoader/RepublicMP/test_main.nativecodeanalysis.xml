@@ -216,14 +216,14 @@
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
       <FILENAME>test_main.cpp</FILENAME>
-      <LINE>126</LINE>
+      <LINE>127</LINE>
       <COLUMN>10</COLUMN>
     </SFA>
     <DEFECTCODE>6387</DEFECTCODE>
     <DESCRIPTION>"g_mockExeBuffer" может быть равен "0":  это не соответствует спецификации функции "memset". </DESCRIPTION>
     <FUNCTION>InitMockHarness</FUNCTION>
     <DECORATED>?InitMockHarness@@YAXXZ</DECORATED>
-    <FUNCLINE>121</FUNCLINE>
+    <FUNCLINE>122</FUNCLINE>
     <PROBABILITY>1</PROBABILITY>
     <RANK>4</RANK>
     <CATEGORY>
@@ -233,13 +233,13 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>123</LINE>
+        <LINE>124</LINE>
         <COLUMN>8</COLUMN>
       </SFA>
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>124</LINE>
+        <LINE>125</LINE>
         <COLUMN>24</COLUMN>
         <KEYEVENT>
           <ID>1</ID>
@@ -251,7 +251,7 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>126</LINE>
+        <LINE>127</LINE>
         <COLUMN>10</COLUMN>
         <KEYEVENT>
           <ID>2</ID>
@@ -263,7 +263,7 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>126</LINE>
+        <LINE>127</LINE>
         <COLUMN>10</COLUMN>
         <KEYEVENT>
           <ID>3</ID>
@@ -278,14 +278,14 @@
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
       <FILENAME>test_main.cpp</FILENAME>
-      <LINE>127</LINE>
+      <LINE>128</LINE>
       <COLUMN>30</COLUMN>
     </SFA>
     <DEFECTCODE>6011</DEFECTCODE>
-    <DESCRIPTION>Разыменование пустого указателя "g_mockExeBuffer". Самое раннее расположение, где это могло произойти, см. в строке 126</DESCRIPTION>
+    <DESCRIPTION>Разыменование пустого указателя "g_mockExeBuffer". Самое раннее расположение, где это могло произойти, см. в строке 127</DESCRIPTION>
     <FUNCTION>InitMockHarness</FUNCTION>
     <DECORATED>?InitMockHarness@@YAXXZ</DECORATED>
-    <FUNCLINE>121</FUNCLINE>
+    <FUNCLINE>122</FUNCLINE>
     <PROBABILITY>1</PROBABILITY>
     <RANK>4</RANK>
     <CATEGORY>
@@ -295,13 +295,13 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>123</LINE>
+        <LINE>124</LINE>
         <COLUMN>8</COLUMN>
       </SFA>
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>124</LINE>
+        <LINE>125</LINE>
         <COLUMN>24</COLUMN>
         <KEYEVENT>
           <ID>1</ID>
@@ -313,7 +313,7 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>126</LINE>
+        <LINE>127</LINE>
         <COLUMN>10</COLUMN>
         <KEYEVENT>
           <ID>2</ID>
@@ -325,7 +325,7 @@
       <SFA>
         <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\tests\</FILEPATH>
         <FILENAME>test_main.cpp</FILENAME>
-        <LINE>127</LINE>
+        <LINE>128</LINE>
         <COLUMN>30</COLUMN>
         <KEYEVENT>
           <ID>3</ID>

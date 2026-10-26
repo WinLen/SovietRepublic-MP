@@ -87,16 +87,6 @@ bool StateHash_Compute(StateSummary* out)
         MixInt(out->hashClock, out->day);
         MixInt(out->hashClock, out->year);
         MixFloat(out->hashClock, out->dayProgress);
-        Mix(out->hashClock, &out->usd, sizeof(double));
-        Mix(out->hashClock, &out->rub, sizeof(double));
-        if (TwoStates_IsActive()) {
-            double r1 = TwoStates_GetRubles(1), r2 = TwoStates_GetRubles(2);
-            double u1 = TwoStates_GetDollars(1), u2 = TwoStates_GetDollars(2);
-            Mix(out->hashClock, &r1, sizeof(double));
-            Mix(out->hashClock, &r2, sizeof(double));
-            Mix(out->hashClock, &u1, sizeof(double));
-            Mix(out->hashClock, &u2, sizeof(double));
-        }
 
         BYTE* bvec = w + WORLD_BUILDINGS_OFFSET;
         long long nb = Count(bvec, 8);

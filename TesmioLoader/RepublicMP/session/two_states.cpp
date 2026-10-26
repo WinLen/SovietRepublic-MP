@@ -835,6 +835,21 @@ double TwoStates_LocalDollars()
     return TwoStates_GetDollars(TwoStates_LocalState());
 }
 
+void TwoStates_SyncBalancesFromHost(double r1, double r2, double u1, double u2)
+{
+    if (!TwoStates_IsActive() || IsUnlimitedMoney()) return;
+    if (!isfinite(r1) || !isfinite(r2) || !isfinite(u1) || !isfinite(u2)) return;
+    g_stateRub[0] = r1;
+    g_stateRub[1] = r2;
+    g_stateUsd[0] = u1;
+    g_stateUsd[1] = u2;
+    __try {
+        *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static int g_cmdOwner = 1;
 static int g_cmdBuildingsBefore = 0;
 static int g_cmdVehiclesBefore = 0;

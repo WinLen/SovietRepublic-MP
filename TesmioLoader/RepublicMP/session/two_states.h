@@ -61,6 +61,7 @@ double TwoStates_GetRubles(int state);
 double TwoStates_GetDollars(int state);
 double TwoStates_LocalRubles();
 double TwoStates_LocalDollars();
+void TwoStates_SyncBalancesFromHost(double r1, double r2, double u1, double u2);
 
 // Deterministic Lockstep hooks:
 //   - Around Apply(const Command& c) in commands.cpp

@@ -102,6 +102,12 @@ bool SaveSync_GetLockstep();
 // Refuse a join when the two games' DLCs differ (on by default; a join goes ahead when either player turns it off).
 void SaveSync_SetDlcCheck(bool on);
 bool SaveSync_GetDlcCheck();
+// Extracts a lowercase DLC token (e.g. "dlc3") from a building type name like "DLC3_swimming_hall"; returns false if not a DLC building.
+bool SaveSync_ExtractBuildingDlcToken(const char* typeName, char* outToken, size_t outSize);
+// True if `dlcToken` (e.g. "dlc3") is present in a comma-separated DLC list (e.g. "dlc2,dlc3").
+bool SaveSync_IsDlcTokenInList(const char* list, const char* dlcToken);
+// True if placing `typeName` is allowed in the current session (blocks DLC buildings when the peer lacks that DLC).
+bool SaveSync_CheckBuildingDlcAllowed(const char* typeName);
 // The current session runs in lockstep.
 bool SaveSync_IsLockstepSession();
 

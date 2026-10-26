@@ -272,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Save/Load sync pipeline & Client Join synchronization fixes (WaitForSaveToFinish atomicity, early Hook_WorkshopRefresh world-load prep, UI money swap lockstep guard, treasury/ownership persistence, SettingsSync thread safety)");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Fix Steam session desyncs: DLC building placement protection when partner lacks DLC, authoritative treasury soft-sync healing in VehicleSoftSync, and separation of hashClock from treasury rounding");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

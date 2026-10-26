@@ -28,6 +28,7 @@
 #include "../lockstep/building_switches.h"
 #include "../determinism/state_hash.h"
 #include "../session/two_states.h"
+#include "../session/save_sync.h"
 #include "../session/mod_sync.h"
 #include "../save/save_zip.h"
 #include "../world_sync/networks/road_sync.h"
@@ -419,6 +420,31 @@ static bool Test_StateHash()
     TEST_CHECK(sVehPosMut.hashVehicles == sBldMut.hashVehicles);
     TEST_CHECK(sVehPosMut.hashVehiclesPos != sBldMut.hashVehiclesPos);
 
+    // Mutate treasury balance -> rub/usd updated, while hashClock stays strictly tied to simulation clock
+    *(double*)(world + WORLD_RUB_OFFSET) = 1500004.14;
+    StateSummary sRubMut = {};
+    TEST_CHECK(StateHash_Compute(&sRubMut));
+    TEST_CHECK(sRubMut.hashClock == sVehPosMut.hashClock);
+    TEST_CHECK_NEAR(sRubMut.rub, 1500004.14, 1e-4);
+
+    // Mutate simulation dayProgress -> hashClock changes
+    *(float*)(world + WORLD_PROGRESS_OFFSET) = 0.500f;
+    StateSummary sClkMut = {};
+    TEST_CHECK(StateHash_Compute(&sClkMut));
+    TEST_CHECK(sClkMut.hashClock != sRubMut.hashClock);
+
+    // DLC building token extraction & list checks
+    char dlcTok[16] = {};
+    TEST_CHECK(SaveSync_ExtractBuildingDlcToken("DLC3_swimming_hall", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc3") == 0);
+    TEST_CHECK(SaveSync_ExtractBuildingDlcToken("dlc2_residential01", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc2") == 0);
+    TEST_CHECK(!SaveSync_ExtractBuildingDlcToken("shop_prior", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(SaveSync_IsDlcTokenInList("dlc2,dlc3", "dlc2"));
+    TEST_CHECK(SaveSync_IsDlcTokenInList("dlc2,dlc3", "dlc3"));
+    TEST_CHECK(!SaveSync_IsDlcTokenInList("dlc2,dlc3", "dlc1"));
+    TEST_CHECK(!SaveSync_IsDlcTokenInList("", "dlc3"));
+
     // Per-object records extraction
     std::vector<BuildingRecord> bldRecs;
     std::vector<VehicleRecord> vehRecs;
@@ -455,6 +481,14 @@ static bool Test_TwoStates_ZonesAndEconomy()
     TEST_CHECK_NEAR(TwoStates_GetRubles(1), 1200000.0, 1e-3);
     TEST_CHECK_NEAR(TwoStates_GetRubles(2), 800000.0, 1e-3);
     TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 2000000.0, 1e-3);
+
+    // Authoritative treasury soft-sync heal from Host
+    TwoStates_SyncBalancesFromHost(1150000.0, 750000.0, 290000.0, 195000.0);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 1150000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 750000.0, 1e-3);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 1900000.0, 1e-3);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 485000.0, 1e-3);
+    TwoStates_SyncBalancesFromHost(1200000.0, 800000.0, 300000.0, 200000.0);
 
     // Zone geometry checks: West (< -250), Shared ([-250 .. +250]), East (> +250)
     TEST_CHECK(TwoStates_GetZoneAt(-500.0f, 0.0f) == 1);

@@ -4,11 +4,15 @@
 #include "../../lockstep/commands.h"
 #include "../../lockstep/lockstep_net.h"
 #include "../../determinism/held_frame.h"
+#include "../../session/two_states.h"
 #include "../../core/diag_log.h"
 #include <string.h>
 #include <math.h>
 
 #define WORLD_RVA 0x9D4F10
+#define WORLD_UNLIMITED_MONEY_OFFSET 0x578
+#define WORLD_USD_OFFSET 0x580
+#define WORLD_RUB_OFFSET 0x588
 #define WORLD_VEHICLES_OFFSET 0x12810
 
 #define VEH_ID_OFFSET 0x04
@@ -46,11 +50,22 @@ struct VehicleSoftSyncEntry {
     float cargoAmount[2];
 };
 
+struct VehicleSoftSyncTreasury {
+    unsigned magic; // 0x54525359 ('TRSY')
+    unsigned flags; // bit 0: treasury valid, bit 1: TwoStates active
+    double worldRub;
+    double worldUsd;
+    double stateRub[2];
+    double stateUsd[2];
+};
+
 struct VehicleSoftSyncMsg {
     unsigned count;
     VehicleSoftSyncEntry entries[SOFT_SYNC_BATCH_MAX];
 };
 #pragma pack(pop)
+
+#define VSS_TREASURY_MAGIC 0x54525359u
 
 static const unsigned kVehicleNodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
 
@@ -159,12 +174,26 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
     return ok;
 }
 
-static bool BuildBatch(VehicleSoftSyncMsg& msg, bool immediate)
+static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr, bool immediate)
 {
     msg.count = 0;
+    memset(&tr, 0, sizeof(tr));
     DiagLog_BeginSafeSeh();
     __try {
         BYTE* w = g_exeBase + WORLD_RVA;
+        if (*(int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) == 0) {
+            tr.magic = VSS_TREASURY_MAGIC;
+            tr.flags = 1u;
+            tr.worldRub = *(double*)(w + WORLD_RUB_OFFSET);
+            tr.worldUsd = *(double*)(w + WORLD_USD_OFFSET);
+            if (TwoStates_IsActive()) {
+                tr.flags |= 2u;
+                tr.stateRub[0] = TwoStates_GetRubles(1);
+                tr.stateRub[1] = TwoStates_GetRubles(2);
+                tr.stateUsd[0] = TwoStates_GetDollars(1);
+                tr.stateUsd[1] = TwoStates_GetDollars(2);
+            }
+        }
         BYTE** begin = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
         BYTE** end = *(BYTE***)(w + WORLD_VEHICLES_OFFSET + 8);
         if (begin && end > begin) {
@@ -207,9 +236,10 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, bool immediate)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         msg.count = 0;
+        tr.magic = 0;
     }
     DiagLog_EndSafeSeh();
-    return msg.count > 0;
+    return msg.count > 0 || tr.magic == VSS_TREASURY_MAGIC;
 }
 
 void VehicleSoftSync_HostTick(unsigned long long tick)
@@ -233,11 +263,19 @@ void VehicleSoftSync_HostTick(unsigned long long tick)
     if (!immediate && (tick % SOFT_SYNC_INTERVAL_TICKS) != 0) return;
 
     VehicleSoftSyncMsg msg = {};
-    if (!BuildBatch(msg, immediate)) return;
+    VehicleSoftSyncTreasury tr = {};
+    if (!BuildBatch(msg, tr, immediate)) return;
 
     g_vssDiag.batchesSent++;
-    size_t wireBytes = sizeof(unsigned) + msg.count * sizeof(VehicleSoftSyncEntry);
-    Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, &msg, wireBytes);
+    size_t baseBytes = sizeof(unsigned) + msg.count * sizeof(VehicleSoftSyncEntry);
+    BYTE wireBuf[sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury)];
+    memcpy(wireBuf, &msg, baseBytes);
+    size_t wireBytes = baseBytes;
+    if (tr.magic == VSS_TREASURY_MAGIC) {
+        memcpy(wireBuf + baseBytes, &tr, sizeof(tr));
+        wireBytes += sizeof(tr);
+    }
+    Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, wireBuf, wireBytes);
 }
 
 static BYTE* FindVehicle(BYTE** begin, size_t total, int place, unsigned vehicleId)
@@ -257,8 +295,11 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
 {
     if (size < sizeof(unsigned)) return false;
     const VehicleSoftSyncMsg* msg = (const VehicleSoftSyncMsg*)data;
-    if (msg->count == 0 || msg->count > SOFT_SYNC_BATCH_MAX) return false;
-    if (size != sizeof(unsigned) + msg->count * sizeof(VehicleSoftSyncEntry)) return false;
+    if (msg->count > SOFT_SYNC_BATCH_MAX) return false;
+    size_t baseBytes = sizeof(unsigned) + msg->count * sizeof(VehicleSoftSyncEntry);
+    bool hasTreasury = (size == baseBytes + sizeof(VehicleSoftSyncTreasury));
+    if (size != baseBytes && !hasTreasury) return false;
+    if (msg->count == 0 && !hasTreasury) return false;
 
     // The Host generated these authoritative values; only the Client needs soft self-healing.
     if (LockstepNet_IsHost()) return true;
@@ -267,9 +308,22 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
     DiagLog_BeginSafeSeh();
     __try {
         BYTE* w = g_exeBase + WORLD_RVA;
+        if (hasTreasury) {
+            VehicleSoftSyncTreasury tr = {};
+            memcpy(&tr, (const BYTE*)data + baseBytes, sizeof(tr));
+            if (tr.magic == VSS_TREASURY_MAGIC && (tr.flags & 1u) != 0 && *(int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) == 0) {
+                if ((tr.flags & 2u) != 0 && TwoStates_IsActive()) {
+                    TwoStates_SyncBalancesFromHost(tr.stateRub[0], tr.stateRub[1], tr.stateUsd[0], tr.stateUsd[1]);
+                } else if (isfinite(tr.worldRub) && isfinite(tr.worldUsd)) {
+                    *(double*)(w + WORLD_RUB_OFFSET) = tr.worldRub;
+                    *(double*)(w + WORLD_USD_OFFSET) = tr.worldUsd;
+                }
+                ok = true;
+            }
+        }
         BYTE** begin = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
         BYTE** end = *(BYTE***)(w + WORLD_VEHICLES_OFFSET + 8);
-        if (begin && end > begin) {
+        if (msg->count > 0 && begin && end > begin) {
             size_t total = (size_t)(end - begin);
             if (total <= MAX_VEHICLES_SCAN) {
                 float batchMaxDriftSq = 0.0f;

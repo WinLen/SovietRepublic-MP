@@ -592,6 +592,77 @@ static void MakeDlcs(SessionDlcs* d)
     ListDlcs(d->list, sizeof(d->list));
 }
 
+static char g_sessionHostDlcs[64] = {};
+static char g_sessionPlayerDlcs[64] = {};
+static volatile LONG g_sessionDlcsValid = 0;
+
+bool SaveSync_ExtractBuildingDlcToken(const char* typeName, char* outToken, size_t outSize)
+{
+    if (outToken && outSize > 0) outToken[0] = '\0';
+    if (!typeName || !outToken || outSize < 6) return false;
+    if (_strnicmp(typeName, "dlc", 3) != 0) return false;
+    size_t i = 3;
+    while (typeName[i] >= '0' && typeName[i] <= '9') ++i;
+    if (i == 3 || typeName[i] != '_' || i >= outSize) return false;
+    for (size_t k = 0; k < i; ++k) {
+        outToken[k] = (char)tolower((unsigned char)typeName[k]);
+    }
+    outToken[i] = '\0';
+    return true;
+}
+
+bool SaveSync_IsDlcTokenInList(const char* list, const char* dlcToken)
+{
+    if (!list || !list[0] || !dlcToken || !dlcToken[0]) return false;
+    size_t tokLen = strlen(dlcToken);
+    const char* p = list;
+    while (*p) {
+        while (*p == ',' || *p == ' ') ++p;
+        if (!*p) break;
+        const char* start = p;
+        while (*p && *p != ',' && *p != ' ') ++p;
+        size_t len = (size_t)(p - start);
+        if (len == tokLen && _strnicmp(start, dlcToken, tokLen) == 0) return true;
+    }
+    return false;
+}
+
+bool SaveSync_CheckBuildingDlcAllowed(const char* typeName)
+{
+    SessionState st = SaveSync_GetState();
+    if (st != SESSION_HOST_IN_GAME && st != SESSION_CLIENT_IN_GAME) return true;
+    if (InterlockedCompareExchange(&g_sessionDlcsValid, 0, 0) == 0) return true;
+
+    char dlcToken[16] = {};
+    if (!SaveSync_ExtractBuildingDlcToken(typeName, dlcToken, sizeof(dlcToken))) return true;
+
+    EnterCriticalSection(&g_lock);
+    bool hostHas = SaveSync_IsDlcTokenInList(g_sessionHostDlcs, dlcToken);
+    bool playerHas = SaveSync_IsDlcTokenInList(g_sessionPlayerDlcs, dlcToken);
+    LeaveCriticalSection(&g_lock);
+
+    if (hostHas && playerHas) return true;
+
+    static ULONGLONG s_lastDlcBlockToastMs = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - s_lastDlcBlockToastMs >= 1500) {
+        s_lastDlcBlockToastMs = now;
+        char upperDlc[16] = {};
+        for (size_t k = 0; dlcToken[k] && k + 1 < sizeof(upperDlc); ++k)
+            upperDlc[k] = (char)toupper((unsigned char)dlcToken[k]);
+        SaveStatus(Tr("[КООП] Здание [%s] заблокировано: у партнёра не установлено %s (вызовет рассинхрон)!",
+                      "[CO-OP] Building [%s] blocked: partner does not have %s installed (would cause desync)!"),
+                   typeName, upperDlc);
+        char toast[220];
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("⛔ Здание из %s недоступно: у партнёра нет этого DLC!",
+                       "⛔ Building from %s blocked: partner lacks this DLC!"),
+                    upperDlc);
+        TwoStates_AddToast(toast, 3);
+    }
+    return false;
+}
+
 // Both sides decide alike: false refuses the join (why says what differs).
 static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool host, char* why, size_t whySize)
 {
@@ -599,6 +670,11 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     memcpy(peer, theirs.list, sizeof(theirs.list));
     const char* hostList = host ? mine.list : peer;
     const char* playerList = host ? peer : mine.list;
+    EnterCriticalSection(&g_lock);
+    strncpy_s(g_sessionHostDlcs, hostList, _TRUNCATE);
+    strncpy_s(g_sessionPlayerDlcs, playerList, _TRUNCATE);
+    InterlockedExchange(&g_sessionDlcsValid, 1);
+    LeaveCriticalSection(&g_lock);
     Logf("republicmp  SESSION: DLCs - host [%s], player [%s]", hostList[0] ? hostList : "none", playerList[0] ? playerList : "none");
     if (strcmp(mine.list, peer) == 0) return true;
     bool refuse = mine.check && theirs.check;

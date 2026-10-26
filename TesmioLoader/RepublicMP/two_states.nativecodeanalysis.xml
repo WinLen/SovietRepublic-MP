@@ -188,279 +188,265 @@
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>133</LINE>
+      <LINE>141</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_RestoreUiMoneySwap</FUNCTION>
+    <DECORATED>?TwoStates_RestoreUiMoneySwap@@YAXXZ</DECORATED>
+    <FUNCLINE>130</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>175</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>ApplyRuntimeTerrainBounds</FUNCTION>
     <DECORATED>?ApplyRuntimeTerrainBounds@@YAXPEAE@Z</DECORATED>
-    <FUNCLINE>119</FUNCLINE>
+    <FUNCLINE>161</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>266</LINE>
+      <LINE>308</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>EndEconAttribution</FUNCTION>
     <DECORATED>?EndEconAttribution@@YAXH@Z</DECORATED>
-    <FUNCLINE>248</FUNCLINE>
+    <FUNCLINE>290</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>380</LINE>
+      <LINE>422</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>SnapshotVehiclesBeforeSave</FUNCTION>
     <DECORATED>?SnapshotVehiclesBeforeSave@@YAXXZ</DECORATED>
-    <FUNCLINE>358</FUNCLINE>
+    <FUNCLINE>400</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>395</LINE>
+      <LINE>437</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>RestoreVehiclesAfterSave</FUNCTION>
     <DECORATED>?RestoreVehiclesAfterSave@@YAXXZ</DECORATED>
-    <FUNCLINE>385</FUNCLINE>
+    <FUNCLINE>427</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>468</LINE>
+      <LINE>513</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>H_MasterSave</FUNCTION>
     <DECORATED>?H_MasterSave@@YAXPEAE@Z</DECORATED>
-    <FUNCLINE>401</FUNCLINE>
+    <FUNCLINE>443</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>496</LINE>
+      <LINE>541</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>H_MasterSave</FUNCTION>
     <DECORATED>?H_MasterSave@@YAXPEAE@Z</DECORATED>
-    <FUNCLINE>401</FUNCLINE>
+    <FUNCLINE>443</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>662</LINE>
+      <LINE>711</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_PrepareHostSave</FUNCTION>
     <DECORATED>?TwoStates_PrepareHostSave@@YAX_NPEAN1@Z</DECORATED>
-    <FUNCLINE>615</FUNCLINE>
+    <FUNCLINE>663</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>706</LINE>
+      <LINE>748</LINE>
       <COLUMN>47</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_OnSessionJoined</FUNCTION>
     <DECORATED>?TwoStates_OnSessionJoined@@YAX_NHM0QEBN1@Z</DECORATED>
-    <FUNCLINE>668</FUNCLINE>
+    <FUNCLINE>717</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>742</LINE>
+      <LINE>785</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_OnWorldLoaded</FUNCTION>
     <DECORATED>?TwoStates_OnWorldLoaded@@YAXXZ</DECORATED>
-    <FUNCLINE>728</FUNCLINE>
+    <FUNCLINE>770</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>827</LINE>
+      <LINE>849</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_SyncBalancesFromHost</FUNCTION>
+    <DECORATED>?TwoStates_SyncBalancesFromHost@@YAXNNNN@Z</DECORATED>
+    <FUNCLINE>838</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>893</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_BeginCommand</FUNCTION>
     <DECORATED>?TwoStates_BeginCommand@@YAXH@Z</DECORATED>
-    <FUNCLINE>814</FUNCLINE>
+    <FUNCLINE>879</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>842</LINE>
+      <LINE>908</LINE>
       <COLUMN>47</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_EndCommand</FUNCTION>
     <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
-    <FUNCLINE>831</FUNCLINE>
+    <FUNCLINE>897</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>853</LINE>
+      <LINE>919</LINE>
       <COLUMN>47</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_EndCommand</FUNCTION>
     <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
-    <FUNCLINE>831</FUNCLINE>
+    <FUNCLINE>897</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>866</LINE>
+      <LINE>932</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_EndCommand</FUNCTION>
     <DECORATED>?TwoStates_EndCommand@@YAXH@Z</DECORATED>
-    <FUNCLINE>831</FUNCLINE>
+    <FUNCLINE>897</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>895</LINE>
+      <LINE>961</LINE>
       <COLUMN>47</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_ApplyTransferCommand</FUNCTION>
     <DECORATED>?TwoStates_ApplyTransferCommand@@YA_NAEBULsStateTransfer@@@Z</DECORATED>
-    <FUNCLINE>870</FUNCLINE>
+    <FUNCLINE>936</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>966</LINE>
+      <LINE>1033</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_BeforeStep</FUNCTION>
     <DECORATED>?TwoStates_BeforeStep@@YAXPEAE@Z</DECORATED>
-    <FUNCLINE>929</FUNCLINE>
+    <FUNCLINE>995</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1012</LINE>
+      <LINE>1079</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_AfterStep</FUNCTION>
     <DECORATED>?TwoStates_AfterStep@@YAXPEAE@Z</DECORATED>
-    <FUNCLINE>979</FUNCLINE>
+    <FUNCLINE>1046</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1050</LINE>
-      <COLUMN>43</COLUMN>
-    </SFA>
-    <DEFECTCODE>6322</DEFECTCODE>
-    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
-    <FUNCTION>TwoStates_UiEnd</FUNCTION>
-    <DECORATED>?TwoStates_UiEnd@@YAXXZ</DECORATED>
-    <FUNCLINE>1041</FUNCLINE>
-    <PATH></PATH>
-  </DEFECT>
-  <DEFECT>
-    <SFA>
-      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
-      <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1062</LINE>
+      <LINE>1121</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_ToolMoneyBegin</FUNCTION>
     <DECORATED>?TwoStates_ToolMoneyBegin@@YAXPEAN0@Z</DECORATED>
-    <FUNCLINE>1054</FUNCLINE>
-    <PATH></PATH>
-  </DEFECT>
-  <DEFECT>
-    <SFA>
-      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
-      <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1072</LINE>
-      <COLUMN>43</COLUMN>
-    </SFA>
-    <DEFECTCODE>6322</DEFECTCODE>
-    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
-    <FUNCTION>TwoStates_ToolMoneyEnd</FUNCTION>
-    <DECORATED>?TwoStates_ToolMoneyEnd@@YAXNN@Z</DECORATED>
-    <FUNCLINE>1066</FUNCLINE>
-    <PATH></PATH>
-  </DEFECT>
-  <DEFECT>
-    <SFA>
-      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
-      <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1134</LINE>
-      <COLUMN>47</COLUMN>
-    </SFA>
-    <DEFECTCODE>6322</DEFECTCODE>
-    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
-    <FUNCTION>TwoStates_GetVehicleOwner</FUNCTION>
-    <DECORATED>?TwoStates_GetVehicleOwner@@YAHHPEBE@Z</DECORATED>
     <FUNCLINE>1112</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
@@ -468,42 +454,70 @@
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1244</LINE>
+      <LINE>1131</LINE>
+      <COLUMN>43</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_ToolMoneyEnd</FUNCTION>
+    <DECORATED>?TwoStates_ToolMoneyEnd@@YAXNN@Z</DECORATED>
+    <FUNCLINE>1125</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1193</LINE>
+      <COLUMN>47</COLUMN>
+    </SFA>
+    <DEFECTCODE>6322</DEFECTCODE>
+    <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
+    <FUNCTION>TwoStates_GetVehicleOwner</FUNCTION>
+    <DECORATED>?TwoStates_GetVehicleOwner@@YAHHPEBE@Z</DECORATED>
+    <FUNCLINE>1171</FUNCLINE>
+    <PATH></PATH>
+  </DEFECT>
+  <DEFECT>
+    <SFA>
+      <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
+      <FILENAME>two_states.cpp</FILENAME>
+      <LINE>1303</LINE>
       <COLUMN>118</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_CheckVehicleControlAllowed</FUNCTION>
     <DECORATED>?TwoStates_CheckVehicleControlAllowed@@YA_NPEBEPEBD@Z</DECORATED>
-    <FUNCLINE>1240</FUNCLINE>
+    <FUNCLINE>1299</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>1782</LINE>
+      <LINE>1841</LINE>
       <COLUMN>47</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>TwoStates_DrawOverlay</FUNCTION>
     <DECORATED>?TwoStates_DrawOverlay@@YAXXZ</DECORATED>
-    <FUNCLINE>1709</FUNCLINE>
+    <FUNCLINE>1768</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
   <DEFECT>
     <SFA>
       <FILEPATH>D:\SovietRepublic MP\TesmioLoader\RepublicMP\session\</FILEPATH>
       <FILENAME>two_states.cpp</FILENAME>
-      <LINE>2267</LINE>
+      <LINE>2326</LINE>
       <COLUMN>43</COLUMN>
     </SFA>
     <DEFECTCODE>6322</DEFECTCODE>
     <DESCRIPTION>Пустой блок _except.</DESCRIPTION>
     <FUNCTION>SafeWriteWorldMoney</FUNCTION>
     <DECORATED>?SafeWriteWorldMoney@@YAXNN@Z</DECORATED>
-    <FUNCLINE>2262</FUNCLINE>
+    <FUNCLINE>2321</FUNCLINE>
     <PATH></PATH>
   </DEFECT>
 </DEFECTS>
