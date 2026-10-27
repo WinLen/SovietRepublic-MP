@@ -7,6 +7,7 @@
 #include "line_accept.h"
 #include "junction_accept.h"
 #include "rename.h"
+#include "../core/engine_rva.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../ui/native_menu.h"
@@ -15,7 +16,6 @@
 #include <string.h>
 #include <utility>
 
-#define WORLD_RVA 0x9D4F10
 #define SEND_TO_DEPOT 0x3FBDC0
 #define LINES_OFFSET 0x12800
 #define DELETE_CLEANUP 0x4962C0
@@ -238,6 +238,8 @@ static void InviteCitizensNow(U64 world, U64 building, unsigned mode)
         float mult = 1.0f + (float)(*(int*)(world + 0x570)) * rate;
         double cost = res ? (double)(*(float*)(res + 0x58) * mult * 10.0f) : 0.0;
         *(double*)(world + 0x580) -= cost;
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF) -= (float)cost;
+        *(int*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 16) += count;
         if (yearIdx >= 0 && monthIdx >= 0) {
             *(double*)(world + 0x127B0 + (U64)yearIdx * 8) += cost;
             *(double*)(world + 0x10AE8 + (U64)monthIdx * 8) += cost;
@@ -255,6 +257,8 @@ static void InviteCitizensNow(U64 world, U64 building, unsigned mode)
         float mult = 1.0f + (float)(*(int*)(world + 0x568)) * rate;
         double cost = res ? (double)(*(float*)(res + 0x5C) * mult * 10.0f) : 0.0;
         *(double*)(world + 0x588) -= cost;
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF + 4) -= (float)cost;
+        *(int*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12) += count;
         if (mode == 2 && yearIdx >= 0 && monthIdx >= 0) {
             *(double*)(world + 0x11FE0 + (U64)yearIdx * 8) += cost;
             *(double*)(world + 0xFA18 + (U64)monthIdx * 8) += cost;
@@ -272,6 +276,8 @@ static void InviteCitizensNow(U64 world, U64 building, unsigned mode)
         float mult = 1.0f + (float)(*(int*)(world + 0x56C)) * rate;
         double cost = res ? (double)(*(float*)(res + 0x5C) * mult * 5.0f) : 0.0;
         *(double*)(world + 0x588) -= cost;
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF + 4) -= (float)cost;
+        *(int*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12) += count;
         if (*(BYTE*)(world + 0x57C) == 0 && yearIdx >= 0 && monthIdx >= 0) {
             *(double*)(world + 0x11FE0 + (U64)yearIdx * 8) += cost;
             *(double*)(world + 0xFA18 + (U64)monthIdx * 8) += cost;

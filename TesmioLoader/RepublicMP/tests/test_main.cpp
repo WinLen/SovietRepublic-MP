@@ -159,6 +159,7 @@ static void InitMockHarness()
 
 static void ResetMockWorldMemory()
 {
+    TwoStates_ResetEconStatsForTest(nullptr);
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
     g_mockExeBuffer[0x542A30] = 0xC3; // ret for MANAGER_RESET_RVA
     g_mockExeBuffer[0x5434C0] = 0xC3; // ret for CANCEL_SEG_RVA
@@ -1488,6 +1489,358 @@ static bool Test_TwoStates_Loans()
 }
 
 // ---------------------------------------------------------------------------
+// Test 10: Two-States Per-State Economic Statistics (Ledgers, Scalars, UI Swap, Rollover & INI)
+// ---------------------------------------------------------------------------
+
+static bool TestEconStats_ResourceLedgerAndScalarsIsolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    // Set up fake resource table at WORLD_RESOURCES_OFFSET (stride = WORLD_RESOURCE_STRIDE = 0x340)
+    std::vector<BYTE> resTable(4 * WORLD_RESOURCE_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x00) = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x08) = resTable.data() + resTable.size();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
+    uintptr_t resGravel = (uintptr_t)(resTable.data() + 0 * WORLD_RESOURCE_STRIDE);
+    uintptr_t resSteel  = (uintptr_t)(resTable.data() + 1 * WORLD_RESOURCE_STRIDE);
+
+    double initRub[2] = { 500000.0, 400000.0 };
+    double initUsd[2] = { 200000.0, 150000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // State 1 (West) imports 25t of Gravel for 1,500 RUB (vecIdx 0 = Import RUB) & buys a vehicle for 12,000 RUB
+    TwoStates_BeginCommand(1);
+    {
+        SovietStatResEntry rowGravel = { resGravel, 25.0f, 1500.0f };
+        TwoStates_LedgerAddForTest(world, &rowGravel, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+        *(float*)(curStat + STAT_VEHICLES_OFF + 4) += 12000.0f; // ImportRUB
+        *(float*)(curStat + STAT_IMMIGRANT_SPEND_OFF + 4) += 600.0f; // Soviet immigrant invite RUB
+        *(double*)(world + WORLD_RUB_OFFSET) -= 14100.0;
+    }
+    TwoStates_EndCommand(1);
+
+    // State 2 (East) imports 10t of Steel for 4,800 RUB (vecIdx 0) & buys a western vehicle for 9,500 USD
+    TwoStates_BeginCommand(2);
+    {
+        SovietStatResEntry rowSteel = { resSteel, 10.0f, 4800.0f };
+        TwoStates_LedgerAddForTest(world, &rowSteel, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+        *(float*)(curStat + STAT_VEHICLES_OFF + 0) += 9500.0f; // ImportUSD
+        *(float*)(curStat + STAT_TOURISM_OFF + 4 * sizeof(float)) += 3200.0f; // Soviet tourist spend RUB
+        *(double*)(world + WORLD_RUB_OFFSET) -= 1600.0;
+        *(double*)(world + WORLD_USD_OFFSET) -= 9500.0;
+    }
+    TwoStates_EndCommand(2);
+
+    float tons = 0.0f, val = 0.0f;
+    TEST_CHECK(TwoStates_GetStateEconResEntry(1, 0, resGravel, &tons, &val));
+    TEST_CHECK_NEAR(tons, 25.0f, 1e-3f);
+    TEST_CHECK_NEAR(val, 1500.0f, 1e-2f);
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 0, resSteel, &tons, &val));
+
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 0, resSteel, &tons, &val));
+    TEST_CHECK_NEAR(tons, 10.0f, 1e-3f);
+    TEST_CHECK_NEAR(val, 4800.0f, 1e-2f);
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(2, 0, resGravel, &tons, &val));
+
+    float veh1[4] = {}, veh2[4] = {};
+    TwoStates_GetStateEconFloat4ForTest(1, false, veh1);
+    TwoStates_GetStateEconFloat4ForTest(2, false, veh2);
+    TEST_CHECK_NEAR(veh1[0],     0.0f, 1e-2f);
+    TEST_CHECK_NEAR(veh1[1], 12000.0f, 1e-2f);
+    TEST_CHECK_NEAR(veh2[0],  9500.0f, 1e-2f);
+    TEST_CHECK_NEAR(veh2[1],     0.0f, 1e-2f);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool TestEconStats_UiSwapAndExactSimulationRestore()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    std::vector<BYTE> resTable(4 * WORLD_RESOURCE_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x00) = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x08) = resTable.data() + resTable.size();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
+    uintptr_t resCoal = (uintptr_t)(resTable.data() + 0 * WORLD_RESOURCE_STRIDE);
+    uintptr_t resOil  = (uintptr_t)(resTable.data() + 1 * WORLD_RESOURCE_STRIDE);
+
+    double initRub[2] = { 300000.0, 200000.0 };
+    double initUsd[2] = { 100000.0,  80000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    TwoStates_BeginCommand(1);
+    {
+        SovietStatResEntry row = { resCoal, 40.0f, 2200.0f };
+        TwoStates_LedgerAddForTest(world, &row, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+        *(float*)(curStat + STAT_VEHICLES_OFF + 4) += 5000.0f;
+    }
+    TwoStates_EndCommand(1);
+
+    TwoStates_BeginCommand(2);
+    {
+        SovietStatResEntry row = { resOil, 80.0f, 9600.0f };
+        TwoStates_LedgerAddForTest(world, &row, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+        *(float*)(curStat + STAT_VEHICLES_OFF + 4) += 15000.0f;
+    }
+    TwoStates_EndCommand(2);
+
+    // Snapshot combined simulation StatRecord before UI swap
+    std::vector<BYTE> simSnapshot(STAT_RECORD_SIZE, 0);
+    memcpy(simSnapshot.data(), curStat, STAT_RECORD_SIZE);
+
+    // 1. Host UI (State 1): must see only 1 row (resCoal, 40t, 2200 RUB) and 5000 RUB vehicle import
+    TwoStates_UiBegin();
+    {
+        SovietStatResEntry* b = *(SovietStatResEntry**)(curStat + STAT_RES_VEC_BASE_OFF + 0x00);
+        SovietStatResEntry* e = *(SovietStatResEntry**)(curStat + STAT_RES_VEC_BASE_OFF + 0x08);
+        TEST_CHECK(b != nullptr && (e - b) == 1);
+        TEST_CHECK(b[0].resourcePtr == resCoal);
+        TEST_CHECK_NEAR(b[0].amountTons, 40.0f, 1e-3f);
+        TEST_CHECK_NEAR(b[0].moneyValue, 2200.0f, 1e-2f);
+        TEST_CHECK_NEAR(*(float*)(curStat + STAT_VEHICLES_OFF + 4), 5000.0f, 1e-2f);
+    }
+    TwoStates_UiEnd();
+    TEST_CHECK(memcmp(simSnapshot.data(), curStat, STAT_RECORD_SIZE) == 0);
+
+    // 2. Client UI (State 2): must see only 1 row (resOil, 80t, 9600 RUB) and 15000 RUB vehicle import
+    TwoStates_OnSessionJoined(false /*Client*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_UiBegin();
+    {
+        SovietStatResEntry* b = *(SovietStatResEntry**)(curStat + STAT_RES_VEC_BASE_OFF + 0x00);
+        SovietStatResEntry* e = *(SovietStatResEntry**)(curStat + STAT_RES_VEC_BASE_OFF + 0x08);
+        TEST_CHECK(b != nullptr && (e - b) == 1);
+        TEST_CHECK(b[0].resourcePtr == resOil);
+        TEST_CHECK_NEAR(b[0].amountTons, 80.0f, 1e-3f);
+        TEST_CHECK_NEAR(b[0].moneyValue, 9600.0f, 1e-2f);
+        TEST_CHECK_NEAR(*(float*)(curStat + STAT_VEHICLES_OFF + 4), 15000.0f, 1e-2f);
+    }
+    TwoStates_UiEnd();
+    TEST_CHECK(memcmp(simSnapshot.data(), curStat, STAT_RECORD_SIZE) == 0);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    std::vector<BYTE> resTable(4 * WORLD_RESOURCE_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x00) = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x08) = resTable.data() + resTable.size();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
+    uintptr_t resFood = (uintptr_t)(resTable.data() + 2 * WORLD_RESOURCE_STRIDE);
+
+    // Special heap-allocated resource pointer at world + WORLD_ELENERGY_RES_PTR_OFF (0xC3B8)
+    std::vector<BYTE> elEnergyHostHeap(WORLD_RESOURCE_STRIDE, 0);
+    std::vector<BYTE> elEnergyClientHeap(WORLD_RESOURCE_STRIDE, 0);
+    *(uintptr_t*)(world + WORLD_ELENERGY_RES_PTR_OFF) = (uintptr_t)elEnergyHostHeap.data();
+
+    // Fake engine history vector (world + WORLD_STAT_HISTORY_OFFSET) with capacity for 2 records
+    std::vector<BYTE> histBuf(2 * STAT_RECORD_SIZE, 0);
+    *(int32_t*)(histBuf.data() + 0) = 30;
+    *(int32_t*)(histBuf.data() + 4) = 1960;
+
+    double initRub[2] = { 400000.0, 400000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // Record Period 1 activity for State 1 (30t Food, 3000 RUB) and State 2 (12t Food, 1200 RUB)
+    TwoStates_BeginCommand(1);
+    {
+        SovietStatResEntry row = { resFood, 30.0f, 3000.0f };
+        TwoStates_LedgerAddForTest(world, &row, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+    }
+    TwoStates_EndCommand(1);
+
+    TwoStates_BeginCommand(2);
+    {
+        SovietStatResEntry row = { resFood, 12.0f, 1200.0f };
+        TwoStates_LedgerAddForTest(world, &row, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+    }
+    TwoStates_EndCommand(2);
+
+    // Simulate engine pushing curStat into histVec and calling StatRecordClear (0x2FC290) with clobbered RCX (nullptr)
+    memcpy(histBuf.data(), curStat, STAT_RECORD_SIZE);
+    *(int32_t*)(histBuf.data() + 0) = 30;
+    *(int32_t*)(histBuf.data() + 4) = 1960;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x00) = histBuf.data();
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x08) = histBuf.data() + STAT_RECORD_SIZE;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x10) = histBuf.data() + histBuf.size();
+
+    TwoStates_StatRecordClearForTest(nullptr, curStat);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(1) == 1);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(2) == 1);
+
+    // Current period must now be cleared, while historical record 0 holds Period 1's per-state data
+    float curTons = 0.0f, curVal = 0.0f;
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 0, resFood, &curTons, &curVal));
+
+    // Add Period 2 activity: State 1 imports special heap resource (elenergy), State 2 imports 50t Food
+    TwoStates_BeginCommand(1);
+    {
+        SovietStatResEntry elRow = { (uintptr_t)elEnergyHostHeap.data(), 120.0f, 4800.0f };
+        TwoStates_LedgerAddForTest(world, &elRow, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+    }
+    TwoStates_EndCommand(1);
+
+    TwoStates_BeginCommand(2);
+    {
+        SovietStatResEntry row = { resFood, 50.0f, 5000.0f };
+        TwoStates_LedgerAddForTest(world, &row, curStat + STAT_RES_VEC_BASE_OFF + 0 * STAT_RES_VEC_STRIDE, 1.0f);
+        *(float*)(curStat + STAT_LOANS_OFF + 8) -= 1400.0f; // PrincipalRUB
+    }
+    TwoStates_EndCommand(2);
+
+    // Save to republicmp_coop.ini, relocate special resource pointer to Client heap, wipe stats, and reload
+    std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_econ_save";
+    std::filesystem::create_directories(saveDir);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(saveDir.string().c_str()));
+
+    *(uintptr_t*)(world + WORLD_ELENERGY_RES_PTR_OFF) = (uintptr_t)elEnergyClientHeap.data();
+    TwoStates_ResetEconStatsForTest(nullptr);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(1) == 0);
+
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir.string().c_str(), true));
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(1) == 1);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(2) == 1);
+
+    // Verify P<off> token resolved elenergy to elEnergyClientHeap.data() on reload
+    TEST_CHECK(TwoStates_GetStateEconResEntry(1, 0, (uintptr_t)elEnergyClientHeap.data(), &curTons, &curVal));
+    TEST_CHECK_NEAR(curTons, 120.0f, 1e-3f);
+    TEST_CHECK_NEAR(curVal, 4800.0f, 1e-2f);
+
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 0, resFood, &curTons, &curVal));
+    TEST_CHECK_NEAR(curTons, 50.0f, 1e-3f);
+    TEST_CHECK_NEAR(curVal, 5000.0f, 1e-2f);
+    float loans2[4] = {};
+    TwoStates_GetStateEconFloat4ForTest(2, true, loans2);
+    TEST_CHECK_NEAR(loans2[2], -1400.0f, 1e-2f);
+
+    // Verify historical record 0 swaps to State 1's 30t / 3000 RUB during Host UI frame
+    TwoStates_OnSessionJoined(true /*Host*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_UiBegin();
+    {
+        SovietStatResEntry* hb = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x00);
+        SovietStatResEntry* he = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x08);
+        TEST_CHECK(hb != nullptr && (he - hb) == 1);
+        TEST_CHECK(hb[0].resourcePtr == resFood);
+        TEST_CHECK_NEAR(hb[0].amountTons, 30.0f, 1e-3f);
+        TEST_CHECK_NEAR(hb[0].moneyValue, 3000.0f, 1e-2f);
+    }
+    TwoStates_UiEnd();
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool TestEconStats_BatchConstructionAndDemographics()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    std::vector<BYTE> resTable(4 * WORLD_RESOURCE_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x00) = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x08) = resTable.data() + resTable.size();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
+    uintptr_t resSteel  = (uintptr_t)(resTable.data() + 0 * WORLD_RESOURCE_STRIDE);
+    uintptr_t resGravel = (uintptr_t)(resTable.data() + 1 * WORLD_RESOURCE_STRIDE);
+    uintptr_t resBricks = (uintptr_t)(resTable.data() + 2 * WORLD_RESOURCE_STRIDE);
+
+    // 1 building in West SSR (X = -500), 1 building in East SSR (X = +500); full 0x1420 building struct size
+    std::vector<BYTE> bldWest(0x1420, 0), bldEast(0x1420, 0);
+    *(int32_t*)(bldWest.data() + 0) = 501;
+    *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -500.0f;
+    *(float*)(bldWest.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(bldEast.data() + 0) = 502;
+    *(float*)(bldEast.data() + OBJ_POS_OFFSET) = +500.0f;
+    *(float*)(bldEast.data() + BLD_PROGRESS_OFFSET) = 0.5f;
+    BYTE* bldPtrs[2] = { bldWest.data(), bldEast.data() };
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldPtrs;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldPtrs + 2;
+
+    // 2 adult housed citizens in West SSR, 5 adult housed citizens in East SSR (stride 0x800 > CIT_UNBORN_FLAG_OFFSET 0x748)
+    std::vector<BYTE> citBuf(7 * 0x800, 0);
+    BYTE* citPtrs[7] = {};
+    for (int i = 0; i < 7; ++i) {
+        citPtrs[i] = citBuf.data() + (size_t)i * 0x800;
+        *(BYTE**)(citPtrs[i] + CIT_HOME_BUILDING_OFFSET) = (i < 2) ? bldWest.data() : bldEast.data();
+    }
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x00) = citPtrs;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x08) = citPtrs + 7;
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 200000.0, 200000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // Simulate multi-resource construction step on East SSR building (resVecs[0] USD, resVecs[2] RUB, resVecs[8] consumed)
+    TwoStates_BeforeStep(world);
+    {
+        SovietStatResEntry batchEntries[3] = {
+            { resSteel,  15.0f, 4500.0f },
+            { resGravel, 80.0f, 1600.0f },
+            { resBricks, 25.0f, 2500.0f }
+        };
+        int batchVecs[3] = { 0, 2, 8 };
+        TwoStates_ConstructStepBatchForTest(world, bldEast.data(), batchEntries, batchVecs, 3);
+    }
+    TwoStates_AfterStep(world);
+
+    float tons = 0.0f, val = 0.0f;
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 0, resSteel,  &tons, &val));
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 2, resGravel, &tons, &val));
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 8, resBricks, &tons, &val));
+
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 0, resSteel, &tons, &val));
+    TEST_CHECK_NEAR(tons, 15.0f, 1e-3f);
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 2, resGravel, &tons, &val));
+    TEST_CHECK_NEAR(tons, 80.0f, 1e-3f);
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 8, resBricks, &tons, &val));
+    TEST_CHECK_NEAR(tons, 25.0f, 1e-3f);
+
+    // Record 3 births ($Citizens_Born at +0x248) for State 1 and verify +0x248 is NOT overwritten by adult population (+0x2C4)
+    TwoStates_BeginCommand(1);
+    *(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) += 3;
+    TwoStates_EndCommand(1);
+
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 2);
+    TwoStates_UiEnd();
+
+    TwoStates_OnSessionJoined(false /*Client*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 0);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 5);
+    TwoStates_UiEnd();
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool Test_TwoStates_EconomyStats()
+{
+    return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
+           TestEconStats_UiSwapAndExactSimulationRestore() &&
+           TestEconStats_PeriodRolloverAndSaveMetaPersistence() &&
+           TestEconStats_BatchConstructionAndDemographics();
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -1514,6 +1867,7 @@ int main()
         { "BuildingSwitches_Commands_SaveZip (Inv #12, Zip)",    &Test_BuildingSwitches_Commands_SaveZip },
         { "WaitingLobbyAndActionLock (Pause, Lock, Inspect)",    &Test_WaitingLobbyAndActionLock },
         { "TwoStates_Loans (Borrow Ceiling, UI Swap, Daily)",    &Test_TwoStates_Loans },
+        { "TwoStates_EconomyStats (Ledgers, UI Swap, Rollover)", &Test_TwoStates_EconomyStats },
     };
 
     for (const auto& tc : kTests) {

@@ -272,7 +272,7 @@ int main(int argc, char** argv)
 
     printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " - Two-States independent Bank & Loans (world+0x10BD0, LS_CMD_LOAN=28, per-republic credit limit & daily repayment), Co-op sidebar debt display, and ub-mode Clean Code refactoring");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " (protocol 47) - Two-States per-republic Economy & Trade statistics ($STAT_CURRENT / $STAT_RECORD, 16 resource ledgers, construction batch auto-purchase, tourism, vehicles, demographics & loans), overdue loan trampoline fix, and P<off> special resource serialization");
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

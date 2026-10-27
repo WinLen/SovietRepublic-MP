@@ -147,7 +147,7 @@
 #define WORLD_FORCE_TERRAIN_SAVE_OFF 0xFC90
 #endif
 
-// Bank / Loan subsystem offsets inside WORLD (SOVIET64.exe PE 6A3EB6AD)
+// Bank / Loan & Economy Statistics subsystem offsets inside WORLD (SOVIET64.exe PE 6A3EB6AD)
 #ifndef WORLD_LOANS_OFFSET
 #define WORLD_LOANS_OFFSET          0x10BD0
 #endif
@@ -157,10 +157,75 @@
 #ifndef WORLD_LOAN_REPAY_AMOUNT_OFF
 #define WORLD_LOAN_REPAY_AMOUNT_OFF 0x10C08
 #endif
+#ifndef WORLD_STAT_CURRENT_OFFSET
+#define WORLD_STAT_CURRENT_OFFSET   0x11328
+#endif
 #ifndef WORLD_LOAN_STATS_OFFSET
 #define WORLD_LOAN_STATS_OFFSET     0x11718
 #endif
+#ifndef WORLD_STAT_HISTORY_OFFSET
+#define WORLD_STAT_HISTORY_OFFSET   0x11728
+#endif
 
+#ifndef STAT_RECORD_SIZE
+#define STAT_RECORD_SIZE            0x400
+#endif
+#ifndef STAT_RES_VEC_COUNT
+#define STAT_RES_VEC_COUNT          16
+#endif
+#ifndef STAT_RES_VEC_BASE_OFF
+#define STAT_RES_VEC_BASE_OFF       0x008
+#endif
+#ifndef STAT_RES_VEC_STRIDE
+#define STAT_RES_VEC_STRIDE         0x018
+#endif
+#ifndef STAT_VEHICLES_OFF
+#define STAT_VEHICLES_OFF           0x188
+#endif
+#ifndef STAT_IMMIGRANT_SPEND_OFF
+#define STAT_IMMIGRANT_SPEND_OFF    0x240
+#endif
+#ifndef STAT_CITIZEN_COUNTS_OFF
+#define STAT_CITIZEN_COUNTS_OFF     0x248
+#endif
+#ifndef STAT_CITIZEN_DEMOGRAPHICS_OFF
+#define STAT_CITIZEN_DEMOGRAPHICS_OFF 0x2B8
+#endif
+#ifndef STAT_CITIZEN_ADULTS_OFF
+#define STAT_CITIZEN_ADULTS_OFF     0x2C4
+#endif
+#ifndef STAT_TOURISM_OFF
+#define STAT_TOURISM_OFF            0x340
+#endif
+#ifndef STAT_LOANS_OFF
+#define STAT_LOANS_OFF              0x3F0
+#endif
+
+#ifndef WORLD_RES_PTR_SLOTS_BEGIN_OFF
+#define WORLD_RES_PTR_SLOTS_BEGIN_OFF 0xC2C8
+#endif
+#ifndef WORLD_RES_PTR_SLOTS_END_OFF
+#define WORLD_RES_PTR_SLOTS_END_OFF   0xC430
+#endif
+#ifndef WORLD_ELENERGY_RES_PTR_OFF
+#define WORLD_ELENERGY_RES_PTR_OFF    0xC3B8
+#endif
+
+#ifndef RVA_CONSTRUCT_GROUNDWORK
+#define RVA_CONSTRUCT_GROUNDWORK    0x143710
+#endif
+#ifndef RVA_BLD_TOURISM_STEP
+#define RVA_BLD_TOURISM_STEP        0x1856F0
+#endif
+#ifndef RVA_LEDGER_ADD
+#define RVA_LEDGER_ADD              0x2FDB00
+#endif
+#ifndef RVA_STAT_RECORD_CLEAR
+#define RVA_STAT_RECORD_CLEAR       0x2FC290
+#endif
+#ifndef RVA_VEHICLE_BORDER_EXPORT
+#define RVA_VEHICLE_BORDER_EXPORT   0x3DF9B9
+#endif
 #ifndef RVA_VEC_LOAN_PUSH_BACK
 #define RVA_VEC_LOAN_PUSH_BACK      0x448AA0
 #endif
@@ -178,6 +243,9 @@
 #endif
 #ifndef RVA_CALC_INTEREST_RATE
 #define RVA_CALC_INTEREST_RATE      0x4B9A80
+#endif
+#ifndef RVA_FOREIGN_WORKER_BOARD
+#define RVA_FOREIGN_WORKER_BOARD    0x831120
 #endif
 
 enum SovietLoanCurrency {
@@ -197,6 +265,12 @@ struct SovietLoan {
     float   initialPrincipal;        // +0x1C ($Stat_InitialAmount)
     int32_t initialDays;             // +0x20 ($Stat_ContractDurationDays)
     float   totalPaidSoFar;          // +0x24 ($Stat_PaidAmount)
+};
+
+struct SovietStatResEntry {
+    uintptr_t resourcePtr; // +0x00 (pointer to resource descriptor in world + 0xC2B0)
+    float     amountTons;  // +0x08 (physical tons / MWh)
+    float     moneyValue;  // +0x0C (value in RUB or USD)
 };
 #pragma pack(pop)
 
@@ -364,3 +438,9 @@ static_assert(HEADER_BIN_DATA_OFFSET == 608 && HEADER_BIN_RECORD_SIZE == 128,
               "header.bin layout must be 0x260 (608) header + 0x80 (128) byte records");
 static_assert(sizeof(SovietLoan) == 0x28,
               "SovietLoan layout must match 40-byte engine struct (0x4B9140 / 0x4B9490 / 0x4B9750)");
+static_assert(sizeof(SovietStatResEntry) == 0x10,
+              "SovietStatResEntry layout must match 16-byte engine struct (0x2FDB00 / 0x2FE3F0)");
+static_assert(WORLD_LOAN_STATS_OFFSET == WORLD_STAT_CURRENT_OFFSET + STAT_LOANS_OFF,
+              "WORLD_LOAN_STATS_OFFSET (0x11718) must equal WORLD_STAT_CURRENT_OFFSET (0x11328) + STAT_LOANS_OFF (0x3F0)");
+static_assert(WORLD_STAT_HISTORY_OFFSET == WORLD_STAT_CURRENT_OFFSET + STAT_RECORD_SIZE,
+              "WORLD_STAT_HISTORY_OFFSET (0x11728) must equal WORLD_STAT_CURRENT_OFFSET (0x11328) + STAT_RECORD_SIZE (0x400)");

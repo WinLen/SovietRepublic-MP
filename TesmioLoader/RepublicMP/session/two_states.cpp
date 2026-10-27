@@ -122,6 +122,44 @@ static float g_uiSavedLoanStats[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 static std::vector<SovietLoan> g_uiFullLoansBackup;
 static std::vector<SovietLoan> g_uiFilteredLoansBefore;
 static std::vector<int>        g_uiFilteredToGlobalIdx;
+
+struct StateEconScalars {
+    float   vehicles[4];       // +0x188..+0x197 ($Vehicles_ImportUSD/RUB, $Vehicles_ExportUSD/RUB)
+    float   immigrantSpend[2]; // +0x240..+0x247 ($Economy_ImigrantCitySpendUSD/RUB)
+    int32_t citizenCounts[5];  // +0x248..+0x25B ($Citizens_Born, Dead, Escaped, ImigrantSoviet, ImigrantAfrica)
+    int32_t demographics[4];   // +0x2B8..+0x2C7 ($Citizens_SmallChilds, MediumChilds, AdultsParent, Adults at +0x2C4)
+    float   tourism[44];       // +0x340..+0x3EF ($Tourism_SpendUSD/RUB[16], Shops/Cinemas/Pubs/Sport/Hotels/Rides)
+    float   loans[4];          // +0x3F0..+0x3FF ($Loan_Ballance_USD, $Loan_Interest_USD, $Loan_Ballance_RUB, $Loan_Interest_RUB)
+};
+
+struct StateEconPeriodStats {
+    int32_t day = 0;
+    int32_t year = 0;
+    std::vector<SovietStatResEntry> resVecs[STAT_RES_VEC_COUNT];
+    StateEconScalars scalars = {};
+};
+
+struct RawStatResVecHeader {
+    SovietStatResEntry* begin;
+    SovietStatResEntry* end;
+    SovietStatResEntry* cap;
+};
+static_assert(sizeof(RawStatResVecHeader) == 24, "RawStatResVecHeader must be 24 bytes");
+
+struct StatRecordUiBackup {
+    RawStatResVecHeader resVecHeaders[STAT_RES_VEC_COUNT];
+    StateEconScalars    scalars;
+};
+
+static StateEconPeriodStats              g_stateCurEcon[2];
+static std::vector<StateEconPeriodStats> g_stateHistEcon[2];
+static bool                              g_stateEconInitialized = false;
+static bool                              g_uiEconSwapped = false;
+static StatRecordUiBackup                g_uiSavedCurStat = {};
+static std::vector<StatRecordUiBackup>   g_uiSavedHistStats;
+static BYTE*                             g_uiSavedHistBegin = nullptr;
+static int                               g_uiSavedHistCount = 0;
+
 static volatile LONG g_saveInProgress = 0;
 static volatile LONGLONG g_completedSaveCount = 0;
 
@@ -396,12 +434,197 @@ static void RevertUiLoansToPreUiState(BYTE* world, int localSelectedAfter, bool 
     SafeWriteSelectedLoanIdx(world, restoredSel);
 }
 
+// ---------------------------------------------------------------------------
+// Per-State Economic Statistics POD & SEH Helpers (WORLD + 0x11328 / 0x11728)
+// ---------------------------------------------------------------------------
+
+static int CountStateAdultHousedCitizens(const BYTE* world, int state);
+
+static void SafeReadStatScalars(const BYTE* rec, StateEconScalars* out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!rec) return;
+    SafeMemcpyPod(out->vehicles,       rec + STAT_VEHICLES_OFF,             sizeof(out->vehicles));
+    SafeMemcpyPod(out->immigrantSpend, rec + STAT_IMMIGRANT_SPEND_OFF,      sizeof(out->immigrantSpend));
+    SafeMemcpyPod(out->citizenCounts,  rec + STAT_CITIZEN_COUNTS_OFF,       sizeof(out->citizenCounts));
+    SafeMemcpyPod(out->demographics,   rec + STAT_CITIZEN_DEMOGRAPHICS_OFF, sizeof(out->demographics));
+    SafeMemcpyPod(out->tourism,        rec + STAT_TOURISM_OFF,              sizeof(out->tourism));
+    SafeMemcpyPod(out->loans,          rec + STAT_LOANS_OFF,                sizeof(out->loans));
+}
+
+static void SafeWriteStatScalars(BYTE* rec, const StateEconScalars& src)
+{
+    if (!rec) return;
+    SafeMemcpyPod(rec + STAT_VEHICLES_OFF,             src.vehicles,       sizeof(src.vehicles));
+    SafeMemcpyPod(rec + STAT_IMMIGRANT_SPEND_OFF,      src.immigrantSpend, sizeof(src.immigrantSpend));
+    SafeMemcpyPod(rec + STAT_CITIZEN_COUNTS_OFF,       src.citizenCounts,  sizeof(src.citizenCounts));
+    SafeMemcpyPod(rec + STAT_CITIZEN_DEMOGRAPHICS_OFF, src.demographics,   sizeof(src.demographics));
+    SafeMemcpyPod(rec + STAT_TOURISM_OFF,              src.tourism,        sizeof(src.tourism));
+    SafeMemcpyPod(rec + STAT_LOANS_OFF,                src.loans,          sizeof(src.loans));
+}
+
+static void AddFloatSliceDelta(float* dst, const float* before, const float* after, int count, float scale)
+{
+    for (int i = 0; i < count; ++i) {
+        float d = (after[i] - before[i]) * scale;
+        if (isfinite(d)) dst[i] += d;
+    }
+}
+
+static void AddStatScalarsDelta(StateEconScalars* dst, const StateEconScalars& before,
+                                const StateEconScalars& after, float scale = 1.0f)
+{
+    if (!dst) return;
+    AddFloatSliceDelta(dst->vehicles,       before.vehicles,       after.vehicles,       4,  scale);
+    AddFloatSliceDelta(dst->immigrantSpend, before.immigrantSpend, after.immigrantSpend, 2,  scale);
+    for (int i = 0; i < 5; ++i) {
+        int32_t d = after.citizenCounts[i] - before.citizenCounts[i];
+        if (d != 0) dst->citizenCounts[i] += (int32_t)lroundf((float)d * scale);
+    }
+    for (int i = 0; i < 3; ++i) {
+        int32_t d = after.demographics[i] - before.demographics[i];
+        if (d != 0) dst->demographics[i] += (int32_t)lroundf((float)d * scale);
+    }
+    AddFloatSliceDelta(dst->tourism, before.tourism, after.tourism, 44, scale);
+    AddFloatSliceDelta(dst->loans,   before.loans,   after.loans,   4,  scale);
+}
+
+static void ClearStateEconPeriod(StateEconPeriodStats* st, int32_t day = 0, int32_t year = 0)
+{
+    if (!st) return;
+    st->day = day;
+    st->year = year;
+    for (int v = 0; v < STAT_RES_VEC_COUNT; ++v) {
+        st->resVecs[v].clear();
+    }
+    memset(&st->scalars, 0, sizeof(st->scalars));
+}
+
+static bool SafeReadResVecEntries(const BYTE* vecAddr, std::vector<SovietStatResEntry>& outEntries)
+{
+    outEntries.clear();
+    if (!vecAddr) return false;
+    RawStatResVecHeader hdr = {};
+    if (!SafeReadPod((const RawStatResVecHeader*)vecAddr, &hdr)) return false;
+    if (!hdr.begin || hdr.end < hdr.begin || hdr.cap < hdr.end) {
+        return hdr.begin == nullptr && hdr.end == nullptr;
+    }
+    ptrdiff_t byteLen = (const BYTE*)hdr.end - (const BYTE*)hdr.begin;
+    if (byteLen < 0 || byteLen % (ptrdiff_t)sizeof(SovietStatResEntry) != 0 ||
+        byteLen > 512 * (ptrdiff_t)sizeof(SovietStatResEntry)) {
+        return false;
+    }
+    int count = (int)(byteLen / (ptrdiff_t)sizeof(SovietStatResEntry));
+    if (count <= 0) return true;
+    outEntries.resize((size_t)count);
+    if (!SafeMemcpyPod(outEntries.data(), hdr.begin, (size_t)count * sizeof(SovietStatResEntry))) {
+        outEntries.clear();
+        return false;
+    }
+    return true;
+}
+
+static void AddEntryDeltaToStateResVec(std::vector<SovietStatResEntry>& vec, uintptr_t resPtr,
+                                       bool isNegativeRow, float dTons, float dVal)
+{
+    if (!isfinite(dTons)) dTons = 0.0f;
+    if (!isfinite(dVal))  dVal  = 0.0f;
+    if (fabsf(dTons) <= 1e-7f && fabsf(dVal) <= 1e-7f) return;
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (vec[i].resourcePtr == resPtr) {
+            bool curNeg = (vec[i].amountTons < 0.0f);
+            if (curNeg == isNegativeRow || fabsf(vec[i].amountTons) <= 1e-7f) {
+                vec[i].amountTons += dTons;
+                vec[i].moneyValue += dVal;
+                return;
+            }
+        }
+    }
+    SovietStatResEntry entry = { resPtr, dTons, dVal };
+    vec.push_back(entry);
+}
+
+static bool SafeReadStatHistHeader(const BYTE* world, BYTE** outBegin, int* outCount)
+{
+    if (!world || !outBegin || !outCount) return false;
+    *outBegin = nullptr;
+    *outCount = 0;
+    uintptr_t ptrs[3] = {};
+    if (!SafeMemcpyPod(ptrs, world + WORLD_STAT_HISTORY_OFFSET, sizeof(ptrs))) return false;
+    BYTE* b = (BYTE*)ptrs[0];
+    BYTE* e = (BYTE*)ptrs[1];
+    BYTE* c = (BYTE*)ptrs[2];
+    if (!b || e < b || c < e) {
+        return b == nullptr && e == nullptr;
+    }
+    ptrdiff_t byteLen = e - b;
+    if (byteLen < 0 || (byteLen % STAT_RECORD_SIZE) != 0 || byteLen > 4096 * STAT_RECORD_SIZE) {
+        return false;
+    }
+    *outBegin = b;
+    *outCount = (int)(byteLen / STAT_RECORD_SIZE);
+    return true;
+}
+
+static void SaveRecordToUiBackup(const BYTE* rec, StatRecordUiBackup* outBackup)
+{
+    if (!rec || !outBackup) return;
+    memset(outBackup, 0, sizeof(*outBackup));
+    SafeMemcpyPod(outBackup->resVecHeaders, rec + STAT_RES_VEC_BASE_OFF, sizeof(outBackup->resVecHeaders));
+    SafeReadStatScalars(rec, &outBackup->scalars);
+}
+
+static void WriteStatePeriodToEngineRecordForUi(BYTE* rec, StateEconPeriodStats& st)
+{
+    if (!rec) return;
+    RawStatResVecHeader hdrs[STAT_RES_VEC_COUNT] = {};
+    for (int v = 0; v < STAT_RES_VEC_COUNT; ++v) {
+        std::vector<SovietStatResEntry>& sv = st.resVecs[v];
+        SovietStatResEntry* p = sv.empty() ? nullptr : sv.data();
+        hdrs[v].begin = p;
+        hdrs[v].end   = p ? (p + sv.size()) : nullptr;
+        hdrs[v].cap   = hdrs[v].end;
+    }
+    SafeMemcpyPod(rec + STAT_RES_VEC_BASE_OFF, hdrs, sizeof(hdrs));
+    SafeWriteStatScalars(rec, st.scalars);
+}
+
+static void RestoreRecordFromUiBackup(BYTE* rec, const StatRecordUiBackup& backup)
+{
+    if (!rec) return;
+    SafeMemcpyPod(rec + STAT_RES_VEC_BASE_OFF, backup.resVecHeaders, sizeof(backup.resVecHeaders));
+    SafeWriteStatScalars(rec, backup.scalars);
+}
+
+static void RestoreUiEconSwap(BYTE* world)
+{
+    if (!g_uiEconSwapped) return;
+    g_uiEconSwapped = false;
+    if (!world) return;
+
+    RestoreRecordFromUiBackup(world + WORLD_STAT_CURRENT_OFFSET, g_uiSavedCurStat);
+    if (g_uiSavedHistBegin && g_uiSavedHistCount > 0) {
+        BYTE* curHistBegin = nullptr;
+        int curHistCount = 0;
+        if (SafeReadStatHistHeader(world, &curHistBegin, &curHistCount) &&
+            curHistBegin == g_uiSavedHistBegin && curHistCount >= g_uiSavedHistCount) {
+            for (int i = 0; i < g_uiSavedHistCount && (size_t)i < g_uiSavedHistStats.size(); ++i) {
+                RestoreRecordFromUiBackup(curHistBegin + (size_t)i * STAT_RECORD_SIZE, g_uiSavedHistStats[(size_t)i]);
+            }
+        }
+    }
+    g_uiSavedHistBegin = nullptr;
+    g_uiSavedHistCount = 0;
+}
+
 void TwoStates_RestoreUiMoneySwap()
 {
     EnsureMoneySwapLock();
     EnterCriticalSection(&g_moneySwapLock);
     bool hadLoans = g_uiLoansSwapped;
     bool hadMoney = g_uiMoneySwapped;
+    bool hadEcon  = g_uiEconSwapped;
     g_uiLoansSwapped = false;
     g_uiMoneySwapped = false;
 
@@ -442,6 +665,10 @@ void TwoStates_RestoreUiMoneySwap()
         } else {
             RestoreUnchangedUiLoans(world, localSelectedAfter);
         }
+    }
+
+    if (hadEcon && g_exeBase) {
+        RestoreUiEconSwap(g_exeBase + WORLD_RVA);
     }
 
     if (hadMoney) {
@@ -521,12 +748,18 @@ static float __fastcall H_GetTerrainBoundaryZMax(BYTE* terrain)
     return o_getBoundaryZMax ? o_getBoundaryZMax(terrain) : -EXPANDED_BOUNDARY_MARGIN;
 }
 
-// --- Fair Customs & Building Economy Attribution Hooks (SOVIET64.exe PE 6A3EB6AD) ---
+// --- Fair Customs, Building, Vehicle & Statistics Attribution Hooks (SOVIET64.exe PE 6A3EB6AD) ---
 // 1. 0x173320(world, building): building auto-purchase of resources & utility border trade
 // 2. 0x1B7D50(world, building): customs / border trade (category 0x6B)
 // 3. 0x1B9A40(world, building): customs / port vehicle loading & unloading export/import
 // 4. 0x159070(world, building, float dt, unsigned char flag): construction resource/groundwork payment
-// 5. 0x3E0730(world, vehicle, unsigned char a3, unsigned char a4): vehicle sale / border delivery
+// 5. 0x143710(world, building): groundwork / initial construction auto-purchase & crane/train step
+// 6. 0x1856F0(world, building): tourist hotel/attraction/restaurant spending & shop consumption
+// 7. 0x3E0730(world, vehicle, unsigned char a3, unsigned char a4): vehicle sale / border delivery
+// 8. 0x3DF9B9(world, vehicle): vehicle border cargo export (after null-vehicle check at 0x3DF9B0)
+// 9. 0x831120(world, worker, vehicle): foreign worker hiring onto vehicle at customs house
+// 10. 0x2FDB00(world, row, ledgerVec, ...): resource statistics ledger accumulator
+// 11. 0x2FC290(world, rec): period statistics record rollover / clear
 
 #define RVA_BLD_ECON        0x173320
 #define RVA_CUSTOMS_BORDER  0x1B7D50
@@ -552,9 +785,33 @@ static const BYTE kConstructStepExpect[20] = {
     0x48, 0x8B, 0xC4, 0x44, 0x88, 0x48, 0x20, 0xF3, 0x0F, 0x11,
     0x50, 0x18, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08
 };
+static const BYTE kConstructGroundworkExpect[14] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+    0x41, 0x56, 0x41, 0x57
+};
+static const BYTE kBldTourismStepExpect[16] = {
+    0x48, 0x8B, 0xC4, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x48,
+    0x81, 0xEC, 0x10, 0x01, 0x00, 0x00
+};
 static const BYTE kVehicleSaleExpect[19] = {
     0x48, 0x8B, 0xC4, 0x44, 0x88, 0x48, 0x20, 0x44, 0x88, 0x40,
     0x18, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56, 0x57
+};
+static const BYTE kVehicleBorderExportExpect[17] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x48, 0x8D, 0x68, 0xA1,
+    0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00
+};
+static const BYTE kForeignWorkerBoardExpect[17] = {
+    0x48, 0x89, 0x5C, 0x24, 0x20, 0x48, 0x89, 0x54, 0x24, 0x10,
+    0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55
+};
+static const BYTE kLedgerAddExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10,
+    0x57, 0x48, 0x83, 0xEC, 0x30
+};
+static const BYTE kStatRecordClearExpect[19] = {
+    0x33, 0xC9, 0x48, 0x89, 0x0A, 0x48, 0x89, 0x8A, 0x88, 0x01,
+    0x00, 0x00, 0x48, 0x89, 0x8A, 0x90, 0x01, 0x00, 0x00
 };
 static const BYTE kMasterSaveExpect[19] = {
     0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
@@ -565,17 +822,24 @@ static const BYTE kGetMaxBorrowExpect[17] = {
     0x45, 0x33, 0xC9,
     0x4C, 0x2B, 0x81, 0xA8, 0x26, 0x01, 0x00
 };
-static const BYTE kStepOneLoanDayExpect[15] = {
+static const BYTE kStepOneLoanDayExpect[20] = {
     0x48, 0x83, 0xEC, 0x18,
     0x8B, 0x42, 0x10,
     0x0F, 0x29, 0x34, 0x24,
     0x85, 0xC0,
-    0x7E, 0x05
+    0x7E, 0x05,
+    0xFF, 0xC8,
+    0x89, 0x42, 0x10
 };
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building);
 typedef __int64 (__fastcall* ConstructStepFn)(BYTE* world, BYTE* building, float dt, unsigned char flag);
 typedef __int64 (__fastcall* VehicleSaleFn)(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4);
+typedef void (__fastcall* VehicleExportFn)(BYTE* world, BYTE* vehicle);
+typedef unsigned char (__fastcall* ForeignWorkerBoardFn)(BYTE* world, BYTE* worker, BYTE* vehicle);
+typedef void (__fastcall* LedgerAddFn)(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec,
+                                       float a4, unsigned char a5, float a6, unsigned char a7);
+typedef void (__fastcall* StatRecordClearFn)(BYTE* world, BYTE* rec);
 typedef void (__fastcall* MasterSaveFn)(BYTE* world);
 typedef float (__fastcall* GetMaxAvailableBorrowFn)(BYTE* world, int32_t loanType);
 typedef void (__fastcall* StepOneLoanDayFn)(BYTE* world, SovietLoan* loan);
@@ -584,23 +848,38 @@ static BldEconFn o_bldEcon = nullptr;
 static BldEconFn o_customsBorder = nullptr;
 static BldEconFn o_customsVehicle = nullptr;
 static ConstructStepFn o_constructStep = nullptr;
+static BldEconFn o_constructGroundwork = nullptr;
+static BldEconFn o_bldTourismStep = nullptr;
 static VehicleSaleFn o_vehicleSale = nullptr;
+static VehicleExportFn o_vehicleBorderExport = nullptr;
+static ForeignWorkerBoardFn o_foreignWorkerBoard = nullptr;
+static LedgerAddFn o_ledgerAdd = nullptr;
+static StatRecordClearFn o_statRecordClear = nullptr;
 static MasterSaveFn o_masterSave = nullptr;
 static GetMaxAvailableBorrowFn o_getMaxAvailableBorrow = nullptr;
 static StepOneLoanDayFn o_stepOneLoanDay = nullptr;
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
 static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize);
+static void EnsureStateEconInitialized(const BYTE* world);
 
 static volatile bool g_inSimStep = false;
 static volatile DWORD g_simStepThread = 0;
 static bool g_inCommand = false;
 static int g_cmdOwner = 1;
+static bool g_beforeLoadPrepared = false;
+static bool g_inStatClearTest = false;
 static thread_local bool t_inEconHook = false;
+static thread_local int  t_econOwner = 1;
+static thread_local bool t_suppressCurStatLedgerHook = false;
 static double g_lastWorldRub = 0.0;
 static double g_lastWorldUsd = 0.0;
 static double g_unattributedRub = 0.0;
 static double g_unattributedUsd = 0.0;
+static StateEconScalars g_lastWorldScalars = {};
+static StateEconScalars g_unattributedScalars = {};
+static StateEconScalars g_econBeforeScalars = {};
+static StateEconScalars g_cmdBeforeScalars = {};
 
 static bool BeginEconAttribution(BYTE* world, int owner)
 {
@@ -610,6 +889,7 @@ static bool BeginEconAttribution(BYTE* world, int owner)
     if (world != g_exeBase + WORLD_RVA || GetCurrentThreadId() != g_simStepThread) return false;
     if (owner != 1 && owner != 2) return false;
 
+    EnsureStateEconInitialized(world);
     __try {
         double curRub = *WorldRubles();
         double curUsd = *WorldDollars();
@@ -617,6 +897,12 @@ static bool BeginEconAttribution(BYTE* world, int owner)
         g_unattributedUsd += (curUsd - g_lastWorldUsd);
         *WorldRubles()  = g_stateRub[owner - 1];
         *WorldDollars() = g_stateUsd[owner - 1];
+        StateEconScalars curScalars = {};
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &curScalars);
+        AddStatScalarsDelta(&g_unattributedScalars, g_lastWorldScalars, curScalars, 1.0f);
+        g_econBeforeScalars = curScalars;
+        g_lastWorldScalars  = curScalars;
+        t_econOwner  = owner;
         t_inEconHook = true;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -645,6 +931,12 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
         *WorldDollars() = g_stateUsd[0] + g_stateUsd[1] + g_unattributedUsd;
         g_lastWorldRub = *WorldRubles();
         g_lastWorldUsd = *WorldDollars();
+        if (g_exeBase) {
+            StateEconScalars afterScalars = {};
+            SafeReadStatScalars(g_exeBase + WORLD_RVA + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
+            AddStatScalarsDelta(&g_stateCurEcon[idx].scalars, g_econBeforeScalars, afterScalars, 1.0f);
+            g_lastWorldScalars = afterScalars;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -697,13 +989,87 @@ static __int64 __fastcall H_CustomsVehicle(BYTE* world, BYTE* building)
     return CallBuildingEconHook(world, building, o_customsVehicle);
 }
 
+static void EnsureStateEconInitialized(const BYTE* world);
+static void AttributeLedgerVecDiffToStates(const BYTE* world, int vecIdx, int owner,
+                                           const std::vector<SovietStatResEntry>& beforeEntries,
+                                           const std::vector<SovietStatResEntry>& afterEntries);
+
+static const int kConstructTrackedVecIdxs[3] = { 0, 2, 8 };
+
+struct ConstructResSnapshot {
+    bool active = false;
+    bool prevSuppress = false;
+    std::vector<SovietStatResEntry> before[3];
+};
+
+static void BeginConstructResSnapshot(const BYTE* world, int owner, ConstructResSnapshot* snap)
+{
+    if (!snap) return;
+    snap->active = false;
+    if (!owner || !TwoStates_IsActive() || !world || (g_exeBase && world != g_exeBase + WORLD_RVA)) return;
+    EnsureStateEconInitialized(world);
+    const BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+    for (int i = 0; i < 3; ++i) {
+        int vIdx = kConstructTrackedVecIdxs[i];
+        SafeReadResVecEntries(curStat + STAT_RES_VEC_BASE_OFF + (size_t)vIdx * STAT_RES_VEC_STRIDE, snap->before[i]);
+    }
+    snap->prevSuppress = t_suppressCurStatLedgerHook;
+    t_suppressCurStatLedgerHook = true;
+    snap->active = true;
+}
+
+static void EndConstructResSnapshot(const BYTE* world, int owner, const ConstructResSnapshot& snap)
+{
+    if (!snap.active) return;
+    t_suppressCurStatLedgerHook = snap.prevSuppress;
+    const BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+    std::vector<SovietStatResEntry> after;
+    for (int i = 0; i < 3; ++i) {
+        int vIdx = kConstructTrackedVecIdxs[i];
+        after.clear();
+        if (SafeReadResVecEntries(curStat + STAT_RES_VEC_BASE_OFF + (size_t)vIdx * STAT_RES_VEC_STRIDE, after)) {
+            AttributeLedgerVecDiffToStates(world, vIdx, owner, snap.before[i], after);
+        }
+    }
+}
+
+struct ConstructEconScope {
+    BYTE* world = nullptr;
+    int owner = 0;
+    bool active = false;
+    ConstructResSnapshot snap;
+
+    ConstructEconScope(BYTE* w, BYTE* building) : world(w)
+    {
+        owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
+        active = owner ? BeginEconAttribution(world, owner) : false;
+        if (active) BeginConstructResSnapshot(world, owner, &snap);
+    }
+
+    ~ConstructEconScope()
+    {
+        if (active) {
+            EndConstructResSnapshot(world, owner, snap);
+            EndEconAttribution(owner);
+        }
+    }
+};
+
 static __int64 __fastcall H_ConstructStep(BYTE* world, BYTE* building, float dt, unsigned char flag)
 {
-    int owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
-    bool active = owner ? BeginEconAttribution(world, owner) : false;
-    __int64 r = o_constructStep(world, building, dt, flag);
-    if (active) EndEconAttribution(owner);
-    return r;
+    ConstructEconScope scope(world, building);
+    return o_constructStep ? o_constructStep(world, building, dt, flag) : 0;
+}
+
+static __int64 __fastcall H_ConstructGroundwork(BYTE* world, BYTE* building)
+{
+    ConstructEconScope scope(world, building);
+    return o_constructGroundwork ? o_constructGroundwork(world, building) : 0;
+}
+
+static __int64 __fastcall H_BldTourismStep(BYTE* world, BYTE* building)
+{
+    return CallBuildingEconHook(world, building, o_bldTourismStep);
 }
 
 static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4)
@@ -711,6 +1077,23 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
     int owner = (g_inSimStep && !t_inEconHook) ? ResolveVehicleOwnerFast(vehicle) : 0;
     bool active = owner ? BeginEconAttribution(world, owner) : false;
     __int64 r = o_vehicleSale(world, vehicle, a3, a4);
+    if (active) EndEconAttribution(owner);
+    return r;
+}
+
+static void __fastcall H_VehicleBorderExport(BYTE* world, BYTE* vehicle)
+{
+    int owner = (g_inSimStep && !t_inEconHook) ? ResolveVehicleOwnerFast(vehicle) : 0;
+    bool active = owner ? BeginEconAttribution(world, owner) : false;
+    o_vehicleBorderExport(world, vehicle);
+    if (active) EndEconAttribution(owner);
+}
+
+static unsigned char __fastcall H_ForeignWorkerBoard(BYTE* world, BYTE* worker, BYTE* vehicle)
+{
+    int owner = (g_inSimStep && !t_inEconHook) ? ResolveVehicleOwnerFast(vehicle) : 0;
+    bool active = owner ? BeginEconAttribution(world, owner) : false;
+    unsigned char r = o_foreignWorkerBoard(world, worker, vehicle);
     if (active) EndEconAttribution(owner);
     return r;
 }
@@ -817,7 +1200,7 @@ static float __fastcall H_GetMaxAvailableBorrow(BYTE* world, int32_t loanType)
     if (!TwoStates_IsActive() || !world || world != g_exeBase + WORLD_RVA) {
         return o_getMaxAvailableBorrow ? o_getMaxAvailableBorrow(world, loanType) : 0.0f;
     }
-    int activeState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    int activeState = t_inEconHook ? t_econOwner : (g_inCommand ? g_cmdOwner : TwoStates_LocalState());
     return TwoStates_CalcMaxAvailableBorrow(world, (int)loanType, activeState);
 }
 
@@ -917,6 +1300,425 @@ static void __fastcall H_StepOneLoanDay(BYTE* world, SovietLoan* loan)
 void TwoStates_StepOneLoanDayForTest(BYTE* world, SovietLoan* loan)
 {
     H_StepOneLoanDay(world, loan);
+}
+
+static int g_stepBldCount[2] = { 0, 0 };
+
+static float ComputeWorldState1Weight(const BYTE* world)
+{
+    if (!world) return 0.5f;
+    if (g_stepBldCount[0] + g_stepBldCount[1] > 0) {
+        return (float)TwoStates_ComputeStepWeightState1(g_stepBldCount[0], g_stepBldCount[1]);
+    }
+    int c1 = 0, c2 = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* const* b = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        const BYTE* const* e = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (b && e > b && (e - b) <= 200000) {
+            for (const BYTE* const* it = b; it < e; ++it) {
+                const BYTE* bld = *it;
+                if (!bld) continue;
+                int owner = ResolveBuildingOwnerFast(bld);
+                if (owner == 2) c2++;
+                else c1++;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+    return (float)TwoStates_ComputeStepWeightState1(c1, c2);
+}
+
+static void SplitEngineStatRecordToStates(const BYTE* world, const BYTE* rec, float w0,
+                                          StateEconPeriodStats* outS0, StateEconPeriodStats* outS1)
+{
+    if (!outS0 || !outS1) return;
+    int32_t day = 0, year = 0;
+    if (rec) {
+        SafeReadPod((const int32_t*)(rec + 0), &day);
+        SafeReadPod((const int32_t*)(rec + 4), &year);
+    }
+    ClearStateEconPeriod(outS0, day, year);
+    ClearStateEconPeriod(outS1, day, year);
+    if (!rec) return;
+
+    if (w0 < 0.0f) w0 = 0.0f;
+    if (w0 > 1.0f) w0 = 1.0f;
+
+    std::vector<SovietStatResEntry> entries;
+    for (int v = 0; v < STAT_RES_VEC_COUNT; ++v) {
+        if (!SafeReadResVecEntries(rec + STAT_RES_VEC_BASE_OFF + (size_t)v * STAT_RES_VEC_STRIDE, entries)) continue;
+        for (size_t i = 0; i < entries.size(); ++i) {
+            float t0 = entries[i].amountTons * w0;
+            float v0 = entries[i].moneyValue * w0;
+            bool isNeg = (entries[i].amountTons < 0.0f);
+            AddEntryDeltaToStateResVec(outS0->resVecs[v], entries[i].resourcePtr, isNeg, t0, v0);
+            AddEntryDeltaToStateResVec(outS1->resVecs[v], entries[i].resourcePtr, isNeg,
+                                       entries[i].amountTons - t0, entries[i].moneyValue - v0);
+        }
+    }
+
+    StateEconScalars fullScalars = {};
+    StateEconScalars zeroScalars = {};
+    SafeReadStatScalars(rec, &fullScalars);
+    AddStatScalarsDelta(&outS0->scalars, zeroScalars, fullScalars, w0);
+    AddStatScalarsDelta(&outS1->scalars, outS0->scalars, fullScalars, 1.0f);
+    outS0->scalars.demographics[3] = CountStateAdultHousedCitizens(world, 1);
+    outS1->scalars.demographics[3] = CountStateAdultHousedCitizens(world, 2);
+}
+
+static void SyncStateEconHistoryLength(const BYTE* world, float w0)
+{
+    BYTE* histBegin = nullptr;
+    int histCount = 0;
+    if (!SafeReadStatHistHeader(world, &histBegin, &histCount) || !histBegin || histCount <= 0) return;
+
+    size_t curLen = std::min(g_stateHistEcon[0].size(), g_stateHistEcon[1].size());
+    if (curLen > (size_t)histCount) {
+        g_stateHistEcon[0].resize((size_t)histCount);
+        g_stateHistEcon[1].resize((size_t)histCount);
+        return;
+    }
+    for (size_t i = curLen; i < (size_t)histCount; ++i) {
+        StateEconPeriodStats s0, s1;
+        SplitEngineStatRecordToStates(world, histBegin + i * STAT_RECORD_SIZE, w0, &s0, &s1);
+        g_stateHistEcon[0].push_back(s0);
+        g_stateHistEcon[1].push_back(s1);
+    }
+}
+
+static void EnsureStateEconInitialized(const BYTE* world)
+{
+    if (!world) return;
+    float w0 = ComputeWorldState1Weight(world);
+    if (!g_stateEconInitialized) {
+        SplitEngineStatRecordToStates(world, world + WORLD_STAT_CURRENT_OFFSET, w0,
+                                      &g_stateCurEcon[0], &g_stateCurEcon[1]);
+        g_stateHistEcon[0].clear();
+        g_stateHistEcon[1].clear();
+        SyncStateEconHistoryLength(world, w0);
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
+        memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+        g_stateEconInitialized = true;
+    } else {
+        SyncStateEconHistoryLength(world, w0);
+    }
+}
+
+// Fallback ledger accumulator for unit tests in MockEngineHarness when o_ledgerAdd is null.
+static SovietStatResEntry g_testLedgerPool[STAT_RES_VEC_COUNT][64] = {};
+
+static void LedgerAddFallback(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec, float mult)
+{
+    if (!world || !row || !ledgerVec) return;
+    SovietStatResEntry src = {};
+    if (!SafeReadPod(row, &src)) return;
+    float dTons = src.amountTons * mult;
+    float dVal  = src.moneyValue * mult;
+    bool isNeg  = (dTons < 0.0f);
+
+    RawStatResVecHeader hdr = {};
+    if (!SafeReadPod((const RawStatResVecHeader*)ledgerVec, &hdr)) return;
+    if (!hdr.begin) {
+        ptrdiff_t rel = ledgerVec - (world + WORLD_STAT_CURRENT_OFFSET + STAT_RES_VEC_BASE_OFF);
+        int vecIdx = (rel >= 0 && rel < STAT_RES_VEC_COUNT * STAT_RES_VEC_STRIDE)
+            ? (int)(rel / STAT_RES_VEC_STRIDE) : 0;
+        hdr.begin = g_testLedgerPool[vecIdx];
+        hdr.end   = hdr.begin;
+        hdr.cap   = hdr.begin + 64;
+        SafeWritePod((RawStatResVecHeader*)ledgerVec, hdr);
+    }
+
+    int count = (int)(hdr.end - hdr.begin);
+    int cap   = (int)(hdr.cap - hdr.begin);
+    if (count < 0 || cap < count || cap > 512) return;
+
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (int i = 0; i < count; ++i) {
+            if (hdr.begin[i].resourcePtr == src.resourcePtr) {
+                bool curNeg = (hdr.begin[i].amountTons < 0.0f);
+                if (curNeg == isNeg || fabsf(hdr.begin[i].amountTons) <= 1e-7f) {
+                    hdr.begin[i].amountTons += dTons;
+                    hdr.begin[i].moneyValue += dVal;
+                    DiagLog_EndSafeSeh();
+                    return;
+                }
+            }
+        }
+        if (count < cap) {
+            hdr.begin[count].resourcePtr = src.resourcePtr;
+            hdr.begin[count].amountTons  = dTons;
+            hdr.begin[count].moneyValue  = dVal;
+            *(SovietStatResEntry**)(ledgerVec + 8) = hdr.begin + (count + 1);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void AttributeResEntryDelta(const BYTE* world, int vecIdx, int owner,
+                                   uintptr_t resPtr, bool isNeg, float dTons, float dVal)
+{
+    if (fabsf(dTons) <= 1e-7f && fabsf(dVal) <= 1e-7f) return;
+    if (owner == 1 || owner == 2) {
+        AddEntryDeltaToStateResVec(g_stateCurEcon[owner - 1].resVecs[vecIdx], resPtr, isNeg, dTons, dVal);
+    } else {
+        float w0 = ComputeWorldState1Weight(world);
+        float t0 = dTons * w0;
+        float v0 = dVal * w0;
+        AddEntryDeltaToStateResVec(g_stateCurEcon[0].resVecs[vecIdx], resPtr, isNeg, t0, v0);
+        AddEntryDeltaToStateResVec(g_stateCurEcon[1].resVecs[vecIdx], resPtr, isNeg, dTons - t0, dVal - v0);
+    }
+}
+
+static void AttributeLedgerVecDiffToStates(const BYTE* world, int vecIdx, int owner,
+                                           const std::vector<SovietStatResEntry>& beforeEntries,
+                                           const std::vector<SovietStatResEntry>& afterEntries)
+{
+    if (vecIdx < 0 || vecIdx >= STAT_RES_VEC_COUNT) return;
+    if (afterEntries.size() < beforeEntries.size()) return;
+    for (size_t i = 0; i < beforeEntries.size(); ++i) {
+        if (afterEntries[i].resourcePtr != beforeEntries[i].resourcePtr) continue;
+        float dt = afterEntries[i].amountTons - beforeEntries[i].amountTons;
+        float dv = afterEntries[i].moneyValue - beforeEntries[i].moneyValue;
+        if (fabsf(dt) > 1e-7f || fabsf(dv) > 1e-7f) {
+            bool isNeg = (afterEntries[i].amountTons < 0.0f) ||
+                         (fabsf(afterEntries[i].amountTons) <= 1e-7f && dt < 0.0f);
+            AttributeResEntryDelta(world, vecIdx, owner, afterEntries[i].resourcePtr, isNeg, dt, dv);
+        }
+    }
+    for (size_t i = beforeEntries.size(); i < afterEntries.size(); ++i) {
+        const SovietStatResEntry& e = afterEntries[i];
+        AttributeResEntryDelta(world, vecIdx, owner, e.resourcePtr, (e.amountTons < 0.0f), e.amountTons, e.moneyValue);
+    }
+}
+
+static void __fastcall H_LedgerAdd(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec,
+                                   float a4, unsigned char a5, float a6, unsigned char a7)
+{
+    bool wasUiSwapped = g_uiEconSwapped;
+    if (wasUiSwapped) {
+        TwoStates_RestoreUiMoneySwap();
+    }
+    bool track = false;
+    int vecIdx = -1;
+    if (!t_suppressCurStatLedgerHook && TwoStates_IsActive() && world && ledgerVec &&
+        (!g_exeBase || world == g_exeBase + WORLD_RVA)) {
+        ptrdiff_t rel = ledgerVec - (world + WORLD_STAT_CURRENT_OFFSET + STAT_RES_VEC_BASE_OFF);
+        if (rel >= 0 && rel < STAT_RES_VEC_COUNT * STAT_RES_VEC_STRIDE && (rel % STAT_RES_VEC_STRIDE) == 0) {
+            EnsureStateEconInitialized(world);
+            vecIdx = (int)(rel / STAT_RES_VEC_STRIDE);
+            track = true;
+        }
+    }
+
+    std::vector<SovietStatResEntry> beforeEntries;
+    if (track) {
+        SafeReadResVecEntries(ledgerVec, beforeEntries);
+    }
+
+    if (o_ledgerAdd) {
+        o_ledgerAdd(world, row, ledgerVec, a4, a5, a6, a7);
+    } else {
+        LedgerAddFallback(world, row, ledgerVec, a6);
+    }
+
+    if (track) {
+        std::vector<SovietStatResEntry> afterEntries;
+        if (SafeReadResVecEntries(ledgerVec, afterEntries)) {
+            int owner = t_inEconHook ? t_econOwner : (g_inCommand ? g_cmdOwner : 0);
+            AttributeLedgerVecDiffToStates(world, vecIdx, owner, beforeEntries, afterEntries);
+        }
+    }
+
+    if (wasUiSwapped && !g_inSimStep && !g_inCommand) {
+        TwoStates_UiBegin();
+    }
+}
+
+static void StatRecordClearFallback(BYTE* world, BYTE* rec)
+{
+    (void)world;
+    if (!rec) return;
+    StateEconScalars zeroScalars = {};
+    SafeWriteStatScalars(rec, zeroScalars);
+    int32_t zeroInt = 0;
+    SafeWritePod((int32_t*)(rec + 0), zeroInt);
+    SafeWritePod((int32_t*)(rec + 4), zeroInt);
+    for (int v = 0; v < STAT_RES_VEC_COUNT; ++v) {
+        BYTE* vecAddr = rec + STAT_RES_VEC_BASE_OFF + (size_t)v * STAT_RES_VEC_STRIDE;
+        RawStatResVecHeader hdr = {};
+        if (SafeReadPod((const RawStatResVecHeader*)vecAddr, &hdr) && hdr.begin) {
+            hdr.end = hdr.begin;
+            SafeWritePod((RawStatResVecHeader*)vecAddr, hdr);
+        }
+    }
+}
+
+static void FlushUnattributedScalarsToStates(const BYTE* world)
+{
+    if (!world) return;
+    StateEconScalars curScalars = {};
+    SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &curScalars);
+    AddStatScalarsDelta(&g_unattributedScalars, g_lastWorldScalars, curScalars, 1.0f);
+    g_lastWorldScalars = curScalars;
+
+    StateEconScalars zeroScalars = {};
+    StateEconScalars share0 = {};
+    float w0 = ComputeWorldState1Weight(world);
+    AddStatScalarsDelta(&share0, zeroScalars, g_unattributedScalars, w0);
+    AddStatScalarsDelta(&g_stateCurEcon[0].scalars, zeroScalars, share0, 1.0f);
+    AddStatScalarsDelta(&g_stateCurEcon[1].scalars, share0, g_unattributedScalars, 1.0f);
+    memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+}
+
+static void __fastcall H_StatRecordClear(BYTE* rcxWorld, BYTE* rec)
+{
+    bool wasUiSwapped = g_uiEconSwapped;
+    if (wasUiSwapped) {
+        TwoStates_RestoreUiMoneySwap();
+    }
+    BYTE* world = (rcxWorld && (!g_exeBase || rcxWorld == g_exeBase + WORLD_RVA))
+        ? rcxWorld
+        : (g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr);
+    bool isCurStat = (TwoStates_IsActive() && world && rec == world + WORLD_STAT_CURRENT_OFFSET);
+    bool isRollover = isCurStat && !g_beforeLoadPrepared && !Determinism_WorldLoading() &&
+                      (g_inSimStep || g_inStatClearTest);
+    if (isRollover) {
+        EnsureStateEconInitialized(world);
+        FlushUnattributedScalarsToStates(world);
+
+        BYTE* histBegin = nullptr;
+        int histCount = 0;
+        bool hasHist = SafeReadStatHistHeader(world, &histBegin, &histCount) && histBegin && histCount > 0;
+        int32_t completedDay = 0, completedYear = 0;
+        const BYTE* dateSrc = hasHist ? (histBegin + (size_t)(histCount - 1) * STAT_RECORD_SIZE) : rec;
+        SafeReadPod((const int32_t*)(dateSrc + 0), &completedDay);
+        SafeReadPod((const int32_t*)(dateSrc + 4), &completedYear);
+
+        float w0 = ComputeWorldState1Weight(world);
+        for (int s = 0; s < 2; ++s) {
+            g_stateCurEcon[s].day = completedDay;
+            g_stateCurEcon[s].year = completedYear;
+            g_stateCurEcon[s].scalars.demographics[3] = CountStateAdultHousedCitizens(world, s + 1);
+        }
+
+        if (hasHist) {
+            while ((int)g_stateHistEcon[0].size() + 1 < histCount) {
+                size_t idx = g_stateHistEcon[0].size();
+                StateEconPeriodStats s0, s1;
+                SplitEngineStatRecordToStates(world, histBegin + idx * STAT_RECORD_SIZE, w0, &s0, &s1);
+                g_stateHistEcon[0].push_back(s0);
+                g_stateHistEcon[1].push_back(s1);
+            }
+            for (int s = 0; s < 2; ++s) {
+                if ((int)g_stateHistEcon[s].size() < histCount) {
+                    g_stateHistEcon[s].push_back(g_stateCurEcon[s]);
+                } else if (!g_stateHistEcon[s].empty()) {
+                    g_stateHistEcon[s].back() = g_stateCurEcon[s];
+                }
+            }
+        } else {
+            g_stateHistEcon[0].push_back(g_stateCurEcon[0]);
+            g_stateHistEcon[1].push_back(g_stateCurEcon[1]);
+        }
+
+        ClearStateEconPeriod(&g_stateCurEcon[0]);
+        ClearStateEconPeriod(&g_stateCurEcon[1]);
+    }
+
+    if (o_statRecordClear) {
+        o_statRecordClear(rcxWorld, rec);
+    } else {
+        StatRecordClearFallback(world, rec);
+    }
+
+    if (isCurStat) {
+        SafeReadStatScalars(rec, &g_lastWorldScalars);
+        memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+    }
+
+    if (wasUiSwapped && !g_inSimStep && !g_inCommand) {
+        TwoStates_UiBegin();
+    }
+}
+
+void TwoStates_ResetEconStatsForTest(BYTE* world)
+{
+    TwoStates_RestoreUiMoneySwap();
+    ClearStateEconPeriod(&g_stateCurEcon[0]);
+    ClearStateEconPeriod(&g_stateCurEcon[1]);
+    g_stateHistEcon[0].clear();
+    g_stateHistEcon[1].clear();
+    memset(g_testLedgerPool, 0, sizeof(g_testLedgerPool));
+    memset(&g_lastWorldScalars, 0, sizeof(g_lastWorldScalars));
+    memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+    g_stateEconInitialized = false;
+    if (world) {
+        EnsureStateEconInitialized(world);
+    }
+}
+
+void TwoStates_LedgerAddForTest(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec, float mult)
+{
+    H_LedgerAdd(world, row, ledgerVec, 0.0f, 0, mult, 0);
+}
+
+void TwoStates_ConstructStepBatchForTest(BYTE* world, BYTE* building, const SovietStatResEntry* entries,
+                                         const int* vecIdxs, int count)
+{
+    if (!world || !building || !entries || !vecIdxs || count <= 0) return;
+    ConstructEconScope scope(world, building);
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+    for (int i = 0; i < count; ++i) {
+        int vIdx = vecIdxs[i];
+        if (vIdx >= 0 && vIdx < STAT_RES_VEC_COUNT) {
+            LedgerAddFallback(world, &entries[i], curStat + STAT_RES_VEC_BASE_OFF + (size_t)vIdx * STAT_RES_VEC_STRIDE, 1.0f);
+        }
+    }
+}
+
+void TwoStates_StatRecordClearForTest(BYTE* world, BYTE* rec)
+{
+    g_inStatClearTest = true;
+    H_StatRecordClear(world, rec);
+    g_inStatClearTest = false;
+}
+
+bool TwoStates_GetStateEconResEntry(int state, int vecIdx, uintptr_t resourcePtr, float* outTons, float* outValue)
+{
+    if (outTons)  *outTons  = 0.0f;
+    if (outValue) *outValue = 0.0f;
+    if ((state != 1 && state != 2) || vecIdx < 0 || vecIdx >= STAT_RES_VEC_COUNT) return false;
+    const std::vector<SovietStatResEntry>& vec = g_stateCurEcon[state - 1].resVecs[vecIdx];
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (vec[i].resourcePtr == resourcePtr) {
+            if (outTons)  *outTons  = vec[i].amountTons;
+            if (outValue) *outValue = vec[i].moneyValue;
+            return true;
+        }
+    }
+    return false;
+}
+
+void TwoStates_GetStateEconFloat4ForTest(int state, bool loansSlice, float outVals[4])
+{
+    if (!outVals) return;
+    memset(outVals, 0, 4 * sizeof(float));
+    if (state == 1 || state == 2) {
+        const float* src = loansSlice
+            ? g_stateCurEcon[state - 1].scalars.loans
+            : g_stateCurEcon[state - 1].scalars.vehicles;
+        memcpy(outVals, src, 4 * sizeof(float));
+    }
+}
+
+int TwoStates_GetStateEconHistoryCount(int state)
+{
+    if (state != 1 && state != 2) return 0;
+    return (int)g_stateHistEcon[state - 1].size();
 }
 
 struct VehSaveSnapshot {
@@ -1084,6 +1886,9 @@ static void __fastcall H_MasterSave(BYTE* world)
     DiagLog_EndSafeSeh();
 
     if (isCoopSave && fullSaveDir[0]) {
+        if (twoStates && world) {
+            EnsureStateEconInitialized(world);
+        }
         if (g_expandBorders) {
             TwoStates_PatchSaveScriptIni(fullSaveDir, 0.0f);
         }
@@ -1136,8 +1941,25 @@ bool TwoStates_Install()
                                 kCustomsVehExpect, sizeof(kCustomsVehExpect), "republicmp two_states customs_vehicle");
     econOk += InstallInlineHook(g_exeBase + RVA_CONSTRUCT_STEP, (void*)&H_ConstructStep, (void**)&o_constructStep,
                                 kConstructStepExpect, sizeof(kConstructStepExpect), "republicmp two_states construct_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_CONSTRUCT_GROUNDWORK, (void*)&H_ConstructGroundwork,
+                                (void**)&o_constructGroundwork, kConstructGroundworkExpect,
+                                sizeof(kConstructGroundworkExpect), "republicmp two_states construct_groundwork");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_TOURISM_STEP, (void*)&H_BldTourismStep,
+                                (void**)&o_bldTourismStep, kBldTourismStepExpect,
+                                sizeof(kBldTourismStepExpect), "republicmp two_states bld_tourism_step");
     econOk += InstallInlineHook(g_exeBase + RVA_VEHICLE_SALE, (void*)&H_VehicleSale, (void**)&o_vehicleSale,
                                 kVehicleSaleExpect, sizeof(kVehicleSaleExpect), "republicmp two_states vehicle_sale");
+    econOk += InstallInlineHook(g_exeBase + RVA_VEHICLE_BORDER_EXPORT, (void*)&H_VehicleBorderExport,
+                                (void**)&o_vehicleBorderExport, kVehicleBorderExportExpect,
+                                sizeof(kVehicleBorderExportExpect), "republicmp two_states vehicle_border_export");
+    econOk += InstallInlineHook(g_exeBase + RVA_FOREIGN_WORKER_BOARD, (void*)&H_ForeignWorkerBoard,
+                                (void**)&o_foreignWorkerBoard, kForeignWorkerBoardExpect,
+                                sizeof(kForeignWorkerBoardExpect), "republicmp two_states foreign_worker_board");
+    econOk += InstallInlineHook(g_exeBase + RVA_LEDGER_ADD, (void*)&H_LedgerAdd, (void**)&o_ledgerAdd,
+                                kLedgerAddExpect, sizeof(kLedgerAddExpect), "republicmp two_states ledger_add");
+    econOk += InstallInlineHook(g_exeBase + RVA_STAT_RECORD_CLEAR, (void*)&H_StatRecordClear,
+                                (void**)&o_statRecordClear, kStatRecordClearExpect,
+                                sizeof(kStatRecordClearExpect), "republicmp two_states stat_record_clear");
     econOk += InstallInlineHook(g_exeBase + RVA_GET_MAX_AVAILABLE_BORROW, (void*)&H_GetMaxAvailableBorrow,
                                 (void**)&o_getMaxAvailableBorrow, kGetMaxBorrowExpect, sizeof(kGetMaxBorrowExpect),
                                 "republicmp two_states get_max_borrow");
@@ -1147,7 +1969,7 @@ bool TwoStates_Install()
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan attribution hooks (%d/7), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats attribution hooks (%d/13), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -1356,6 +2178,10 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
                 *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
                 *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
             }
+            if (g_exeBase && !g_beforeLoadPrepared && !Determinism_WorldLoading() &&
+                (!o_statRecordClear || SaveSync_IsWorldLoaded())) {
+                EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+            }
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
@@ -1394,6 +2220,9 @@ void TwoStates_OnWorldLoaded()
         } else {
             *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
             *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        }
+        if (g_exeBase) {
+            EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
         }
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1502,6 +2331,11 @@ void TwoStates_BeginCommand(int ownerState)
     }
     g_inCommand = true;
     __try {
+        if (g_exeBase) {
+            BYTE* world = g_exeBase + WORLD_RVA;
+            EnsureStateEconInitialized(world);
+            SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_cmdBeforeScalars);
+        }
         *WorldRubles()  = g_stateRub[g_cmdOwner - 1];
         *WorldDollars() = g_stateUsd[g_cmdOwner - 1];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1539,6 +2373,13 @@ void TwoStates_EndCommand(int ownerState)
     }
     g_inCommand = false;
     __try {
+        if (g_exeBase) {
+            BYTE* world = g_exeBase + WORLD_RVA;
+            StateEconScalars afterScalars = {};
+            SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
+            AddStatScalarsDelta(&g_stateCurEcon[owner - 1].scalars, g_cmdBeforeScalars, afterScalars, 1.0f);
+            g_lastWorldScalars = afterScalars;
+        }
         g_stateRub[owner - 1] = *WorldRubles();
         g_stateUsd[owner - 1] = *WorldDollars();
         *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
@@ -1709,6 +2550,14 @@ bool TwoStates_ApplyLoanCommand(const LsLoanCommand& cmd)
         }
     }
     SafeAddLoanStatsDelta(world, cmd.dStats);
+    if (filterByState && !g_inCommand) {
+        EnsureStateEconInitialized(world);
+        for (int i = 0; i < 4; ++i) {
+            if (isfinite(cmd.dStats[i])) {
+                g_stateCurEcon[ownerState - 1].scalars.loans[i] += cmd.dStats[i];
+            }
+        }
+    }
     NotifyLoanActionToast(ownerState, cmd);
     return true;
 }
@@ -1762,8 +2611,6 @@ void TwoStates_GetLoanDebt(int state, double* outRubDebt, double* outUsdDebt, in
     }
 }
 
-static int g_stepBldCount[2] = { 0, 0 };
-
 void TwoStates_BeforeStep(BYTE* world)
 {
     TwoStates_RestoreUiMoneySwap();
@@ -1774,6 +2621,7 @@ void TwoStates_BeforeStep(BYTE* world)
         g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
         return;
     }
+    EnsureStateEconInitialized(world);
     g_stepBldCount[0] = g_stepBldCount[1] = 0;
 
     __try {
@@ -1783,6 +2631,8 @@ void TwoStates_BeforeStep(BYTE* world)
         g_lastWorldUsd = *WorldDollars();
         g_unattributedRub = 0.0;
         g_unattributedUsd = 0.0;
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
+        memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
         g_simStepThread = GetCurrentThreadId();
         g_inSimStep = true;
 
@@ -1823,6 +2673,10 @@ void TwoStates_AfterStep(BYTE* world)
     }
     g_inSimStep = false;
     __try {
+        FlushUnattributedScalarsToStates(world);
+        g_stateCurEcon[0].scalars.demographics[3] = CountStateAdultHousedCitizens(world, 1);
+        g_stateCurEcon[1].scalars.demographics[3] = CountStateAdultHousedCitizens(world, 2);
+
         double nowRub = *WorldRubles();
         double nowUsd = *WorldDollars();
         double dRub = g_unattributedRub + (nowRub - g_lastWorldRub);
@@ -1850,6 +2704,38 @@ void TwoStates_AfterStep(BYTE* world)
         *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+static void BeginUiEconSwap(BYTE* world, int localState)
+{
+    if (!world || (localState != 1 && localState != 2)) return;
+    EnsureStateEconInitialized(world);
+    int sIdx = localState - 1;
+    g_stateCurEcon[sIdx].scalars.demographics[3] = CountStateAdultHousedCitizens(world, localState);
+
+    SaveRecordToUiBackup(world + WORLD_STAT_CURRENT_OFFSET, &g_uiSavedCurStat);
+    WriteStatePeriodToEngineRecordForUi(world + WORLD_STAT_CURRENT_OFFSET, g_stateCurEcon[sIdx]);
+
+    BYTE* histBegin = nullptr;
+    int histCount = 0;
+    if (SafeReadStatHistHeader(world, &histBegin, &histCount) && histBegin && histCount > 0) {
+        g_uiSavedHistBegin = histBegin;
+        g_uiSavedHistCount = histCount;
+        g_uiSavedHistStats.resize((size_t)histCount);
+        int swapCount = (int)std::min((size_t)histCount, g_stateHistEcon[sIdx].size());
+        for (int i = 0; i < histCount; ++i) {
+            SaveRecordToUiBackup(histBegin + (size_t)i * STAT_RECORD_SIZE, &g_uiSavedHistStats[(size_t)i]);
+            if (i < swapCount) {
+                WriteStatePeriodToEngineRecordForUi(histBegin + (size_t)i * STAT_RECORD_SIZE,
+                                                    g_stateHistEcon[sIdx][(size_t)i]);
+            }
+        }
+    } else {
+        g_uiSavedHistBegin = nullptr;
+        g_uiSavedHistCount = 0;
+        g_uiSavedHistStats.clear();
+    }
+    g_uiEconSwapped = true;
 }
 
 static void BeginUiLoanSwap(BYTE* world, bool filterByState)
@@ -1890,11 +2776,13 @@ void TwoStates_UiBegin()
 {
     EnsureMoneySwapLock();
     EnterCriticalSection(&g_moneySwapLock);
-    if (g_uiMoneySwapped || g_uiLoansSwapped) {
+    if (g_uiMoneySwapped || g_uiLoansSwapped || g_uiEconSwapped) {
         LeaveCriticalSection(&g_moneySwapLock);
         return;
     }
     if (!g_exeBase || g_inSimStep || g_inCommand || TwoStates_IsSaveInProgress() ||
+        g_beforeLoadPrepared || Determinism_WorldLoading() ||
+        (o_statRecordClear && !SaveSync_IsWorldLoaded()) ||
         Determinism_GetFramePhase() != 0 || IsUnlimitedMoney()) {
         LeaveCriticalSection(&g_moneySwapLock);
         return;
@@ -1917,6 +2805,9 @@ void TwoStates_UiBegin()
         g_uiMoneySwapped = true;
     }
 
+    if (twoStates) {
+        BeginUiEconSwap(g_exeBase + WORLD_RVA, TwoStates_LocalState());
+    }
     BeginUiLoanSwap(g_exeBase + WORLD_RVA, twoStates);
     LeaveCriticalSection(&g_moneySwapLock);
 }
@@ -3131,6 +4022,265 @@ static bool SafeReadPendingLoadInfo(BYTE* outTerrainFlag, char* outSaveRel, size
     }
 }
 
+static std::string ResourcePtrToToken(const BYTE* world, uintptr_t resPtr)
+{
+    if (!resPtr) return "I0";
+    if (world) {
+        uintptr_t resBegin = 0, resEnd = 0;
+        if (SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET), &resBegin) &&
+            SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET + 8), &resEnd) &&
+            resBegin && resEnd > resBegin && resPtr >= resBegin && resPtr < resEnd &&
+            ((resPtr - resBegin) % WORLD_RESOURCE_STRIDE) == 0) {
+            char buf[32];
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "R%llu",
+                        (unsigned long long)((resPtr - resBegin) / WORLD_RESOURCE_STRIDE));
+            return buf;
+        }
+        uintptr_t wBase = (uintptr_t)world;
+        if (resPtr >= wBase && resPtr < wBase + 0x1000000ULL) {
+            char buf[32];
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "W%llu", (unsigned long long)(resPtr - wBase));
+            return buf;
+        }
+        for (size_t off = WORLD_RES_PTR_SLOTS_BEGIN_OFF; off <= WORLD_RES_PTR_SLOTS_END_OFF; off += sizeof(uintptr_t)) {
+            uintptr_t slotVal = 0;
+            if (SafeReadPod((const uintptr_t*)(world + off), &slotVal) && slotVal == resPtr) {
+                char buf[32];
+                _snprintf_s(buf, sizeof(buf), _TRUNCATE, "P%llu", (unsigned long long)off);
+                return buf;
+            }
+        }
+    }
+    char buf[32];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "I%llu", (unsigned long long)resPtr);
+    return buf;
+}
+
+static uintptr_t ResourceTokenToPtr(const BYTE* world, const std::string& tok)
+{
+    if (tok.empty()) return 0;
+    char prefix = tok[0];
+    unsigned long long num = _strtoui64(tok.c_str() + 1, nullptr, 10);
+    if (prefix == 'R' && world) {
+        uintptr_t resBegin = 0, resEnd = 0;
+        if (SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET), &resBegin) &&
+            SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET + 8), &resEnd) &&
+            resBegin && resEnd > resBegin) {
+            uintptr_t ptr = resBegin + (uintptr_t)(num * WORLD_RESOURCE_STRIDE);
+            if (ptr >= resBegin && ptr < resEnd) return ptr;
+        }
+    } else if (prefix == 'W' && world) {
+        if (num < 0x1000000ULL) {
+            return (uintptr_t)world + (uintptr_t)num;
+        }
+    } else if (prefix == 'P' && world) {
+        if (num >= WORLD_RES_PTR_SLOTS_BEGIN_OFF && num <= WORLD_RES_PTR_SLOTS_END_OFF &&
+            (num % sizeof(uintptr_t)) == 0) {
+            uintptr_t slotVal = 0;
+            if (SafeReadPod((const uintptr_t*)(world + (size_t)num), &slotVal)) {
+                return slotVal;
+            }
+        }
+    } else if (prefix == 'I' && world) {
+        uintptr_t ptr = (uintptr_t)num;
+        uintptr_t wBase = (uintptr_t)world;
+        if (ptr >= wBase && ptr < wBase + 0x1000000ULL) return ptr;
+        uintptr_t resBegin = 0, resEnd = 0;
+        if (SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET), &resBegin) &&
+            SafeReadPod((const uintptr_t*)(world + WORLD_RESOURCES_OFFSET + 8), &resEnd) &&
+            resBegin && resEnd > resBegin && ptr >= resBegin && ptr < resEnd) {
+            return ptr;
+        }
+    }
+    return 0;
+}
+
+static long long FloatToCents(float v)
+{
+    return isfinite(v) ? (long long)llround((double)v * 100.0) : 0LL;
+}
+
+static long long FloatToMillitons(float v)
+{
+    return isfinite(v) ? (long long)llround((double)v * 1000.0) : 0LL;
+}
+
+static std::string SerializeStateEconPeriod(const BYTE* world, const StateEconPeriodStats& st)
+{
+    std::ostringstream ss;
+    char buf[256];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                "D:%d,%d;V:%lld,%lld,%lld,%lld;M:%lld,%lld;C:%d,%d,%d,%d,%d;P:%d,%d,%d,%d;L:%lld,%lld,%lld,%lld",
+                st.day, st.year,
+                FloatToCents(st.scalars.vehicles[0]), FloatToCents(st.scalars.vehicles[1]),
+                FloatToCents(st.scalars.vehicles[2]), FloatToCents(st.scalars.vehicles[3]),
+                FloatToCents(st.scalars.immigrantSpend[0]), FloatToCents(st.scalars.immigrantSpend[1]),
+                st.scalars.citizenCounts[0], st.scalars.citizenCounts[1], st.scalars.citizenCounts[2],
+                st.scalars.citizenCounts[3], st.scalars.citizenCounts[4],
+                st.scalars.demographics[0], st.scalars.demographics[1],
+                st.scalars.demographics[2], st.scalars.demographics[3],
+                FloatToCents(st.scalars.loans[0]), FloatToCents(st.scalars.loans[1]),
+                FloatToCents(st.scalars.loans[2]), FloatToCents(st.scalars.loans[3]));
+    ss << buf;
+
+    bool hasTourism = false;
+    for (int i = 0; i < 44; ++i) {
+        long long cents = FloatToCents(st.scalars.tourism[i]);
+        if (cents != 0) {
+            ss << (hasTourism ? "," : ";T:");
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d:%lld", i, cents);
+            ss << buf;
+            hasTourism = true;
+        }
+    }
+
+    for (int v = 0; v < STAT_RES_VEC_COUNT; ++v) {
+        const std::vector<SovietStatResEntry>& vec = st.resVecs[v];
+        if (vec.empty()) continue;
+        ss << ";R" << v << ":";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) ss << ",";
+            std::string rTok = ResourcePtrToToken(world, vec[i].resourcePtr);
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%s:%lld:%lld",
+                        rTok.c_str(), FloatToMillitons(vec[i].amountTons), FloatToCents(vec[i].moneyValue));
+            ss << buf;
+        }
+    }
+    return ss.str();
+}
+
+static void ParseCentsSlice(const std::string& body, float* outFloats, int maxCount)
+{
+    size_t pos = 0;
+    for (int i = 0; i < maxCount && pos < body.size(); ++i) {
+        size_t comma = body.find(',', pos);
+        if (comma == std::string::npos) comma = body.size();
+        long long cents = _strtoi64(body.substr(pos, comma - pos).c_str(), nullptr, 10);
+        outFloats[i] = (float)((double)cents / 100.0);
+        pos = comma + 1;
+    }
+}
+
+static void ParseTourismTokenBody(const std::string& body, float outTourism[44])
+{
+    size_t pos = 0;
+    while (pos < body.size()) {
+        size_t comma = body.find(',', pos);
+        if (comma == std::string::npos) comma = body.size();
+        std::string item = body.substr(pos, comma - pos);
+        size_t colon = item.find(':');
+        if (colon != std::string::npos) {
+            int idx = atoi(item.substr(0, colon).c_str());
+            long long cents = _strtoi64(item.substr(colon + 1).c_str(), nullptr, 10);
+            if (idx >= 0 && idx < 44) {
+                outTourism[idx] = (float)((double)cents / 100.0);
+            }
+        }
+        pos = comma + 1;
+    }
+}
+
+static void ParseResVecTokenBody(const BYTE* world, const std::string& body, std::vector<SovietStatResEntry>& outVec)
+{
+    size_t pos = 0;
+    while (pos < body.size()) {
+        size_t comma = body.find(',', pos);
+        if (comma == std::string::npos) comma = body.size();
+        std::string item = body.substr(pos, comma - pos);
+        size_t c1 = item.find(':');
+        size_t c2 = (c1 != std::string::npos) ? item.find(':', c1 + 1) : std::string::npos;
+        if (c1 != std::string::npos && c2 != std::string::npos) {
+            uintptr_t resPtr = ResourceTokenToPtr(world, item.substr(0, c1));
+            long long mtons = _strtoi64(item.substr(c1 + 1, c2 - c1 - 1).c_str(), nullptr, 10);
+            long long cents = _strtoi64(item.substr(c2 + 1).c_str(), nullptr, 10);
+            if (resPtr != 0) {
+                SovietStatResEntry e = { resPtr, (float)((double)mtons / 1000.0), (float)((double)cents / 100.0) };
+                outVec.push_back(e);
+            }
+        }
+        pos = comma + 1;
+    }
+}
+
+static void DeserializeStateEconPeriod(const BYTE* world, const std::string& str, StateEconPeriodStats* out)
+{
+    if (!out) return;
+    ClearStateEconPeriod(out, 0, 0);
+    size_t pos = 0;
+    while (pos < str.size()) {
+        size_t semi = str.find(';', pos);
+        if (semi == std::string::npos) semi = str.size();
+        std::string seg = str.substr(pos, semi - pos);
+        pos = semi + 1;
+        size_t colon = seg.find(':');
+        if (colon == std::string::npos) continue;
+        std::string tag = seg.substr(0, colon);
+        std::string body = seg.substr(colon + 1);
+        if (tag == "D") {
+            sscanf_s(body.c_str(), "%d,%d", &out->day, &out->year);
+        } else if (tag == "V") {
+            ParseCentsSlice(body, out->scalars.vehicles, 4);
+        } else if (tag == "M") {
+            ParseCentsSlice(body, out->scalars.immigrantSpend, 2);
+        } else if (tag == "C") {
+            sscanf_s(body.c_str(), "%d,%d,%d,%d,%d",
+                     &out->scalars.citizenCounts[0], &out->scalars.citizenCounts[1],
+                     &out->scalars.citizenCounts[2], &out->scalars.citizenCounts[3],
+                     &out->scalars.citizenCounts[4]);
+        } else if (tag == "P") {
+            sscanf_s(body.c_str(), "%d,%d,%d,%d",
+                     &out->scalars.demographics[0], &out->scalars.demographics[1],
+                     &out->scalars.demographics[2], &out->scalars.demographics[3]);
+        } else if (tag == "L") {
+            ParseCentsSlice(body, out->scalars.loans, 4);
+        } else if (tag == "T") {
+            ParseTourismTokenBody(body, out->scalars.tourism);
+        } else if (tag.size() >= 2 && tag[0] == 'R') {
+            int vIdx = atoi(tag.c_str() + 1);
+            if (vIdx >= 0 && vIdx < STAT_RES_VEC_COUNT) {
+                ParseResVecTokenBody(world, body, out->resVecs[vIdx]);
+            }
+        }
+    }
+}
+
+static bool ParseCoopMetaEconKey(const BYTE* world, const std::string& key, const std::string& val, bool haveEconCur[2])
+{
+    if (key == "econ_cur1") {
+        DeserializeStateEconPeriod(world, val, &g_stateCurEcon[0]);
+        haveEconCur[0] = true;
+        return true;
+    }
+    if (key == "econ_cur2") {
+        DeserializeStateEconPeriod(world, val, &g_stateCurEcon[1]);
+        haveEconCur[1] = true;
+        return true;
+    }
+    if (key == "econ_hist_count") {
+        int cnt = atoi(val.c_str());
+        if (cnt > 0 && cnt <= 4096) {
+            g_stateHistEcon[0].resize((size_t)cnt);
+            g_stateHistEcon[1].resize((size_t)cnt);
+        }
+        return true;
+    }
+    if (_strnicmp(key.c_str(), "econ_hist1_", 11) == 0) {
+        int idx = atoi(key.c_str() + 11);
+        if (idx >= 0 && (size_t)idx < g_stateHistEcon[0].size()) {
+            DeserializeStateEconPeriod(world, val, &g_stateHistEcon[0][(size_t)idx]);
+        }
+        return true;
+    }
+    if (_strnicmp(key.c_str(), "econ_hist2_", 11) == 0) {
+        int idx = atoi(key.c_str() + 11);
+        if (idx >= 0 && (size_t)idx < g_stateHistEcon[1].size()) {
+            DeserializeStateEconPeriod(world, val, &g_stateHistEcon[1][(size_t)idx]);
+        }
+        return true;
+    }
+    return false;
+}
+
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 {
     if (!fullSaveDir || !fullSaveDir[0]) return;
@@ -3197,6 +4347,18 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "\r\n";
     LeaveCriticalSection(&g_ownerLock);
 
+    const BYTE* world = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+    if (g_stateEconInitialized && world) {
+        out << "econ_cur1=" << SerializeStateEconPeriod(world, g_stateCurEcon[0]) << "\r\n";
+        out << "econ_cur2=" << SerializeStateEconPeriod(world, g_stateCurEcon[1]) << "\r\n";
+        size_t histCount = std::min(g_stateHistEcon[0].size(), g_stateHistEcon[1].size());
+        out << "econ_hist_count=" << histCount << "\r\n";
+        for (size_t i = 0; i < histCount; ++i) {
+            out << "econ_hist1_" << i << "=" << SerializeStateEconPeriod(world, g_stateHistEcon[0][i]) << "\r\n";
+            out << "econ_hist2_" << i << "=" << SerializeStateEconPeriod(world, g_stateHistEcon[1][i]) << "\r\n";
+        }
+    }
+
     std::string data = out.str();
     FILE* f = nullptr;
     if (fopen_s(&f, metaPath, "wb") == 0 && f) {
@@ -3254,6 +4416,13 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     long long tradeRubCents[2] = { 0, 0 };
     long long tradeUsdCents[2] = { 0, 0 };
     bool haveRub = false, haveUsd = false;
+    bool haveEconCur[2] = { false, false };
+    const BYTE* world = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+
+    ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
+    ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
+    g_stateHistEcon[0].clear();
+    g_stateHistEcon[1].clear();
 
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
@@ -3283,10 +4452,17 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
         else if (key == "net_trade2_usd_cents") tradeUsdCents[1] = _strtoi64(val.c_str(), nullptr, 10);
         else if (key == "building_owners") ParseOwnersList(val, g_buildingOwners);
         else if (key == "vehicle_owners")  ParseOwnersList(val, g_vehicleOwners);
+        else ParseCoopMetaEconKey(world, key, val, haveEconCur);
     }
     size_t bldCount = g_buildingOwners.size();
     size_t vehCount = g_vehicleOwners.size();
     LeaveCriticalSection(&g_ownerLock);
+
+    g_stateEconInitialized = (haveEconCur[0] && haveEconCur[1]);
+    if (g_stateEconInitialized && world) {
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
+        memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+    }
 
     g_netTradeRub[0] = (double)tradeRubCents[0] / 100.0;
     g_netTradeRub[1] = (double)tradeRubCents[1] / 100.0;
@@ -3340,13 +4516,17 @@ bool TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAn
     return ReadCoopSaveMetaInternal(fullSaveDir, updateBudgetsAndMode);
 }
 
-static bool g_beforeLoadPrepared = false;
-
 void TwoStates_BeforeAnyWorldLoad()
 {
     if (!g_exeBase) return;
     if (g_beforeLoadPrepared) return;
     g_beforeLoadPrepared = true;
+    TwoStates_RestoreUiMoneySwap();
+    g_stateEconInitialized = false;
+    ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
+    ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
+    g_stateHistEcon[0].clear();
+    g_stateHistEcon[1].clear();
 
     bool isSessionLoad = Determinism_WorldLoading() || SaveSync_GetState() != SESSION_IDLE;
     bool wantCoopHost = (NativeMenu_IsHostOnNextLoad() || g_importingSpSave) && !isSessionLoad;
@@ -3441,6 +4621,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
     if (hasSaveDir && ReadCoopSaveMetaInternal(fullSaveDir, true)) {
         g_haveLobbyBaseMoney = false;
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
+            EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
             char msg[240];
             _snprintf_s(msg, sizeof(msg), _TRUNCATE,
                         Tr("Загружен кооп-сейв «2 государства» (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",
@@ -3471,6 +4652,11 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         LeaveCriticalSection(&g_ownerLock);
         g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
         g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
+        g_stateEconInitialized = false;
+        ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
+        ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
+        g_stateHistEcon[0].clear();
+        g_stateHistEcon[1].clear();
     }
 }
 

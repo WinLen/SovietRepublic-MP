@@ -171,6 +171,15 @@ bool   TwoStates_WriteSaveMetaToDir(const char* fullSaveDir);
 bool   TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAndMode);
 float  TwoStates_CalcMaxAvailableBorrow(BYTE* world, int loanType, int state);
 void   TwoStates_StepOneLoanDayForTest(BYTE* world, SovietLoan* loan);
+void   TwoStates_ResetEconStatsForTest(BYTE* world);
+void   TwoStates_LedgerAddForTest(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec, float mult = 1.0f);
+void   TwoStates_ConstructStepBatchForTest(BYTE* world, BYTE* building, const SovietStatResEntry* entries,
+                                           const int* vecIdxs, int count);
+void   TwoStates_StatRecordClearForTest(BYTE* world, BYTE* rec);
+bool   TwoStates_GetStateEconResEntry(int state, int vecIdx, uintptr_t resourcePtr, float* outTons, float* outValue);
+void   TwoStates_GetStateEconFloat4ForTest(int state, bool loansSlice, float outVals[4]);
+int    TwoStates_GetStateEconHistoryCount(int state);
+
 
 
 
