@@ -659,7 +659,9 @@ void Commands_SubmitRemote(int kind, const void* data, size_t size)
     Lock();
     g_outbox.push_back(std::move(c));
     Unlock();
-    Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(cleanKind));
+    if (!Frequent(cleanKind)) {
+        Logf("republicmp  LOCKSTEP: %s from the player - made at the next boundary", KindName(cleanKind));
+    }
 }
 
 void Commands_Receive(int kind, unsigned long long afterTick, const void* data, size_t size)

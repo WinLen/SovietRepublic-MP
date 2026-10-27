@@ -179,6 +179,9 @@ void   TwoStates_StatRecordClearForTest(BYTE* world, BYTE* rec);
 bool   TwoStates_GetStateEconResEntry(int state, int vecIdx, uintptr_t resourcePtr, float* outTons, float* outValue);
 void   TwoStates_GetStateEconFloat4ForTest(int state, bool loansSlice, float outVals[4]);
 int    TwoStates_GetStateEconHistoryCount(int state);
+void   TwoStates_CalcStoredResourcesForTest(BYTE* world, int* outBuildingCount, int* outVehicleCount);
+void*  TwoStates_BuildRegPreservingRelayStub(void* targetCppFn, bool keepXmm0Result, bool zeroRcxOnExit);
+
 
 
 

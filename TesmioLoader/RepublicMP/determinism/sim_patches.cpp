@@ -14,6 +14,7 @@
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
 #include "../session/save_sync.h"
+#include "../session/two_states.h"
 #include "../ui/native_menu.h"
 #include "determinism.h"
 #include "held_frame.h"
@@ -946,7 +947,9 @@ static __int64 DetUiRoutine(void* world)
         if ((BYTE*)world == g_exeBase + WORLD_RVA &&
             (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
             SaveSync_EnforceWaitingLobbyHold();
+            TwoStates_UiBegin();
             __int64 r = original(world);
+            TwoStates_UiEnd();
             SaveSync_EnforceWaitingLobbyHold();
             return r;
         }

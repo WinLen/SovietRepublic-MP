@@ -890,11 +890,13 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0xBD0)); // Citizen* vector cap
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0xBD8)); // Inmate* vector begin
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0x970)); // Storage slots vector
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0x9F8)); // Post-0x9E8 pointer block
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0xF18)); // Citizen destinations vector
 
     // Legitimate building settings offsets must NOT be excluded
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x114)); // Building custom name
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x500)); // Setting word
+    TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x9E8)); // Water reservoir / heating plant setting word
 
     // 1b. RoadSync_ClearCategoryPreview & RoadSync_CancelLocalDrag state cleanup
     {
@@ -1187,7 +1189,7 @@ static bool TestLoans_MaxAvailableBorrow()
     *(BYTE**)(world + WORLD_WORK_RESOURCE_PTR_OFF) = workRes.data();
 
     // Create 1 West residential building (X = -1000) and 1 East residential building (X = +1000)
-    std::vector<BYTE> bldWest(0x100, 0), bldEast(0x100, 0);
+    std::vector<BYTE> bldWest(0x1420, 0), bldEast(0x1420, 0);
     *(int*)bldWest.data() = 10; *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -1000.0f;
     *(int*)bldEast.data() = 20; *(float*)(bldEast.data() + OBJ_POS_OFFSET) =  1000.0f;
 
@@ -1737,6 +1739,20 @@ static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
         TEST_CHECK(hb[0].resourcePtr == resFood);
         TEST_CHECK_NEAR(hb[0].amountTons, 30.0f, 1e-3f);
         TEST_CHECK_NEAR(hb[0].moneyValue, 3000.0f, 1e-2f);
+
+        // Simulate Economy & Trade Window (0x361BB0) calling LedgerAdd (0x2FDB00) on temporary UI vector world+0xC7F0:
+        // must NOT unswap curStat or histBuf mid-render!
+        SovietStatResEntry uiTmpPool[4] = {};
+        *(SovietStatResEntry**)(world + 0xC7F0 + 0x00) = uiTmpPool;
+        *(SovietStatResEntry**)(world + 0xC7F0 + 0x08) = uiTmpPool;
+        *(SovietStatResEntry**)(world + 0xC7F0 + 0x10) = uiTmpPool + 4;
+        TwoStates_LedgerAddForTest(world, &hb[0], world + 0xC7F0, 1.0f);
+
+        SovietStatResEntry* hbAfter = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x00);
+        SovietStatResEntry* heAfter = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x08);
+        TEST_CHECK(hbAfter != nullptr && (heAfter - hbAfter) == 1);
+        TEST_CHECK_NEAR(hbAfter[0].amountTons, 30.0f, 1e-3f);
+        TEST_CHECK_NEAR(hbAfter[0].moneyValue, 3000.0f, 1e-2f);
     }
     TwoStates_UiEnd();
 
@@ -1771,15 +1787,52 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldPtrs;
     *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldPtrs + 2;
 
-    // 2 adult housed citizens in West SSR, 5 adult housed citizens in East SSR (stride 0x800 > CIT_UNBORN_FLAG_OFFSET 0x748)
-    std::vector<BYTE> citBuf(7 * 0x800, 0);
-    BYTE* citPtrs[7] = {};
-    for (int i = 0; i < 7; ++i) {
+    // 2 adult housed citizens + 1 child (age 4) in West SSR; 5 adult housed citizens + 1 student (age 14) + 1 21+ child (age 24) in East SSR
+    std::vector<BYTE> citBuf(10 * 0x800, 0);
+    BYTE* citPtrs[10] = {};
+    for (int i = 0; i < 10; ++i) {
         citPtrs[i] = citBuf.data() + (size_t)i * 0x800;
-        *(BYTE**)(citPtrs[i] + CIT_HOME_BUILDING_OFFSET) = (i < 2) ? bldWest.data() : bldEast.data();
+        bool isWest = (i < 3);
+        *(BYTE**)(citPtrs[i] + CIT_HOME_BUILDING_OFFSET) = isWest ? bldWest.data() : bldEast.data();
+        *(float*)(citPtrs[i] + 0x18) = isWest ? 78.0f : 64.0f;  // Life expectancy
+        *(float*)(citPtrs[i] + 0xA8) = isWest ? 2.2f  : 1.2f;   // Education (West: university >= 2.0, East: basic 1.0..2.0)
+        *(float*)(citPtrs[i] + CIT_AGE_OFFSET) = isWest ? 32.0f : 40.0f;
+        *(float*)(citPtrs[i] + 0xD8) = isWest ? 0.90f : 0.50f;  // Health [0]
+        *(float*)(citPtrs[i] + 0xDC) = isWest ? 0.85f : 0.60f;  // Food [1]
+        *(float*)(citPtrs[i] + 0xE0) = isWest ? 0.80f : 0.45f;  // Clothes [2]
+        *(float*)(citPtrs[i] + 0xE4) = isWest ? 0.20f : 0.70f;  // Alcohol [3]
+        *(float*)(citPtrs[i] + 0xF4) = isWest ? 0.75f : 0.35f;  // Loyalty [7]
+        *(float*)(citPtrs[i] + 0xF8) = isWest ? 0.88f : 0.42f;  // Happiness [8]
+        *(float*)(citPtrs[i] + 0xFC) = isWest ? 2.5f  : 1.2f;   // Electronics [9] (West: Radio+TV, East: Radio only)
     }
+    // citPtrs[2]: child age 4.0f with parent citPtrs[0] in West SSR
+    *(BYTE**)(citPtrs[2] + CIT_PARENT_OFFSET) = citPtrs[0];
+    *(float*)(citPtrs[2] + CIT_AGE_OFFSET) = 4.0f;
+    // citPtrs[8]: student age 14.0f with parent citPtrs[3] in East SSR
+    *(BYTE**)(citPtrs[8] + CIT_PARENT_OFFSET) = citPtrs[3];
+    *(float*)(citPtrs[8] + CIT_AGE_OFFSET) = 14.0f;
+    // citPtrs[9]: 21+ living with parent age 24.0f with parent citPtrs[4] in East SSR
+    *(BYTE**)(citPtrs[9] + CIT_PARENT_OFFSET) = citPtrs[4];
+    *(float*)(citPtrs[9] + CIT_AGE_OFFSET) = 24.0f;
+
     *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x00) = citPtrs;
-    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x08) = citPtrs + 7;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x08) = citPtrs + 10;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x10) = citPtrs + 10;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = bldPtrs;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = bldPtrs + 2;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x10) = bldPtrs + 2;
+
+    std::vector<BYTE> vehWest1(0x2000, 0), vehEast1(0x2000, 0), vehEast2(0x2000, 0);
+    *(int32_t*)(vehWest1.data() + VEH_ID_OFFSET) = 701;
+    *(float*)(vehWest1.data() + VEH_POS_OFFSET) = -500.0f;
+    *(int32_t*)(vehEast1.data() + VEH_ID_OFFSET) = 702;
+    *(float*)(vehEast1.data() + VEH_POS_OFFSET) = +500.0f;
+    *(int32_t*)(vehEast2.data() + VEH_ID_OFFSET) = 703;
+    *(float*)(vehEast2.data() + VEH_POS_OFFSET) = +600.0f;
+    BYTE* vehPtrs[3] = { vehWest1.data(), vehEast1.data(), vehEast2.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 0x00) = vehPtrs;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 0x08) = vehPtrs + 3;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 0x10) = vehPtrs + 3;
 
     double initRub[2] = { 500000.0, 500000.0 };
     double initUsd[2] = { 200000.0, 200000.0 };
@@ -1811,24 +1864,154 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK(TwoStates_GetStateEconResEntry(2, 8, resBricks, &tons, &val));
     TEST_CHECK_NEAR(tons, 25.0f, 1e-3f);
 
-    // Record 3 births ($Citizens_Born at +0x248) for State 1 and verify +0x248 is NOT overwritten by adult population (+0x2C4)
+    // Record 3 births ($Citizens_Born at +0x248) and 2 university graduates (+0x2EC) for State 1
     TwoStates_BeginCommand(1);
     *(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) += 3;
+    *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 0) += 2;
     TwoStates_EndCommand(1);
 
+    int bldCnt = 0, vehCnt = 0;
+    TwoStates_CalcStoredResourcesForTest(world, &bldCnt, &vehCnt);
+    TEST_CHECK(bldCnt == 1 && vehCnt == 1);
+
+    BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
+    BYTE* hudBlock = world + WORLD_HUD_POP_BLOCK_OFFSET;
     TwoStates_UiBegin();
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
-    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 2);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 0) == 2);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 0) == 1); // 1 child < 6
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 4) == 0); // 0 students 6..21
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 8) == 0); // 0 21+ with parent
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 2);           // 2 independent adults
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.90f, 1e-3f); // West Health = 90%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 1 * 4), 0.85f, 1e-3f); // West Food = 85%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 2 * 4), 0.80f, 1e-3f); // West Clothes = 80%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 7 * 4), 0.75f, 1e-3f); // West Loyalty = 75%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.88f, 1e-3f); // West Happiness = 88%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_AVERAGES_OFF + 4), 78.0f, 1e-2f);         // West Life Expectancy = 78y
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 3 * 4) == 3);                 // 3 university educated
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 6 * 4) == 2);                 // 2 adults with TV
+    TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.90f, 1e-3f);
+    TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.88f, 1e-3f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 3);          // Top HUD population = 3
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.90f, 1e-3f);                 // Top HUD Health = 90%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.88f, 1e-3f); // Top HUD Happiness = 88%
+    TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
+    TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 2);
+    TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 3);
     TwoStates_UiEnd();
+    TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
 
     TwoStates_OnSessionJoined(false /*Client*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_CalcStoredResourcesForTest(world, &bldCnt, &vehCnt);
+    TEST_CHECK(bldCnt == 1 && vehCnt == 2);
+
     TwoStates_UiBegin();
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 0);
-    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 5);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 0) == 0);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 0) == 0); // 0 child < 6
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 4) == 1); // 1 student 6..21
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 8) == 1); // 1 21+ with parent
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_ADULTS_OFF) == 5);           // 5 independent adults
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.50f, 1e-3f); // East Health = 50%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 1 * 4), 0.60f, 1e-3f); // East Food = 60%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 2 * 4), 0.45f, 1e-3f); // East Clothes = 45%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 7 * 4), 0.35f, 1e-3f); // East Loyalty = 35%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.42f, 1e-3f); // East Happiness = 42%
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_AVERAGES_OFF + 4), 64.0f, 1e-2f);         // East Life Expectancy = 64y
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 2 * 4) == 7);                 // 7 basic educated
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 5 * 4) == 5);                 // 5 adults with Radio
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 6 * 4) == 0);                 // 0 adults with TV
+    TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.50f, 1e-3f);
+    TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.42f, 1e-3f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 7);          // Top HUD population = 7
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.50f, 1e-3f);                 // Top HUD Health = 50%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.42f, 1e-3f); // Top HUD Happiness = 42%
+    TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_COUNTS_OFF + 0) == 0);
+    TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 5);
+    TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 7);
     TwoStates_UiEnd();
+    TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
 
     TwoStates_OnSessionEnded();
     ResetMockWorldMemory();
+    return true;
+}
+
+static uintptr_t g_relayClobberSeenRcx = 0;
+static uintptr_t g_relayClobberSeenRdx = 0;
+
+static float __fastcall MockLeafHookClobberVolatile(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4)
+{
+    g_relayClobberSeenRcx = a1;
+    g_relayClobberSeenRdx = a2;
+    volatile double mathTmp = sin((double)(a3 & 0xFF)) + cos((double)(a4 & 0xFF));
+    (void)mathTmp;
+    return 42500.5f;
+}
+
+static bool TestEconStats_LeafHookRelayStubPreservesRegisters()
+{
+    void* stubVoidZeroRcx = TwoStates_BuildRegPreservingRelayStub((void*)&MockLeafHookClobberVolatile, false, true);
+    void* stubFloatKeep   = TwoStates_BuildRegPreservingRelayStub((void*)&MockLeafHookClobberVolatile, true, false);
+    TEST_CHECK(stubVoidZeroRcx != nullptr);
+    TEST_CHECK(stubFloatKeep != nullptr);
+
+    // Build a tiny machine-code verifier that calls stubVoidZeroRcx with known rcx/rdx/r8/r9
+    // and stores post-call rcx/rdx/r8/r9 into an output array[4].
+    BYTE* page = (BYTE*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    TEST_CHECK(page != nullptr);
+    if (!page) return false;
+
+    // Verifier signature: void (__fastcall*)(uintptr_t outRegs[4], void* targetStub)
+    // Entry: rcx = outRegs, rdx = targetStub
+    BYTE* p = page;
+    auto emit = [&](std::initializer_list<BYTE> bytes) {
+        for (BYTE b : bytes) *p++ = b;
+    };
+    emit({ 0x53 });                                             // push rbx
+    emit({ 0x56 });                                             // push rsi
+    emit({ 0x48, 0x83, 0xEC, 0x28 });                           // sub rsp, 0x28
+    emit({ 0x48, 0x8B, 0xD9 });                                 // mov rbx, rcx (outRegs)
+    emit({ 0x48, 0x8B, 0xF2 });                                 // mov rsi, rdx (targetStub)
+    emit({ 0x48, 0xB9, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 }); // mov rcx, 0x8877665544332211
+    emit({ 0x48, 0xBA, 0xA8, 0x01, 0x62, 0x0C, 0xF6, 0x7F, 0x00, 0x00 }); // mov rdx, 0x00007FF60C6201A8
+    emit({ 0x49, 0xB8, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11 }); // mov r8,  0x1100FFEEDDCCBBAA
+    emit({ 0x49, 0xB9, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22 }); // mov r9,  0x2233445566778899
+    emit({ 0xFF, 0xD6 });                                       // call rsi
+    emit({ 0x48, 0x89, 0x0B });                                 // mov [rbx+0x00], rcx
+    emit({ 0x48, 0x89, 0x53, 0x08 });                           // mov [rbx+0x08], rdx
+    emit({ 0x4C, 0x89, 0x43, 0x10 });                           // mov [rbx+0x10], r8
+    emit({ 0x4C, 0x89, 0x4B, 0x18 });                           // mov [rbx+0x18], r9
+    emit({ 0x48, 0x83, 0xC4, 0x28 });                           // add rsp, 0x28
+    emit({ 0x5E });                                             // pop rsi
+    emit({ 0x5B });                                             // pop rbx
+    emit({ 0xC3 });                                             // ret
+    FlushInstructionCache(GetCurrentProcess(), page, (size_t)(p - page));
+
+    typedef float (__fastcall* VerifierFn)(uintptr_t outRegs[4], void* targetStub);
+    VerifierFn runVerifier = (VerifierFn)page;
+
+    uintptr_t outRegs[4] = {};
+    g_relayClobberSeenRcx = 0;
+    g_relayClobberSeenRdx = 0;
+    runVerifier(outRegs, stubVoidZeroRcx);
+    TEST_CHECK(g_relayClobberSeenRcx == 0x8877665544332211ULL);
+    TEST_CHECK(g_relayClobberSeenRdx == 0x00007FF60C6201A8ULL);
+    TEST_CHECK(outRegs[0] == 0ULL);                       // rcx zeroed on exit (matching 0x2FC290 xor ecx, ecx)
+    TEST_CHECK(outRegs[1] == 0x00007FF60C6201A8ULL);      // rdx preserved (preventing 0x334CD1 crash at 0x2FC5E4!)
+    TEST_CHECK(outRegs[2] == 0x1100FFEEDDCCBBAAULL);      // r8 preserved
+    TEST_CHECK(outRegs[3] == 0x2233445566778899ULL);      // r9 preserved
+
+    memset(outRegs, 0, sizeof(outRegs));
+    float fRes = runVerifier(outRegs, stubFloatKeep);
+    TEST_CHECK_NEAR(fRes, 42500.5f, 1e-2f);               // xmm0 float return preserved
+    TEST_CHECK(outRegs[0] == 0x8877665544332211ULL);      // rcx preserved when zeroRcxOnExit == false
+    TEST_CHECK(outRegs[1] == 0x00007FF60C6201A8ULL);      // rdx preserved
+    TEST_CHECK(outRegs[2] == 0x1100FFEEDDCCBBAAULL);      // r8 preserved
+    TEST_CHECK(outRegs[3] == 0x2233445566778899ULL);      // r9 preserved
+
+    VirtualFree(page, 0, MEM_RELEASE);
     return true;
 }
 
@@ -1837,7 +2020,8 @@ static bool Test_TwoStates_EconomyStats()
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
            TestEconStats_UiSwapAndExactSimulationRestore() &&
            TestEconStats_PeriodRolloverAndSaveMetaPersistence() &&
-           TestEconStats_BatchConstructionAndDemographics();
+           TestEconStats_BatchConstructionAndDemographics() &&
+           TestEconStats_LeafHookRelayStubPreservesRegisters();
 }
 
 // ---------------------------------------------------------------------------

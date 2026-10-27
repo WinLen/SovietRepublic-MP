@@ -1012,10 +1012,10 @@ static int g_uiShown = 0;
 
 void Determinism_UiSpeedBegin()
 {
+    TwoStates_UiBegin();
     if (!g_active || !g_buttonsArmed) return;
     g_uiShown = g_paused ? 0 : g_requestedSpeed;
     *(int*)(g_exeBase + 0x9D54B4) = g_uiShown;
-    TwoStates_UiBegin();
 }
 
 void Determinism_UiSpeedEnd()
