@@ -20,6 +20,10 @@ TesmioLoader/RepublicMP/.vs/
 *.lib
 *.obj
 *.res
+*.nativecodeanalysis.xml
+.metrics/
+__pycache__/
+logs_steam/
 
 # Staged workshop content & local secrets
 steam_workshop/content/

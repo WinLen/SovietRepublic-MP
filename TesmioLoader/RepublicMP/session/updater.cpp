@@ -429,24 +429,24 @@ void Updater_Init(void)
     Updater_CheckNow();
 }
 
-void Updater_CheckNow(void)
+static void StartUpdaterWorker(LPTHREAD_START_ROUTINE proc)
 {
     EnsureLock();
     if (g_workerRunning) return;
     g_workerRunning = true;
-    HANDLE h = CreateThread(nullptr, 0, CheckThreadProc, nullptr, 0, nullptr);
+    HANDLE h = CreateThread(nullptr, 0, proc, nullptr, 0, nullptr);
     if (h) CloseHandle(h);
     else g_workerRunning = false;
 }
 
+void Updater_CheckNow(void)
+{
+    StartUpdaterWorker(CheckThreadProc);
+}
+
 void Updater_DownloadAndApply(void)
 {
-    EnsureLock();
-    if (g_workerRunning) return;
-    g_workerRunning = true;
-    HANDLE h = CreateThread(nullptr, 0, ApplyThreadProc, nullptr, 0, nullptr);
-    if (h) CloseHandle(h);
-    else g_workerRunning = false;
+    StartUpdaterWorker(ApplyThreadProc);
 }
 
 UpdateStatus Updater_GetStatus(void)

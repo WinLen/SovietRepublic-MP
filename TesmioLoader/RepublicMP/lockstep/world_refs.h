@@ -8,6 +8,7 @@
 // world +f908 / +fa28) by a hash of their words.
 #pragma once
 
+#include <stddef.h>
 #include "tesmio_plugin.h"
 
 void WorldRefs_Bind(const TsmHost* host);
@@ -33,3 +34,18 @@ bool Ref_Line(U64 line, RouteRef& r);
 U64 Ref_LineAt(const RouteRef& r);
 bool Ref_Node(U64 node, RouteRef& r);
 U64 Ref_NodeAt(const RouteRef& r);
+
+// Shared deterministic hash & vector indexing helpers for lockstep modules.
+unsigned Ref_FnvWords(const unsigned* words, int n);
+unsigned Ref_NodeCheck(U64 node);
+unsigned Ref_IndexInVector(U64 vector, U64 p);
+U64 Ref_AtVectorIndex(U64 vector, unsigned index);
+void Ref_SetStandInVector(unsigned char* at, const void* begin, size_t bytes);
+
+// Resource (world + 0xC2B0) and VehicleType (world + 0x12840) definition pointer encoding.
+bool Ref_DefPtr(U64 p, unsigned char& tag, unsigned& index);
+bool Ref_DefPtrAt(unsigned char tag, unsigned index, U64& p);
+
+struct TsmRoutineSig;
+bool Ref_CheckRoutineTable(int* cache, const TsmRoutineSig* table, size_t count, const char* moduleTag);
+

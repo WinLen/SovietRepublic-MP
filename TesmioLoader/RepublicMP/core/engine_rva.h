@@ -103,6 +103,33 @@
 #ifndef WORLD_HIDE_HUD_OFF
 #define WORLD_HIDE_HUD_OFF          0xFBA
 #endif
+#ifndef TOOL_GUARD1_OFFSET
+#define TOOL_GUARD1_OFFSET          0xFBC
+#endif
+#ifndef TOOL_GUARD2_OFFSET
+#define TOOL_GUARD2_OFFSET          0xFBE
+#endif
+#ifndef TOOL_GUARD3_OFFSET
+#define TOOL_GUARD3_OFFSET          0xFC3
+#endif
+#ifndef WORLD_RESOURCES_OFFSET
+#define WORLD_RESOURCES_OFFSET      0xC2B0
+#endif
+#ifndef WORLD_WORK_RESOURCE_PTR_OFF
+#define WORLD_WORK_RESOURCE_PTR_OFF 0xC2C8
+#endif
+#ifndef WORLD_ECON_TAB_OFFSET
+#define WORLD_ECON_TAB_OFFSET       0xC65C
+#endif
+#ifndef WORLD_RESOURCE_STRIDE
+#define WORLD_RESOURCE_STRIDE       0x340
+#endif
+#ifndef WORLD_VEHICLE_TYPES_OFFSET
+#define WORLD_VEHICLE_TYPES_OFFSET  0x12840
+#endif
+#ifndef WORLD_VEHICLE_TYPE_STRIDE
+#define WORLD_VEHICLE_TYPE_STRIDE   0x9F08
+#endif
 
 #ifndef TOOL_DRAG_ACTIVE_OFFSET
 #define TOOL_DRAG_ACTIVE_OFFSET     0xD2AC
@@ -119,6 +146,59 @@
 #ifndef WORLD_FORCE_TERRAIN_SAVE_OFF
 #define WORLD_FORCE_TERRAIN_SAVE_OFF 0xFC90
 #endif
+
+// Bank / Loan subsystem offsets inside WORLD (SOVIET64.exe PE 6A3EB6AD)
+#ifndef WORLD_LOANS_OFFSET
+#define WORLD_LOANS_OFFSET          0x10BD0
+#endif
+#ifndef WORLD_LOAN_SELECTED_OFFSET
+#define WORLD_LOAN_SELECTED_OFFSET  0x10BE8
+#endif
+#ifndef WORLD_LOAN_REPAY_AMOUNT_OFF
+#define WORLD_LOAN_REPAY_AMOUNT_OFF 0x10C08
+#endif
+#ifndef WORLD_LOAN_STATS_OFFSET
+#define WORLD_LOAN_STATS_OFFSET     0x11718
+#endif
+
+#ifndef RVA_VEC_LOAN_PUSH_BACK
+#define RVA_VEC_LOAN_PUSH_BACK      0x448AA0
+#endif
+#ifndef RVA_TAKE_LOAN
+#define RVA_TAKE_LOAN               0x4B9140
+#endif
+#ifndef RVA_GET_MAX_AVAILABLE_BORROW
+#define RVA_GET_MAX_AVAILABLE_BORROW 0x4B9380
+#endif
+#ifndef RVA_STEP_ONE_LOAN_DAY
+#define RVA_STEP_ONE_LOAN_DAY       0x4B9490
+#endif
+#ifndef RVA_STEP_ALL_LOANS_DAILY
+#define RVA_STEP_ALL_LOANS_DAILY    0x4B9660
+#endif
+#ifndef RVA_CALC_INTEREST_RATE
+#define RVA_CALC_INTEREST_RATE      0x4B9A80
+#endif
+
+enum SovietLoanCurrency {
+    LOAN_CURRENCY_USD = 1,
+    LOAN_CURRENCY_RUB = 2,
+};
+
+#pragma pack(push, 1)
+struct SovietLoan {
+    float   yearInterestRate;        // +0x00 ($YearInterestRate)
+    float   yearInterestRatePenalty; // +0x04 ($YearInterestRatePenalty = 2 * yearInterestRate)
+    int32_t loanType;                // +0x08 ($LoanType: 1 = USD, 2 = RUB)
+    int32_t loanSubType;             // +0x0C ($LoanSubType: 0 = West SSR / State 1, 1 = East SSR / State 2)
+    int32_t daysRemaining;           // +0x10 ($CurrentDurationDays)
+    float   remainingPrincipal;      // +0x14 ($CurrentAmount)
+    float   unpaidPenaltyBalance;    // +0x18 ($CurrentAmountForPenalty)
+    float   initialPrincipal;        // +0x1C ($Stat_InitialAmount)
+    int32_t initialDays;             // +0x20 ($Stat_ContractDurationDays)
+    float   totalPaidSoFar;          // +0x24 ($Stat_PaidAmount)
+};
+#pragma pack(pop)
 
 #ifndef WORLD_BUILDINGS_OFFSET
 #define WORLD_BUILDINGS_OFFSET      0x11B08
@@ -222,6 +302,16 @@
 #define VEH_POS_OFFSET              0xDE0
 #endif
 
+#ifndef CIT_HOME_BUILDING_OFFSET
+#define CIT_HOME_BUILDING_OFFSET    0x20
+#endif
+#ifndef CIT_INFANT_FLAG_OFFSET
+#define CIT_INFANT_FLAG_OFFSET      0x71C
+#endif
+#ifndef CIT_UNBORN_FLAG_OFFSET
+#define CIT_UNBORN_FLAG_OFFSET      0x748
+#endif
+
 // Invariant #16: Manager preview state starts at +0x408, std::vector<RoadSyncPoint> starts at +0x410.
 #ifndef MANAGER_RESET_STATE_OFFSET
 #define MANAGER_RESET_STATE_OFFSET  0x408
@@ -272,3 +362,5 @@ static_assert(MGR_ROUTE_BEGIN_OFFSET == MANAGER_RESET_STATE_OFFSET + 8,
               "MGR_ROUTE_BEGIN_OFFSET (0x410) must be 8 bytes after MANAGER_RESET_STATE_OFFSET (0x408)");
 static_assert(HEADER_BIN_DATA_OFFSET == 608 && HEADER_BIN_RECORD_SIZE == 128,
               "header.bin layout must be 0x260 (608) header + 0x80 (128) byte records");
+static_assert(sizeof(SovietLoan) == 0x28,
+              "SovietLoan layout must match 40-byte engine struct (0x4B9140 / 0x4B9490 / 0x4B9750)");

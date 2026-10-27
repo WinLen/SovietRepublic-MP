@@ -13,6 +13,7 @@
 #include "../determinism/determinism.h"
 #include "../ui/lang.h"
 #include "../ui/native_menu.h"
+#include "../ui/sync_block.h"
 #include "imgui.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +53,9 @@ static double g_stateRub[2] = { 0.0, 0.0 };
 static double g_stateUsd[2] = { 0.0, 0.0 };
 static double g_netTradeRub[2] = { 0.0, 0.0 };
 static double g_netTradeUsd[2] = { 0.0, 0.0 };
+static double g_lobbyBaseWorldRub = 0.0;
+static double g_lobbyBaseWorldUsd = 0.0;
+static bool g_haveLobbyBaseMoney = false;
 static bool g_treasuryInitialized = false;
 static bool g_loadedFromCoopSave = false;
 static volatile bool g_importingSpSave = false;
@@ -109,6 +113,15 @@ static double g_uiSavedSimRub = 0.0;
 static double g_uiSavedSimUsd = 0.0;
 static double g_uiShownRub = 0.0;
 static double g_uiShownUsd = 0.0;
+static bool g_uiLoansSwapped = false;
+static bool g_uiLoansFilterByState = false;
+static int  g_uiLoansOwnerSubType = 0;
+static int  g_uiSavedGlobalSelectedIdx = -1;
+static int  g_uiLocalSelectedIdxBefore = -1;
+static float g_uiSavedLoanStats[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+static std::vector<SovietLoan> g_uiFullLoansBackup;
+static std::vector<SovietLoan> g_uiFilteredLoansBefore;
+static std::vector<int>        g_uiFilteredToGlobalIdx;
 static volatile LONG g_saveInProgress = 0;
 static volatile LONGLONG g_completedSaveCount = 0;
 
@@ -127,21 +140,329 @@ unsigned long long TwoStates_GetCompletedSaveCount()
     return (unsigned long long)InterlockedCompareExchange64(&g_completedSaveCount, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// Bank / Loan POD & SEH Helpers (WORLD + 0x10BD0 / 0x10BE8 / 0x11718)
+// ---------------------------------------------------------------------------
+
+static const BYTE kVecLoanPushBackExpect[8] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83
+};
+typedef void (__fastcall* VecLoanPushBackFn)(BYTE* vecPtr, const SovietLoan* loan);
+
+static bool SafeReadLoanVectorHeader(const BYTE* world, SovietLoan** outBegin, int* outCount, int* outCapCount)
+{
+    if (!world || !outBegin || !outCount || !outCapCount) return false;
+    *outBegin = nullptr;
+    *outCount = 0;
+    *outCapCount = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* vec = world + WORLD_LOANS_OFFSET;
+        SovietLoan* b = *(SovietLoan* const*)(vec + 0);
+        SovietLoan* e = *(SovietLoan* const*)(vec + 8);
+        SovietLoan* c = *(SovietLoan* const*)(vec + 16);
+        if (!b || e < b || c < e) {
+            *outBegin = b;
+            DiagLog_EndSafeSeh();
+            return b == nullptr && e == nullptr;
+        }
+        ptrdiff_t byteLen = (const BYTE*)e - (const BYTE*)b;
+        ptrdiff_t capBytes = (const BYTE*)c - (const BYTE*)b;
+        if (byteLen < 0 || byteLen % (ptrdiff_t)sizeof(SovietLoan) != 0 ||
+            byteLen > 4096 * (ptrdiff_t)sizeof(SovietLoan)) {
+            DiagLog_EndSafeSeh();
+            return false;
+        }
+        *outBegin = b;
+        *outCount = (int)(byteLen / (ptrdiff_t)sizeof(SovietLoan));
+        *outCapCount = (int)(capBytes / (ptrdiff_t)sizeof(SovietLoan));
+        DiagLog_EndSafeSeh();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+}
+
+static bool SafeWriteLoanVectorInPlace(BYTE* world, const SovietLoan* src, int count)
+{
+    SovietLoan* b = nullptr;
+    int curCount = 0, capCount = 0;
+    if (!SafeReadLoanVectorHeader(world, &b, &curCount, &capCount)) return false;
+    if (count < 0 || count > capCount) return false;
+    if (count > 0 && (!b || !src)) return false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (count > 0 && b != src) {
+            memcpy(b, src, (size_t)count * sizeof(SovietLoan));
+        }
+        if (b) {
+            *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b + count;
+        }
+        DiagLog_EndSafeSeh();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+}
+
+static int SafeReadSelectedLoanIdx(const BYTE* world)
+{
+    int32_t idx = -1;
+    if (world) SafeReadPod((const int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET), &idx);
+    return (int)idx;
+}
+
+static void SafeWriteSelectedLoanIdx(BYTE* world, int idx)
+{
+    int32_t val = (int32_t)idx;
+    if (world) SafeWritePod((int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET), val);
+}
+
+static void SafeReadLoanStats(const BYTE* world, float outStats[4])
+{
+    if (!outStats) return;
+    memset(outStats, 0, 4 * sizeof(float));
+    if (world) SafeMemcpyPod(outStats, world + WORLD_LOAN_STATS_OFFSET, 4 * sizeof(float));
+}
+
+static void SafeWriteLoanStats(BYTE* world, const float stats[4])
+{
+    if (world && stats) SafeMemcpyPod(world + WORLD_LOAN_STATS_OFFSET, stats, 4 * sizeof(float));
+}
+
+static void SafeAddLoanStatsDelta(BYTE* world, const float dStats[4])
+{
+    if (!world || !dStats) return;
+    float cur[4] = {};
+    SafeReadLoanStats(world, cur);
+    for (int i = 0; i < 4; ++i) {
+        if (isfinite(dStats[i])) cur[i] += dStats[i];
+    }
+    SafeWriteLoanStats(world, cur);
+}
+
+static bool SafePushBackLoan(BYTE* world, const SovietLoan& loan)
+{
+    if (!world) return false;
+    if (g_exeBase && SafeBytesMatch(g_exeBase + RVA_VEC_LOAN_PUSH_BACK, kVecLoanPushBackExpect, sizeof(kVecLoanPushBackExpect))) {
+        DiagLog_BeginSafeSeh();
+        __try {
+            VecLoanPushBackFn pushFn = (VecLoanPushBackFn)(g_exeBase + RVA_VEC_LOAN_PUSH_BACK);
+            pushFn(world + WORLD_LOANS_OFFSET, &loan);
+            DiagLog_EndSafeSeh();
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            DiagLog_EndSafeSeh();
+            return false;
+        }
+    }
+    SovietLoan* b = nullptr;
+    int curCount = 0, capCount = 0;
+    if (!SafeReadLoanVectorHeader(world, &b, &curCount, &capCount) || !b || curCount >= capCount) {
+        return false;
+    }
+    DiagLog_BeginSafeSeh();
+    __try {
+        b[curCount] = loan;
+        *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b + (curCount + 1);
+        DiagLog_EndSafeSeh();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+}
+
+static bool SafeEraseLoanAt(BYTE* world, int globalIdx)
+{
+    SovietLoan* b = nullptr;
+    int curCount = 0, capCount = 0;
+    if (!SafeReadLoanVectorHeader(world, &b, &curCount, &capCount) || !b) return false;
+    if (globalIdx < 0 || globalIdx >= curCount) return false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (globalIdx + 1 < curCount) {
+            memmove(&b[globalIdx], &b[globalIdx + 1], (size_t)(curCount - globalIdx - 1) * sizeof(SovietLoan));
+        }
+        *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b + (curCount - 1);
+        int32_t sel = *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET);
+        if (sel == globalIdx) {
+            *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = -1;
+        } else if (sel > globalIdx) {
+            *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = sel - 1;
+        }
+        DiagLog_EndSafeSeh();
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+}
+
+static bool ReadCurrentLoansToVector(const BYTE* world, std::vector<SovietLoan>& outLoans)
+{
+    outLoans.clear();
+    SovietLoan* b = nullptr;
+    int count = 0, capCount = 0;
+    if (!SafeReadLoanVectorHeader(world, &b, &count, &capCount)) return false;
+    if (count <= 0 || !b) return true;
+    outLoans.resize((size_t)count);
+    if (!SafeMemcpyPod(outLoans.data(), b, (size_t)count * sizeof(SovietLoan))) {
+        outLoans.clear();
+        return false;
+    }
+    return true;
+}
+
+static bool DetectUiLoanOperation(const std::vector<SovietLoan>& afterLoans, LsLoanCommand* outCmd)
+{
+    if (!outCmd) return false;
+    memset(outCmd, 0, sizeof(*outCmd));
+    size_t beforeN = g_uiFilteredLoansBefore.size();
+    size_t afterN  = afterLoans.size();
+
+    if (afterN == beforeN + 1) {
+        outCmd->op = LOAN_OP_BORROW;
+        outCmd->ownerSubType = g_uiLoansOwnerSubType;
+        outCmd->ownerLoanOrd = (int32_t)beforeN;
+        outCmd->loan = afterLoans.back();
+        outCmd->loan.loanSubType = g_uiLoansOwnerSubType;
+        return true;
+    }
+    if (afterN + 1 == beforeN) {
+        int ord = g_uiLocalSelectedIdxBefore;
+        if (ord < 0 || (size_t)ord >= beforeN) {
+            ord = (int)afterN;
+            for (size_t i = 0; i < afterN; ++i) {
+                if (fabsf(afterLoans[i].initialPrincipal - g_uiFilteredLoansBefore[i].initialPrincipal) > 0.5f ||
+                    afterLoans[i].loanType != g_uiFilteredLoansBefore[i].loanType ||
+                    afterLoans[i].daysRemaining != g_uiFilteredLoansBefore[i].daysRemaining) {
+                    ord = (int)i;
+                    break;
+                }
+            }
+        }
+        outCmd->op = LOAN_OP_REPAY_FULL;
+        outCmd->ownerSubType = g_uiLoansOwnerSubType;
+        outCmd->ownerLoanOrd = (int32_t)ord;
+        outCmd->loan = g_uiFilteredLoansBefore[(size_t)ord];
+        outCmd->loan.loanSubType = g_uiLoansOwnerSubType;
+        return true;
+    }
+    if (afterN == beforeN) {
+        for (size_t i = 0; i < afterN; ++i) {
+            if (fabsf(afterLoans[i].remainingPrincipal - g_uiFilteredLoansBefore[i].remainingPrincipal) > 0.005f ||
+                fabsf(afterLoans[i].totalPaidSoFar - g_uiFilteredLoansBefore[i].totalPaidSoFar) > 0.005f) {
+                outCmd->op = LOAN_OP_REPAY_PARTIAL;
+                outCmd->ownerSubType = g_uiLoansOwnerSubType;
+                outCmd->ownerLoanOrd = (int32_t)i;
+                outCmd->loan = afterLoans[i];
+                outCmd->loan.loanSubType = g_uiLoansOwnerSubType;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void RestoreUnchangedUiLoans(BYTE* world, int localSelectedAfter)
+{
+    if (!g_uiLoansFilterByState || !world) return;
+    SafeWriteLoanVectorInPlace(world, g_uiFullLoansBackup.data(), (int)g_uiFullLoansBackup.size());
+    int restoredSel = -1;
+    if (localSelectedAfter >= 0 && (size_t)localSelectedAfter < g_uiFilteredToGlobalIdx.size()) {
+        restoredSel = g_uiFilteredToGlobalIdx[(size_t)localSelectedAfter];
+    }
+    SafeWriteSelectedLoanIdx(world, restoredSel);
+}
+
+static void RevertUiLoansToPreUiState(BYTE* world, int localSelectedAfter, bool keepLocalSelection)
+{
+    if (!world) return;
+    SafeWriteLoanVectorInPlace(world, g_uiFullLoansBackup.data(), (int)g_uiFullLoansBackup.size());
+    SafeWriteLoanStats(world, g_uiSavedLoanStats);
+    int restoredSel = g_uiSavedGlobalSelectedIdx;
+    if (keepLocalSelection) {
+        if (g_uiLoansFilterByState) {
+            restoredSel = (localSelectedAfter >= 0 && (size_t)localSelectedAfter < g_uiFilteredToGlobalIdx.size())
+                ? g_uiFilteredToGlobalIdx[(size_t)localSelectedAfter]
+                : -1;
+        } else {
+            restoredSel = localSelectedAfter;
+        }
+    }
+    SafeWriteSelectedLoanIdx(world, restoredSel);
+}
+
 void TwoStates_RestoreUiMoneySwap()
 {
     EnsureMoneySwapLock();
     EnterCriticalSection(&g_moneySwapLock);
-    if (g_uiMoneySwapped) {
-        g_uiMoneySwapped = false;
-        __try {
-            double dRub = *WorldRubles() - g_uiShownRub;
-            double dUsd = *WorldDollars() - g_uiShownUsd;
-            *WorldRubles()  = g_uiSavedSimRub + dRub;
-            *WorldDollars() = g_uiSavedSimUsd + dUsd;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+    bool hadLoans = g_uiLoansSwapped;
+    bool hadMoney = g_uiMoneySwapped;
+    g_uiLoansSwapped = false;
+    g_uiMoneySwapped = false;
+
+    bool submitLoanCmd = false;
+    bool applyOfflineLoanCmd = false;
+    LsLoanCommand loanCmd = {};
+
+    if (hadLoans && g_exeBase) {
+        BYTE* world = g_exeBase + WORLD_RVA;
+        int localSelectedAfter = SafeReadSelectedLoanIdx(world);
+        std::vector<SovietLoan> afterLoans;
+        if (ReadCurrentLoansToVector(world, afterLoans) && DetectUiLoanOperation(afterLoans, &loanCmd)) {
+            double curRub = g_uiShownRub, curUsd = g_uiShownUsd;
+            SafeReadPod(WorldRubles(), &curRub);
+            SafeReadPod(WorldDollars(), &curUsd);
+            loanCmd.dRub = curRub - g_uiShownRub;
+            loanCmd.dUsd = curUsd - g_uiShownUsd;
+            float afterStats[4] = {};
+            SafeReadLoanStats(world, afterStats);
+            for (int i = 0; i < 4; ++i) {
+                loanCmd.dStats[i] = afterStats[i] - g_uiSavedLoanStats[i];
+            }
+
+            bool blockedInLobby = SaveSync_IsWaitingLobbyActive();
+            RevertUiLoansToPreUiState(world, localSelectedAfter, !blockedInLobby);
+            if (hadMoney) {
+                SafeWritePod(WorldRubles(), g_uiSavedSimRub);
+                SafeWritePod(WorldDollars(), g_uiSavedSimUsd);
+                hadMoney = false;
+            }
+            if (!blockedInLobby) {
+                if (Commands_Capturing()) {
+                    submitLoanCmd = true;
+                } else {
+                    applyOfflineLoanCmd = true;
+                }
+            }
+        } else {
+            RestoreUnchangedUiLoans(world, localSelectedAfter);
+        }
+    }
+
+    if (hadMoney) {
+        double curRub = g_uiShownRub, curUsd = g_uiShownUsd;
+        if (SafeReadPod(WorldRubles(), &curRub) && SafeReadPod(WorldDollars(), &curUsd)) {
+            double dRub = curRub - g_uiShownRub;
+            double dUsd = curUsd - g_uiShownUsd;
+            SafeWritePod(WorldRubles(), g_uiSavedSimRub + dRub);
+            SafeWritePod(WorldDollars(), g_uiSavedSimUsd + dUsd);
         }
     }
     LeaveCriticalSection(&g_moneySwapLock);
+
+    if (submitLoanCmd) {
+        Commands_Submit(LS_CMD_LOAN, &loanCmd, sizeof(loanCmd));
+    } else if (applyOfflineLoanCmd) {
+        int owner = (loanCmd.ownerSubType == 1) ? 2 : 1;
+        TwoStates_BeginCommand(owner);
+        TwoStates_ApplyLoanCommand(loanCmd);
+        TwoStates_EndCommand(owner);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -239,11 +560,25 @@ static const BYTE kMasterSaveExpect[19] = {
     0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
     0x41, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x0A, 0x00, 0x00
 };
+static const BYTE kGetMaxBorrowExpect[17] = {
+    0x4C, 0x8B, 0x81, 0xB0, 0x26, 0x01, 0x00,
+    0x45, 0x33, 0xC9,
+    0x4C, 0x2B, 0x81, 0xA8, 0x26, 0x01, 0x00
+};
+static const BYTE kStepOneLoanDayExpect[15] = {
+    0x48, 0x83, 0xEC, 0x18,
+    0x8B, 0x42, 0x10,
+    0x0F, 0x29, 0x34, 0x24,
+    0x85, 0xC0,
+    0x7E, 0x05
+};
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building);
 typedef __int64 (__fastcall* ConstructStepFn)(BYTE* world, BYTE* building, float dt, unsigned char flag);
 typedef __int64 (__fastcall* VehicleSaleFn)(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4);
 typedef void (__fastcall* MasterSaveFn)(BYTE* world);
+typedef float (__fastcall* GetMaxAvailableBorrowFn)(BYTE* world, int32_t loanType);
+typedef void (__fastcall* StepOneLoanDayFn)(BYTE* world, SovietLoan* loan);
 
 static BldEconFn o_bldEcon = nullptr;
 static BldEconFn o_customsBorder = nullptr;
@@ -251,6 +586,8 @@ static BldEconFn o_customsVehicle = nullptr;
 static ConstructStepFn o_constructStep = nullptr;
 static VehicleSaleFn o_vehicleSale = nullptr;
 static MasterSaveFn o_masterSave = nullptr;
+static GetMaxAvailableBorrowFn o_getMaxAvailableBorrow = nullptr;
+static StepOneLoanDayFn o_stepOneLoanDay = nullptr;
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
 static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize);
@@ -258,6 +595,7 @@ static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSi
 static volatile bool g_inSimStep = false;
 static volatile DWORD g_simStepThread = 0;
 static bool g_inCommand = false;
+static int g_cmdOwner = 1;
 static thread_local bool t_inEconHook = false;
 static double g_lastWorldRub = 0.0;
 static double g_lastWorldUsd = 0.0;
@@ -268,7 +606,7 @@ static bool BeginEconAttribution(BYTE* world, int owner)
 {
     if (!g_inSimStep || g_inCommand || t_inEconHook || !TwoStates_IsActive()) return false;
     if (IsUnlimitedMoney()) return false;
-    if (!Determinism_InStepFrame()) return false;
+    if (Determinism_IsActive() && !Determinism_InStepFrame()) return false;
     if (world != g_exeBase + WORLD_RVA || GetCurrentThreadId() != g_simStepThread) return false;
     if (owner != 1 && owner != 2) return false;
 
@@ -287,7 +625,7 @@ static bool BeginEconAttribution(BYTE* world, int owner)
     }
 }
 
-static void EndEconAttribution(int owner)
+static void EndEconAttribution(int owner, bool countInNetTrade = true)
 {
     if (!t_inEconHook) return;
     t_inEconHook = false;
@@ -299,8 +637,10 @@ static void EndEconAttribution(int owner)
         double dUsd = newUsd - g_stateUsd[idx];
         g_stateRub[idx] = newRub;
         g_stateUsd[idx] = newUsd;
-        g_netTradeRub[idx] += dRub;
-        g_netTradeUsd[idx] += dUsd;
+        if (countInNetTrade) {
+            g_netTradeRub[idx] += dRub;
+            g_netTradeUsd[idx] += dUsd;
+        }
         *WorldRubles()  = g_stateRub[0] + g_stateRub[1] + g_unattributedRub;
         *WorldDollars() = g_stateUsd[0] + g_stateUsd[1] + g_unattributedUsd;
         g_lastWorldRub = *WorldRubles();
@@ -333,31 +673,28 @@ static int ResolveVehicleOwnerFast(const BYTE* v)
     }
 }
 
-static __int64 __fastcall H_BldEcon(BYTE* world, BYTE* building)
+static __int64 CallBuildingEconHook(BYTE* world, BYTE* building, BldEconFn orig)
 {
     int owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
     bool active = owner ? BeginEconAttribution(world, owner) : false;
-    __int64 r = o_bldEcon(world, building);
+    __int64 r = orig(world, building);
     if (active) EndEconAttribution(owner);
     return r;
+}
+
+static __int64 __fastcall H_BldEcon(BYTE* world, BYTE* building)
+{
+    return CallBuildingEconHook(world, building, o_bldEcon);
 }
 
 static __int64 __fastcall H_CustomsBorder(BYTE* world, BYTE* building)
 {
-    int owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
-    bool active = owner ? BeginEconAttribution(world, owner) : false;
-    __int64 r = o_customsBorder(world, building);
-    if (active) EndEconAttribution(owner);
-    return r;
+    return CallBuildingEconHook(world, building, o_customsBorder);
 }
 
 static __int64 __fastcall H_CustomsVehicle(BYTE* world, BYTE* building)
 {
-    int owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
-    bool active = owner ? BeginEconAttribution(world, owner) : false;
-    __int64 r = o_customsVehicle(world, building);
-    if (active) EndEconAttribution(owner);
-    return r;
+    return CallBuildingEconHook(world, building, o_customsVehicle);
 }
 
 static __int64 __fastcall H_ConstructStep(BYTE* world, BYTE* building, float dt, unsigned char flag)
@@ -376,6 +713,210 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
     __int64 r = o_vehicleSale(world, vehicle, a3, a4);
     if (active) EndEconAttribution(owner);
     return r;
+}
+
+static int CountStateAdultHousedCitizens(const BYTE* world, int state)
+{
+    if (!world || (state != 1 && state != 2)) return 0;
+    int adultCount = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* const* b = *(const BYTE* const* const*)(world + WORLD_CITIZENS_OFFSET);
+        const BYTE* const* e = *(const BYTE* const* const*)(world + WORLD_CITIZENS_OFFSET + 8);
+        if (b && e >= b && (e - b) <= 2000000) {
+            for (const BYTE* const* it = b; it < e; ++it) {
+                const BYTE* cit = *it;
+                if (!cit) continue;
+                if (*(const int32_t*)(cit + CIT_INFANT_FLAG_OFFSET) != 0) continue;
+                if (*(const int32_t*)(cit + CIT_UNBORN_FLAG_OFFSET) != 0) continue;
+                const BYTE* home = *(const BYTE* const*)(cit + CIT_HOME_BUILDING_OFFSET);
+                if (!home) continue;
+                if (ResolveBuildingOwnerFast(home) == state) {
+                    adultCount++;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        adultCount = 0;
+    }
+    DiagLog_EndSafeSeh();
+    return adultCount;
+}
+
+static float ReadWorkResourceMultiplier(const BYTE* world, int loanType)
+{
+    if (!world) return 0.0f;
+    float mult = 0.0f;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* workRes = *(const BYTE* const*)(world + WORLD_WORK_RESOURCE_PTR_OFF);
+        if (workRes) {
+            mult = (loanType == LOAN_CURRENCY_USD)
+                ? *(const float*)(workRes + 0x58)
+                : *(const float*)(workRes + 0x5C);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        mult = 0.0f;
+    }
+    DiagLog_EndSafeSeh();
+    return isfinite(mult) ? mult : 0.0f;
+}
+
+static float SumLoanSliceDebtForState(const SovietLoan* loans, int count, int loanType, int state)
+{
+    if (!loans || count <= 0) return 0.0f;
+    int targetSub = (state == 2) ? 1 : 0;
+    float sum = 0.0f;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (int i = 0; i < count; ++i) {
+            int sub = (loans[i].loanSubType == 1) ? 1 : 0;
+            if (loans[i].loanType == loanType && sub == targetSub) {
+                sum += loans[i].remainingPrincipal + loans[i].unpaidPenaltyBalance;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+    return sum;
+}
+
+static float SumStateExistingLoanDebt(const BYTE* world, int loanType, int state)
+{
+    EnsureMoneySwapLock();
+    EnterCriticalSection(&g_moneySwapLock);
+    if (g_uiLoansSwapped && g_uiLoansFilterByState) {
+        float sum = SumLoanSliceDebtForState(g_uiFullLoansBackup.data(), (int)g_uiFullLoansBackup.size(), loanType, state);
+        LeaveCriticalSection(&g_moneySwapLock);
+        return sum;
+    }
+    LeaveCriticalSection(&g_moneySwapLock);
+
+    SovietLoan* b = nullptr;
+    int count = 0, capCount = 0;
+    if (!SafeReadLoanVectorHeader(world, &b, &count, &capCount) || !b || count <= 0) return 0.0f;
+    return SumLoanSliceDebtForState(b, count, loanType, state);
+}
+
+float TwoStates_CalcMaxAvailableBorrow(BYTE* world, int loanType, int state)
+{
+    if (!world) return 0.0f;
+    int targetState = (state == 2) ? 2 : 1;
+    int adultCitizens = CountStateAdultHousedCitizens(world, targetState);
+    float popRatio = (float)adultCitizens / 100000.0f;
+    if (popRatio > 1.0f) popRatio = 1.0f;
+    if (popRatio < 0.0f) popRatio = 0.0f;
+    float mult = ReadWorkResourceMultiplier(world, loanType);
+    float maxDebt = (200000.0f + 2000000.0f * popRatio) * mult;
+    float existingDebt = SumStateExistingLoanDebt(world, loanType, targetState);
+    return maxDebt - existingDebt;
+}
+
+static float __fastcall H_GetMaxAvailableBorrow(BYTE* world, int32_t loanType)
+{
+    if (!TwoStates_IsActive() || !world || world != g_exeBase + WORLD_RVA) {
+        return o_getMaxAvailableBorrow ? o_getMaxAvailableBorrow(world, loanType) : 0.0f;
+    }
+    int activeState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    return TwoStates_CalcMaxAvailableBorrow(world, (int)loanType, activeState);
+}
+
+// Fallback matching 0x4B9490 (StepOneLoanDay) for unit tests in MockEngineHarness where o_stepOneLoanDay is null.
+static void StepOneLoanDayFallback(BYTE* world, SovietLoan* loan)
+{
+    if (!world || !loan) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (loan->daysRemaining > 0) loan->daysRemaining--;
+        const float kInv365 = 1.0f / 365.0f;
+        float rateFrac = loan->yearInterestRate / 100.0f;
+        float p0 = loan->remainingPrincipal;
+        float p1 = p0 + p0 * kInv365 * rateFrac;
+        float penInterest = loan->unpaidPenaltyBalance * kInv365 * rateFrac;
+        float dailyInterest = p1 * kInv365 * rateFrac + penInterest;
+        float newPrincipal = p1 + penInterest;
+        loan->remainingPrincipal = newPrincipal;
+
+        float principalShare = (loan->daysRemaining > 0)
+            ? (newPrincipal / (float)(loan->daysRemaining + 1))
+            : newPrincipal;
+        float dueToday = principalShare + loan->unpaidPenaltyBalance;
+
+        double* treasuryPtr = (loan->loanType == LOAN_CURRENCY_USD)
+            ? (double*)(world + WORLD_USD_OFFSET)
+            : (double*)(world + WORLD_RUB_OFFSET);
+        if (*treasuryPtr < 0.0) *treasuryPtr = 0.0;
+        double avail = *treasuryPtr;
+
+        float actualPaid = dueToday;
+        float principalStatDelta = dueToday - dailyInterest;
+        if ((double)dueToday > avail) {
+            actualPaid = (float)avail;
+            if ((double)dailyInterest > avail) {
+                dailyInterest = actualPaid;
+                principalStatDelta = 0.0f;
+            } else {
+                principalStatDelta = (float)(avail - (double)dailyInterest);
+            }
+        }
+        *treasuryPtr = avail - (double)actualPaid;
+
+        float* stats = (float*)(world + WORLD_LOAN_STATS_OFFSET);
+        int statBase = (loan->loanType == LOAN_CURRENCY_USD) ? 0 : 2;
+        stats[statBase + 0] -= principalStatDelta;
+        stats[statBase + 1] -= dailyInterest;
+
+        loan->totalPaidSoFar += actualPaid;
+        float remAfterPenalty = actualPaid;
+        if (loan->unpaidPenaltyBalance > 0.0f) {
+            float newPen = loan->unpaidPenaltyBalance - actualPaid;
+            if (newPen >= 0.0f) {
+                loan->unpaidPenaltyBalance = newPen;
+                remAfterPenalty = 0.0f;
+            } else {
+                loan->unpaidPenaltyBalance = 0.0f;
+                remAfterPenalty = -newPen;
+            }
+        }
+        if (remAfterPenalty > 0.0f) {
+            if (loan->remainingPrincipal > 0.0f) {
+                loan->remainingPrincipal -= remAfterPenalty;
+                if (principalShare > remAfterPenalty) {
+                    float unpaidInstallment = principalShare - remAfterPenalty;
+                    loan->remainingPrincipal -= unpaidInstallment;
+                    loan->unpaidPenaltyBalance += unpaidInstallment;
+                }
+            }
+        } else if (principalShare > 0.0f) {
+            loan->remainingPrincipal -= principalShare;
+            loan->unpaidPenaltyBalance += principalShare;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void __fastcall H_StepOneLoanDay(BYTE* world, SovietLoan* loan)
+{
+    int owner = 1;
+    int32_t sub = 0;
+    if (loan && SafeReadPod(&loan->loanSubType, &sub) && sub == 1) {
+        owner = 2;
+    }
+    bool active = (g_inSimStep && !t_inEconHook) ? BeginEconAttribution(world, owner) : false;
+    if (o_stepOneLoanDay) {
+        o_stepOneLoanDay(world, loan);
+    } else {
+        StepOneLoanDayFallback(world, loan);
+    }
+    if (active) {
+        EndEconAttribution(owner, false);
+    }
+}
+
+void TwoStates_StepOneLoanDayForTest(BYTE* world, SovietLoan* loan)
+{
+    H_StepOneLoanDay(world, loan);
 }
 
 struct VehSaveSnapshot {
@@ -597,10 +1138,16 @@ bool TwoStates_Install()
                                 kConstructStepExpect, sizeof(kConstructStepExpect), "republicmp two_states construct_step");
     econOk += InstallInlineHook(g_exeBase + RVA_VEHICLE_SALE, (void*)&H_VehicleSale, (void**)&o_vehicleSale,
                                 kVehicleSaleExpect, sizeof(kVehicleSaleExpect), "republicmp two_states vehicle_sale");
+    econOk += InstallInlineHook(g_exeBase + RVA_GET_MAX_AVAILABLE_BORROW, (void*)&H_GetMaxAvailableBorrow,
+                                (void**)&o_getMaxAvailableBorrow, kGetMaxBorrowExpect, sizeof(kGetMaxBorrowExpect),
+                                "republicmp two_states get_max_borrow");
+    econOk += InstallInlineHook(g_exeBase + RVA_STEP_ONE_LOAN_DAY, (void*)&H_StepOneLoanDay,
+                                (void**)&o_stepOneLoanDay, kStepOneLoanDayExpect, sizeof(kStepOneLoanDayExpect),
+                                "republicmp two_states step_one_loan_day");
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy attribution hooks (%d/5), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan attribution hooks (%d/7), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -663,9 +1210,15 @@ const char* TwoStates_StateName(int state)
 void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
 {
     TwoStates_RestoreUiMoneySwap();
+    DiagLog_BeginSafeSeh();
     __try {
         double worldRub = *WorldRubles();
         double worldUsd = *WorldDollars();
+        if (!isResync && !g_loadedFromCoopSave && !g_haveLobbyBaseMoney) {
+            g_lobbyBaseWorldRub = worldRub;
+            g_lobbyBaseWorldUsd = worldUsd;
+            g_haveLobbyBaseMoney = true;
+        }
         if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
             if (IsUnlimitedMoney()) {
                 g_stateRub[0] = 100000000.0;
@@ -676,18 +1229,22 @@ void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
                 *WorldDollars() = 100000000.0;
                 g_treasuryInitialized = true;
             } else if (!isResync && !g_treasuryInitialized) {
+                double baseRub = g_haveLobbyBaseMoney ? g_lobbyBaseWorldRub : worldRub;
+                double baseUsd = g_haveLobbyBaseMoney ? g_lobbyBaseWorldUsd : worldUsd;
                 if (g_fullStartingCapital) {
-                    g_stateRub[0] = worldRub;
-                    g_stateRub[1] = worldRub;
-                    g_stateUsd[0] = worldUsd;
-                    g_stateUsd[1] = worldUsd;
+                    g_stateRub[0] = baseRub;
+                    g_stateRub[1] = baseRub;
+                    g_stateUsd[0] = baseUsd;
+                    g_stateUsd[1] = baseUsd;
                     *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
                     *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
                 } else {
-                    g_stateRub[0] = worldRub * 0.5;
-                    g_stateRub[1] = worldRub - g_stateRub[0];
-                    g_stateUsd[0] = worldUsd * 0.5;
-                    g_stateUsd[1] = worldUsd - g_stateUsd[0];
+                    g_stateRub[0] = baseRub * 0.5;
+                    g_stateRub[1] = baseRub - g_stateRub[0];
+                    g_stateUsd[0] = baseUsd * 0.5;
+                    g_stateUsd[1] = baseUsd - g_stateUsd[0];
+                    *WorldRubles()  = baseRub;
+                    *WorldDollars() = baseUsd;
                 }
                 g_treasuryInitialized = true;
             } else {
@@ -703,15 +1260,67 @@ void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd)
                 *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
             }
         } else {
-            g_stateRub[0] = worldRub;
+            double baseRub = (!isResync && !g_loadedFromCoopSave && g_haveLobbyBaseMoney) ? g_lobbyBaseWorldRub : worldRub;
+            double baseUsd = (!isResync && !g_loadedFromCoopSave && g_haveLobbyBaseMoney) ? g_lobbyBaseWorldUsd : worldUsd;
+            g_stateRub[0] = baseRub;
             g_stateRub[1] = 0.0;
-            g_stateUsd[0] = worldUsd;
+            g_stateUsd[0] = baseUsd;
             g_stateUsd[1] = 0.0;
+            if (!IsUnlimitedMoney() && !isResync && !g_loadedFromCoopSave && g_haveLobbyBaseMoney) {
+                *WorldRubles()  = baseRub;
+                *WorldDollars() = baseUsd;
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
     if (outRub) { outRub[0] = g_stateRub[0]; outRub[1] = g_stateRub[1]; }
     if (outUsd) { outUsd[0] = g_stateUsd[0]; outUsd[1] = g_stateUsd[1]; }
+}
+
+bool TwoStates_IsLoadedFromCoopSave()
+{
+    return g_loadedFromCoopSave;
+}
+
+void TwoStates_CaptureLobbyBaseMoney()
+{
+    TwoStates_RestoreUiMoneySwap();
+    if (g_loadedFromCoopSave || g_inSession || SaveSync_IsWaitingForReconnect()) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        g_lobbyBaseWorldRub = *WorldRubles();
+        g_lobbyBaseWorldUsd = *WorldDollars();
+        g_haveLobbyBaseMoney = true;
+        g_treasuryInitialized = false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_haveLobbyBaseMoney = false;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+void TwoStates_ReapplyWaitingLobbySettings()
+{
+    TwoStates_RestoreUiMoneySwap();
+    g_sessionMode = g_chosenMode;
+    if (g_loadedFromCoopSave || SaveSync_IsWaitingForReconnect()) return;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (!g_haveLobbyBaseMoney) {
+            g_lobbyBaseWorldRub = *WorldRubles();
+            g_lobbyBaseWorldUsd = *WorldDollars();
+            g_haveLobbyBaseMoney = true;
+        }
+        g_treasuryInitialized = false;
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    if (ok) {
+        TwoStates_PrepareHostSave(false, nullptr, nullptr);
+    }
 }
 
 void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, bool expandBorders,
@@ -731,9 +1340,12 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
     g_stateUsd[1] = stateUsd[1];
     g_treasuryInitialized = (g_sessionMode == COOP_MODE_TWO_STATES);
     g_inSession = true;
-    g_loadedFromCoopSave = false;
+    if (!isHost) {
+        g_loadedFromCoopSave = false;
+    }
 
     if (g_sessionMode == COOP_MODE_TWO_STATES) {
+        DiagLog_BeginSafeSeh();
         __try {
             if (IsUnlimitedMoney()) {
                 g_stateRub[0] = g_stateRub[1] = 100000000.0;
@@ -747,6 +1359,7 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+        DiagLog_EndSafeSeh();
         SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Режим активен! Вы: %s | Граница X=0 (общая зона ±%.0f м)",
                       "[TWO STATES] Mode active! You: %s | Border X=0 (shared zone ±%.0f m)"),
                    TwoStates_StateName(TwoStates_LocalState()), g_borderHalfWidth);
@@ -771,6 +1384,7 @@ void TwoStates_OnWorldLoaded()
 {
     TwoStates_RestoreUiMoneySwap();
     if (!TwoStates_IsActive()) return;
+    DiagLog_BeginSafeSeh();
     __try {
         if (IsUnlimitedMoney()) {
             g_stateRub[0] = g_stateRub[1] = 100000000.0;
@@ -784,6 +1398,7 @@ void TwoStates_OnWorldLoaded()
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static void SafeWriteWorldMoney(double rub, double usd);
@@ -795,6 +1410,16 @@ void TwoStates_OnSessionEnded()
     g_inSimStep = false;
     if (!SaveSync_IsWorldLoaded()) {
         g_treasuryInitialized = false;
+        g_haveLobbyBaseMoney = false;
+    } else if (!g_loadedFromCoopSave && g_haveLobbyBaseMoney && !SaveSync_HadPartnerInSession()) {
+        // Server was stopped in the Waiting Lobby before any partner ever joined:
+        // restore the exact pre-lobby Singleplayer world balance so 100%-each never doubles SP money.
+        if (!IsUnlimitedMoney()) {
+            SafeWriteWorldMoney(g_lobbyBaseWorldRub, g_lobbyBaseWorldUsd);
+        }
+        g_treasuryInitialized = false;
+        g_stateRub[0] = g_stateRub[1] = 0.0;
+        g_stateUsd[0] = g_stateUsd[1] = 0.0;
     } else if (g_treasuryInitialized && TwoStates_GetMode() == COOP_MODE_TWO_STATES && !IsUnlimitedMoney()) {
         SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
     }
@@ -805,24 +1430,26 @@ void TwoStates_OnSessionEnded()
 // Treasury & Deterministic Command / Step Hooks
 // ---------------------------------------------------------------------------
 
-double TwoStates_GetRubles(int state)
+static double GetStateTreasuryBalance(int state, const double balances[2], double* (*worldCurrencyPtr)())
 {
     if (!TwoStates_IsActive() && !(g_treasuryInitialized && TwoStates_GetMode() == COOP_MODE_TWO_STATES)) {
-        __try { return *WorldRubles(); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0.0; }
+        double v = 0.0;
+        SafeReadPod(worldCurrencyPtr(), &v);
+        return v;
     }
-    if (state == 1) return g_stateRub[0];
-    if (state == 2) return g_stateRub[1];
-    return g_stateRub[0] + g_stateRub[1];
+    if (state == 1) return balances[0];
+    if (state == 2) return balances[1];
+    return balances[0] + balances[1];
+}
+
+double TwoStates_GetRubles(int state)
+{
+    return GetStateTreasuryBalance(state, g_stateRub, WorldRubles);
 }
 
 double TwoStates_GetDollars(int state)
 {
-    if (!TwoStates_IsActive() && !(g_treasuryInitialized && TwoStates_GetMode() == COOP_MODE_TWO_STATES)) {
-        __try { return *WorldDollars(); } __except (EXCEPTION_EXECUTE_HANDLER) { return 0.0; }
-    }
-    if (state == 1) return g_stateUsd[0];
-    if (state == 2) return g_stateUsd[1];
-    return g_stateUsd[0] + g_stateUsd[1];
+    return GetStateTreasuryBalance(state, g_stateUsd, WorldDollars);
 }
 
 double TwoStates_LocalRubles()
@@ -850,30 +1477,17 @@ void TwoStates_SyncBalancesFromHost(double r1, double r2, double u1, double u2)
     }
 }
 
-static int g_cmdOwner = 1;
 static int g_cmdBuildingsBefore = 0;
 static int g_cmdVehiclesBefore = 0;
 
 static int GetWorldBuildingCount()
 {
-    __try {
-        BYTE** b = *(BYTE***)(g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-        BYTE** e = *(BYTE***)(g_exeBase + VEC_BUILDINGS_END_RVA);
-        return (b && e >= b) ? (int)(e - b) : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
+    return (int)SafeCountStdVector(g_exeBase + VEC_BUILDINGS_BEGIN_RVA, sizeof(void*));
 }
 
 static int GetWorldVehicleCount()
 {
-    __try {
-        BYTE** b = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
-        BYTE** e = *(BYTE***)(g_exeBase + VEC_VEHICLES_END_RVA);
-        return (b && e >= b) ? (int)(e - b) : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
-    }
+    return (int)SafeCountStdVector(g_exeBase + VEC_VEHICLES_BEGIN_RVA, sizeof(void*));
 }
 
 void TwoStates_BeginCommand(int ownerState)
@@ -966,8 +1580,8 @@ bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t)
                TwoStates_StateName(t.fromState), TwoStates_StateName(t.toState), sendRub, sendUsd);
     char toast[200];
     _snprintf_s(toast, sizeof(toast), _TRUNCATE,
-                Tr("💸 Перевод из %s в %s: %.0f ₽ / %.0f $",
-                   "💸 Transfer from %s to %s: %.0f RUB / %.0f USD"),
+                Tr("★ Перевод из %s в %s: %.0f ₽ / %.0f $",
+                   "★ Transfer from %s to %s: %.0f RUB / %.0f USD"),
                 TwoStates_StateName(t.fromState), TwoStates_StateName(t.toState), sendRub, sendUsd);
     TwoStates_AddToast(toast, 1);
     return true;
@@ -987,6 +1601,164 @@ void TwoStates_RequestTransfer(double rubles, double dollars)
         Commands_Submit(26 /* LS_CMD_STATE_TRANSFER */, &t, sizeof(t));
     } else {
         TwoStates_ApplyTransferCommand(t);
+    }
+}
+
+static int FindOwnerLoanGlobalIdx(const SovietLoan* b, int count, bool filterByState, int targetSubType, const LsLoanCommand& cmd)
+{
+    if (!b || count <= 0) return -1;
+    int ord = 0;
+    for (int i = 0; i < count; ++i) {
+        int sub = (b[i].loanSubType == 1) ? 1 : 0;
+        if (!filterByState || sub == targetSubType) {
+            if (ord == cmd.ownerLoanOrd) return i;
+            ord++;
+        }
+    }
+    for (int i = 0; i < count; ++i) {
+        int sub = (b[i].loanSubType == 1) ? 1 : 0;
+        if ((!filterByState || sub == targetSubType) &&
+            b[i].loanType == cmd.loan.loanType &&
+            fabsf(b[i].initialPrincipal - cmd.loan.initialPrincipal) < 1.0f &&
+            b[i].initialDays == cmd.loan.initialDays) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void NotifyLoanActionToast(int ownerState, const LsLoanCommand& cmd)
+{
+    if (!TwoStates_IsActive()) return;
+    bool isUsd = (cmd.loan.loanType == LOAN_CURRENCY_USD);
+    double amount = isUsd ? fabs(cmd.dUsd) : fabs(cmd.dRub);
+    if (amount < 1.0) amount = (double)cmd.loan.initialPrincipal;
+    const char* curSym = isUsd ? "$" : Tr("₽", "RUB");
+    char toast[220];
+    if (cmd.op == LOAN_OP_BORROW) {
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("★ %s взяла кредит: +%.0f %s", "★ %s took a loan: +%.0f %s"),
+                    TwoStates_StateName(ownerState), amount, curSym);
+    } else if (cmd.op == LOAN_OP_REPAY_FULL) {
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("★ %s полностью погасила кредит: -%.0f %s", "★ %s repaid loan in full: -%.0f %s"),
+                    TwoStates_StateName(ownerState), amount, curSym);
+    } else {
+        _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                    Tr("★ %s погасила часть кредита: -%.0f %s", "★ %s partially repaid loan: -%.0f %s"),
+                    TwoStates_StateName(ownerState), amount, curSym);
+    }
+    TwoStates_AddToast(toast, 1);
+}
+
+bool TwoStates_ApplyLoanCommand(const LsLoanCommand& cmd)
+{
+    if (!g_exeBase) return false;
+    if (cmd.op != LOAN_OP_BORROW && cmd.op != LOAN_OP_REPAY_PARTIAL && cmd.op != LOAN_OP_REPAY_FULL)
+        return false;
+    if (!isfinite(cmd.dRub) || !isfinite(cmd.dUsd))
+        return false;
+
+    BYTE* world = g_exeBase + WORLD_RVA;
+    int ownerState = (cmd.ownerSubType == 1) ? 2 : (g_inCommand ? g_cmdOwner : 1);
+    bool filterByState = TwoStates_IsActive();
+    int targetSubType = (filterByState && ownerState == 2) ? 1 : 0;
+
+    if (cmd.op == LOAN_OP_BORROW) {
+        SovietLoan newLoan = cmd.loan;
+        newLoan.loanSubType = targetSubType;
+        if (!SafePushBackLoan(world, newLoan)) return false;
+    } else {
+        SovietLoan* b = nullptr;
+        int count = 0, capCount = 0;
+        if (!SafeReadLoanVectorHeader(world, &b, &count, &capCount) || !b || count <= 0) return false;
+        int globalIdx = FindOwnerLoanGlobalIdx(b, count, filterByState, targetSubType, cmd);
+        if (globalIdx < 0) return false;
+
+        if (cmd.op == LOAN_OP_REPAY_PARTIAL) {
+            SovietLoan updated = cmd.loan;
+            updated.loanSubType = targetSubType;
+            if (!SafeWritePod(&b[globalIdx], updated)) return false;
+        } else {
+            if (!SafeEraseLoanAt(world, globalIdx)) return false;
+        }
+    }
+
+    if (filterByState && !IsUnlimitedMoney()) {
+        int idx = ownerState - 1;
+        g_stateRub[idx] += cmd.dRub;
+        g_stateUsd[idx] += cmd.dUsd;
+        if (g_stateRub[idx] < 0.0) g_stateRub[idx] = 0.0;
+        if (g_stateUsd[idx] < 0.0) g_stateUsd[idx] = 0.0;
+        if (g_inCommand) {
+            SafeWritePod(WorldRubles(), g_stateRub[g_cmdOwner - 1]);
+            SafeWritePod(WorldDollars(), g_stateUsd[g_cmdOwner - 1]);
+        } else {
+            SafeWritePod(WorldRubles(), g_stateRub[0] + g_stateRub[1]);
+            SafeWritePod(WorldDollars(), g_stateUsd[0] + g_stateUsd[1]);
+        }
+    } else {
+        double curRub = 0.0, curUsd = 0.0;
+        if (SafeReadPod(WorldRubles(), &curRub) && SafeReadPod(WorldDollars(), &curUsd)) {
+            double nextRub = curRub + cmd.dRub;
+            double nextUsd = curUsd + cmd.dUsd;
+            if (nextRub < 0.0) nextRub = 0.0;
+            if (nextUsd < 0.0) nextUsd = 0.0;
+            SafeWritePod(WorldRubles(), nextRub);
+            SafeWritePod(WorldDollars(), nextUsd);
+        }
+    }
+    SafeAddLoanStatsDelta(world, cmd.dStats);
+    NotifyLoanActionToast(ownerState, cmd);
+    return true;
+}
+
+static void AccumulateLoansForState(const SovietLoan* loans, int count, int state,
+                                    double* outRubDebt, double* outUsdDebt, int* outLoanCount)
+{
+    double rub = 0.0, usd = 0.0;
+    int matched = 0;
+    if (loans && count > 0) {
+        DiagLog_BeginSafeSeh();
+        __try {
+            for (int i = 0; i < count; ++i) {
+                int loanState = (loans[i].loanSubType == 1) ? 2 : 1;
+                if (state != 0 && loanState != state) continue;
+                double d = (double)loans[i].remainingPrincipal + (double)loans[i].unpaidPenaltyBalance;
+                if (loans[i].loanType == LOAN_CURRENCY_USD) usd += d;
+                else rub += d;
+                matched++;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        DiagLog_EndSafeSeh();
+    }
+    if (outRubDebt) *outRubDebt = rub;
+    if (outUsdDebt) *outUsdDebt = usd;
+    if (outLoanCount) *outLoanCount = matched;
+}
+
+void TwoStates_GetLoanDebt(int state, double* outRubDebt, double* outUsdDebt, int* outLoanCount)
+{
+    if (outRubDebt) *outRubDebt = 0.0;
+    if (outUsdDebt) *outUsdDebt = 0.0;
+    if (outLoanCount) *outLoanCount = 0;
+    if (!g_exeBase) return;
+
+    EnsureMoneySwapLock();
+    EnterCriticalSection(&g_moneySwapLock);
+    if (g_uiLoansSwapped) {
+        AccumulateLoansForState(g_uiFullLoansBackup.data(), (int)g_uiFullLoansBackup.size(),
+                                state, outRubDebt, outUsdDebt, outLoanCount);
+        LeaveCriticalSection(&g_moneySwapLock);
+        return;
+    }
+    LeaveCriticalSection(&g_moneySwapLock);
+
+    SovietLoan* b = nullptr;
+    int count = 0, capCount = 0;
+    if (SafeReadLoanVectorHeader(g_exeBase + WORLD_RVA, &b, &count, &capCount) && b && count > 0) {
+        AccumulateLoansForState(b, count, state, outRubDebt, outUsdDebt, outLoanCount);
     }
 }
 
@@ -1080,27 +1852,72 @@ void TwoStates_AfterStep(BYTE* world)
     }
 }
 
+static void BeginUiLoanSwap(BYTE* world, bool filterByState)
+{
+    if (!world || !ReadCurrentLoansToVector(world, g_uiFullLoansBackup)) {
+        g_uiLoansSwapped = false;
+        return;
+    }
+    g_uiSavedGlobalSelectedIdx = SafeReadSelectedLoanIdx(world);
+    SafeReadLoanStats(world, g_uiSavedLoanStats);
+    g_uiLoansFilterByState = filterByState;
+    g_uiLoansOwnerSubType = (filterByState && TwoStates_LocalState() == 2) ? 1 : 0;
+
+    g_uiFilteredLoansBefore.clear();
+    g_uiFilteredToGlobalIdx.clear();
+    g_uiLocalSelectedIdxBefore = -1;
+
+    for (size_t i = 0; i < g_uiFullLoansBackup.size(); ++i) {
+        int sub = (g_uiFullLoansBackup[i].loanSubType == 1) ? 1 : 0;
+        if (!filterByState || sub == g_uiLoansOwnerSubType) {
+            int localOrd = (int)g_uiFilteredLoansBefore.size();
+            if ((int)i == g_uiSavedGlobalSelectedIdx) {
+                g_uiLocalSelectedIdxBefore = localOrd;
+            }
+            g_uiFilteredLoansBefore.push_back(g_uiFullLoansBackup[i]);
+            g_uiFilteredToGlobalIdx.push_back((int)i);
+        }
+    }
+
+    if (filterByState) {
+        SafeWriteLoanVectorInPlace(world, g_uiFilteredLoansBefore.data(), (int)g_uiFilteredLoansBefore.size());
+        SafeWriteSelectedLoanIdx(world, g_uiLocalSelectedIdxBefore);
+    }
+    g_uiLoansSwapped = true;
+}
+
 void TwoStates_UiBegin()
 {
     EnsureMoneySwapLock();
     EnterCriticalSection(&g_moneySwapLock);
-    if (!TwoStates_IsActive() || g_inSimStep || g_inCommand || TwoStates_IsSaveInProgress() ||
-        Determinism_GetFramePhase() != 0 || IsUnlimitedMoney()) {
-        g_uiMoneySwapped = false;
+    if (g_uiMoneySwapped || g_uiLoansSwapped) {
         LeaveCriticalSection(&g_moneySwapLock);
         return;
     }
-    __try {
-        g_uiSavedSimRub = *WorldRubles();
-        g_uiSavedSimUsd = *WorldDollars();
-        g_uiShownRub = TwoStates_LocalRubles();
-        g_uiShownUsd = TwoStates_LocalDollars();
-        *WorldRubles()  = g_uiShownRub;
-        *WorldDollars() = g_uiShownUsd;
-        g_uiMoneySwapped = true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        g_uiMoneySwapped = false;
+    if (!g_exeBase || g_inSimStep || g_inCommand || TwoStates_IsSaveInProgress() ||
+        Determinism_GetFramePhase() != 0 || IsUnlimitedMoney()) {
+        LeaveCriticalSection(&g_moneySwapLock);
+        return;
     }
+
+    bool twoStates = TwoStates_IsActive();
+    bool captureLoans = twoStates || Commands_Capturing() || SaveSync_IsWaitingLobbyActive();
+    if (!twoStates && !captureLoans) {
+        LeaveCriticalSection(&g_moneySwapLock);
+        return;
+    }
+
+    if (SafeReadPod(WorldRubles(), &g_uiSavedSimRub) && SafeReadPod(WorldDollars(), &g_uiSavedSimUsd)) {
+        g_uiShownRub = twoStates ? TwoStates_LocalRubles() : g_uiSavedSimRub;
+        g_uiShownUsd = twoStates ? TwoStates_LocalDollars() : g_uiSavedSimUsd;
+        if (twoStates) {
+            SafeWritePod(WorldRubles(), g_uiShownRub);
+            SafeWritePod(WorldDollars(), g_uiShownUsd);
+        }
+        g_uiMoneySwapped = true;
+    }
+
+    BeginUiLoanSwap(g_exeBase + WORLD_RVA, twoStates);
     LeaveCriticalSection(&g_moneySwapLock);
 }
 
@@ -1136,13 +1953,18 @@ void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd)
 // Territory, Building & Vehicle Ownership
 // ---------------------------------------------------------------------------
 
-void TwoStates_RegisterBuildingOwner(int buildingId, int ownerState)
+static void RegisterEntityOwner(std::unordered_map<int, int>& ownersMap, int entityId, int ownerState)
 {
-    if (buildingId < 0 || (ownerState != 1 && ownerState != 2)) return;
+    if (entityId < 0 || (ownerState != 1 && ownerState != 2)) return;
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
-    g_buildingOwners[buildingId] = ownerState;
+    ownersMap[entityId] = ownerState;
     LeaveCriticalSection(&g_ownerLock);
+}
+
+void TwoStates_RegisterBuildingOwner(int buildingId, int ownerState)
+{
+    RegisterEntityOwner(g_buildingOwners, buildingId, ownerState);
 }
 
 int TwoStates_GetBuildingOwner(int buildingId, float x, float z)
@@ -1161,11 +1983,7 @@ int TwoStates_GetBuildingOwner(int buildingId, float x, float z)
 
 void TwoStates_RegisterVehicleOwner(int vehicleId, int ownerState)
 {
-    if (vehicleId < 0 || (ownerState != 1 && ownerState != 2)) return;
-    EnsureOwnerLock();
-    EnterCriticalSection(&g_ownerLock);
-    g_vehicleOwners[vehicleId] = ownerState;
-    LeaveCriticalSection(&g_ownerLock);
+    RegisterEntityOwner(g_vehicleOwners, vehicleId, ownerState);
 }
 
 int TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr)
@@ -1778,7 +2596,9 @@ void TwoStates_DrawOverlay()
     static bool s_f6WasDown = false;
     static bool s_altClickWasDown = false;
 
-    bool f7Down = focused && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+    bool allowWorldHotkeys = focused && !SyncBlock_BlocksWorldInput();
+
+    bool f7Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
     if (f7Down && !s_f7WasDown) {
         g_show3DBorder = !g_show3DBorder;
         TwoStates_SaveSettings();
@@ -1788,13 +2608,13 @@ void TwoStates_DrawOverlay()
     }
     s_f7WasDown = f7Down;
 
-    bool f6Down = focused && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+    bool f6Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
     if (f6Down && !s_f6WasDown && worldLoaded) {
         TwoStates_JumpCameraToPartner();
     }
     s_f6WasDown = f6Down;
 
-    bool altClickDown = focused && !ImGui::GetIO().WantCaptureMouse &&
+    bool altClickDown = allowWorldHotkeys && !ImGui::GetIO().WantCaptureMouse &&
                         (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
                         (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     if (altClickDown && !s_altClickWasDown && worldLoaded) {
@@ -1826,20 +2646,6 @@ void TwoStates_DrawOverlay()
     if (worldLoaded) {
         DrawPartnerCursorAndPing(bg, displaySize);
         DrawMinimapOverlay(bg);
-    }
-
-    // While Host is waiting for Player 2 (before Lockstep starts), keep State 1 treasury synced with world balance
-    SessionState st = SaveSync_GetState();
-    if (st == SESSION_HOST_LISTENING && TwoStates_IsActive() && !g_inSimStep && !g_inCommand) {
-        __try {
-            double curRub = *WorldRubles();
-            double curUsd = *WorldDollars();
-            double sumRub = g_stateRub[0] + g_stateRub[1];
-            double sumUsd = g_stateUsd[0] + g_stateUsd[1];
-            if (fabs(curRub - sumRub) > 0.01) g_stateRub[0] += (curRub - sumRub);
-            if (fabs(curUsd - sumUsd) > 0.01) g_stateUsd[0] += (curUsd - sumUsd);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-        }
     }
 
     // Draw Toast notifications (top-center below the game's resource bar)
@@ -2013,23 +2819,9 @@ static bool GetExeDir(char* outDir, size_t outSize)
     return true;
 }
 
-static std::string GetSettingsIniPath()
-{
-    char path[MAX_PATH] = {};
-    HMODULE hMod = nullptr;
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)&TwoStates_LoadSettings, &hMod)) {
-        GetModuleFileNameA(hMod, path, MAX_PATH);
-    }
-    std::string dll(path);
-    size_t pos = dll.find_last_of("\\/");
-    if (pos == std::string::npos) return "republicmp_settings.ini";
-    return dll.substr(0, pos + 1) + "republicmp_settings.ini";
-}
-
 void TwoStates_LoadSettings()
 {
-    std::string ini = GetSettingsIniPath();
+    std::string ini = Lang_GetConfigPath();
     if (GetFileAttributesA(ini.c_str()) == INVALID_FILE_ATTRIBUTES) return;
 
     int mode = GetPrivateProfileIntA("coop", "mode", (int)g_chosenMode, ini.c_str());
@@ -2070,7 +2862,7 @@ void TwoStates_LoadSettings()
 
 void TwoStates_SaveSettings()
 {
-    std::string ini = GetSettingsIniPath();
+    std::string ini = Lang_GetConfigPath();
     char buf[32] = {};
 
     _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%d", (int)g_chosenMode);
@@ -2647,6 +3439,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
     }
 
     if (hasSaveDir && ReadCoopSaveMetaInternal(fullSaveDir, true)) {
+        g_haveLobbyBaseMoney = false;
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
             char msg[240];
             _snprintf_s(msg, sizeof(msg), _TRUNCATE,
@@ -2661,6 +3454,16 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
     } else {
         g_loadedFromCoopSave = false;
         g_treasuryInitialized = false;
+        g_haveLobbyBaseMoney = false;
+        DiagLog_BeginSafeSeh();
+        __try {
+            g_lobbyBaseWorldRub = *WorldRubles();
+            g_lobbyBaseWorldUsd = *WorldDollars();
+            g_haveLobbyBaseMoney = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_haveLobbyBaseMoney = false;
+        }
+        DiagLog_EndSafeSeh();
         EnsureOwnerLock();
         EnterCriticalSection(&g_ownerLock);
         g_buildingOwners.clear();

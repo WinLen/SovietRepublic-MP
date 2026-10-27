@@ -7,6 +7,8 @@
 // escape into the game.
 #include "terrain_hook.h"
 #include "../../lockstep/commands.h"
+#include "../../session/save_sync.h"
+#include "../../ui/native_menu.h"
 #include "../networks/road_sync.h"
 #include <vector>
 #include "terrain_sync.h"
@@ -351,9 +353,24 @@ struct LsTerrainEdit {
 };
 static std::vector<LsTerrainEdit> g_lsTerrain; // main thread (the tools run in the Late body)
 
+static bool IsMapGenCaller(void* returnAddress)
+{
+    if (!g_exeBase || !returnAddress) return false;
+    unsigned long long rva = (unsigned long long)((BYTE*)returnAddress - g_exeBase);
+    return rva == 0x22FF4B || rva == 0x230338 || rva == 0x2300F0 ||
+           rva == 0x2304D0 || rva == 0x244FF5;
+}
+
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 {
     bool remote = g_terrainApplyingRemote != 0 || RoadSync_IsApplyingSegment();
+    if (!remote && !IsMapGenCaller(returnAddress) &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        x.suppressed = 1;
+        Record(method, returnAddress, x);
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return false;
+    }
     if (!remote && Commands_TakeLocal()) {
         g_lsTerrain.push_back({ method, x });
         x.suppressed = 1;
@@ -370,26 +387,36 @@ static void EndEdit(int method, const TerrainArgs& x)
     if (g_terrainApplyingRemote == 0 && !RoadSync_IsApplyingSegment()) TerrainSync_CaptureEdit(method, x);
 }
 
-static void H_RaiseLower(void* t, const float* pos, float a, float b, float c, float d, bool e)
+template <typename InvokeFn>
+static void ExecuteHookedTerrainEdit(int method, void* retAddr, const float* pos, const float* pos2,
+                                     const float* floats, int nf, const int* ints, int ni,
+                                     bool hasB, bool bVal, InvokeFn invokeOrig)
 {
     TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.f[3] = d; x.nf = 4;
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_RAISE_LOWER, _ReturnAddress(), x)) return;
-    o_RaiseLower(t, pos, a, b, c, d, e);
-    EndEdit(TM_RAISE_LOWER, x);
+    if (pos) { CopyPos(x.pos, pos); x.hasPos = 1; }
+    if (pos2) { CopyPos(x.pos2, pos2); x.hasPos2 = 1; }
+    for (int i = 0; i < nf; ++i) x.f[i] = floats[i];
+    x.nf = nf;
+    for (int i = 0; i < ni; ++i) x.i[i] = ints[i];
+    x.ni = ni;
+    if (hasB) { x.b = bVal; x.hasB = 1; }
+    if (!BeginEdit(method, retAddr, x)) return;
+    invokeOrig();
+    EndEdit(method, x);
+}
+
+static void H_RaiseLower(void* t, const float* pos, float a, float b, float c, float d, bool e)
+{
+    const float fs[4] = { a, b, c, d };
+    ExecuteHookedTerrainEdit(TM_RAISE_LOWER, _ReturnAddress(), pos, nullptr, fs, 4, nullptr, 0, true, e,
+                             [&]() { o_RaiseLower(t, pos, a, b, c, d, e); });
 }
 
 static void H_RaiseLowerAngle(void* t, const float* pos, float a, float b, float c, float d, bool e, float g)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.f[3] = d; x.f[4] = g; x.nf = 5; // f[4] is the arg after the bool
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_RAISE_LOWER_ANGLE, _ReturnAddress(), x)) return;
-    o_RaiseLowerAngle(t, pos, a, b, c, d, e, g);
-    EndEdit(TM_RAISE_LOWER_ANGLE, x);
+    const float fs[5] = { a, b, c, d, g }; // f[4] is the arg after the bool
+    ExecuteHookedTerrainEdit(TM_RAISE_LOWER_ANGLE, _ReturnAddress(), pos, nullptr, fs, 5, nullptr, 0, true, e,
+                             [&]() { o_RaiseLowerAngle(t, pos, a, b, c, d, e, g); });
 }
 
 static float H_RaiseLowerAngleCost(void* t, const float* pos, float a, float b, float c, float d, bool e)
@@ -407,61 +434,40 @@ static float H_RaiseLowerAngleCost(void* t, const float* pos, float a, float b, 
 
 static void H_Smooth(void* t, const float* pos, float a, float b, float c, bool e)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.nf = 3;
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_SMOOTH, _ReturnAddress(), x)) return;
-    o_Smooth(t, pos, a, b, c, e);
-    EndEdit(TM_SMOOTH, x);
+    const float fs[3] = { a, b, c };
+    ExecuteHookedTerrainEdit(TM_SMOOTH, _ReturnAddress(), pos, nullptr, fs, 3, nullptr, 0, true, e,
+                             [&]() { o_Smooth(t, pos, a, b, c, e); });
 }
 
 static void H_Level(void* t, const float* pos, float a, float b, float c, bool e)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.nf = 3;
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_LEVEL, _ReturnAddress(), x)) return;
-    o_Level(t, pos, a, b, c, e);
-    EndEdit(TM_LEVEL, x);
+    const float fs[3] = { a, b, c };
+    ExecuteHookedTerrainEdit(TM_LEVEL, _ReturnAddress(), pos, nullptr, fs, 3, nullptr, 0, true, e,
+                             [&]() { o_Level(t, pos, a, b, c, e); });
 }
 
 static void H_ToHeight(void* t, const float* pos, const float* pos2, float a, float b, float c, bool e)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    CopyPos(x.pos2, pos2); x.hasPos2 = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.nf = 3;
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_TO_HEIGHT, _ReturnAddress(), x)) return;
-    o_ToHeight(t, pos, pos2, a, b, c, e);
-    EndEdit(TM_TO_HEIGHT, x);
+    const float fs[3] = { a, b, c };
+    ExecuteHookedTerrainEdit(TM_TO_HEIGHT, _ReturnAddress(), pos, pos2, fs, 3, nullptr, 0, true, e,
+                             [&]() { o_ToHeight(t, pos, pos2, a, b, c, e); });
 }
 
 static void H_SmoothLimits(void* t, const float* pos, float a, float b, float c, float d, float e,
                            float f, float g, float h, float k)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.f[0] = a; x.f[1] = b; x.f[2] = c; x.f[3] = d; x.f[4] = e;
-    x.f[5] = f; x.f[6] = g; x.f[7] = h; x.f[8] = k; x.nf = 9;
-    if (!BeginEdit(TM_SMOOTH_LIMITS, _ReturnAddress(), x)) return;
-    o_SmoothLimits(t, pos, a, b, c, d, e, f, g, h, k);
-    EndEdit(TM_SMOOTH_LIMITS, x);
+    const float fs[9] = { a, b, c, d, e, f, g, h, k };
+    ExecuteHookedTerrainEdit(TM_SMOOTH_LIMITS, _ReturnAddress(), pos, nullptr, fs, 9, nullptr, 0, false, false,
+                             [&]() { o_SmoothLimits(t, pos, a, b, c, d, e, f, g, h, k); });
 }
 
 // i[0] = channel, i[1], i[2] = the two ints after the floats.
 static void H_Mask(void* t, const float* pos, int channel, float a, float b, int i1, int i2, bool e)
 {
-    TerrainArgs x = {};
-    CopyPos(x.pos, pos); x.hasPos = 1;
-    x.i[0] = channel; x.i[1] = i1; x.i[2] = i2; x.ni = 3;
-    x.f[0] = a; x.f[1] = b; x.nf = 2;
-    x.b = e; x.hasB = 1;
-    if (!BeginEdit(TM_MASK, _ReturnAddress(), x)) return;
-    o_Mask(t, pos, channel, a, b, i1, i2, e);
-    EndEdit(TM_MASK, x);
+    const float fs[2] = { a, b };
+    const int is[3] = { channel, i1, i2 };
+    ExecuteHookedTerrainEdit(TM_MASK, _ReturnAddress(), pos, nullptr, fs, 2, is, 3, true, e,
+                             [&]() { o_Mask(t, pos, channel, a, b, i1, i2, e); });
 }
 
 static void H_MaskGen(void* t, int ch, float a, float b, float c, float d, float e, float f)

@@ -5,6 +5,7 @@
 #include "route_tools.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include <string.h>
 
@@ -37,36 +38,31 @@ static const unsigned kStopTools[2] = { 0x2B2760, 0x2B4A50 };
 #define DEPOT_LIST_END (0x100 - 0x50)
 #define DEPOT_MAX 64
 
-struct RoutineEntry {
-    unsigned rva;
-    unsigned char entry[16];
-    size_t size; // 0: all 16 bytes
-};
-static const RoutineEntry kRoutines[] = {
-    { 0x2B5120, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 } },
-    { 0x2B2760, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x98, 0xd2, 0x00, 0x00, 0x48 } },
-    { 0x2B4A50, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x98, 0xd2, 0x00, 0x00, 0x48, 0x8b } },
-    { 0x2B4C60, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 } },
-    { 0x40CDE0, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b } },
-    { 0x498990, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 } },
-    { 0x1AA540, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 } },
-    { 0x3BB330, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xbc, 0x05, 0x00, 0x00 } },
-    { 0x497B10, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 } },
+static const TsmRoutineSig kRoutines[] = {
+    { 0x2B5120, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 }, 0 },
+    { 0x2B2760, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x98, 0xd2, 0x00, 0x00, 0x48 }, 0 },
+    { 0x2B4A50, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x98, 0xd2, 0x00, 0x00, 0x48, 0x8b }, 0 },
+    { 0x2B4C60, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 }, 0 },
+    { 0x40CDE0, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
+    { 0x498990, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 }, 0 },
+    { 0x1AA540, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 }, 0 },
+    { 0x3BB330, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xbc, 0x05, 0x00, 0x00 }, 0 },
+    { 0x497B10, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 }, 0 },
     // The depot tool's frame (mov rax,rsp; five pushes; lea rbp,[rax-108h]) and its mark.
-    { 0x2B2DD0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xf8 } },
+    { 0x2B2DD0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xf8 }, 0 },
     { 0x2B2DE0, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
-    { 0x40BD60, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b } },
+    { 0x40BD60, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
     // The sending steps.
-    { 0x68B2B0, { 0x48, 0x8b, 0x81, 0x08, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 } },
-    { 0x3E2900, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 } },
-    { 0x3E3F40, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec } },
-    { 0x3BB640, { 0x4d, 0x8b, 0xd0, 0x48, 0x85, 0xd2, 0x75, 0x03, 0x32, 0xc0, 0xc3, 0x48, 0x8b, 0x82, 0xb0, 0x05 } },
-    { 0x3A38F0, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 } },
-    { 0x3A3830, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a } },
-    { 0x6DE260, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x04, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 } },
-    { 0x1AE130, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 } },
-    { 0x6B7070, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 } },
-    { 0x6B7420, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 } },
+    { 0x68B2B0, { 0x48, 0x8b, 0x81, 0x08, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 }, 0 },
+    { 0x3E2900, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 }, 0 },
+    { 0x3E3F40, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 0 },
+    { 0x3BB640, { 0x4d, 0x8b, 0xd0, 0x48, 0x85, 0xd2, 0x75, 0x03, 0x32, 0xc0, 0xc3, 0x48, 0x8b, 0x82, 0xb0, 0x05 }, 0 },
+    { 0x3A38F0, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 }, 0 },
+    { 0x3A3830, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a }, 0 },
+    { 0x6DE260, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x04, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 }, 0 },
+    { 0x1AE130, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 }, 0 },
+    { 0x6B7070, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 }, 0 },
+    { 0x6B7420, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 }, 0 },
 };
 
 typedef U64 (*PickFn)(U64, U64, U64, U64, U64, U64, U64*, U64*);
@@ -89,17 +85,7 @@ void RouteTools_Bind(const TsmHost* host)
 
 bool RouteTools_Ready()
 {
-    if (g_ready < 0) {
-        g_ready = 1;
-        for (const RoutineEntry& e : kRoutines) {
-            if (memcmp(g_exeBase + e.rva, e.entry, e.size ? e.size : sizeof(e.entry)) != 0) {
-                Logf("republicmp  ROUTE: game routine at 0x%X differs - the route tools are put away in lockstep", e.rva);
-                g_ready = 0;
-                break;
-            }
-        }
-    }
-    return g_ready == 1;
+    return Ref_CheckRoutineTable(&g_ready, kRoutines, sizeof(kRoutines) / sizeof(kRoutines[0]), "ROUTE");
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
@@ -152,26 +138,38 @@ struct DepotMsg {
 #pragma pack(pop)
 
 
+static const char* const kRouteKindNames[] = {
+    "a vehicle's stop",                 // ROUTE_VEHICLE_STOP (0)
+    "a line's stop",                    // ROUTE_LINE_STOP (1)
+    "a vehicle on a line",              // ROUTE_LINE_COPY (2)
+    "vehicles sent to a depot",         // ROUTE_DEPOT (3)
+    "a square road/water area",         // ROUTE_SQUARE_ROAD (4)
+    "a vehicle's go-there target",      // ROUTE_GO_THERE (5)
+    "a buoy action",                    // ROUTE_BOJKA (6)
+    "a hub stop link",                  // ROUTE_JOIN_HUB_STOP (7)
+    "a network node join",              // ROUTE_JOIN_HUB (8)
+    "a worker relocation",              // ROUTE_WORKER_RELOCATE (9)
+    "a vehicle's schedule copy",        // ROUTE_VEHICLE_COPY (10)
+    "a vehicle replacement",            // ROUTE_VEHICLE_REPLACE (11)
+    "an auto-replace vehicle pick",     // ROUTE_VEHICLE_REPLACE_AUTO (12)
+    "a vehicle loaded onto a vehicle",  // ROUTE_VEHICLE_TO_VEHICLE (13)
+    "a construction vehicle dispatch",  // ROUTE_VEHICLE_SEND_CONSTR (14)
+};
+
 static const char* KindText(unsigned kind)
 {
-    switch (kind) {
-    case ROUTE_VEHICLE_STOP: return "a vehicle's stop";
-    case ROUTE_LINE_STOP: return "a line's stop";
-    case ROUTE_LINE_COPY: return "a vehicle on a line";
-    case ROUTE_DEPOT: return "vehicles sent to a depot";
-    case ROUTE_SQUARE_ROAD: return "a square road/water area";
-    case ROUTE_GO_THERE: return "a vehicle's go-there target";
-    case ROUTE_BOJKA: return "a buoy action";
-    case ROUTE_JOIN_HUB_STOP: return "a hub stop link";
-    case ROUTE_JOIN_HUB: return "a network node join";
-    case ROUTE_WORKER_RELOCATE: return "a worker relocation";
-    case ROUTE_VEHICLE_COPY: return "a vehicle's schedule copy";
-    case ROUTE_VEHICLE_REPLACE: return "a vehicle replacement";
-    case ROUTE_VEHICLE_REPLACE_AUTO: return "an auto-replace vehicle pick";
-    case ROUTE_VEHICLE_TO_VEHICLE: return "a vehicle loaded onto a vehicle";
-    case ROUTE_VEHICLE_SEND_CONSTR: return "a construction vehicle dispatch";
-    }
-    return "?";
+    const unsigned n = (unsigned)(sizeof(kRouteKindNames) / sizeof(kRouteKindNames[0]));
+    return kind < n ? kRouteKindNames[kind] : "?";
+}
+
+static void InitRouteMsg(RouteMsg& m, unsigned kind, int index = 0, unsigned char ctrl = 0)
+{
+    memset(&m, 0, sizeof(m));
+    m.kind = kind;
+    m.origin = g_origin;
+    m.index = index;
+    m.ctrl = ctrl ? 1 : 0;
+    m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,28 +473,66 @@ U64 RouteTools_GoThereTool(U64 world)
     return r;
 }
 
-U64 RouteTools_BojkaTool(U64 world, U64 mode)
+static bool InvokeTwoArgPressTool(U64 world, U64 arg2, unsigned rva, U64* outResult)
 {
-    typedef U64 (*BojkaFn)(U64, U64);
-    BojkaFn tool = (BojkaFn)(g_exeBase + 0x3C85B0);
+    typedef U64 (*TwoArgToolFn)(U64, U64);
+    TwoArgToolFn tool = (TwoArgToolFn)(g_exeBase + rva);
     BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world, mode);
+    if (!*press || !Commands_TakeLocal()) {
+        *outResult = tool(world, arg2);
+        return false;
+    }
     BYTE kept = *press;
     *press = 0;
-    U64 r = tool(world, mode);
+    *outResult = tool(world, arg2);
     *press = kept;
+    return true;
+}
+
+static bool InvokeArmedCaptureTool(U64 world, unsigned rva, bool useMarkPick, U64* outResult)
+{
+    ToolFn tool = (ToolFn)(g_exeBase + rva);
+    BYTE* press = g_exeBase + PRESS_RVA;
+    if (!*press || !Commands_TakeLocal()) {
+        *outResult = tool(world);
+        return false;
+    }
+    BYTE kept = *press;
+    *press = 0;
+    if (useMarkPick) {
+        g_markArmed = true;
+        g_markSeen = g_markAllowed = false;
+        g_markVehicle = 0;
+    } else {
+        g_depotArmed = true;
+        g_depotSeen = g_depotOverflow = g_depotAllowed = false;
+        g_depot = g_depotReturnTo = 0;
+    }
+    *outResult = tool(world);
+    if (useMarkPick) g_markArmed = false;
+    else g_depotArmed = false;
+    *press = kept;
+    return useMarkPick ? (g_markSeen && g_markAllowed && g_markVehicle != 0)
+                       : (g_depotSeen && g_depotAllowed && g_depot != 0);
+}
+
+static void SubmitPointRouteTool(unsigned kind, int index, const float pos[3], const char* actionDesc)
+{
+    if (!TwoStates_CheckBuildAllowed(pos[0], pos[2], actionDesc)) return;
+    RouteMsg m;
+    InitRouteMsg(m, kind, index);
+    memcpy(m.posA, pos, 12);
+    Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
+}
+
+U64 RouteTools_BojkaTool(U64 world, U64 mode)
+{
+    U64 r = 0;
+    if (!InvokeTwoArgPressTool(world, mode, 0x3C85B0, &r)) return r;
     __try {
         float pos[3];
         memcpy(pos, (const void*)(world + 0xF6C), 12);
-        if (!TwoStates_CheckBuildAllowed(pos[0], pos[2], "установка/снос буйка")) return r;
-        RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_BOJKA;
-        m.origin = g_origin;
-        m.index = (int)(mode & 0xff);
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
-        memcpy(m.posA, pos, 12);
-        Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
+        SubmitPointRouteTool(ROUTE_BOJKA, (int)(mode & 0xff), pos, "установка/снос буйка");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Refused(KindText(ROUTE_BOJKA), "a fault while reading it");
     }
@@ -524,10 +560,7 @@ U64 RouteTools_JoinHubStopTool(U64 world)
             !TwoStates_CheckBuildAllowed(*(float*)(stopNode + 4), *(float*)(stopNode + 0xC), "объединение перекрёстков"))
             return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_JOIN_HUB_STOP;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        InitRouteMsg(m, ROUTE_JOIN_HUB_STOP);
         memcpy(m.posA, (const void*)(firstNode + 4), 12);
         memcpy(m.posB, (const void*)(stopNode + 4), 12);
         Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
@@ -539,27 +572,15 @@ U64 RouteTools_JoinHubStopTool(U64 world)
 
 U64 RouteTools_JoinHubTool(U64 world, U64 a2)
 {
-    typedef U64 (*JoinHubFn)(U64, U64);
-    JoinHubFn tool = (JoinHubFn)(g_exeBase + 0x3C9A00);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world, a2);
-    BYTE kept = *press;
-    *press = 0;
-    U64 r = tool(world, a2);
-    *press = kept;
+    U64 r = 0;
+    if (!InvokeTwoArgPressTool(world, a2, 0x3C9A00, &r)) return r;
     __try {
         U64 node = Q(world + 0xF650);
-        if (!node) return r;
-        float pos[3];
-        memcpy(pos, (const void*)(node + 4), 12);
-        if (!TwoStates_CheckBuildAllowed(pos[0], pos[2], "объединение узлов сети")) return r;
-        RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_JOIN_HUB;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
-        memcpy(m.posA, pos, 12);
-        Commands_Submit(LS_CMD_ROUTE, &m, sizeof(m));
+        if (node) {
+            float pos[3];
+            memcpy(pos, (const void*)(node + 4), 12);
+            SubmitPointRouteTool(ROUTE_JOIN_HUB, 0, pos, "объединение узлов сети");
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Refused(KindText(ROUTE_JOIN_HUB), "a fault while reading it");
     }
@@ -568,9 +589,6 @@ U64 RouteTools_JoinHubTool(U64 world, U64 a2)
 
 U64 RouteTools_WorkerRelocateTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B8CE0);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
     int mode = 0;
     __try {
         U64 sel = Q(world + SELECTED_OFFSET);
@@ -582,15 +600,8 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     unsigned char ctrl = *(g_exeBase + CTRL_RVA);
-    BYTE kept = *press;
-    *press = 0;
-    g_depotArmed = true;
-    g_depotSeen = g_depotOverflow = g_depotAllowed = false;
-    g_depot = g_depotReturnTo = 0;
-    U64 r = tool(world);
-    g_depotArmed = false;
-    *press = kept;
-    if (!g_depotSeen || !g_depotAllowed || !g_depot) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x2B8CE0, false, &r)) return r;
     __try {
         U64 srcBld = Q(world + TARGET_OFFSET);
         if (!srcBld) return r;
@@ -600,12 +611,7 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
                                                    "переселение граждан в чужое здание"))
             return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_WORKER_RELOCATE;
-        m.origin = g_origin;
-        m.index = mode;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
-        m.ctrl = ctrl ? 1 : 0;
+        InitRouteMsg(m, ROUTE_WORKER_RELOCATE, mode, ctrl);
         if (!Ref_Building(srcBld, m.object) || !Ref_Building(g_depot, m.building)) {
             Refused(KindText(ROUTE_WORKER_RELOCATE), "a building");
             return r;
@@ -619,30 +625,15 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
 
 U64 RouteTools_VehicleCopyTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B18C0);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
     unsigned char ctrl = *(g_exeBase + CTRL_RVA);
-    BYTE kept = *press;
-    *press = 0;
-    g_depotArmed = true;
-    g_depotSeen = g_depotOverflow = g_depotAllowed = false;
-    g_depot = g_depotReturnTo = 0;
-    U64 r = tool(world);
-    g_depotArmed = false;
-    *press = kept;
-    if (!g_depotSeen || !g_depotAllowed || !g_depot) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x2B18C0, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh) return r;
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "копирование расписания чужому транспорту"))
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "копирование расписания чужому транспорту"))
             return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_VEHICLE_COPY;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
-        m.ctrl = ctrl ? 1 : 0;
+        InitRouteMsg(m, ROUTE_VEHICLE_COPY, 0, ctrl);
         if (!Ref_Vehicle(srcVeh, m.object) || !Ref_Vehicle(g_depot, m.vehicle)) {
             Refused(KindText(ROUTE_VEHICLE_COPY), "a vehicle");
             return r;
@@ -656,27 +647,13 @@ U64 RouteTools_VehicleCopyTool(U64 world)
 
 U64 RouteTools_VehicleReplaceTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B3C80);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
-    BYTE kept = *press;
-    *press = 0;
-    g_depotArmed = true;
-    g_depotSeen = g_depotOverflow = g_depotAllowed = false;
-    g_depot = g_depotReturnTo = 0;
-    U64 r = tool(world);
-    g_depotArmed = false;
-    *press = kept;
-    if (!g_depotSeen || !g_depotAllowed || !g_depot) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x2B3C80, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh) return r;
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "замена чужого транспорта")) return r;
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "замена чужого транспорта")) return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_VEHICLE_REPLACE;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        InitRouteMsg(m, ROUTE_VEHICLE_REPLACE);
         if (!Ref_Vehicle(srcVeh, m.object)) {
             Refused(KindText(ROUTE_VEHICLE_REPLACE), "the source vehicle");
             return r;
@@ -705,25 +682,12 @@ U64 RouteTools_VehicleReplaceTool(U64 world)
 
 U64 RouteTools_VehicleReplaceAutoTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B4680);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
-    BYTE kept = *press;
-    *press = 0;
-    g_depotArmed = true;
-    g_depotSeen = g_depotOverflow = g_depotAllowed = false;
-    g_depot = g_depotReturnTo = 0;
-    U64 r = tool(world);
-    g_depotArmed = false;
-    *press = kept;
-    if (!g_depotSeen || !g_depotAllowed || !g_depot) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x2B4680, false, &r)) return r;
     __try {
         if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "автозамена чужого транспорта")) return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_VEHICLE_REPLACE_AUTO;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        InitRouteMsg(m, ROUTE_VEHICLE_REPLACE_AUTO);
         if (!Ref_Vehicle(g_depot, m.vehicle)) {
             Refused(KindText(ROUTE_VEHICLE_REPLACE_AUTO), "the vehicle");
             return r;
@@ -737,29 +701,16 @@ U64 RouteTools_VehicleReplaceAutoTool(U64 world)
 
 U64 RouteTools_VehicleToVehicleTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B6AB0);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
-    BYTE kept = *press;
-    *press = 0;
-    g_markArmed = true;
-    g_markSeen = g_markAllowed = false;
-    g_markVehicle = 0;
-    U64 r = tool(world);
-    g_markArmed = false;
-    *press = kept;
-    if (!g_markSeen || !g_markAllowed || !g_markVehicle) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x2B6AB0, true, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh) return r;
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "погрузка чужого транспорта") ||
+        if (!srcVeh ||
+            !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "погрузка чужого транспорта") ||
             !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_markVehicle, "погрузка на чужой транспорт"))
             return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_VEHICLE_TO_VEHICLE;
-        m.origin = g_origin;
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        InitRouteMsg(m, ROUTE_VEHICLE_TO_VEHICLE);
         if (!Ref_Vehicle(srcVeh, m.object) || !Ref_Vehicle(g_markVehicle, m.vehicle)) {
             Refused(KindText(ROUTE_VEHICLE_TO_VEHICLE), "a vehicle");
             return r;
@@ -773,28 +724,14 @@ U64 RouteTools_VehicleToVehicleTool(U64 world)
 
 U64 RouteTools_VehicleSendConstrTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x1D88A0);
-    BYTE* press = g_exeBase + PRESS_RVA;
-    if (!*press || !Commands_TakeLocal()) return tool(world);
-    BYTE kept = *press;
-    *press = 0;
-    g_depotArmed = true;
-    g_depotSeen = g_depotOverflow = g_depotAllowed = false;
-    g_depot = g_depotReturnTo = 0;
-    U64 r = tool(world);
-    g_depotArmed = false;
-    *press = kept;
-    if (!g_depotSeen || !g_depotAllowed || !g_depot) return r;
+    U64 r = 0;
+    if (!InvokeArmedCaptureTool(world, 0x1D88A0, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh) return r;
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "отправка чужой строительной техники")) return r;
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "отправка чужой строительной техники"))
+            return r;
         RouteMsg m;
-        memset(&m, 0, sizeof(m));
-        m.kind = ROUTE_VEHICLE_SEND_CONSTR;
-        m.origin = g_origin;
-        m.index = *(int*)(world + 0xD2A8);
-        m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
+        InitRouteMsg(m, ROUTE_VEHICLE_SEND_CONSTR, *(int*)(world + 0xD2A8));
         if (!Ref_Vehicle(srcVeh, m.object) || !Ref_Building(g_depot, m.building)) {
             Refused(KindText(ROUTE_VEHICLE_SEND_CONSTR), "the vehicle or building");
             return r;

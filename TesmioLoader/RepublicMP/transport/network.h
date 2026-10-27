@@ -8,6 +8,7 @@
 #include "tesmio_plugin.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <string.h>
 
 void Network_Bind(const TsmHost* host);
 bool NetworkInit();
@@ -47,3 +48,31 @@ void NetworkShutdownSocket(SOCKET sock);
 void NetworkCloseSocket(SOCKET sock);
 void NetworkGetPeerName(SOCKET sock, char* out, size_t outSize);
 
+// Shared channel worker & socket activation helpers for BuildSync / RoadSync / TerrainSync.
+inline void NetworkActivateChannelSocket(SOCKET* dstSock, SOCKET sock,
+                                         volatile bool* connected, LPTHREAD_START_ROUTINE recvProc)
+{
+    *dstSock = sock;
+    DWORD sendTimeoutMs = 5000;
+    DWORD recvTimeoutMs = 0;
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs));
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvTimeoutMs, sizeof(recvTimeoutMs));
+    *connected = true;
+    CreateThread(nullptr, 0, recvProc, nullptr, 0, nullptr);
+}
+
+inline void NetworkLaunchChannelWorker(bool isHostRole, const char* hostIp,
+                                       char* targetIpBuf, size_t targetIpCap,
+                                       volatile bool* connected, volatile bool* connecting,
+                                       volatile bool* isHostOut, volatile bool* cancelConnect,
+                                       LPTHREAD_START_ROUTINE workerProc)
+{
+    if (*connected || *connecting) return;
+    if (!isHostRole && hostIp && hostIp[0] && targetIpBuf && targetIpCap > 0) {
+        strncpy_s(targetIpBuf, targetIpCap, hostIp, _TRUNCATE);
+    }
+    *isHostOut = isHostRole;
+    *cancelConnect = false;
+    *connecting = true;
+    CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
+}

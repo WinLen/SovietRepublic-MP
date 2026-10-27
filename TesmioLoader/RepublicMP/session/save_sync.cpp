@@ -3,6 +3,8 @@
 #include "save_sync.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
 #include "game_speed.h"
 #include "sync_check.h"
 #include "two_states.h"
@@ -56,8 +58,10 @@ void SaveSync_Bind(const TsmHost* host)
 
 static volatile SessionState g_state = SESSION_IDLE;
 static volatile bool g_isHost = false;
+static volatile bool g_hadPartnerInSession = false;
 static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
 static char g_peerIp[64] = "";
+static char g_lastPartnerPeer[64] = "";
 static char g_lastError[256] = "";
 
 // Set by SaveSync_RequestDisconnect; reset at the start of every session.
@@ -125,6 +129,13 @@ static void SetPeerIp(const char* ip)
 {
     EnterCriticalSection(&g_lock);
     strncpy_s(g_peerIp, ip ? ip : "", _TRUNCATE);
+    LeaveCriticalSection(&g_lock);
+}
+
+static void SetLastPartnerPeer(const char* peer)
+{
+    EnterCriticalSection(&g_lock);
+    strncpy_s(g_lastPartnerPeer, peer ? peer : "", _TRUNCATE);
     LeaveCriticalSection(&g_lock);
 }
 
@@ -917,7 +928,11 @@ static bool RunHostJoin(SOCKET sock)
                                       mine.stateRub, mine.stateUsd);
             TriggerLoadSave(liveSaveName);
             if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
-                if (!g_disconnectRequested) SetSessionError(Tr("Не удалось загрузить общий мир", "loading the shared world failed"));
+                if (!g_disconnectRequested) {
+                    SetSessionError(Tr("Не удалось загрузить общий мир", "loading the shared world failed"));
+                    SetState(SESSION_HOST_LISTENING);
+                    EnsureGamePaused();
+                }
                 TwoStates_OnSessionEnded();
                 ResetChannels();
                 break;
@@ -955,9 +970,13 @@ static bool RunHostJoin(SOCKET sock)
             }
         }
         if (!ready) {
+            if (!g_disconnectRequested) {
+                SetState(SESSION_HOST_LISTENING);
+                EnsureGamePaused();
+            }
             if (g_lockstep) {
-                TwoStates_OnSessionEnded();
                 ResetChannels();
+                ModSync_EndSession();
             }
             break;
         }
@@ -966,9 +985,13 @@ static bool RunHostJoin(SOCKET sock)
         if (g_lockstep) {
             HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
             if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
-                if (!g_disconnectRequested) SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
-                TwoStates_OnSessionEnded();
+                if (!g_disconnectRequested) {
+                    SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+                    SetState(SESSION_HOST_LISTENING);
+                    EnsureGamePaused();
+                }
                 ResetChannels();
+                ModSync_EndSession();
                 break;
             }
             joined = true;
@@ -979,7 +1002,11 @@ static bool RunHostJoin(SOCKET sock)
         HostStep(sock, 7, "Starting live sync");
         StartChannelsHost();
         if (!WaitForChannels(false)) {
-            if (!g_disconnectRequested) SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
+            if (!g_disconnectRequested) {
+                SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
+                SetState(SESSION_HOST_LISTENING);
+                EnsureGamePaused();
+            }
             ResetChannels();
             break;
         }
@@ -995,10 +1022,13 @@ static bool RunHostJoin(SOCKET sock)
 
     g_activeSock = INVALID_SOCKET;
     NetworkCloseSocket(sock);
+    if (!joined && !g_disconnectRequested) {
+        SetState(SESSION_HOST_LISTENING);
+        EnsureGamePaused();
+    }
     SyncBlock_SetActive(false, nullptr);
-    // A joined player starts paused on both sides - either player resumes
-    // when both are ready (issue #18); the speed sync carries it over.
-    if (!joined) EnsureGameUnpaused();
+    // Keep Host paused while waiting in the Co-op Lobby; only unpause if hosting was stopped.
+    if (!joined && g_disconnectRequested) EnsureGameUnpaused();
     return joined;
 }
 
@@ -1012,6 +1042,7 @@ static void RunHostSession()
     bool rejoin = false; // a re-sync: the player is expected back right away
     while (!g_disconnectRequested) {
         SetState(SESSION_HOST_LISTENING);
+        EnsureGamePaused();
         SteamP2P_SetHostingPresence(!rejoin);
         if (!rejoin) {
             SetPeerIp("");
@@ -1057,23 +1088,38 @@ static void RunHostSession()
         g_lastWorldSentTick = GetTickCount64();
         g_resyncRequested = false; // one asked for during the join is already done
 
+        g_hadPartnerInSession = true;
+        SetLastPartnerPeer(peer);
         SetState(SESSION_HOST_IN_GAME);
         SaveStatus("[HOST] %s is in the game - live sync running, paused until either player resumes", peer);
         const char* why = MonitorLiveSession(false);
-        ResetChannels();
-        if (!why) break; // Stop hosting
+        if (!why || g_disconnectRequested) {
+            ResetChannels();
+            break; // Stop hosting
+        }
         if (why == kResyncReason) {
+            SetState(SESSION_HOST_LISTENING);
+            EnsureGamePaused();
+            ResetChannels();
             rejoin = true;
             SaveStatus("[HOST] re-syncing - waiting for %s to reconnect", peer);
             continue;
         }
-        TwoStates_OnSessionEnded();
-        SetSessionError("%s left: %s", peer, why);
+        // Partner disconnected/crashed: transition straight to SESSION_HOST_LISTENING and pause
+        // BEFORE tearing down Determinism so no unpaused simulation tick can occur.
+        SetState(SESSION_HOST_LISTENING);
+        EnsureGamePaused();
+        ResetChannels();
+        ModSync_EndSession();
+        SetSessionError(Tr("Связь с %s прервана (%s) — игра на паузе, ждём переподключения",
+                           "%s disconnected (%s) - game paused, waiting for reconnect"), peer, why);
         SaveStatus("[HOST] %s left (%s) - waiting for a player again", peer, why);
     }
 
     SteamP2P_SetHostingPresence(false);
     TwoStates_OnSessionEnded();
+    g_hadPartnerInSession = false;
+    SetLastPartnerPeer("");
     ResetChannels();
     SetPeerIp("");
     SaveStatus("[HOST] stopped hosting");
@@ -1397,25 +1443,33 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 
 bool SaveSync_IsWorldLoaded()
 {
+    bool loaded = false;
+    DiagLog_BeginSafeSeh();
     __try {
-        return *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0 &&
-               *(volatile char*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) == 0;
+        loaded = *(__int64*)((uintptr_t)g_exe + WORLD_ROAD_NETWORK_RVA) != 0 &&
+                 *(volatile char*)((uintptr_t)g_exe + LOAD_TRIGGER_DAT_RVA) == 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        loaded = false;
     }
+    DiagLog_EndSafeSeh();
+    return loaded;
 }
 
 static bool SafeGetCurrentWorldSaveRel(char* outRel, size_t outSize)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         const char* curRel = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
         if (curRel && _strnicmp(curRel, "save/", 5) == 0 && curRel[5]) {
             strncpy_s(outRel, outSize, curRel, _TRUNCATE);
-            return true;
+            ok = true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
     }
-    return false;
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 void SaveSync_StartHost()
@@ -1451,11 +1505,15 @@ void SaveSync_StartHost()
     }
     g_disconnectRequested = false;
     g_isHost = true;
+    g_hadPartnerInSession = false;
+    SetLastPartnerPeer("");
     g_resyncRequested = false;
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_HOST_LISTENING);
+    SaveSync_EnforceWaitingLobbyHold();
+    TwoStates_CaptureLobbyBaseMoney();
     double initRub[2] = {}, initUsd[2] = {};
     TwoStates_PrepareHostSave(false, initRub, initUsd);
     TwoStates_OnSessionJoined(true, TwoStates_GetMode(), TwoStates_GetBorderHalfWidth(), TwoStates_GetExpandBorders(),
@@ -1474,6 +1532,8 @@ void SaveSync_StartClient(const char* hostIp)
         TwoStates_SaveSettings();
     }
     g_isHost = false;
+    g_hadPartnerInSession = false;
+    SetLastPartnerPeer("");
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
@@ -1573,6 +1633,9 @@ void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
     DiagLog_FrameTick();
+    if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
+        SaveSync_EnforceWaitingLobbyHold();
+    }
     if (g_state == SESSION_IDLE && (NativeMenu_GetActiveScreenId() != 0 || SaveSync_IsWorldLoaded())) {
         char steamJoinTarget[64] = {};
         if (SteamP2P_ConsumePendingJoin(steamJoinTarget, sizeof(steamJoinTarget))) {
@@ -1597,6 +1660,95 @@ bool SaveSync_IsHostRole()       { return g_isHost; }
 ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }
 bool SaveSync_IsHostAwaitingClient() { return g_state == SESSION_HOST_LISTENING; }
 const char* SaveSync_GetTargetIp() { return g_targetIp; }
+
+bool SaveSync_ShouldBlockWorldEdits(int sessionState, bool inGameplay, bool syncBlockActive)
+{
+    if (!inGameplay) return false;
+    if (syncBlockActive) return true;
+    return sessionState == SESSION_HOST_LISTENING ||
+           sessionState == SESSION_HOST_JOINING ||
+           sessionState == SESSION_CLIENT_JOINING;
+}
+
+bool SaveSync_IsWaitingLobbyActive()
+{
+    return SaveSync_ShouldBlockWorldEdits((int)g_state, SaveSync_IsWorldLoaded(), SyncBlock_IsActive());
+}
+
+bool SaveSync_IsWaitingForReconnect()
+{
+    return g_state == SESSION_HOST_LISTENING && g_hadPartnerInSession;
+}
+
+bool SaveSync_HadPartnerInSession()
+{
+    return g_hadPartnerInSession;
+}
+
+const char* SaveSync_GetLastPartnerPeer()
+{
+    return g_lastPartnerPeer;
+}
+
+void SaveSync_EnforceWaitingLobbyHold(unsigned char* exeBase)
+{
+    unsigned char* base = exeBase ? exeBase : (unsigned char*)g_exe;
+    if (!base) return;
+
+    // 1. Force game speed = 0 (paused), preserving any positive speed in GAME_SPEED_SAVED_OFFSET (+0x5A8),
+    //    and force turbo = 0, hold = 0, timer paused byte (+12) = 1, and raw LMB bytes (0xA54E90/0xA54E91) = 0.
+    int curSpeed = 0;
+    if (SafeReadPod<int>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_OFFSET, &curSpeed) && curSpeed != 0) {
+        if (curSpeed > 0) {
+            SafeWritePod<int>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_SAVED_OFFSET, curSpeed);
+        }
+        SafeWritePod<int>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_OFFSET, 0);
+    }
+    SafeWritePod<int>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_TURBO_OFFSET, 0);
+    SafeWritePod<unsigned char>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_HOLD_OFFSET, 0);
+    SafeWritePod<unsigned char>(base + 0x9D4EE0 + 12, 1);
+    SafeWritePod<unsigned char>(base + 0xA54E90, 0);
+    SafeWritePod<unsigned char>(base + 0xA54E91, 0);
+
+    // 2. Deselect any active building/terrain/demolish/road tool and cancel active drag
+    uintptr_t activeTool = 0;
+    unsigned char dragActive = 0;
+    SafeReadPod<uintptr_t>(base + WORLD_RVA + WORLD_SELECTED_TOOL_PTR_OFF, &activeTool);
+    SafeReadPod<unsigned char>(base + WORLD_RVA + TOOL_DRAG_ACTIVE_OFFSET, &dragActive);
+    if (activeTool != 0 || dragActive != 0) {
+        SafeWritePod<uintptr_t>(base + WORLD_RVA + WORLD_SELECTED_TOOL_PTR_OFF, 0);
+        SafeWritePod<unsigned char>(base + WORLD_RVA + TOOL_DRAG_ACTIVE_OFFSET, 0);
+        if (base == (unsigned char*)g_exe) {
+            RoadSync_CancelLocalDrag();
+            for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; ++c) {
+                RoadSync_ClearCategoryPreview(c);
+            }
+        }
+    }
+}
+
+void SaveSync_NotifyWaitingLobbyActionBlocked()
+{
+    static ULONGLONG s_lastNotifyMs = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - s_lastNotifyMs < 1800) return;
+    s_lastNotifyMs = now;
+
+    if (SaveSync_IsWaitingForReconnect()) {
+        TwoStates_AddToast(Tr("⏸ Связь с партнёром потеряна — строительство и рытьё на паузе до переподключения",
+                              "⏸ Partner disconnected — building and terrain tools are locked until reconnect"), 2);
+    } else {
+        TwoStates_AddToast(Tr("⏸ Ожидание второго игрока — строительство, снос и рытьё временно заблокированы",
+                              "⏸ Waiting for Player 2 — building, demolition and terrain tools are locked"), 2);
+    }
+}
+
+void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession, const char* lastPartnerPeer)
+{
+    g_state = state;
+    g_hadPartnerInSession = hadPartnerInSession;
+    SetLastPartnerPeer(lastPartnerPeer ? lastPartnerPeer : "");
+}
 
 // The returned buffers are only ever rewritten whole by the session thread;
 // the UI reads them once per frame.

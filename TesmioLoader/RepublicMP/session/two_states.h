@@ -14,10 +14,17 @@
 #pragma once
 
 #include "tesmio_plugin.h"
+#include "../core/engine_rva.h"
 
 enum CoopStateMode {
     COOP_MODE_ONE_STATE = 0,
     COOP_MODE_TWO_STATES = 1,
+};
+
+enum LsLoanOp {
+    LOAN_OP_BORROW        = 1,
+    LOAN_OP_REPAY_PARTIAL = 2,
+    LOAN_OP_REPAY_FULL    = 3,
 };
 
 #pragma pack(push, 1)
@@ -27,7 +34,18 @@ struct LsStateTransfer {
     double rubles;
     double dollars;
 };
+
+struct LsLoanCommand {
+    int32_t    op;           // LsLoanOp: 1 = borrow, 2 = partial repay, 3 = full repay
+    int32_t    ownerSubType; // 0 = State 1 (West SSR), 1 = State 2 (East SSR)
+    int32_t    ownerLoanOrd; // 0..M-1 index among ownerSubType's loans (for repay)
+    SovietLoan loan;         // 40-byte loan record (new loan on borrow, updated/repaid loan on repay)
+    double     dRub;         // treasury delta in RUB (+amount on borrow, -repay on repay)
+    double     dUsd;         // treasury delta in USD (+amount on borrow, -repay on repay)
+    float      dStats[4];    // delta of world + 0x11718..0x11724 ($Loan_Ballance_USD, $Loan_Interest_USD, $Loan_Ballance_RUB, $Loan_Interest_RUB)
+};
 #pragma pack(pop)
+static_assert(sizeof(LsLoanCommand) == 84, "LsLoanCommand wire size must be 84 bytes");
 
 void TwoStates_Bind(const TsmHost* host);
 bool TwoStates_Install();
@@ -50,7 +68,10 @@ int TwoStates_LocalState();
 const char* TwoStates_StateName(int state);
 
 // Session lifecycle (called by save_sync and determinism load hook).
+void TwoStates_CaptureLobbyBaseMoney();
 void TwoStates_PrepareHostSave(bool isResync, double* outRub, double* outUsd);
+void TwoStates_ReapplyWaitingLobbySettings();
+bool TwoStates_IsLoadedFromCoopSave();
 void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, bool expandBorders,
                                const double stateRub[2], const double stateUsd[2]);
 void TwoStates_OnWorldLoaded();
@@ -69,6 +90,8 @@ void TwoStates_BeginCommand(int ownerState);
 void TwoStates_EndCommand(int ownerState);
 bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t);
 void TwoStates_RequestTransfer(double rubles, double dollars);
+bool TwoStates_ApplyLoanCommand(const LsLoanCommand& cmd);
+void TwoStates_GetLoanDebt(int state, double* outRubDebt, double* outUsdDebt, int* outLoanCount = nullptr);
 
 //   - Around simulation step (HookedSimStep .. Determinism_AfterLate)
 void TwoStates_BeforeStep(BYTE* world);
@@ -146,6 +169,8 @@ bool   TwoStates_IsSafeSaveScriptPath(const char* saveDir);
 double TwoStates_ComputeStepWeightState1(int countState1, int countState2);
 bool   TwoStates_WriteSaveMetaToDir(const char* fullSaveDir);
 bool   TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAndMode);
+float  TwoStates_CalcMaxAvailableBorrow(BYTE* world, int loanType, int state);
+void   TwoStates_StepOneLoanDayForTest(BYTE* world, SovietLoan* loan);
 
 
 

@@ -4,6 +4,8 @@
 #include "brush_tools.h"
 #include "commands.h"
 #include "../session/two_states.h"
+#include "../session/save_sync.h"
+#include "../ui/native_menu.h"
 #include <limits.h>
 #include <string.h>
 
@@ -197,6 +199,10 @@ typedef void (*PaintGroundFn)(U64 terrainPaint, U64 a2, const float* pos, float 
 
 static void RelayDemolishTreesGround(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5)
 {
+    if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return;
+    }
     if (!Commands_TakeLocal()) {
         ((ClearTreesFn)(g_exeBase + CLEAR_TREES_RVA))(world, pos, radius, a4, a5);
         return;
@@ -215,6 +221,9 @@ static void RelayDemolishTreesGround(U64 world, const float* pos, float radius, 
 
 static void RelayDemolishPaintGround(U64 terrainPaint, U64 a2, const float* pos, float radius, float a5, unsigned char a6)
 {
+    if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
+        return;
+    }
     if (!Commands_TakeLocal()) {
         ((PaintGroundFn)(g_exeBase + PAINT_GROUND_RVA))(terrainPaint, a2, pos, radius, a5, a6);
     }
@@ -418,6 +427,18 @@ static U64 Run(int kind, U64 world, U64 a2)
     BYTE* press = g_exeBase + PRESS_RVA;
     bool menus = w[kMenus[0]] || w[kMenus[1]] || w[kMenus[2]];
     bool acting = *down || (kind == TREE_KIND && *press);
+    if (acting && !menus &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        g_stroke.active = false;
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        BYTE keptDown = *down, keptPress = *press;
+        *down = 0;
+        *press = 0;
+        U64 r = tool(world, a2);
+        *down = keptDown;
+        *press = keptPress;
+        return r;
+    }
     if (!acting || menus || !Commands_TakeLocal() || !BrushTools_Ready(kind)) {
         if (!acting) g_stroke.active = false; // the stroke ends with the button
         return tool(world, a2);

@@ -11,7 +11,10 @@
 #include "../replay_menus.h"
 #include "../../determinism/determinism.h"
 #include "../../session/two_states.h"
+#include "../../session/save_sync.h"
+#include "../../ui/native_menu.h"
 #include "../../core/engine_rva.h"
+#include "../../core/safe_mem.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #include <vector>
@@ -66,10 +69,7 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0  // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8     // that port's index
 
-// thisPtr fields used by the tool wrappers.
-#define TOOL_GUARD1_OFFSET 0xfbc          // any nonzero -> wrappers do nothing (blocking UI)
-#define TOOL_GUARD2_OFFSET 0xfbe
-#define TOOL_GUARD3_OFFSET 0xfc3
+// thisPtr fields used by the tool wrappers (TOOL_GUARD1/2/3_OFFSET in engine_rva.h).
 #define CONTINUING_Y_OFFSET_OFFSET 0xf90  // added to cursor Y on drag ticks
 #define SNAP_TARGET_PTR_OFFSET 0xf6d8     // drag-start snap target
 #define SNAP_MODE_A_OFFSET 0xf658
@@ -229,14 +229,10 @@ void RoadSync_Bind(const TsmHost* host)
 // Logs to the file log and to the Debug window.
 static void RoadSyncStatus(const char* fmt, ...)
 {
-    char body[512];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
+    DebugLog_FormatStatus(Logf, "ROAD_SYNC", fmt, ap);
     va_end(ap);
-
-    Logf("republicmp  ROAD_SYNC: %s", body);
-    DebugLog_Add(body);
 }
 
 static __int64 GetWorldThisPtr()
@@ -246,13 +242,7 @@ static __int64 GetWorldThisPtr()
 
 static bool IsWorldLoaded()
 {
-    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-    __try {
-        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeIsWorldLoaded(g_exeBase);
 }
 
 bool RoadSync_IsApplyingSegment()
@@ -264,13 +254,7 @@ bool RoadSync_IsApplyingSegment()
 // open); the wrappers silently do nothing then, so applying must wait.
 static bool ToolWrapperGuardBusy(__int64 thisPtr)
 {
-    __try {
-        return *(unsigned char*)(thisPtr + TOOL_GUARD1_OFFSET) ||
-               *(unsigned char*)(thisPtr + TOOL_GUARD2_OFFSET) ||
-               *(unsigned char*)(thisPtr + TOOL_GUARD3_OFFSET);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeIsToolGuardBusy((uintptr_t)thisPtr);
 }
 
 // Clears the local mouse-hover globals so a replay never snaps to whatever
@@ -2002,15 +1986,7 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
 
 static void StartConnection(SOCKET sock)
 {
-    g_sock = sock;
-
-    DWORD sendTimeoutMs = 5000;
-    DWORD recvTimeoutMs = 0;
-    setsockopt(g_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs));
-    setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvTimeoutMs, sizeof(recvTimeoutMs));
-
-    g_connected = true;
-    CreateThread(nullptr, 0, ReceiveLoopThread, nullptr, 0, nullptr);
+    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread);
     RoadSyncStatus("[ROAD_SYNC] connection established");
 }
 
@@ -2066,23 +2042,16 @@ static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
 
 void RoadSync_StartHost()
 {
-    if (g_connected || g_connecting) return;
-    g_isHost = true;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               HostAcceptWorkerThread);
 }
 
 void RoadSync_StartClient(const char* hostIp)
 {
-    if (g_connected || g_connecting) return;
-    if (hostIp && hostIp[0]) {
-        strncpy_s(g_targetIp, hostIp, _TRUNCATE);
-    }
-    g_isHost = false;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               ClientConnectWorkerThread);
 }
 
 void RoadSync_Reset()
@@ -2195,19 +2164,26 @@ static int SendOrQueue(RoadSyncItem& item)
     return g_connected ? g_nextSeq : -1;
 }
 
-int RoadSync_SendSegment(const RoadSyncSegment& seg)
+template <typename PayloadT, typename AssignFn>
+static int SendRoadWirePayload(int count, int minCount, int maxCount, const char* what, int wireTag,
+                               const PayloadT& payload, AssignFn assignFn)
 {
-    if (seg.pointCount < 0 || seg.pointCount > ROAD_SYNC_MAX_POINTS) {
-        Logf("republicmp  ROAD_SYNC: refusing to send segment, pointCount=%d", seg.pointCount);
+    if (count < minCount || count > maxCount) {
+        Logf("republicmp  ROAD_SYNC: refusing to send %s, count=%d", what, count);
         return -1;
     }
     static RoadSyncItem s_item; // large - game thread only
     memset(&s_item, 0, sizeof(s_item));
-    s_item.tag = ROAD_SYNC_WIRE_SEGMENT;
-    s_item.seg.seg = seg;
-    s_item.seg.terrainFence = TerrainSync_GetFenceSeq();
-    s_item.seg.mode = BuildMode_Read();
+    s_item.tag = wireTag;
+    assignFn(s_item, payload);
     return SendOrQueue(s_item);
+}
+
+int RoadSync_SendSegment(const RoadSyncSegment& seg)
+{
+    return SendRoadWirePayload<RoadSyncSegment>(
+        seg.pointCount, 0, ROAD_SYNC_MAX_POINTS, "segment", ROAD_SYNC_WIRE_SEGMENT, seg,
+        [](RoadSyncItem& item, const RoadSyncSegment& s) { item.seg.seg = s; item.seg.terrainFence = TerrainSync_GetFenceSeq(); item.seg.mode = BuildMode_Read(); });
 }
 
 int RoadSync_SendDemolish(int category, const float cursor[3], const float* rangeA, const float* rangeB,
@@ -2236,17 +2212,9 @@ int RoadSync_SendDemolish(int category, const float cursor[3], const float* rang
 
 int RoadSync_SendUpgrade(const RoadSyncUpgradeMsg& up)
 {
-    if (up.pieceCount < 1 || up.pieceCount > ROAD_SYNC_MAX_UPGRADE_PIECES) {
-        Logf("republicmp  ROAD_SYNC: refusing to send upgrade, pieceCount=%d", up.pieceCount);
-        return -1;
-    }
-    static RoadSyncItem s_item;
-    memset(&s_item, 0, sizeof(s_item));
-    s_item.tag = ROAD_SYNC_WIRE_UPGRADE;
-    s_item.up = up;
-    s_item.up.terrainFence = TerrainSync_GetFenceSeq();
-    s_item.up.mode = BuildMode_Read();
-    return SendOrQueue(s_item);
+    return SendRoadWirePayload<RoadSyncUpgradeMsg>(
+        up.pieceCount, 1, ROAD_SYNC_MAX_UPGRADE_PIECES, "upgrade", ROAD_SYNC_WIRE_UPGRADE, up,
+        [](RoadSyncItem& item, const RoadSyncUpgradeMsg& u) { item.up = u; item.up.terrainFence = TerrainSync_GetFenceSeq(); item.up.mode = BuildMode_Read(); });
 }
 
 // ---------------------------------------------------------------------------
@@ -2642,6 +2610,11 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
                                unsigned char rubles, __int64 count, __int64 group)
 {
     PlanStartFn orig = exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return 0;
+    }
     // Lockstep: the button press becomes a command, made on every PC.
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
         (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
@@ -2704,6 +2677,11 @@ static __int64 g_lastBottomBarCancelNet = 0;
 
 static __int64 HookedBottomBarCancelSeg(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5)
 {
+    if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return 0;
+    }
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
         ULONGLONG now = GetTickCount64();
         if (g_lastBottomBarCancelNet != network || now - g_lastBottomBarCancelMs > 50) {
@@ -2769,22 +2747,29 @@ bool RoadSync_InstallPlanStartHooks()
     return a && b;
 }
 
-static void SendPlanCaptures()
+template <typename MsgT, size_t CapN, typename PackFn>
+static void FlushCapturedRoadQueue(MsgT (&queue)[CapN], int& count, int wireTag, PackFn packFn)
 {
-    RoadSyncPlanStartMsg captured[PLAN_CAPTURE_MAX];
+    MsgT captured[CapN];
     EnterCriticalSection(&g_queueLock);
-    int n = g_planCaptureCount;
-    memcpy(captured, g_planCaptures, sizeof(RoadSyncPlanStartMsg) * n);
-    g_planCaptureCount = 0;
+    int n = count;
+    if (n > (int)CapN) n = (int)CapN;
+    if (n > 0) memcpy(captured, queue, sizeof(MsgT) * (size_t)n);
+    count = 0;
     LeaveCriticalSection(&g_queueLock);
     for (int i = 0; i < n; i++) {
         static RoadSyncItem s_item; // large - game thread only
         memset(&s_item, 0, sizeof(s_item));
-        s_item.tag = ROAD_SYNC_WIRE_PLAN_START;
-        s_item.plan = captured[i];
-        s_item.plan.terrainFence = TerrainSync_GetFenceSeq();
+        s_item.tag = wireTag;
+        packFn(s_item, captured[i]);
         SendOrQueue(s_item);
     }
+}
+
+static void SendPlanCaptures()
+{
+    FlushCapturedRoadQueue(g_planCaptures, g_planCaptureCount, ROAD_SYNC_WIRE_PLAN_START,
+                           [](RoadSyncItem& item, const RoadSyncPlanStartMsg& m) { item.plan = m; item.plan.terrainFence = TerrainSync_GetFenceSeq(); });
 }
 
 static bool CallPlanStart(PlanStartFn fn, __int64 network, const RoadSyncPlanStartMsg& m)
@@ -2957,6 +2942,11 @@ static int CountPlannedPieces(__int64 world)
 
 static __int64 HookedGroupTool(__int64 world, int mode)
 {
+    if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        __try { *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return 0;
+    }
     // Lockstep: the commit frame becomes a command; this PC drops its drag
     // mark instead of committing, so the next frame does not commit again.
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
@@ -3025,6 +3015,11 @@ static void HandleCtrlRectTool(__int64 world, int mode, unsigned int rva)
 {
     typedef void (*RectToolFn)(__int64);
     RectToolFn orig = (RectToolFn)(g_exeBase + rva);
+    if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        __try { *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        return;
+    }
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
         GroupToolState s;
         bool commit = false;
@@ -3088,6 +3083,10 @@ void RoadSync_ShiftCancelTool(__int64 world)
 {
     typedef void (*ShiftCancelFn)(__int64);
     ShiftCancelFn orig = (ShiftCancelFn)(g_exeBase + SHIFT_CANCEL_PLAN_RVA);
+    if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        return;
+    }
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
         BYTE* w = (BYTE*)world;
         BYTE* press = g_exeBase + GROUP_TOOL_PRESS_RVA;
@@ -3133,20 +3132,8 @@ bool RoadSync_InstallGroupToolHook()
 
 static void SendGroupToolCaptures()
 {
-    RoadSyncGroupToolMsg captured[GROUP_CAPTURE_MAX];
-    EnterCriticalSection(&g_queueLock);
-    int n = g_groupCaptureCount;
-    memcpy(captured, g_groupCaptures, sizeof(RoadSyncGroupToolMsg) * n);
-    g_groupCaptureCount = 0;
-    LeaveCriticalSection(&g_queueLock);
-    for (int i = 0; i < n; i++) {
-        static RoadSyncItem s_item; // large - game thread only
-        memset(&s_item, 0, sizeof(s_item));
-        s_item.tag = ROAD_SYNC_WIRE_GROUP_TOOL;
-        s_item.group = captured[i];
-        s_item.group.terrainFence = TerrainSync_GetFenceSeq();
-        SendOrQueue(s_item);
-    }
+    FlushCapturedRoadQueue(g_groupCaptures, g_groupCaptureCount, ROAD_SYNC_WIRE_GROUP_TOOL,
+                           [](RoadSyncItem& item, const RoadSyncGroupToolMsg& m) { item.group = m; item.group.terrainFence = TerrainSync_GetFenceSeq(); });
 }
 
 static bool CallGroupTool(__int64 world, const RoadSyncGroupToolMsg& m)

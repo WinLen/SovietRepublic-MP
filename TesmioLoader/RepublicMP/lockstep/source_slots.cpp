@@ -4,6 +4,7 @@
 #include "source_slots.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include <algorithm>
 #include <string.h>
@@ -65,17 +66,6 @@ bool SourceSlots_Ready()
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
-static bool Copy(void* to, const void* from, size_t n)
-{
-    if (!n) return true;
-    __try {
-        memcpy(to, from, n);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
 struct Slots {
     U64 building;
     unsigned count;
@@ -88,25 +78,20 @@ static bool ReadSlots(U64 building, Slots& s)
     U64 v[2] = {};
     s.building = building;
     s.count = 0;
-    if (!building || !Copy(v, (const void*)(building + SLOTS_OFFSET), 16)) return false;
+    if (!building || !SafeMemcpyPod(v, (const void*)(building + SLOTS_OFFSET), 16)) return false;
     if (!v[0] && !v[1]) return true;
     if (!v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES || (v[1] - v[0]) / SLOT_BYTES > MAX_SLOTS) return false;
     s.count = (unsigned)((v[1] - v[0]) / SLOT_BYTES);
     for (unsigned i = 0; i < s.count; i++)
-        if (!Copy(&s.source[i], (const void*)(v[0] + (U64)i * SLOT_BYTES), 8)) return false;
+        if (!SafeMemcpyPod(&s.source[i], (const void*)(v[0] + (U64)i * SLOT_BYTES), 8)) return false;
     return true;
 }
 
 static bool WriteSlot(U64 building, unsigned slot, U64 source)
 {
     U64 v[2] = {};
-    if (!Copy(v, (const void*)(building + SLOTS_OFFSET), 16) || !v[0] || v[1] < v[0] || slot >= (v[1] - v[0]) / SLOT_BYTES) return false;
-    __try {
-        *(U64*)(v[0] + (U64)slot * SLOT_BYTES) = source;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    if (!SafeMemcpyPod(v, (const void*)(building + SLOTS_OFFSET), 16) || !v[0] || v[1] < v[0] || slot >= (v[1] - v[0]) / SLOT_BYTES) return false;
+    return SafeWritePod((void*)(v[0] + (U64)slot * SLOT_BYTES), source);
 }
 
 static bool GuardedRef(U64 building, RouteRef& r)
@@ -168,7 +153,7 @@ U64 SourceSlots_AddSourceTool(U64 world, U64 a2)
     if (!Commands_TakeLocal() || !SourceSlots_Ready()) return tool(world, a2);
     Slots before;
     U64 building = 0;
-    bool held = Copy(&building, (const void*)(world + WINDOW_BUILDING), 8) && building && ReadSlots(building, before);
+    bool held = SafeMemcpyPod(&building, (const void*)(world + WINDOW_BUILDING), 8) && building && ReadSlots(building, before);
     U64 r = tool(world, a2);
     if (held) Take(before, "the add-source tool");
     return r;
@@ -201,23 +186,23 @@ static void Shown()
 {
     U64 v[2] = {};
     std::vector<U64> buildings;
-    if (!Copy(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return;
+    if (!SafeMemcpyPod(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return;
     buildings.resize((size_t)((v[1] - v[0]) / 8));
-    if (buildings.empty() || !Copy(buildings.data(), (const void*)v[0], buildings.size() * 8)) return;
+    if (buildings.empty() || !SafeMemcpyPod(buildings.data(), (const void*)v[0], buildings.size() * 8)) return;
     std::sort(buildings.begin(), buildings.end());
     U64 building = 0;
-    if (Copy(&building, World() + WINDOW_BUILDING, 8)) Hold(building, buildings);
+    if (SafeMemcpyPod(&building, World() + WINDOW_BUILDING, 8)) Hold(building, buildings);
     U64 w[2] = {};
-    if (!Copy(w, g_exeBase + WINDOWS_RVA, 16) || !w[0] || w[1] < w[0] || (w[1] - w[0]) / 8 > MAX_WINDOWS) return;
+    if (!SafeMemcpyPod(w, g_exeBase + WINDOWS_RVA, 16) || !w[0] || w[1] < w[0] || (w[1] - w[0]) / 8 > MAX_WINDOWS) return;
     std::vector<U64> windows((size_t)((w[1] - w[0]) / 8));
-    if (windows.empty() || !Copy(windows.data(), (const void*)w[0], windows.size() * 8)) return;
+    if (windows.empty() || !SafeMemcpyPod(windows.data(), (const void*)w[0], windows.size() * 8)) return;
     for (U64 win : windows) {
         U64 object = 0, parent = 0;
         unsigned kind = 0;
-        if (!win || !Copy(&kind, (const void*)(win + WINDOW_KIND), 4) || !Copy(&object, (const void*)(win + WINDOW_OBJECT), 8)) continue;
+        if (!win || !SafeMemcpyPod(&kind, (const void*)(win + WINDOW_KIND), 4) || !SafeMemcpyPod(&object, (const void*)(win + WINDOW_OBJECT), 8)) continue;
         Hold(object, buildings);
-        if (kind == PICKER_WINDOW && Copy(&parent, (const void*)(win + WINDOW_PARENT), 8) && parent &&
-            Copy(&object, (const void*)(parent + WINDOW_OBJECT), 8))
+        if (kind == PICKER_WINDOW && SafeMemcpyPod(&parent, (const void*)(win + WINDOW_PARENT), 8) && parent &&
+            SafeMemcpyPod(&object, (const void*)(parent + WINDOW_OBJECT), 8))
             Hold(object, buildings);
     }
 }

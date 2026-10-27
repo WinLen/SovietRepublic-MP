@@ -651,8 +651,8 @@ static SOCKET MakeSteamSocket(int idx)
     return (SOCKET)(STEAM_SOCKET_TAG | (uint64_t)(idx & 0xFFFF));
 }
 
-static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
-                            uint32_t connId, const void* payload, uint32_t payloadLen)
+static bool SendFrameWithKindLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
+                                    uint32_t connId, const void* payload, uint32_t payloadLen, int sendType)
 {
     if (s_shuttingDown || !s_available || !s_pSteamNetworking) return false;
     if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
@@ -675,36 +675,20 @@ static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t
         remoteSteamId,
         packet.data(),
         (uint32_t)packet.size(),
-        k_EP2PSendReliable,
+        sendType,
         (int)port);
+}
+
+static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
+                            uint32_t connId, const void* payload, uint32_t payloadLen)
+{
+    return SendFrameWithKindLocked(remoteSteamId, port, type, connId, payload, payloadLen, k_EP2PSendReliable);
 }
 
 static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
                                       uint32_t connId, const void* payload, uint32_t payloadLen)
 {
-    if (s_shuttingDown || !s_available || !s_pSteamNetworking) return false;
-    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
-        s_shuttingDown = true;
-        s_available = false;
-        return false;
-    }
-    std::vector<uint8_t> packet(sizeof(P2PFrameHeader) + payloadLen);
-    P2PFrameHeader* hdr = (P2PFrameHeader*)packet.data();
-    hdr->magic = P2P_FRAME_MAGIC;
-    hdr->type = type;
-    hdr->port = port;
-    hdr->connId = connId;
-    hdr->payloadLen = payloadLen;
-    if (payloadLen > 0 && payload) {
-        memcpy(packet.data() + sizeof(P2PFrameHeader), payload, payloadLen);
-    }
-    return pISteamNetworking_SendP2PPacket(
-        s_pSteamNetworking,
-        remoteSteamId,
-        packet.data(),
-        (uint32_t)packet.size(),
-        k_EP2PSendUnreliableNoDelay,
-        (int)port);
+    return SendFrameWithKindLocked(remoteSteamId, port, type, connId, payload, payloadLen, k_EP2PSendUnreliableNoDelay);
 }
 
 static void PumpChannelLocked(int channel)

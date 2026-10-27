@@ -148,7 +148,7 @@ if not exist build\tesmioloader.ini (
             echo save_manifest = 0
             echo version_check = 1
             echo menu_patch = 1
-            echo menu_tag = tesmioloader v. b0.3.6
+            echo menu_tag = RepublicMP Co-op
             echo.
             echo [plugins]
             echo RepublicMP = 1

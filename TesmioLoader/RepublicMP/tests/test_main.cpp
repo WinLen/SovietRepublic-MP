@@ -31,6 +31,7 @@
 #include "../session/save_sync.h"
 #include "../session/mod_sync.h"
 #include "../save/save_zip.h"
+#include "../ui/sync_block.h"
 #include "../world_sync/networks/road_sync.h"
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
@@ -192,6 +193,25 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(MGR_ROUTE_BEGIN_OFFSET == 0x410);
     TEST_CHECK(HEADER_BIN_DATA_OFFSET == 0x260);
     TEST_CHECK(HEADER_BIN_RECORD_SIZE == 0x80);
+    TEST_CHECK(WORLD_WORK_RESOURCE_PTR_OFF == 0xC2C8);
+    TEST_CHECK(WORLD_ECON_TAB_OFFSET == 0xC65C);
+    TEST_CHECK(WORLD_LOANS_OFFSET == 0x10BD0);
+    TEST_CHECK(WORLD_LOAN_SELECTED_OFFSET == 0x10BE8);
+    TEST_CHECK(WORLD_LOAN_REPAY_AMOUNT_OFF == 0x10C08);
+    TEST_CHECK(WORLD_LOAN_STATS_OFFSET == 0x11718);
+    TEST_CHECK(RVA_VEC_LOAN_PUSH_BACK == 0x448AA0);
+    TEST_CHECK(RVA_TAKE_LOAN == 0x4B9140);
+    TEST_CHECK(RVA_GET_MAX_AVAILABLE_BORROW == 0x4B9380);
+    TEST_CHECK(RVA_STEP_ONE_LOAN_DAY == 0x4B9490);
+    TEST_CHECK(RVA_STEP_ALL_LOANS_DAILY == 0x4B9660);
+    TEST_CHECK(RVA_CALC_INTEREST_RATE == 0x4B9A80);
+    TEST_CHECK(sizeof(SovietLoan) == 0x28);
+    TEST_CHECK(offsetof(SovietLoan, yearInterestRate) == 0x00);
+    TEST_CHECK(offsetof(SovietLoan, loanSubType) == 0x0C);
+    TEST_CHECK(offsetof(SovietLoan, remainingPrincipal) == 0x14);
+    TEST_CHECK(offsetof(SovietLoan, unpaidPenaltyBalance) == 0x18);
+    TEST_CHECK(offsetof(SovietLoan, totalPaidSoFar) == 0x24);
+    TEST_CHECK(sizeof(LsLoanCommand) == 84);
 
     // SafeReadPod / SafeWritePod on valid memory
     uint64_t val = 0;
@@ -256,6 +276,36 @@ static bool Test_RvaAndSafeMem()
     }
     for (auto& th : threads) th.join();
     TEST_CHECK(sharedCounter == 8000);
+
+    // SafeBytesMatch & TsmCheckRoutineTable tests
+    const unsigned char pattern[4] = { 0x48, 0x89, 0x5C, 0x24 };
+    memcpy(g_mockExeBuffer + 0x12340, pattern, 4);
+    TEST_CHECK(SafeBytesMatch(g_mockExeBuffer + 0x12340, pattern, 4));
+    TEST_CHECK(!SafeBytesMatch(g_mockExeBuffer + 0x12341, pattern, 4));
+    TEST_CHECK(!SafeBytesMatch(nullptr, pattern, 4));
+
+    const TsmRoutineSig sigs[1] = { { 0x12340, { 0x48, 0x89, 0x5C, 0x24 }, 4 } };
+    int sigCache = -1;
+    unsigned badRva = 0;
+    TEST_CHECK(TsmCheckRoutineTable(g_mockExeBuffer, &sigCache, sigs, 1, &badRva));
+    TEST_CHECK(sigCache == 1 && badRva == 0);
+    g_mockExeBuffer[0x12340] = 0x90;
+    sigCache = -1;
+    TEST_CHECK(!TsmCheckRoutineTable(g_mockExeBuffer, &sigCache, sigs, 1, &badRva));
+    TEST_CHECK(sigCache == 0 && badRva == 0x12340);
+
+    // SafeIsWorldLoaded & SafeIsToolGuardBusy tests
+    TEST_CHECK(!SafeIsWorldLoaded(g_mockExeBuffer));
+    std::vector<BYTE*> dummyBlds = { g_mockExeBuffer + 0x2000 };
+    WriteMockVectorHeader(g_mockExeBuffer + WORLD_RVA + WORLD_BUILDINGS_OFFSET, dummyBlds);
+    TEST_CHECK(SafeIsWorldLoaded(g_mockExeBuffer));
+
+    BYTE* worldPtr = g_mockExeBuffer + WORLD_RVA;
+    TEST_CHECK(!SafeIsToolGuardBusy((uintptr_t)worldPtr));
+    worldPtr[TOOL_GUARD2_OFFSET] = 1;
+    TEST_CHECK(SafeIsToolGuardBusy((uintptr_t)worldPtr));
+    worldPtr[TOOL_GUARD2_OFFSET] = 0;
+    TEST_CHECK(!SafeIsToolGuardBusy((uintptr_t)worldPtr));
 
     return true;
 }
@@ -336,6 +386,42 @@ static bool Test_WorldRefs()
     TEST_CHECK(Ref_Node((U64)nodeObj.data(), refN));
     TEST_CHECK(refN.list == 0xFA28 && refN.place == 0);
     TEST_CHECK(Ref_NodeAt(refN) == (U64)nodeObj.data());
+    TEST_CHECK(Ref_NodeCheck((U64)nodeObj.data()) == refN.check);
+
+    // Ref_SetStandInVector, Ref_IndexInVector, Ref_AtVectorIndex
+    BYTE standIn[24] = {};
+    U64 ptrArray[3] = { 0x1001, 0x1002, 0x1003 };
+    Ref_SetStandInVector(standIn, ptrArray, sizeof(ptrArray));
+    TEST_CHECK(Ref_IndexInVector((U64)standIn, 0x1002) == 1u);
+    TEST_CHECK(Ref_IndexInVector((U64)standIn, 0x9999) == 0xFFFFFFFFu);
+    TEST_CHECK(Ref_AtVectorIndex((U64)standIn, 2u) == 0x1003ULL);
+    TEST_CHECK(Ref_AtVectorIndex((U64)standIn, 3u) == 0ULL);
+
+    // Ref_DefPtr and Ref_DefPtrAt (Resource stride 0x340 and VehicleType stride 0x9F08)
+    std::vector<BYTE> fakeResources(WORLD_RESOURCE_STRIDE * 4, 0);
+    std::vector<BYTE> fakeVehTypes(WORLD_VEHICLE_TYPE_STRIDE * 3, 0);
+    *(U64*)(world + WORLD_RESOURCES_OFFSET)     = (U64)fakeResources.data();
+    *(U64*)(world + WORLD_RESOURCES_OFFSET + 8) = (U64)(fakeResources.data() + fakeResources.size());
+    *(U64*)(world + WORLD_VEHICLE_TYPES_OFFSET)     = (U64)fakeVehTypes.data();
+    *(U64*)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = (U64)(fakeVehTypes.data() + fakeVehTypes.size());
+
+    unsigned char defTag = 99;
+    unsigned defIdx = 99;
+    U64 resolvedDef = 123;
+    TEST_CHECK(Ref_DefPtr(0, defTag, defIdx) && defTag == 0 && defIdx == 0);
+    TEST_CHECK(Ref_DefPtrAt(0, 0, resolvedDef) && resolvedDef == 0);
+
+    U64 res2Ptr = (U64)(fakeResources.data() + 2 * WORLD_RESOURCE_STRIDE);
+    TEST_CHECK(Ref_DefPtr(res2Ptr, defTag, defIdx) && defTag == 1 && defIdx == 2u);
+    TEST_CHECK(Ref_DefPtrAt(defTag, defIdx, resolvedDef) && resolvedDef == res2Ptr);
+
+    U64 vt1Ptr = (U64)(fakeVehTypes.data() + 1 * WORLD_VEHICLE_TYPE_STRIDE);
+    TEST_CHECK(Ref_DefPtr(vt1Ptr, defTag, defIdx) && defTag == 2 && defIdx == 1u);
+    TEST_CHECK(Ref_DefPtrAt(defTag, defIdx, resolvedDef) && resolvedDef == vt1Ptr);
+
+    // Unaligned pointer inside Resource table and out-of-bounds index must fail
+    TEST_CHECK(!Ref_DefPtr(res2Ptr + 4, defTag, defIdx));
+    TEST_CHECK(!Ref_DefPtrAt(1, 10, resolvedDef));
 
     return true;
 }
@@ -897,6 +983,511 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
 }
 
 // ---------------------------------------------------------------------------
+// Test 8: Waiting Lobby Hold, Action Lock, Map Inspect & Idempotent Settings
+// ---------------------------------------------------------------------------
+
+static bool Test_WaitingLobbyAndActionLock()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Pure state matrix for SaveSync_ShouldBlockWorldEdits(sessionState, inGameplay, syncBlockActive)
+    TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_IDLE, false, false));
+    TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_IDLE, true, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_IDLE, true, true));
+    TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_HOST_LISTENING, false, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_HOST_LISTENING, true, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_HOST_JOINING, true, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_JOINING, true, false));
+    TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_HOST_IN_GAME, true, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_HOST_IN_GAME, true, true));
+    TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_IN_GAME, true, false));
+    TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_IN_GAME, true, true));
+
+    // Mark mock world as loaded (WORLD_ROAD_NETWORK_RVA = 0x9E46B0 != 0 and LOAD_TRIGGER_DAT_RVA == 0)
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    TEST_CHECK(SaveSync_IsWorldLoaded());
+
+    // 2. Waiting Lobby & Reconnect state transitions
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TEST_CHECK(!SaveSync_IsWaitingLobbyActive());
+    TEST_CHECK(!SaveSync_IsWaitingForReconnect());
+
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(SaveSync_IsWaitingLobbyActive());
+    TEST_CHECK(!SaveSync_IsWaitingForReconnect());
+
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, true, "127.0.0.1:5556");
+    TEST_CHECK(SaveSync_IsWaitingLobbyActive());
+    TEST_CHECK(SaveSync_IsWaitingForReconnect());
+    TEST_CHECK(strcmp(SaveSync_GetLastPartnerPeer(), "127.0.0.1:5556") == 0);
+
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "127.0.0.1:5556");
+    TEST_CHECK(!SaveSync_IsWaitingLobbyActive());
+
+    // 3. SaveSync_EnforceWaitingLobbyHold enforces pause (speed=0, timer+12=1), preserves saved speed (+0x5A8), and clears active tool & drag
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    *(int*)(world + 0x5A4) = 2;                               // GAME_SPEED_OFFSET
+    *(int*)(world + 0x5A8) = 0;                               // GAME_SPEED_SAVED_OFFSET
+    *(int*)(world + 0x5AC) = 1;                               // GAME_SPEED_TURBO_OFFSET
+    *(unsigned char*)(world + 0x5A2) = 1;                     // GAME_SPEED_HOLD_OFFSET
+    *(unsigned char*)(g_mockExeBuffer + 0x9D4EE0 + 12) = 0;   // timer paused byte (0 = running)
+    *(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = (void*)0x12345678ULL;
+    *(unsigned char*)(world + 0xD2AC) = 1;                    // TOOL_DRAG_ACTIVE_OFFSET
+    *(unsigned char*)(g_mockExeBuffer + 0xA54E90) = 1;        // LMB_HELD_RVA
+    *(unsigned char*)(g_mockExeBuffer + 0xA54E91) = 1;        // LMB_JUST_PRESSED_RVA
+
+    SaveSync_EnforceWaitingLobbyHold();
+
+    TEST_CHECK(*(int*)(world + 0x5A4) == 0);
+    TEST_CHECK(*(int*)(world + 0x5A8) == 2); // saved speed preserved
+    TEST_CHECK(*(int*)(world + 0x5AC) == 0);
+    TEST_CHECK(*(unsigned char*)(world + 0x5A2) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0x9D4EE0 + 12) == 1);
+    TEST_CHECK(*(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == nullptr);
+    TEST_CHECK(*(unsigned char*)(world + 0xD2AC) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA54E90) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA54E91) == 0);
+
+    // 4. Map Inspection Mode ([Tab]) and automatic exit when partner begins joining
+    SyncBlock_SetActive(false, nullptr);
+    SyncBlock_SetMapInspectMode(false);
+    TEST_CHECK(!SyncBlock_IsMapInspectMode());
+    TEST_CHECK(SyncBlock_BlocksWorldInput());
+
+    SyncBlock_SetMapInspectMode(true);
+    TEST_CHECK(SyncBlock_IsMapInspectMode());
+    TEST_CHECK(!SyncBlock_BlocksWorldInput());
+
+    // Partner starts joining -> Map Inspection Mode must automatically exit and block input
+    TEST_CHECK(!SyncBlock_UpdateMapInspectState((int)SESSION_HOST_JOINING, true));
+    TEST_CHECK(!SyncBlock_IsMapInspectMode());
+
+    // 5. Idempotent Waiting Lobby Settings re-application (never doubles money on repeated toggles)
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
+    *(double*)(world + WORLD_RUB_OFFSET) = 1000000.0;
+    *(double*)(world + WORLD_USD_OFFSET) = 400000.0;
+    *(unsigned char*)(g_mockExeBuffer + TERRAIN_FLAG_DAT_RVA) = 1; // new map / non-coop save
+    TwoStates_OnAnyWorldLoaded(false);
+    TEST_CHECK(!TwoStates_IsLoadedFromCoopSave());
+
+    TwoStates_SetMode(COOP_MODE_TWO_STATES);
+    TwoStates_SetFullStartingCapital(true);
+    TwoStates_ReapplyWaitingLobbySettings();
+    TwoStates_ReapplyWaitingLobbySettings();
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 1000000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 1000000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 2000000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 800000.0, 1e-2);
+
+    // Toggle to 50/50 split -> each gets 500k RUB / 200k USD, world total returns to 1M RUB / 400k USD
+    TwoStates_SetFullStartingCapital(false);
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 500000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 500000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 1000000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 400000.0, 1e-2);
+
+    // Toggle back to One State -> world total stays 1M RUB / 400k USD
+    TwoStates_SetMode(COOP_MODE_ONE_STATE);
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 1000000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 400000.0, 1e-2);
+
+    // Stopping the server in the Waiting Lobby before any partner joins must restore the
+    // Singleplayer balance (never leaving it doubled from 100% starting capital):
+    TwoStates_SetMode(COOP_MODE_TWO_STATES);
+    TwoStates_SetFullStartingCapital(true);
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 2000000.0, 1e-2);
+    TEST_CHECK(!SaveSync_HadPartnerInSession());
+    TwoStates_OnSessionEnded();
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 1000000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 400000.0, 1e-2);
+
+    // Mid-game Singleplayer balance change before opening server: TwoStates_CaptureLobbyBaseMoney()
+    *(double*)(world + WORLD_RUB_OFFSET) = 650000.0;
+    *(double*)(world + WORLD_USD_OFFSET) = 210000.0;
+    TwoStates_CaptureLobbyBaseMoney();
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 650000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 650000.0, 1e-2);
+    TwoStates_OnSessionEnded();
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 650000.0, 1e-2);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 210000.0, 1e-2);
+
+    // 6. Existing Co-op save protection: TwoStates_OnSessionJoined(true, ...) must preserve
+    //    TwoStates_IsLoadedFromCoopSave() and never re-split or double loaded Co-op save balances.
+    std::filesystem::path coopSaveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_coop_lobby";
+    std::error_code ec;
+    std::filesystem::create_directories(coopSaveDir, ec);
+    TwoStates_SetMode(COOP_MODE_TWO_STATES);
+    double savedRub[2] = { 725000.0, 315000.0 };
+    double savedUsd[2] = { 180000.0, 95000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, true, savedRub, savedUsd);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(coopSaveDir.string().c_str()));
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(coopSaveDir.string().c_str(), true));
+    TEST_CHECK(TwoStates_IsLoadedFromCoopSave());
+
+    double prepRub[2] = {}, prepUsd[2] = {};
+    TwoStates_PrepareHostSave(false, prepRub, prepUsd);
+    TwoStates_OnSessionJoined(true, TwoStates_GetMode(), TwoStates_GetBorderHalfWidth(), TwoStates_GetExpandBorders(),
+                              prepRub, prepUsd);
+    TEST_CHECK(TwoStates_IsLoadedFromCoopSave());
+    TwoStates_SetFullStartingCapital(true);
+    TwoStates_ReapplyWaitingLobbySettings();
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 725000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 315000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 180000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 95000.0, 1e-2);
+
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    SyncBlock_SetActive(false, nullptr);
+    TwoStates_OnSessionEnded();
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: TwoStates Bank & Loan Subsystem (Ceiling, UI Filter, Lockstep & Daily Step)
+// ---------------------------------------------------------------------------
+
+static SovietLoan MakeTestLoan(int32_t loanType, int32_t subType, float principal, float penalty,
+                               int32_t daysRem, float ratePct)
+{
+    SovietLoan ln = {};
+    ln.initialPrincipal    = principal;
+    ln.remainingPrincipal  = principal;
+    ln.loanType            = loanType;
+    ln.loanSubType         = subType;
+    ln.daysRemaining       = daysRem;
+    ln.initialDays         = daysRem;
+    ln.unpaidPenaltyBalance = penalty;
+    ln.yearInterestRate    = ratePct;
+    return ln;
+}
+
+static bool TestLoans_MaxAvailableBorrow()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    double initRub[2] = { 1000000.0, 1000000.0 };
+    double initUsd[2] = { 500000.0,  500000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    // Work resource multipliers at world + 0xC2C8 -> +0x58 (USD = 1.5), +0x5C (RUB = 2.0)
+    std::vector<BYTE> workRes(0x80, 0);
+    *(float*)(workRes.data() + 0x58) = 1.5f;
+    *(float*)(workRes.data() + 0x5C) = 2.0f;
+    *(BYTE**)(world + WORLD_WORK_RESOURCE_PTR_OFF) = workRes.data();
+
+    // Create 1 West residential building (X = -1000) and 1 East residential building (X = +1000)
+    std::vector<BYTE> bldWest(0x100, 0), bldEast(0x100, 0);
+    *(int*)bldWest.data() = 10; *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -1000.0f;
+    *(int*)bldEast.data() = 20; *(float*)(bldEast.data() + OBJ_POS_OFFSET) =  1000.0f;
+
+    // 10,000 adult housed citizens in West (popRatio = 0.1) and 50,000 in East (popRatio = 0.5),
+    // plus 2,000 infants, 2,000 unborn, and 2,000 homeless citizens that must be excluded.
+    std::vector<BYTE> citAdultWest(0x800, 0), citAdultEast(0x800, 0);
+    std::vector<BYTE> citInfant(0x800, 0), citUnborn(0x800, 0), citHomeless(0x800, 0);
+    *(BYTE**)(citAdultWest.data() + CIT_HOME_BUILDING_OFFSET) = bldWest.data();
+    *(BYTE**)(citAdultEast.data() + CIT_HOME_BUILDING_OFFSET) = bldEast.data();
+    *(BYTE**)(citInfant.data()    + CIT_HOME_BUILDING_OFFSET) = bldWest.data();
+    *(int32_t*)(citInfant.data()  + CIT_INFANT_FLAG_OFFSET)   = 1;
+    *(BYTE**)(citUnborn.data()    + CIT_HOME_BUILDING_OFFSET) = bldEast.data();
+    *(int32_t*)(citUnborn.data()  + CIT_UNBORN_FLAG_OFFSET)   = 1;
+
+    std::vector<BYTE*> citVec;
+    citVec.reserve(66000);
+    for (int i = 0; i < 10000; ++i) citVec.push_back(citAdultWest.data());
+    for (int i = 0; i < 50000; ++i) citVec.push_back(citAdultEast.data());
+    for (int i = 0; i < 2000;  ++i) citVec.push_back(citInfant.data());
+    for (int i = 0; i < 2000;  ++i) citVec.push_back(citUnborn.data());
+    for (int i = 0; i < 2000;  ++i) citVec.push_back(citHomeless.data());
+    WriteMockVectorHeader(world + WORLD_CITIZENS_OFFSET, citVec);
+
+    // Existing RUB loans: West has 100k principal + 20k penalty = 120k; East has 300k principal
+    std::vector<SovietLoan> loans = {
+        MakeTestLoan(LOAN_CURRENCY_RUB, 0, 100000.0f, 20000.0f, 365, 3.5f),
+        MakeTestLoan(LOAN_CURRENCY_RUB, 1, 300000.0f,     0.0f, 365, 3.5f),
+        MakeTestLoan(LOAN_CURRENCY_USD, 1,  50000.0f,     0.0f, 365, 4.0f),
+    };
+    loans.reserve(8);
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loans);
+
+    // West RUB maxDebt = (200,000 + 2,000,000 * 0.1) * 2.0 = 800,000; minus 120,000 = 680,000
+    TEST_CHECK_NEAR(TwoStates_CalcMaxAvailableBorrow(world, LOAN_CURRENCY_RUB, 1), 680000.0f, 1.0f);
+    // East RUB maxDebt = (200,000 + 2,000,000 * 0.5) * 2.0 = 2,400,000; minus 300,000 = 2,100,000
+    TEST_CHECK_NEAR(TwoStates_CalcMaxAvailableBorrow(world, LOAN_CURRENCY_RUB, 2), 2100000.0f, 1.0f);
+    // East USD maxDebt = (200,000 + 2,000,000 * 0.5) * 1.5 = 1,800,000; minus 50,000 = 1,750,000
+    TEST_CHECK_NEAR(TwoStates_CalcMaxAvailableBorrow(world, LOAN_CURRENCY_USD, 2), 1750000.0f, 1.0f);
+
+    double dRub1 = 0.0, dUsd1 = 0.0, dRub2 = 0.0, dUsd2 = 0.0;
+    int cnt1 = 0, cnt2 = 0;
+    TwoStates_GetLoanDebt(1, &dRub1, &dUsd1, &cnt1);
+    TwoStates_GetLoanDebt(2, &dRub2, &dUsd2, &cnt2);
+    TEST_CHECK(cnt1 == 1 && cnt2 == 2);
+    TEST_CHECK_NEAR(dRub1, 120000.0, 1e-2);
+    TEST_CHECK_NEAR(dUsd1, 0.0, 1e-2);
+    TEST_CHECK_NEAR(dRub2, 300000.0, 1e-2);
+    TEST_CHECK_NEAR(dUsd2, 50000.0, 1e-2);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool TestLoans_UiSwapAndSelectionMapping()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    double initRub[2] = { 900000.0, 600000.0 };
+    double initUsd[2] = { 400000.0, 250000.0 };
+    TwoStates_OnSessionJoined(/*isHost=*/true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    std::vector<SovietLoan> loans = {
+        MakeTestLoan(LOAN_CURRENCY_RUB, 0, 110000.0f, 0.0f, 365, 3.0f), // global [0] -> West [0]
+        MakeTestLoan(LOAN_CURRENCY_RUB, 1, 220000.0f, 0.0f, 365, 3.5f), // global [1] -> East [0]
+        MakeTestLoan(LOAN_CURRENCY_USD, 0, 330000.0f, 0.0f, 730, 4.0f), // global [2] -> West [1]
+    };
+    loans.reserve(8);
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loans);
+    *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = 2; // global index 2 (West's 2nd loan)
+
+    // Host (State 1) enters UI; call TwoStates_UiBegin twice to verify idempotency
+    TwoStates_UiBegin();
+    TwoStates_UiBegin();
+
+    SovietLoan* uiB = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+    SovietLoan* uiE = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+    TEST_CHECK(uiB != nullptr && (uiE - uiB) == 2);
+    TEST_CHECK_NEAR(uiB[0].initialPrincipal, 110000.0f, 1.0f);
+    TEST_CHECK_NEAR(uiB[1].initialPrincipal, 330000.0f, 1.0f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) == 1); // mapped 2 -> local 1
+
+    // While UI swap is active, TwoStates_GetLoanDebt(2) must still report East's full debt from backup
+    double eastRubDuringUi = 0.0;
+    int eastCntDuringUi = 0;
+    TwoStates_GetLoanDebt(2, &eastRubDuringUi, nullptr, &eastCntDuringUi);
+    TEST_CHECK(eastCntDuringUi == 1);
+    TEST_CHECK_NEAR(eastRubDuringUi, 220000.0, 1.0);
+
+    // Simulate Host selecting local loan [0] in UI, then end UI
+    *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = 0;
+    TwoStates_UiEnd();
+
+    uiB = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+    uiE = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+    TEST_CHECK((uiE - uiB) == 3);
+    TEST_CHECK(*(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) == 0);
+
+    // Now test as Client (State 2) with global index 1 (East's loan) selected
+    TwoStates_OnSessionJoined(/*isHost=*/false, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = 1;
+    TwoStates_UiBegin();
+    uiB = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+    uiE = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+    TEST_CHECK(uiB != nullptr && (uiE - uiB) == 1);
+    TEST_CHECK_NEAR(uiB[0].initialPrincipal, 220000.0f, 1.0f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) == 0);
+    TwoStates_UiEnd();
+
+    uiB = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+    uiE = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+    TEST_CHECK((uiE - uiB) == 3);
+    TEST_CHECK(*(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) == 1);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool TestLoans_LockstepBorrowAndRepay()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
+
+    double initRub[2] = { 1000000.0, 500000.0 };
+    double initUsd[2] = { 300000.0,  200000.0 };
+    TwoStates_OnSessionJoined(/*isHost=*/false, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    std::vector<SovietLoan> loans = {
+        MakeTestLoan(LOAN_CURRENCY_RUB, 0, 150000.0f, 0.0f, 365, 3.0f), // West's existing loan
+    };
+    loans.reserve(8);
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loans);
+
+    Commands_SetSession(COMMANDS_HOST);
+    Commands_RecordMoney();
+
+    // 1. Waiting Lobby block: borrowing while in SESSION_HOST_LISTENING must be reverted and emit NO command
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(SaveSync_IsWaitingLobbyActive());
+    TwoStates_UiBegin();
+    {
+        SovietLoan* b = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+        TEST_CHECK(b != nullptr);
+        b[0] = MakeTestLoan(LOAN_CURRENCY_USD, 0, 100000.0f, 0.0f, 365, 4.0f);
+        *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b + 1;
+        *(double*)(world + WORLD_USD_OFFSET) += 100000.0;
+    }
+    TwoStates_UiEnd();
+    Commands_CheckMoney("test_lobby_loan");
+    TEST_CHECK(!Commands_Due(1));
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 200000.0, 1e-2);
+
+    // 2. Active gameplay (SESSION_CLIENT_IN_GAME): State 2 borrows 100,000 USD in UI
+    SaveSync_SetTestSessionState(SESSION_CLIENT_IN_GAME, true, "127.0.0.1:5556");
+    TEST_CHECK(!SaveSync_IsWaitingLobbyActive());
+
+    TwoStates_UiBegin();
+    {
+        SovietLoan* b = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+        SovietLoan* e = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+        TEST_CHECK(b != nullptr && (e - b) == 0); // State 2 has 0 loans initially
+        b[0] = MakeTestLoan(LOAN_CURRENCY_USD, 0 /*TakeLoan sets 0; hook tags 1*/, 100000.0f, 0.0f, 365, 4.0f);
+        *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b + 1;
+        *(double*)(world + WORLD_USD_OFFSET) += 100000.0;
+        *(float*)(world + WORLD_LOAN_STATS_OFFSET + 0) += 100000.0f;
+    }
+    TwoStates_UiEnd();
+    // Immediately after UiEnd (before tick boundary), world balance is reverted so LS_CMD_MONEY is NOT emitted
+    Commands_CheckMoney("test_borrow");
+    TEST_CHECK(Commands_Due(1));
+    Commands_Boundary(1);
+
+    // State 2's USD must increase by exactly +100,000 (not +200,000 from duplicate LS_CMD_MONEY)
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 300000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 300000.0, 1e-2);
+    double eastDebtUsd = 0.0;
+    int eastCnt = 0;
+    TwoStates_GetLoanDebt(2, nullptr, &eastDebtUsd, &eastCnt);
+    TEST_CHECK(eastCnt == 1);
+    TEST_CHECK_NEAR(eastDebtUsd, 100000.0, 1.0);
+
+    // 3. Partial repayment: State 2 repays 40,000 USD of its loan
+    TwoStates_UiBegin();
+    {
+        SovietLoan* b = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+        SovietLoan* e = *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8);
+        TEST_CHECK(b != nullptr && (e - b) == 1);
+        b[0].remainingPrincipal -= 40000.0f;
+        b[0].totalPaidSoFar     += 40000.0f;
+        *(double*)(world + WORLD_USD_OFFSET) -= 40000.0;
+        *(float*)(world + WORLD_LOAN_STATS_OFFSET + 0) -= 40000.0f;
+    }
+    TwoStates_UiEnd();
+    Commands_CheckMoney("test_repay_partial");
+    TEST_CHECK(Commands_Due(2));
+    Commands_Boundary(2);
+
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 300000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 260000.0, 1e-2);
+    TwoStates_GetLoanDebt(2, nullptr, &eastDebtUsd, &eastCnt);
+    TEST_CHECK(eastCnt == 1);
+    TEST_CHECK_NEAR(eastDebtUsd, 60000.0, 1.0);
+
+    // 4. Full repayment: State 2 pays off the remaining 60,000 USD
+    TwoStates_UiBegin();
+    {
+        SovietLoan* b = *(SovietLoan**)(world + WORLD_LOANS_OFFSET);
+        TEST_CHECK(b != nullptr);
+        *(int32_t*)(world + WORLD_LOAN_SELECTED_OFFSET) = 0;
+        *(SovietLoan**)(world + WORLD_LOANS_OFFSET + 8) = b; // erased
+        *(double*)(world + WORLD_USD_OFFSET) -= 60000.0;
+        *(float*)(world + WORLD_LOAN_STATS_OFFSET + 0) -= 60000.0f;
+    }
+    TwoStates_UiEnd();
+    Commands_CheckMoney("test_repay_full");
+    TEST_CHECK(Commands_Due(3));
+    Commands_Boundary(3);
+
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 300000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 200000.0, 1e-2);
+    TwoStates_GetLoanDebt(2, nullptr, &eastDebtUsd, &eastCnt);
+    TEST_CHECK(eastCnt == 0);
+    TEST_CHECK_NEAR(eastDebtUsd, 0.0, 1.0);
+
+    // West's original loan must still be intact
+    double westDebtRub = 0.0;
+    int westCnt = 0;
+    TwoStates_GetLoanDebt(1, &westDebtRub, nullptr, &westCnt);
+    TEST_CHECK(westCnt == 1);
+    TEST_CHECK_NEAR(westDebtRub, 150000.0, 1.0);
+
+    Commands_SetSession(COMMANDS_OFF);
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TwoStates_OnSessionEnded();
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    return true;
+}
+
+static bool TestLoans_DailyStepAndBankruptcyIsolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    double initRub[2] = { 500000.0, 100000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    // Asymmetric building count: 50 buildings in West (State 1) vs 1 building in East (State 2)
+    std::vector<std::vector<BYTE>> westBlds(50, std::vector<BYTE>(0x800, 0));
+    std::vector<BYTE> eastBld(0x800, 0);
+    std::vector<BYTE*> bldVec;
+    for (int i = 0; i < 50; ++i) {
+        *(int*)westBlds[(size_t)i].data() = 100 + i;
+        *(float*)(westBlds[(size_t)i].data() + OBJ_POS_OFFSET) = -1000.0f;
+        *(float*)(westBlds[(size_t)i].data() + BLD_PROGRESS_OFFSET) = 1.0f;
+        bldVec.push_back(westBlds[(size_t)i].data());
+    }
+    *(int*)eastBld.data() = 999;
+    *(float*)(eastBld.data() + OBJ_POS_OFFSET) = 1000.0f;
+    *(float*)(eastBld.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    bldVec.push_back(eastBld.data());
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    // East has 1 RUB loan: 36,500 RUB over 365 days at 0% interest -> 100 RUB/day installment
+    SovietLoan eastLoan = MakeTestLoan(LOAN_CURRENCY_RUB, 1 /*East*/, 36500.0f, 0.0f, 365, 0.0f);
+
+    TwoStates_BeforeStep(world);
+    TwoStates_StepOneLoanDayForTest(world, &eastLoan);
+    TwoStates_AfterStep(world);
+
+    // West MUST pay 0 RUB (despite owning 50/51 buildings); East pays 100% of its 100 RUB installment
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 500000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2),  99900.0, 1e-3);
+    TEST_CHECK_NEAR(eastLoan.remainingPrincipal, 36400.0f, 1e-2f);
+    TEST_CHECK_NEAR(eastLoan.unpaidPenaltyBalance, 0.0f, 1e-3f);
+
+    // Bankruptcy / penalty isolation: East has 0 RUB while West still has 500,000 RUB
+    TwoStates_SyncBalancesFromHost(500000.0, 0.0, 100000.0, 100000.0);
+    TwoStates_BeforeStep(world);
+    TwoStates_StepOneLoanDayForTest(world, &eastLoan);
+    TwoStates_AfterStep(world);
+
+    // West's 500,000 RUB is untouched, East stays at 0 RUB, and East's loan accrues unpaidPenaltyBalance
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 500000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2),      0.0, 1e-3);
+    TEST_CHECK(eastLoan.unpaidPenaltyBalance > 99.0f);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool Test_TwoStates_Loans()
+{
+    return TestLoans_MaxAvailableBorrow() &&
+           TestLoans_UiSwapAndSelectionMapping() &&
+           TestLoans_LockstepBorrowAndRepay() &&
+           TestLoans_DailyStepAndBankruptcyIsolation();
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -921,6 +1512,8 @@ int main()
         { "TwoStates_SaveMetaAndScriptIni (Inv #4 & #5)",        &Test_TwoStates_SaveMetaAndScriptIniSafety },
         { "ModSync_HeaderBinAndWorkshopFilter (Inv #6 & #9)",    &Test_ModSync_HeaderBinAndWorkshopFilter },
         { "BuildingSwitches_Commands_SaveZip (Inv #12, Zip)",    &Test_BuildingSwitches_Commands_SaveZip },
+        { "WaitingLobbyAndActionLock (Pause, Lock, Inspect)",    &Test_WaitingLobbyAndActionLock },
+        { "TwoStates_Loans (Borrow Ceiling, UI Swap, Daily)",    &Test_TwoStates_Loans },
     };
 
     for (const auto& tc : kTests) {

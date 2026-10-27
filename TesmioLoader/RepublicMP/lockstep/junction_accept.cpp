@@ -4,6 +4,7 @@
 // disassembly of 1.1.1.9).
 #include "junction_accept.h"
 #include "commands.h"
+#include "world_refs.h"
 #include "../session/two_states.h"
 #include <math.h>
 #include <string.h>
@@ -62,34 +63,6 @@ void JunctionAccept_Bind(const TsmHost* host)
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
-static unsigned NodeCheck(U64 node)
-{
-    unsigned w[3] = { 0x4e4f4445u, *(unsigned*)(node + 4), *(unsigned*)(node + 0xc) };
-    unsigned h = 2166136261u;
-    for (int i = 0; i < 3; i++)
-        for (int b = 0; b < 4; b++) {
-            h ^= (w[i] >> (8 * b)) & 0xffu;
-            h *= 16777619u;
-        }
-    return h | 1u;
-}
-
-static unsigned IndexIn(U64 vector, U64 p)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!p || !begin || end < begin || (end - begin) / 8 > 1000000) return 0xFFFFFFFFu;
-    for (U64 at = begin; at < end; at += 8)
-        if (Q(at) == p) return (unsigned)((at - begin) / 8);
-    return 0xFFFFFFFFu;
-}
-
-static U64 AtIndex(U64 vector, unsigned index)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!begin || end < begin || index >= (end - begin) / 8) return 0;
-    return Q(begin + (U64)index * 8);
-}
-
 // A vector's element count (elem bytes each), or -1 when it is not one or too long.
 static int Count(U64 at, unsigned elem, int max)
 {
@@ -116,18 +89,18 @@ static const char* Encode(U64 junction, U64 copy, JunctionMsg& m)
     if (live <= 0) return "the junction has no nodes";
     U64 first = Q(Q(junction + NODES_OFFSET));
     if (Q(first + JUNCTION_OF_NODE) != junction) return "the junction's first node is not its own";
-    unsigned index = IndexIn(roads + NETWORK_NODES, first);
+    unsigned index = Ref_IndexInVector(roads + NETWORK_NODES, first);
     if (index == 0xFFFFFFFFu) return "the junction's node is not in the road network";
-    m.anchor = { index, NodeCheck(first) };
+    m.anchor = { index, Ref_NodeCheck(first) };
     // The copy's nodes (crossroad_add may have changed them).
     int nodes = Count(copy + NODES_OFFSET, 8, MAX_NODES);
     if (nodes <= 0) return "the copy has no nodes";
     U64 list = Q(copy + NODES_OFFSET);
     for (int i = 0; i < nodes; i++) {
         U64 node = Q(list + (U64)i * 8);
-        unsigned at = IndexIn(roads + NETWORK_NODES, node);
+        unsigned at = Ref_IndexInVector(roads + NETWORK_NODES, node);
         if (at == 0xFFFFFFFFu) return "a node of the copy is not in the road network";
-        m.node[i] = { at, NodeCheck(node) };
+        m.node[i] = { at, Ref_NodeCheck(node) };
     }
     m.nodes = (unsigned char)nodes;
     int arms = Count(copy + ARMS_OFFSET, ARM_BYTES, MAX_ARMS);
@@ -191,17 +164,6 @@ static U64 g_nodes[MAX_NODES];
 static BYTE g_arms[MAX_ARMS * ARM_BYTES];
 static BYTE g_phases[MAX_PHASES * PHASE_BYTES];
 
-static void SetVec(BYTE* at, const void* begin, size_t bytes)
-{
-    U64 v[3] = {};
-    if (bytes && begin) {
-        v[0] = (U64)begin;
-        v[1] = v[0] + bytes;
-        v[2] = v[1];
-    }
-    memcpy(at, v, 24);
-}
-
 static const char* Apply(const JunctionMsg& m, unsigned* kindAfter)
 {
     U64 world = (U64)World();
@@ -209,8 +171,8 @@ static const char* Apply(const JunctionMsg& m, unsigned* kindAfter)
     if (!roads) return "no road network";
     if (m.kind > MAX_KIND || !m.nodes || m.nodes > MAX_NODES || m.arms > MAX_ARMS || m.phases > MAX_PHASES) return "a bad shape";
     // The junction: the anchor's, which must list the anchor.
-    U64 anchor = AtIndex(roads + NETWORK_NODES, m.anchor.index);
-    if (!anchor || NodeCheck(anchor) != m.anchor.check) return "the junction's node is not here";
+    U64 anchor = Ref_AtVectorIndex(roads + NETWORK_NODES, m.anchor.index);
+    if (!anchor || Ref_NodeCheck(anchor) != m.anchor.check) return "the junction's node is not here";
     U64 junction = Q(anchor + JUNCTION_OF_NODE);
     int live = junction ? Count(junction + NODES_OFFSET, 8, MAX_NODES) : -1;
     bool listed = false;
@@ -220,8 +182,8 @@ static const char* Apply(const JunctionMsg& m, unsigned* kindAfter)
     memset(g_arms, 0, sizeof(g_arms));
     memcpy(g_object, &m.kind, 4);
     for (int i = 0; i < m.nodes; i++) {
-        U64 node = AtIndex(roads + NETWORK_NODES, m.node[i].index);
-        if (!node || NodeCheck(node) != m.node[i].check) return "a node of the copy is not here";
+        U64 node = Ref_AtVectorIndex(roads + NETWORK_NODES, m.node[i].index);
+        if (!node || Ref_NodeCheck(node) != m.node[i].check) return "a node of the copy is not here";
         g_nodes[i] = node;
     }
     for (int i = 0; i < m.arms; i++) {
@@ -233,9 +195,9 @@ static const char* Apply(const JunctionMsg& m, unsigned* kindAfter)
         memcpy(e + 0x14, &m.arm[i].mode, 4);
     }
     memcpy(g_phases, m.phase, (size_t)m.phases * PHASE_BYTES);
-    SetVec(g_object + NODES_OFFSET, g_nodes, (size_t)m.nodes * 8);
-    SetVec(g_object + ARMS_OFFSET, g_arms, (size_t)m.arms * ARM_BYTES);
-    SetVec(g_object + PHASES_OFFSET, g_phases, (size_t)m.phases * PHASE_BYTES);
+    Ref_SetStandInVector(g_object + NODES_OFFSET, g_nodes, (size_t)m.nodes * 8);
+    Ref_SetStandInVector(g_object + ARMS_OFFSET, g_arms, (size_t)m.arms * ARM_BYTES);
+    Ref_SetStandInVector(g_object + PHASES_OFFSET, g_phases, (size_t)m.phases * PHASE_BYTES);
     U64 holder = Q(world + LIST_FIELD);
     if (!holder) return "no traffic light list";
     typedef U64 (*Call3)(U64, U64, U64);

@@ -5,6 +5,7 @@
 #include "line_accept.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/safe_mem.h"
 #include <string.h>
 #include <vector>
 
@@ -29,10 +30,6 @@
 #define BORDER_WESTERN 0x11AF8
 #define CACHE_BEGIN 0xC6B0
 #define CACHE_END 0xC6B8
-#define RESOURCES 0xC2B0
-#define RESOURCE_STRIDE 0x340
-#define TYPES 0x12840
-#define TYPE_STRIDE 0x9F08
 #define MAX_ELEMENTS 4096
 #define MAX_STOPS 1024
 #define MAGIC 0x31414E4C
@@ -46,16 +43,12 @@ static const unsigned kHalfPtrs[4] = { 0x68, 0x80, 0x98, 0xB0 };
 #define VEHICLES_RVA 0x497650
 #define NAME_RVA 0x499600
 
-struct RoutineEntry {
-    unsigned rva;
-    unsigned char entry[16];
-};
-static const RoutineEntry kRoutines[] = {
-    { COPY_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x11, 0x05, 0x00, 0x00, 0x48, 0x8b, 0xc4, 0x44, 0x88, 0x48, 0x20 } },
-    { MERGE_RVA, { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41 } },
-    { DIRTY_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 } },
-    { VEHICLES_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf5, 0x02, 0x00, 0x00, 0x53, 0x41, 0x56, 0x48, 0x83, 0xec, 0x38 } },
-    { NAME_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x78, 0x01, 0x00, 0x00, 0x4c, 0x8b, 0xdc, 0x56, 0x48, 0x81, 0xec } },
+static const TsmRoutineSig kRoutines[] = {
+    { COPY_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x11, 0x05, 0x00, 0x00, 0x48, 0x8b, 0xc4, 0x44, 0x88, 0x48, 0x20 }, 16 },
+    { MERGE_RVA, { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41 }, 16 },
+    { DIRTY_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 }, 16 },
+    { VEHICLES_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf5, 0x02, 0x00, 0x00, 0x53, 0x41, 0x56, 0x48, 0x83, 0xec, 0x38 }, 16 },
+    { NAME_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x78, 0x01, 0x00, 0x00, 0x4c, 0x8b, 0xdc, 0x56, 0x48, 0x81, 0xec }, 16 },
 };
 
 static int g_ready = -1;
@@ -67,16 +60,7 @@ void LineAccept_Bind(const TsmHost* host)
 
 static bool Ready()
 {
-    if (g_ready < 0) {
-        g_ready = 1;
-        for (const RoutineEntry& e : kRoutines)
-            if (memcmp(g_exeBase + e.rva, e.entry, sizeof(e.entry)) != 0) {
-                Logf("republicmp  LINE: game routine at 0x%X differs - line accepts are refused in lockstep", e.rva);
-                g_ready = 0;
-                break;
-            }
-    }
-    return g_ready == 1;
+    return Ref_CheckRoutineTable(&g_ready, kRoutines, sizeof(kRoutines) / sizeof(kRoutines[0]), "LINE");
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
@@ -133,37 +117,6 @@ struct Reader {
     RouteRef ref() { RouteRef r = kNoRef; raw(&r, sizeof(r)); return r; }
     unsigned count(unsigned max) { unsigned c = u32(); if (c > max) ok = false; return ok ? c : 0; }
 };
-
-// A definition pointer as a table index: resources (world +c2b0) or vehicle types (world +12840).
-static bool PtrRef(U64 p, BYTE& tag, unsigned& index)
-{
-    tag = 0;
-    index = 0;
-    if (!p) return true;
-    const unsigned tables[2] = { RESOURCES, TYPES }, strides[2] = { RESOURCE_STRIDE, TYPE_STRIDE };
-    for (int k = 0; k < 2; k++) {
-        U64 v[2] = {};
-        if (!Read(v, (U64)World() + tables[k], 16) || !v[0] || v[1] < v[0]) continue;
-        if (p >= v[0] && p < v[1] && (p - v[0]) % strides[k] == 0) {
-            tag = (BYTE)(k + 1);
-            index = (unsigned)((p - v[0]) / strides[k]);
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool PtrAt(BYTE tag, unsigned index, U64& p)
-{
-    p = 0;
-    if (tag == 0) return index == 0;
-    if (tag > 2) return false;
-    unsigned table = tag == 1 ? RESOURCES : TYPES, stride = tag == 1 ? RESOURCE_STRIDE : TYPE_STRIDE;
-    U64 v[2] = {};
-    if (!Read(v, (U64)World() + table, 16) || !v[0] || v[1] < v[0] || index >= (v[1] - v[0]) / stride) return false;
-    p = v[0] + (U64)index * stride;
-    return true;
-}
 
 static bool GuardedRef(bool (*fn)(U64, RouteRef&), U64 object, RouteRef& r)
 {
@@ -248,7 +201,7 @@ static const char* Encode(U64 line, U64 copy, Writer& w)
             for (size_t k = 0; k < bytes.size(); k += 16) {
                 BYTE tag;
                 unsigned index;
-                if (!PtrRef(*(U64*)&bytes[k], tag, index)) return "a cargo definition is unknown";
+                if (!Ref_DefPtr(*(U64*)&bytes[k], tag, index)) return "a cargo definition is unknown";
                 w.u8(tag);
                 w.u32(index);
                 w.u64(*(U64*)&bytes[k + 8]);
@@ -264,7 +217,7 @@ static const char* Encode(U64 line, U64 copy, Writer& w)
                 for (size_t k = 0; k < bytes.size(); k += 8) {
                     BYTE tag;
                     unsigned index;
-                    if (!PtrRef(*(U64*)&bytes[k], tag, index)) return "a definition is unknown";
+                    if (!Ref_DefPtr(*(U64*)&bytes[k], tag, index)) return "a definition is unknown";
                     w.u8(tag);
                     w.u32(index);
                 }
@@ -340,17 +293,6 @@ struct StandIn {
     std::vector<std::vector<BYTE>> pools;
 };
 
-static void SetVec(BYTE* at, const void* begin, size_t bytes)
-{
-    U64 v[3] = {};
-    if (bytes && begin) {
-        v[0] = (U64)begin;
-        v[1] = v[0] + bytes;
-        v[2] = v[1];
-    }
-    memcpy(at, v, 24);
-}
-
 static const void* Pool(StandIn& s, const std::vector<BYTE>& data)
 {
     if (data.empty()) return nullptr;
@@ -410,17 +352,17 @@ static const char* Decode(const BYTE* data, size_t size, StandIn& s, U64& line)
                 BYTE tag = in.u8();
                 unsigned index = in.u32();
                 U64 p = 0;
-                if (!PtrAt(tag, index, p)) return "a cargo definition is unknown here";
+                if (!Ref_DefPtrAt(tag, index, p)) return "a cargo definition is unknown here";
                 U64 value = in.u64();
                 memcpy(&tmp[k * 16], &p, 8);
                 memcpy(&tmp[k * 16 + 8], &value, 8);
             }
-            SetVec(o + HALF_PAIRS, Pool(s, tmp), tmp.size());
+            Ref_SetStandInVector(o + HALF_PAIRS, Pool(s, tmp), tmp.size());
             for (unsigned off : kHalfInts) {
                 unsigned n = in.count(MAX_ELEMENTS);
                 tmp.assign((size_t)n * 4, 0);
                 in.raw(tmp.data(), tmp.size());
-                SetVec(o + off, Pool(s, tmp), tmp.size());
+                Ref_SetStandInVector(o + off, Pool(s, tmp), tmp.size());
             }
             for (unsigned off : kHalfPtrs) {
                 unsigned n = in.count(MAX_ELEMENTS);
@@ -429,10 +371,10 @@ static const char* Decode(const BYTE* data, size_t size, StandIn& s, U64& line)
                     BYTE tag = in.u8();
                     unsigned index = in.u32();
                     U64 p = 0;
-                    if (!PtrAt(tag, index, p)) return "a definition is unknown here";
+                    if (!Ref_DefPtrAt(tag, index, p)) return "a definition is unknown here";
                     memcpy(&tmp[k * 8], &p, 8);
                 }
-                SetVec(o + off, Pool(s, tmp), tmp.size());
+                Ref_SetStandInVector(o + off, Pool(s, tmp), tmp.size());
             }
         }
         BYTE hasNode = in.u8();
@@ -449,10 +391,10 @@ static const char* Decode(const BYTE* data, size_t size, StandIn& s, U64& line)
     in.raw(s.counts.data(), s.counts.size());
     if (!in.ok || in.at != size) return "unknown layout";
 
-    SetVec(&s.line[LINE_STATIONS], s.stations.data(), s.stations.size() * 8);
-    SetVec(&s.line[LINE_RECORDS], s.records.data(), s.records.size());
-    SetVec(&s.line[LINE_MEASURES], s.measures.data(), s.measures.size());
-    SetVec(&s.line[LINE_COUNTS], s.counts.data(), s.counts.size());
+    Ref_SetStandInVector(&s.line[LINE_STATIONS], s.stations.data(), s.stations.size() * 8);
+    Ref_SetStandInVector(&s.line[LINE_RECORDS], s.records.data(), s.records.size());
+    Ref_SetStandInVector(&s.line[LINE_MEASURES], s.measures.data(), s.measures.size());
+    Ref_SetStandInVector(&s.line[LINE_COUNTS], s.counts.data(), s.counts.size());
     line = GuardedAt(Ref_LineAt, lineRef);
     return line ? nullptr : "the line is gone";
 }

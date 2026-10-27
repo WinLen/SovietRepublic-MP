@@ -9,10 +9,12 @@
 #include "view_list_scope.h"
 #include "buildings/demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
+#include "../ui/native_menu.h"
 #include "../lockstep/commands.h"
 #include "../determinism/determinism.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
+#include "../core/safe_mem.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -48,28 +50,20 @@ RoadCommitFn g_origRoadCommit = nullptr;
 // Engine addresses and offsets
 // ---------------------------------------------------------------------------
 
-#define UNIVERSAL_THIS_RVA 0x9D4F10      // placement god-object (thisPtr)
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // city buildings vector
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0 // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8
 #define HOVER_NODE_RVA 0x9E4560          // network node under the cursor (power lines join on it)
 #define HOVER_EDGE_RVA 0x9E4558          // network edge under the cursor
 
 // thisPtr fields.
-#define CURSOR_X_OFFSET 0xf6c            // placement cursor
-#define CURSOR_Y_OFFSET 0xf70
-#define CURSOR_Z_OFFSET 0xf74
 #define CURSOR_YAW_OFFSET 0xf94          // placement yaw (radians)
 #define PLACEMENT_RESULT_OFFSET 0x11a10  // validation code after a placement call
 #define MIRROR_EFFECTIVE_OFFSET 0x11db1  // byte: mirror state the last placement call used
-#define TOOL_DRAG_ACTIVE_OFFSET 0xd2ac   // byte: a path-tool drag is in progress
 #define ACTIVE_TOOL_OFFSET 0xD428        // char*: name of the active tool
 
 // Building object fields.
 #define OBJ_ROT_SIN_OFFSET 0x340
 #define OBJ_ROT_COS_OFFSET 0x348
-#define OBJ_POS_OFFSET 0x350             // float x,y,z
 
 // Tool manager fields (see world_sync/networks/road_sync.cpp for the full list).
 #define MGR_CURVE_OFFSET 0x48
@@ -126,13 +120,7 @@ static __int64 GetPlacementManagerThisPtr()
 
 static bool IsWorldLoaded()
 {
-    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-    __try {
-        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeIsWorldLoaded(g_exeBase);
 }
 
 // Number of elements in the buildings vector, -1 if unreadable.
@@ -914,6 +902,12 @@ void HookedRoadCommit(__int64 manager,
                       unsigned __int64 p6, unsigned __int64 p7)
 {
     int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
+    if ((SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) &&
+        category >= 0 && p2 == 0 && !RoadSync_IsApplyingSegment()) {
+        RoadSync_ClearCategoryPreview(category);
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return;
+    }
     uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
     bool fromToolWrapper = (retRva >= 0x3AC000 && retRva < 0x3D8000);
     if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
@@ -1173,6 +1167,10 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
 
 bool LocalBuilds_PlacementPress()
 {
+    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return true;
+    }
     if (!g_placeOpen || !Commands_TakeLocal()) return false;
     __int64 world = g_placeWorld;
     BuildSyncMsg msg = {};
@@ -1209,8 +1207,18 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                       unsigned __int64 param_5, unsigned int param_6,
                       char param_7, char param_8)
 {
-    // Placements are refused while the save-sync block screen is up.
-    if (SyncBlock_IsActive()) return;
+    // Placements are refused while the save-sync block screen or waiting lobby is up.
+    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+        __try {
+            if (*(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA)) {
+                *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
+                *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;
+                SaveSync_NotifyWaitingLobbyActionBlocked();
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        return;
+    }
     if (Commands_TakeLocal() && !BuildSync_IsApplyingRemote()) {
         PlacementAsCommand(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
         return;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See session_patches.h.
 #include "session_patches.h"
+#include "../core/safe_mem.h"
 #include "../session/save_sync.h"                 // SaveSync_IsBusy
 #include "../world_sync/buildings/build_sync.h" // BuildSync_IsConnected
 #include "../determinism/determinism.h"        // Determinism_IsActive (the probe)
@@ -136,11 +137,7 @@ static bool PrepareGate()
 
 static bool BytesAre(const SessionPatch& p, const unsigned char* bytes)
 {
-    __try {
-        return memcmp(g_exeBase + p.rva, bytes, p.size) == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeBytesMatch(g_exeBase + p.rva, bytes, p.size);
 }
 
 static bool Write(const SessionPatch& p, const unsigned char* bytes)

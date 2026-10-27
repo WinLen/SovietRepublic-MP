@@ -3,7 +3,11 @@
 // read against the disassembly of 1.1.1.9).
 #include "hover_tools.h"
 #include "commands.h"
+#include "world_refs.h"
+#include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../session/save_sync.h"
+#include "../ui/native_menu.h"
 #include "../world_sync/view_list_scope.h"
 #include <math.h>
 #include <string.h>
@@ -78,7 +82,7 @@ bool HoverTools_Ready(int kind)
 {
     if (kind < 0 || kind >= KINDS) return false;
     if (g_ready[kind] < 0) {
-        g_ready[kind] = memcmp(g_exeBase + kRoutines[kind], kEntries[kind], 16) == 0 ? 1 : 0;
+        g_ready[kind] = SafeBytesMatch(g_exeBase + kRoutines[kind], kEntries[kind], 16) ? 1 : 0;
         if (!g_ready[kind]) Logf("republicmp  HOVER: the %s tool's routine differs - it stays as it was", kKindText[kind]);
     }
     return g_ready[kind] == 1;
@@ -91,54 +95,22 @@ static U64 Q(U64 at) { return *(U64*)at; }
 // References
 // ---------------------------------------------------------------------------
 
-static unsigned Fnv(const unsigned* words, int n)
-{
-    unsigned h = 2166136261u;
-    for (int i = 0; i < n; i++)
-        for (int b = 0; b < 4; b++) {
-            h ^= (words[i] >> (8 * b)) & 0xffu;
-            h *= 16777619u;
-        }
-    return h | 1u;
-}
-
-static unsigned IndexIn(U64 vector, U64 p)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!p || !begin || end < begin || (end - begin) / 8 > 1000000) return 0xFFFFFFFFu;
-    for (U64 at = begin; at < end; at += 8)
-        if (Q(at) == p) return (unsigned)((at - begin) / 8);
-    return 0xFFFFFFFFu;
-}
-
-static U64 AtIndex(U64 vector, unsigned index)
-{
-    U64 begin = Q(vector), end = Q(vector + 8);
-    if (!begin || end < begin || index >= (end - begin) / 8) return 0;
-    return Q(begin + (U64)index * 8);
-}
-
-static unsigned NodeCheck(U64 node)
-{
-    unsigned w[3] = { 0x4e4f4445u, *(unsigned*)(node + 4), *(unsigned*)(node + 0xc) };
-    return Fnv(w, 3);
-}
-
 static bool EdgeCheck(U64 network, U64 edge, unsigned* check)
 {
     U64 a = Q(edge + 0x20), z = Q(edge + 0x28), pb = Q(edge + 8), pe = Q(edge + 0x10);
     if (pe < pb) return false;
-    unsigned na = a ? IndexIn(network + NODES, a) : 0xfffffffeu, nz = z ? IndexIn(network + NODES, z) : 0xfffffffeu;
+    unsigned na = a ? Ref_IndexInVector(network + NODES, a) : 0xfffffffeu;
+    unsigned nz = z ? Ref_IndexInVector(network + NODES, z) : 0xfffffffeu;
     if (na == 0xFFFFFFFFu || nz == 0xFFFFFFFFu) return false;
     unsigned w[4] = { 0x45444745u, na, nz, (unsigned)(pe - pb) };
-    *check = Fnv(w, 4);
+    *check = Ref_FnvWords(w, 4);
     return true;
 }
 
 static unsigned BuildingCheck(U64 b)
 {
     unsigned w[3] = { 0x42444e47u, *(unsigned*)(b + 0x3a0), *(unsigned*)(b + 0x3a8) };
-    return Fnv(w, 3);
+    return Ref_FnvWords(w, 3);
 }
 
 // A pointer of the pick state as a reference (none for anything it cannot place).
@@ -147,11 +119,11 @@ static void ToRef(U64 world, U64 network, U64 roads, U64 p, PickRef& r)
     r = { REF_NONE, 0, 0 };
     if (!p) return;
     unsigned i, check = 0;
-    if ((i = IndexIn(network + NODES, p)) != 0xFFFFFFFFu) r = { REF_NODE, i, NodeCheck(p) };
-    else if ((i = IndexIn(network + EDGES, p)) != 0xFFFFFFFFu && EdgeCheck(network, p, &check)) r = { REF_EDGE, i, check };
-    else if (roads && roads != network && (i = IndexIn(roads + NODES, p)) != 0xFFFFFFFFu) r = { REF_ROAD_NODE, i, NodeCheck(p) };
-    else if (roads && roads != network && (i = IndexIn(roads + EDGES, p)) != 0xFFFFFFFFu && EdgeCheck(roads, p, &check)) r = { REF_ROAD_EDGE, i, check };
-    else if ((i = IndexIn(world + BUILDINGS, p)) != 0xFFFFFFFFu) r = { REF_BUILDING, i, BuildingCheck(p) };
+    if ((i = Ref_IndexInVector(network + NODES, p)) != 0xFFFFFFFFu) r = { REF_NODE, i, Ref_NodeCheck(p) };
+    else if ((i = Ref_IndexInVector(network + EDGES, p)) != 0xFFFFFFFFu && EdgeCheck(network, p, &check)) r = { REF_EDGE, i, check };
+    else if (roads && roads != network && (i = Ref_IndexInVector(roads + NODES, p)) != 0xFFFFFFFFu) r = { REF_ROAD_NODE, i, Ref_NodeCheck(p) };
+    else if (roads && roads != network && (i = Ref_IndexInVector(roads + EDGES, p)) != 0xFFFFFFFFu && EdgeCheck(roads, p, &check)) r = { REF_ROAD_EDGE, i, check };
+    else if ((i = Ref_IndexInVector(world + BUILDINGS, p)) != 0xFFFFFFFFu) r = { REF_BUILDING, i, BuildingCheck(p) };
 }
 
 static bool FromRef(U64 world, U64 network, U64 roads, const PickRef& r, U64* out)
@@ -160,11 +132,11 @@ static bool FromRef(U64 world, U64 network, U64 roads, const PickRef& r, U64* ou
     unsigned check = 0;
     switch (r.tag) {
     case REF_NONE: return true;
-    case REF_NODE: *out = AtIndex(network + NODES, r.index); return *out && NodeCheck(*out) == r.check;
-    case REF_EDGE: *out = AtIndex(network + EDGES, r.index); return *out && EdgeCheck(network, *out, &check) && check == r.check;
-    case REF_ROAD_NODE: *out = roads ? AtIndex(roads + NODES, r.index) : 0; return *out && NodeCheck(*out) == r.check;
-    case REF_ROAD_EDGE: *out = roads ? AtIndex(roads + EDGES, r.index) : 0; return *out && EdgeCheck(roads, *out, &check) && check == r.check;
-    case REF_BUILDING: *out = AtIndex(world + BUILDINGS, r.index); return *out && BuildingCheck(*out) == r.check;
+    case REF_NODE: *out = Ref_AtVectorIndex(network + NODES, r.index); return *out && Ref_NodeCheck(*out) == r.check;
+    case REF_EDGE: *out = Ref_AtVectorIndex(network + EDGES, r.index); return *out && EdgeCheck(network, *out, &check) && check == r.check;
+    case REF_ROAD_NODE: *out = roads ? Ref_AtVectorIndex(roads + NODES, r.index) : 0; return *out && Ref_NodeCheck(*out) == r.check;
+    case REF_ROAD_EDGE: *out = roads ? Ref_AtVectorIndex(roads + EDGES, r.index) : 0; return *out && EdgeCheck(roads, *out, &check) && check == r.check;
+    case REF_BUILDING: *out = Ref_AtVectorIndex(world + BUILDINGS, r.index); return *out && BuildingCheck(*out) == r.check;
     }
     return false;
 }
@@ -266,6 +238,15 @@ static U64 Run(int kind, U64 world, U64 a2)
     BYTE* w = (BYTE*)world;
     BYTE* press = g_exeBase + PRESS_RVA;
     bool menus = w[kMenus[0]] || w[kMenus[1]] || w[kMenus[2]];
+    if (*press && !menus &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        BYTE kept = *press;
+        *press = 0;
+        U64 r = tool(world, a2);
+        *press = kept;
+        return r;
+    }
     if (!*press || menus || !Commands_TakeLocal() || !HoverTools_Ready(kind)) {
         // A click in a session that is not taken stays on this PC: worth a line.
         static int s_logged = 0;

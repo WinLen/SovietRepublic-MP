@@ -12,6 +12,7 @@
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
 #include "../session/two_states.h"
+#include "../ui/native_menu.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../core/safe_mem.h"
 #include <intrin.h>           // _ReturnAddress
@@ -213,6 +214,10 @@ static void H_timerStart(void* timer)
 {
     if (g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA) SimPatches_WaitRender();
     o_timerStart(timer);
+    if (!g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        SaveSync_EnforceWaitingLobbyHold();
+    }
 }
 
 static void H_timerStop(void* timer)
@@ -500,50 +505,57 @@ static void CompareBuildings(int sample, const std::vector<BuildingRecord>& a, c
     }
 }
 
-static void CompareCitizens(int sample, const std::vector<CitizenRecord>& a, const std::vector<CitizenRecord>& b)
+template <typename RecordT, typename SameFn, typename LogFn>
+static void CompareSampleRecords(const char* kindLabel, bool& reportedFlag, int sample,
+                                 const std::vector<RecordT>& a, const std::vector<RecordT>& b,
+                                 SameFn isSame, LogFn logDiff)
 {
-    if (g_reportedCitizens) return;
+    if (reportedFlag) return;
     size_t n = a.size() < b.size() ? a.size() : b.size();
     int lines = 0;
     for (size_t i = 0; i < n && lines < PROBE_DETAIL_LINES; i++) {
-        const CitizenRecord& x = a[i];
-        const CitizenRecord& y = b[i];
-        if (x.home == y.home && SameFloat(x.age, y.age) && memcmp(x.pos, y.pos, 12) == 0) continue;
-        if (!lines)
-            Logf("republicmp  PROBE: citizens first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
-                 g_samples[0][sample].step, sample + 1, a.size(), b.size());
-        Logf("republicmp  PROBE:   #%zu home %d/%d age %.6f/%.6f at (%.2f,%.2f,%.2f)/(%.2f,%.2f,%.2f)", i, x.home, y.home,
-             x.age, y.age, x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2]);
+        if (isSame(a[i], b[i])) continue;
+        if (!lines) {
+            Logf("republicmp  PROBE: %s first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
+                 kindLabel, g_samples[0][sample].step, sample + 1, a.size(), b.size());
+        }
+        logDiff(i, a[i], b[i]);
         lines++;
     }
     if (lines || a.size() != b.size()) {
-        if (!lines) Logf("republicmp  PROBE: citizens first differ at step %llu: %zu/%zu listed", g_samples[0][sample].step,
-                         a.size(), b.size());
-        g_reportedCitizens = true;
+        if (!lines) {
+            Logf("republicmp  PROBE: %s first differ at step %llu: %zu/%zu listed",
+                 kindLabel, g_samples[0][sample].step, a.size(), b.size());
+        }
+        reportedFlag = true;
     }
+}
+
+static void CompareCitizens(int sample, const std::vector<CitizenRecord>& a, const std::vector<CitizenRecord>& b)
+{
+    CompareSampleRecords(
+        "citizens", g_reportedCitizens, sample, a, b,
+        [](const CitizenRecord& x, const CitizenRecord& y) {
+            return x.home == y.home && SameFloat(x.age, y.age) && memcmp(x.pos, y.pos, 12) == 0;
+        },
+        [](size_t i, const CitizenRecord& x, const CitizenRecord& y) {
+            Logf("republicmp  PROBE:   #%zu home %d/%d age %.6f/%.6f at (%.2f,%.2f,%.2f)/(%.2f,%.2f,%.2f)",
+                 i, x.home, y.home, x.age, y.age, x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2]);
+        });
 }
 
 static void CompareVehicles(int sample, const std::vector<VehicleRecord>& a, const std::vector<VehicleRecord>& b)
 {
-    if (g_reportedVehicles) return;
-    size_t n = a.size() < b.size() ? a.size() : b.size();
-    int lines = 0;
-    for (size_t i = 0; i < n && lines < PROBE_DETAIL_LINES; i++) {
-        const VehicleRecord& x = a[i];
-        const VehicleRecord& y = b[i];
-        if (x.index == y.index && memcmp(x.pos, y.pos, 12) == 0 && x.cargo == y.cargo) continue;
-        if (!lines)
-            Logf("republicmp  PROBE: vehicles first differ at step %llu (sample %d), %zu/%zu listed - run 1 / run 2:",
-                 g_samples[0][sample].step, sample + 1, a.size(), b.size());
-        Logf("republicmp  PROBE:   #%zu vehicle %d/%d at (%.3f,%.3f,%.3f)/(%.3f,%.3f,%.3f) cargo %s", i, x.index, y.index,
-             x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2], x.cargo == y.cargo ? "same" : "DIFFERENT");
-        lines++;
-    }
-    if (lines || a.size() != b.size()) {
-        if (!lines) Logf("republicmp  PROBE: vehicles first differ at step %llu: %zu/%zu listed", g_samples[0][sample].step,
-                         a.size(), b.size());
-        g_reportedVehicles = true;
-    }
+    CompareSampleRecords(
+        "vehicles", g_reportedVehicles, sample, a, b,
+        [](const VehicleRecord& x, const VehicleRecord& y) {
+            return x.index == y.index && memcmp(x.pos, y.pos, 12) == 0 && x.cargo == y.cargo;
+        },
+        [](size_t i, const VehicleRecord& x, const VehicleRecord& y) {
+            Logf("republicmp  PROBE:   #%zu vehicle %d/%d at (%.3f,%.3f,%.3f)/(%.3f,%.3f,%.3f) cargo %s",
+                 i, x.index, y.index, x.pos[0], x.pos[1], x.pos[2], y.pos[0], y.pos[1], y.pos[2],
+                 x.cargo == y.cargo ? "same" : "DIFFERENT");
+        });
 }
 
 // Main thread, at a sample.
@@ -800,6 +812,9 @@ static void HookedLoadWorld(void)
         return;
     }
     TwoStates_OnAnyWorldLoaded(false);
+    if (NativeMenu_IsHostOnNextLoad() || SaveSync_IsWaitingLobbyActive()) {
+        SaveSync_EnforceWaitingLobbyHold();
+    }
     if (g_probeState == PROBE_WAIT_LOAD) {
         EmptySearchPool();
         SimPatches_ResetSearches();
@@ -952,6 +967,15 @@ static void TakeSpeedInput()
     bool wasPaused = g_paused;
     int wasSpeed = g_requestedSpeed;
     int* speed = (int*)(g_exeBase + 0x9D54B4);
+    if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
+        g_paused = true;
+        InterlockedExchange(&g_pauseRequests, 0);
+        *speed = 0;
+        speed[1] = g_requestedSpeed;
+        speed[2] = kSpeedSentinel;
+        g_buttonsArmed = true;
+        return;
+    }
     bool button = g_buttonsArmed && speed[2] != kSpeedSentinel;
     // Esc's timer hold and its remembered-speed restore are not player
     // pacing requests (105a90 / 317db0). (by SoylentGreed)
@@ -1250,12 +1274,14 @@ static void SessionAdmission(BYTE* timer)
     int wanted = LockstepNet_TakeSpeedRequest();
     if (wanted >= 10) g_remoteBoost = wanted - 10 > 2 ? 2 : wanted - 10;
     else if (wanted > 0) g_requestedSpeed = wanted > 1 ? 2 : 1;
+    bool waitingLobby = SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
+    if (waitingLobby) g_paused = true;
     if ((int)g_paused != g_sentPaused || g_requestedSpeed != g_sentSpeed) {
         LockstepNet_SendState(g_paused, g_requestedSpeed);
         g_sentPaused = g_paused;
         g_sentSpeed = g_requestedSpeed;
     }
-    bool hold = g_paused || timer[13] != 0 || !LockstepNet_IsConnected();
+    bool hold = g_paused || waitingLobby || timer[13] != 0 || !LockstepNet_IsConnected();
     if (hold) {
         g_subTickAlpha = 0.0;
         if (g_paused) g_tickDebt = 0.0;
@@ -1279,6 +1305,11 @@ static void SessionAdmission(BYTE* timer)
 static void HookedSimStep(__int64 world)
 {
     if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) {
+        if (!g_active && (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+            SaveSync_EnforceWaitingLobbyHold();
+            o_simStep(world);
+            return;
+        }
         o_simStep(world);
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         return;
@@ -1318,7 +1349,12 @@ static void HookedSimStep(__int64 world)
 
 void Determinism_BeforeLate()
 {
-    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
+    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) {
+        if (!g_active && (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+            SaveSync_EnforceWaitingLobbyHold();
+        }
+        return;
+    }
     g_framePhase = 5;
     TakeSpeedInput();
     g_inEarly = g_frameStep;

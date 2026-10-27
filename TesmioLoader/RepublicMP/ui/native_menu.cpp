@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See native_menu.h.
 #include "native_menu.h"
+#include "sync_block.h"
 #include "lang.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
@@ -1053,10 +1054,310 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
     return clicked;
 }
 
+static void DrawSidebarSingleplayerSection(BYTE* menuObj, float leftX, float& currentY, float textStep, float btnStep, float guiScale)
+{
+    DrawSidebarText(leftX, currentY, 0xFF881111, false,
+                    TrW(L"Сессия: Одиночная игра", L"Session: Singleplayer"));
+    currentY += textStep;
+
+    DrawSidebarText(leftX, currentY, 0xFF333333, false,
+                    TrW(L"Откройте сервер прямо из игры:", L"Start a Co-op server in-game:"));
+    currentY += textStep + guiScale * 8.0f;
+
+    int mode = TwoStates_GetMode();
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                          mode == COOP_MODE_TWO_STATES
+                              ? TrW(L"Режим: 2 государства", L"Mode: Two States")
+                              : TrW(L"Режим: 1 государство", L"Mode: One State"),
+                          "editor/mp_icon_mode.png")) {
+        TwoStates_SetMode(mode == COOP_MODE_TWO_STATES ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES);
+        TwoStates_SaveSettings();
+    }
+    currentY += btnStep;
+
+    if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
+        bool fullCap = TwoStates_GetFullStartingCapital();
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                              fullCap ? TrW(L"Казна: 100% каждому", L"Budget: 100% Each")
+                                      : TrW(L"Казна: Делить 50/50", L"Budget: Split 50/50"),
+                              "editor/mp_icon_ruble.png")) {
+            TwoStates_SetFullStartingCapital(!fullCap);
+            TwoStates_SaveSettings();
+        }
+        currentY += btnStep;
+
+        bool show3D = TwoStates_GetShow3DBorder();
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                              show3D ? TrW(L"3D-граница: ВКЛ [F7]", L"3D Border: ON [F7]")
+                                     : TrW(L"3D-граница: ВЫКЛ [F7]", L"3D Border: OFF [F7]"),
+                              "editor/mp_icon_border.png")) {
+            TwoStates_SetShow3DBorder(!show3D);
+            TwoStates_SaveSettings();
+        }
+        currentY += btnStep;
+    }
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                          Lang_Get() == MP_LANG_EN ? L"Language: English" : L"Язык: Русский",
+                          "editor/mp_icon_lang.png")) {
+        Lang_Toggle();
+        TwoStates_SaveSettings();
+    }
+    currentY += btnStep;
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
+                          TrW(L"Открыть Кооп-сервер", L"Start Co-op Server"),
+                          "editor/mp_icon_start.png")) {
+        SaveSync_StartHost();
+    }
+    currentY += btnStep;
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF881818,
+                          TrW(L"<< Назад", L"<< Back"),
+                          "editor/mp_icon_back.png")) {
+        g_inGameCoopSubTab = false;
+    }
+    currentY += btnStep;
+}
+
+static void DrawSidebarActiveCoopStatus(SessionState st, float leftX, float& currentY, float textStep)
+{
+    if (TwoStates_IsActive()) {
+        int me = TwoStates_LocalState();
+        DrawSidebarText(leftX, currentY, 0xFF881111, false,
+                        me == 1 ? TrW(L"Роль: Западная ССР (Хост)", L"Role: West SSR (Host)")
+                                : TrW(L"Роль: Восточная ССР (Игрок 2)", L"Role: East SSR (Player 2)"));
+    } else {
+        DrawSidebarText(leftX, currentY, 0xFF881111, false,
+                        TrW(L"Режим: Общая республика", L"Mode: Shared Republic"));
+    }
+    currentY += textStep;
+
+    if (st == SESSION_HOST_LISTENING) {
+        DrawSidebarText(leftX, currentY, 0xFF994000, false,
+                        TrW(L"Статус: Ждём 2-го игрока...", L"Status: Waiting Player 2..."));
+        currentY += textStep;
+    } else {
+        wchar_t pingLine[96] = {};
+        unsigned long long rtt = 0;
+        if (LockstepNet_RoundTrip(&rtt)) {
+            _snwprintf_s(pingLine, _TRUNCATE,
+                         TrW(L"Статус: В сети (пинг %llu мс)", L"Status: Online (ping %llu ms)"), rtt);
+        } else {
+            wcsncpy_s(pingLine, TrW(L"Статус: В сети", L"Status: Online"), _TRUNCATE);
+        }
+        DrawSidebarText(leftX, currentY, 0xFF155518, false, pingLine);
+        currentY += textStep;
+    }
+
+    if (TwoStates_IsActive()) {
+        int me = TwoStates_LocalState();
+        int other = (me == 1) ? 2 : 1;
+
+        wchar_t myLine[96] = {};
+        _snwprintf_s(myLine, _TRUNCATE,
+                     TrW(L"Своя: %.0f РУБ | %.0f $", L"Own: %.0f RUB | %.0f $"),
+                     TwoStates_LocalRubles(), TwoStates_LocalDollars());
+        DrawSidebarText(leftX, currentY, 0xFF155518, false, myLine);
+        currentY += textStep;
+
+        wchar_t partLine[96] = {};
+        _snwprintf_s(partLine, _TRUNCATE,
+                     TrW(L"Партнёр: %.0f РУБ | %.0f $", L"Partner: %.0f RUB | %.0f $"),
+                     TwoStates_GetRubles(other), TwoStates_GetDollars(other));
+        DrawSidebarText(leftX, currentY, 0xFF333333, false, partLine);
+        currentY += textStep;
+
+        double myDebtRub = 0.0, myDebtUsd = 0.0;
+        double partDebtRub = 0.0, partDebtUsd = 0.0;
+        int myLoanCnt = 0, partLoanCnt = 0;
+        TwoStates_GetLoanDebt(me, &myDebtRub, &myDebtUsd, &myLoanCnt);
+        TwoStates_GetLoanDebt(other, &partDebtRub, &partDebtUsd, &partLoanCnt);
+        if (myLoanCnt > 0 || partLoanCnt > 0) {
+            wchar_t debtLine[112] = {};
+            _snwprintf_s(debtLine, _TRUNCATE,
+                         TrW(L"Долг: %.0f₽/%.0f$ | П: %.0f₽/%.0f$",
+                             L"Debt: %.0fR/%.0f$ | P: %.0fR/%.0f$"),
+                         myDebtRub, myDebtUsd, partDebtRub, partDebtUsd);
+            DrawSidebarText(leftX, currentY, 0xFF883315, false, debtLine);
+            currentY += textStep;
+        }
+
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
+            int zone = TwoStates_GetZoneAt(cx, cz);
+            const wchar_t* zText = (zone == 0)
+                ? TrW(L"Курсор: Погранзона", L"Cursor: Border Zone")
+                : (zone == me ? TrW(L"Курсор: Своя земля", L"Cursor: Own Land")
+                              : TrW(L"Курсор: Чужая земля", L"Cursor: Partner's Land"));
+            unsigned int zCol = (zone == 0) ? 0xFF995500 : (zone == me ? 0xFF155518 : 0xFF881818);
+            DrawSidebarText(leftX, currentY, zCol, false, zText);
+            currentY += textStep;
+        }
+    }
+}
+
+static void DrawSidebarActiveCoopSection(BYTE* menuObj, SessionState st, float leftX, float& currentY, float textStep, float btnStep, float guiScale)
+{
+    DrawSidebarActiveCoopStatus(st, leftX, currentY, textStep);
+    currentY += guiScale * 8.0f;
+
+    if (st == SESSION_HOST_LISTENING && SteamP2P_IsAvailable()) {
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF183D5D,
+                              TrW(L"Скопировать код Steam", L"Copy Steam Code"),
+                              "editor/mp_icon_steam.png")) {
+            CopyMySteamCodeToClipboard();
+        }
+        currentY += btnStep;
+    }
+
+    if (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME) {
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
+                              TrW(L"Сохранить кооп-игру", L"Save Co-op Game"),
+                              "editor/settings_save.png")) {
+            TwoStates_TriggerQuickCoopSave();
+        }
+        currentY += btnStep;
+    }
+
+    if (st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME) {
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                              TrW(L"Камера к партнёру [F6]", L"Camera to Partner [F6]"),
+                              "editor/mp_icon_camera.png")) {
+            TwoStates_JumpCameraToPartner();
+        }
+        currentY += btnStep;
+
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                              TrW(L"Сигнал на карте [Alt+ЛКМ]", L"Ping Map [Alt+LMB]"),
+                              "editor/mp_icon_ping.png")) {
+            TwoStates_PingAtCursor();
+        }
+        currentY += btnStep;
+
+        if (TwoStates_IsActive()) {
+            if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
+                                  TrW(L"Перевести 50 000 РУБ", L"Send 50,000 RUB"),
+                                  "editor/mp_icon_ruble.png")) {
+                TwoStates_RequestTransfer(50000.0, 0.0);
+            }
+            currentY += btnStep;
+
+            if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
+                                  TrW(L"Перевести 50 000 $", L"Send 50,000 USD"),
+                                  "editor/mp_icon_dollar.png")) {
+                TwoStates_RequestTransfer(0.0, 50000.0);
+            }
+            currentY += btnStep;
+        }
+
+        if (st == SESSION_HOST_IN_GAME) {
+            if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                                  TrW(L"Синхронизировать мир", L"Re-sync World"),
+                                  "editor/mp_icon_sync.png")) {
+                SaveSync_RequestResync();
+            }
+            currentY += btnStep;
+        }
+    }
+
+    if (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
+        bool show3D = TwoStates_GetShow3DBorder();
+        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                              show3D ? TrW(L"3D-граница: ВКЛ [F7]", L"3D Border: ON [F7]")
+                                     : TrW(L"3D-граница: ВЫКЛ [F7]", L"3D Border: OFF [F7]"),
+                              "editor/mp_icon_border.png")) {
+            TwoStates_SetShow3DBorder(!show3D);
+            TwoStates_SaveSettings();
+        }
+        currentY += btnStep;
+    }
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                          Lang_Get() == MP_LANG_EN ? L"Language: English" : L"Язык: Русский",
+                          "editor/mp_icon_lang.png")) {
+        Lang_Toggle();
+        TwoStates_SaveSettings();
+    }
+    currentY += btnStep;
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF881818,
+                          st == SESSION_HOST_LISTENING
+                              ? TrW(L"Остановить сервер", L"Stop Server")
+                              : TrW(L"Отключиться от коопа", L"Disconnect"),
+                          "editor/mp_icon_stop.png")) {
+        SaveSync_RequestDisconnect();
+    }
+    currentY += btnStep;
+
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
+                          TrW(L"<< Назад", L"<< Back"),
+                          "editor/mp_icon_back.png")) {
+        g_inGameCoopSubTab = false;
+    }
+    currentY += btnStep;
+}
+
+static void DrawSidebarCoopSubTab(BYTE* menuObj)
+{
+    BYTE* titleCallSite = g_exeBase + SYSTAB_ROOT_TITLE_RVA;
+    BYTE savedCallBytes[6];
+    DWORD oldProt = 0;
+    VirtualProtect(titleCallSite, 6, PAGE_EXECUTE_READWRITE, &oldProt);
+    memcpy(savedCallBytes, titleCallSite, 6);
+    memset(titleCallSite, 0x90, 6);
+
+    BYTE savedCheat = *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF);
+    *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = 0;
+    *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) = -2;
+
+    g_origSystemTabBuild(menuObj);
+
+    memcpy(titleCallSite, savedCallBytes, 6);
+    VirtualProtect(titleCallSite, 6, oldProt, &oldProt);
+
+    *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = savedCheat;
+    int afterSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
+    *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) = -1;
+
+    if (!*(void**)(menuObj + SYSTAB_TAB_PTR_OFF)) {
+        g_inGameCoopSubTab = false;
+        g_sidebarLClickAvailable = false;
+        return;
+    }
+    if (afterSubTab == -1) {
+        g_inGameCoopSubTab = false;
+        g_sidebarLClickAvailable = false;
+        *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
+        return;
+    }
+
+    float guiScale = *(float*)(g_exeBase + GUI_SCALE_RVA);
+    float leftX = guiScale * 102.0f;
+    float baseEndY = (*(float*)(menuObj + SYSTAB_PANEL_H_OFF) - guiScale * 730.0f);
+
+    DrawSidebarText(guiScale * 150.0f, baseEndY - guiScale * 64.0f, 0xFF505050, true,
+                    TrW(L"Кооператив", L"Co-op"));
+
+    float currentY = baseEndY - guiScale * 4.0f;
+    float textStep = guiScale * 22.0f;
+    float btnStep  = guiScale * 35.0f;
+
+    SessionState st = SaveSync_GetState();
+    bool inActiveGame = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
+    if (!inActiveGame && !TwoStates_IsActive()) {
+        DrawSidebarSingleplayerSection(menuObj, leftX, currentY, textStep, btnStep, guiScale);
+    } else {
+        DrawSidebarActiveCoopSection(menuObj, st, leftX, currentY, textStep, btnStep, guiScale);
+    }
+    *(float*)(menuObj + SYSTAB_PANEL_H_OFF) = currentY + guiScale * 736.0f;
+}
+
 static void Hook_SystemTabBuildInner(BYTE* menuObj)
 {
     __try {
-        bool focused = (*(BYTE*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) != 0) && IsGameWindowFocused();
+        bool focused = (*(BYTE*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) != 0) && IsGameWindowFocused() &&
+                       !SyncBlock_BlocksWorldInput() && !SaveSync_IsWaitingLobbyActive();
         bool lmbDown = focused &&
                        ((*(BYTE*)(g_exeBase + INPUT_LHELD_RVA) != 0) ||
                         ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0));
@@ -1066,7 +1367,6 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
 
         int curSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
         if (curSubTab != -1) {
-            // Player is in one of the game's built-in sub-tabs (Audio, Graphics, Cheats, etc.)
             g_inGameCoopSubTab = false;
             g_sidebarLClickAvailable = false;
             g_origSystemTabBuild(menuObj);
@@ -1074,285 +1374,10 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
         }
 
         if (g_inGameCoopSubTab) {
-            // Render the native sub-tab frame and Back arrow button using C65C = -2,
-            // while temporarily NOPing the root title draw call at 0x337D7B so
-            // "Меню параметров" does not overlap the top-left Back arrow icon.
-            BYTE* titleCallSite = g_exeBase + SYSTAB_ROOT_TITLE_RVA;
-            BYTE savedCallBytes[6];
-            DWORD oldProt = 0;
-            VirtualProtect(titleCallSite, 6, PAGE_EXECUTE_READWRITE, &oldProt);
-            memcpy(savedCallBytes, titleCallSite, 6);
-            memset(titleCallSite, 0x90, 6);
-
-            BYTE savedCheat = *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF);
-            *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = 0;
-            *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) = -2;
-
-            g_origSystemTabBuild(menuObj);
-
-            memcpy(titleCallSite, savedCallBytes, 6);
-            VirtualProtect(titleCallSite, 6, oldProt, &oldProt);
-
-            *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = savedCheat;
-            int afterSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
-            *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) = -1;
-
-            if (!*(void**)(menuObj + SYSTAB_TAB_PTR_OFF)) {
-                g_inGameCoopSubTab = false;
-                g_sidebarLClickAvailable = false;
-                return;
-            }
-            if (afterSubTab == -1) {
-                // Player clicked the native top-left Back arrow icon!
-                g_inGameCoopSubTab = false;
-                g_sidebarLClickAvailable = false;
-                *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
-                return;
-            }
-
-            float guiScale = *(float*)(g_exeBase + GUI_SCALE_RVA);
-            float leftX = guiScale * 102.0f;
-            float baseEndY = (*(float*)(menuObj + SYSTAB_PANEL_H_OFF) - guiScale * 730.0f);
-
-            // Draw sub-tab title right next to the top-left Back arrow icon (which ends at x = 140 * guiScale)
-            DrawSidebarText(guiScale * 150.0f, baseEndY - guiScale * 64.0f, 0xFF505050, true,
-                            TrW(L"Кооператив", L"Co-op"));
-
-            float currentY = baseEndY - guiScale * 4.0f;
-            float textStep = guiScale * 22.0f;
-            float btnStep  = guiScale * 35.0f;
-
-            SessionState st = SaveSync_GetState();
-            bool inActiveGame = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
-
-            if (!inActiveGame && !TwoStates_IsActive()) {
-                DrawSidebarText(leftX, currentY, 0xFF881111, false,
-                                TrW(L"Сессия: Одиночная игра", L"Session: Singleplayer"));
-                currentY += textStep;
-
-                DrawSidebarText(leftX, currentY, 0xFF333333, false,
-                                TrW(L"Откройте сервер прямо из игры:", L"Start a Co-op server in-game:"));
-                currentY += textStep + guiScale * 8.0f;
-
-                int mode = TwoStates_GetMode();
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                      mode == COOP_MODE_TWO_STATES
-                                          ? TrW(L"Режим: 2 государства", L"Mode: Two States")
-                                          : TrW(L"Режим: 1 государство", L"Mode: One State"),
-                                      "editor/mp_icon_mode.png")) {
-                    TwoStates_SetMode(mode == COOP_MODE_TWO_STATES ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES);
-                    TwoStates_SaveSettings();
-                }
-                currentY += btnStep;
-
-                if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
-                    bool fullCap = TwoStates_GetFullStartingCapital();
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                          fullCap ? TrW(L"Казна: 100% каждому", L"Budget: 100% Each")
-                                                  : TrW(L"Казна: Делить 50/50", L"Budget: Split 50/50"),
-                                          "editor/mp_icon_ruble.png")) {
-                        TwoStates_SetFullStartingCapital(!fullCap);
-                        TwoStates_SaveSettings();
-                    }
-                    currentY += btnStep;
-
-                    bool show3D = TwoStates_GetShow3DBorder();
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                          show3D ? TrW(L"3D-граница: ВКЛ [F7]", L"3D Border: ON [F7]")
-                                                 : TrW(L"3D-граница: ВЫКЛ [F7]", L"3D Border: OFF [F7]"),
-                                          "editor/mp_icon_border.png")) {
-                        TwoStates_SetShow3DBorder(!show3D);
-                        TwoStates_SaveSettings();
-                    }
-                    currentY += btnStep;
-                }
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                      Lang_Get() == MP_LANG_EN ? L"Language: English" : L"Язык: Русский",
-                                      "editor/mp_icon_lang.png")) {
-                    Lang_Toggle();
-                    TwoStates_SaveSettings();
-                }
-                currentY += btnStep;
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
-                                      TrW(L"Открыть Кооп-сервер", L"Start Co-op Server"),
-                                      "editor/mp_icon_start.png")) {
-                    SaveSync_StartHost();
-                }
-                currentY += btnStep;
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF881818,
-                                      TrW(L"<< Назад", L"<< Back"),
-                                      "editor/mp_icon_back.png")) {
-                    g_inGameCoopSubTab = false;
-                }
-                currentY += btnStep;
-            } else {
-                // Active Co-op Session in-game view
-                if (TwoStates_IsActive()) {
-                    int me = TwoStates_LocalState();
-                    DrawSidebarText(leftX, currentY, 0xFF881111, false,
-                                    me == 1 ? TrW(L"Роль: Западная ССР (Хост)", L"Role: West SSR (Host)")
-                                            : TrW(L"Роль: Восточная ССР (Игрок 2)", L"Role: East SSR (Player 2)"));
-                } else {
-                    DrawSidebarText(leftX, currentY, 0xFF881111, false,
-                                    TrW(L"Режим: Общая республика", L"Mode: Shared Republic"));
-                }
-                currentY += textStep;
-
-                if (st == SESSION_HOST_LISTENING) {
-                    DrawSidebarText(leftX, currentY, 0xFF994000, false,
-                                    TrW(L"Статус: Ждём 2-го игрока...", L"Status: Waiting Player 2..."));
-                    currentY += textStep;
-                } else {
-                    wchar_t pingLine[96] = {};
-                    unsigned long long rtt = 0;
-                    if (LockstepNet_RoundTrip(&rtt)) {
-                        _snwprintf_s(pingLine, _TRUNCATE,
-                                     TrW(L"Статус: В сети (пинг %llu мс)", L"Status: Online (ping %llu ms)"), rtt);
-                    } else {
-                        wcsncpy_s(pingLine, TrW(L"Статус: В сети", L"Status: Online"), _TRUNCATE);
-                    }
-                    DrawSidebarText(leftX, currentY, 0xFF155518, false, pingLine);
-                    currentY += textStep;
-                }
-
-                if (TwoStates_IsActive()) {
-                    int me = TwoStates_LocalState();
-                    int other = (me == 1) ? 2 : 1;
-
-                    wchar_t myLine[96] = {};
-                    _snwprintf_s(myLine, _TRUNCATE,
-                                 TrW(L"Своя: %.0f РУБ | %.0f $", L"Own: %.0f RUB | %.0f $"),
-                                 TwoStates_LocalRubles(), TwoStates_LocalDollars());
-                    DrawSidebarText(leftX, currentY, 0xFF155518, false, myLine);
-                    currentY += textStep;
-
-                    wchar_t partLine[96] = {};
-                    _snwprintf_s(partLine, _TRUNCATE,
-                                 TrW(L"Партнёр: %.0f РУБ | %.0f $", L"Partner: %.0f RUB | %.0f $"),
-                                 TwoStates_GetRubles(other), TwoStates_GetDollars(other));
-                    DrawSidebarText(leftX, currentY, 0xFF333333, false, partLine);
-                    currentY += textStep;
-
-                    float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-                    if (TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) {
-                        int zone = TwoStates_GetZoneAt(cx, cz);
-                        const wchar_t* zText = (zone == 0)
-                            ? TrW(L"Курсор: Погранзона", L"Cursor: Border Zone")
-                            : (zone == me ? TrW(L"Курсор: Своя земля", L"Cursor: Own Land")
-                                          : TrW(L"Курсор: Чужая земля", L"Cursor: Partner's Land"));
-                        unsigned int zCol = (zone == 0) ? 0xFF995500 : (zone == me ? 0xFF155518 : 0xFF881818);
-                        DrawSidebarText(leftX, currentY, zCol, false, zText);
-                        currentY += textStep;
-                    }
-                }
-
-                currentY += guiScale * 8.0f;
-
-                if (st == SESSION_HOST_LISTENING && SteamP2P_IsAvailable()) {
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF183D5D,
-                                          TrW(L"Скопировать код Steam", L"Copy Steam Code"),
-                                          "editor/mp_icon_steam.png")) {
-                        CopyMySteamCodeToClipboard();
-                    }
-                    currentY += btnStep;
-                }
-
-                if (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME) {
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
-                                          TrW(L"Сохранить кооп-игру", L"Save Co-op Game"),
-                                          "editor/settings_save.png")) {
-                        TwoStates_TriggerQuickCoopSave();
-                    }
-                    currentY += btnStep;
-                }
-
-                if (st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME) {
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                          TrW(L"Камера к партнёру [F6]", L"Camera to Partner [F6]"),
-                                          "editor/mp_icon_camera.png")) {
-                        TwoStates_JumpCameraToPartner();
-                    }
-                    currentY += btnStep;
-
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                          TrW(L"Сигнал на карте [Alt+ЛКМ]", L"Ping Map [Alt+LMB]"),
-                                          "editor/mp_icon_ping.png")) {
-                        TwoStates_PingAtCursor();
-                    }
-                    currentY += btnStep;
-
-                    if (TwoStates_IsActive()) {
-                        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
-                                              TrW(L"Перевести 50 000 РУБ", L"Send 50,000 RUB"),
-                                              "editor/mp_icon_ruble.png")) {
-                            TwoStates_RequestTransfer(50000.0, 0.0);
-                        }
-                        currentY += btnStep;
-
-                        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF155518,
-                                              TrW(L"Перевести 50 000 $", L"Send 50,000 USD"),
-                                              "editor/mp_icon_dollar.png")) {
-                            TwoStates_RequestTransfer(0.0, 50000.0);
-                        }
-                        currentY += btnStep;
-                    }
-
-                    if (st == SESSION_HOST_IN_GAME) {
-                        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                              TrW(L"Синхронизировать мир", L"Re-sync World"),
-                                              "editor/mp_icon_sync.png")) {
-                            SaveSync_RequestResync();
-                        }
-                        currentY += btnStep;
-                    }
-                }
-
-                if (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
-                    bool show3D = TwoStates_GetShow3DBorder();
-                    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                          show3D ? TrW(L"3D-граница: ВКЛ [F7]", L"3D Border: ON [F7]")
-                                                 : TrW(L"3D-граница: ВЫКЛ [F7]", L"3D Border: OFF [F7]"),
-                                          "editor/mp_icon_border.png")) {
-                        TwoStates_SetShow3DBorder(!show3D);
-                        TwoStates_SaveSettings();
-                    }
-                    currentY += btnStep;
-                }
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                      Lang_Get() == MP_LANG_EN ? L"Language: English" : L"Язык: Русский",
-                                      "editor/mp_icon_lang.png")) {
-                    Lang_Toggle();
-                    TwoStates_SaveSettings();
-                }
-                currentY += btnStep;
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF881818,
-                                      st == SESSION_HOST_LISTENING
-                                          ? TrW(L"Остановить сервер", L"Stop Server")
-                                          : TrW(L"Отключиться от коопа", L"Disconnect"),
-                                      "editor/mp_icon_stop.png")) {
-                    SaveSync_RequestDisconnect();
-                }
-                currentY += btnStep;
-
-                if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                                      TrW(L"<< Назад", L"<< Back"),
-                                      "editor/mp_icon_back.png")) {
-                    g_inGameCoopSubTab = false;
-                }
-                currentY += btnStep;
-            }
-
-            *(float*)(menuObj + SYSTAB_PANEL_H_OFF) = currentY + guiScale * 736.0f;
+            DrawSidebarCoopSubTab(menuObj);
             return;
         }
 
-        // Root 'system' (Hammer & Sickle) tab: let the game draw all standard icons/elements,
-        // then append our native "КООПЕРАТИВ" / "CO-OP" button cleanly below "Достижения доступны".
         bool hadNativeClickBefore = (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0);
         g_origSystemTabBuild(menuObj);
         if (hadNativeClickBefore && *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) == 0) {
@@ -1474,54 +1499,8 @@ bool NativeMenu_Install(void)
     return true;
 }
 
-void NativeMenu_DrawOverlay(void)
+static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 displaySize)
 {
-    g_overlayHovered = false;
-    bool worldLoaded = SaveSync_IsWorldLoaded();
-    int screenId = NativeMenu_GetActiveScreenId();
-
-    // Reset in-game Co-op sub-tab state if the left sidebar is closed
-    if (g_exeBase && g_inGameCoopSubTab) {
-        __try {
-            if (!*(void**)(g_exeBase + MENU_OBJ_RVA + SYSTAB_TAB_PTR_OFF)) {
-                g_inGameCoopSubTab = false;
-            }
-        } __except (EXCEPTION_EXECUTE_HANDLER) {}
-    }
-
-    // 1. Detect transition from Main Menu / Load Screen -> World Loaded!
-    if (worldLoaded != g_wasWorldLoaded) {
-        ResetSidebarIcons();
-    }
-    if (worldLoaded && !g_wasWorldLoaded) {
-        g_delegatedToLaunchScreen = false;
-        if (g_hostOnNextLoad) {
-            g_hostOnNextLoad = false;
-            g_nativePage = NATIVE_PAGE_ROOT;
-            if (SaveSync_GetState() == SESSION_IDLE) {
-                DiagLog_Printf("SESSION", "World finished loading with HostOnNextLoad=1 -> auto-starting Co-op Host server");
-                SaveSync_StartHost();
-            }
-        }
-    }
-    g_wasWorldLoaded = worldLoaded;
-
-    // 2. If user backed out of Load Game / Custom Game / Campaign back to Root Main Menu (screenId == 1),
-    //    reset g_hostOnNextLoad if load isn't triggered.
-    if (!worldLoaded && screenId == 1 && g_lastScreenId != 1) {
-        BYTE loadTrig = 0;
-        __try { loadTrig = *(volatile BYTE*)(g_exeBase + LOAD_TRIGGER_DAT_RVA); } __except (EXCEPTION_EXECUTE_HANDLER) {}
-        if (loadTrig == 0 && !g_delegatedToLaunchScreen) {
-            g_hostOnNextLoad = false;
-            TwoStates_SetImportingSpSave(false);
-            TwoStates_MountSaveBank(false);
-        }
-    }
-    g_lastScreenId = screenId;
-
-    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-
-    // 2b. Single-PC Dual-Window Testbed automation (--mp-autohost / --mp-autojoin or env vars):
     static bool s_autoFlagsChecked = false;
     static bool s_autoHostPending = false;
     static bool s_autoUnpausePending = false;
@@ -1558,170 +1537,221 @@ void NativeMenu_DrawOverlay(void)
         }
     }
 
-    if (!worldLoaded && screenId == 1 && SaveSync_GetState() == SESSION_IDLE) {
-        ++s_menuReadyFrames;
-        if (s_autoHostPending && s_menuReadyFrames >= 45) {
-            s_autoHostPending = false;
-            TwoStates_MountSaveBank(true);
-            TwoStates_SetImportingSpSave(false);
-            char autoSaveName[128] = {};
-            if (TwoStates_GetLatestCoopSaveName(autoSaveName, sizeof(autoSaveName)) && autoSaveName[0]) {
-                g_hostOnNextLoad = true;
-                g_delegatedToLaunchScreen = false;
-                g_nativePage = NATIVE_PAGE_ROOT;
-                DiagLog_Printf("UI", "Dual-Window Testbed: auto-starting Host with latest Co-op save [%s]", autoSaveName);
-                TriggerLoadSave(autoSaveName);
-            } else {
-                DiagLog_Printf("UI", "Dual-Window Testbed: no Co-op save found for auto-host; opening Host menu");
-                g_nativePage = NATIVE_PAGE_HOST;
-            }
-        } else if (s_autoJoinPending && s_menuReadyFrames >= 45) {
-            if (SaveSync_IsLocalPcHostWaiting()) {
-                s_autoJoinPending = false;
-                strncpy_s(g_joinAddress, "127.0.0.1", _TRUNCATE);
-                DiagLog_Printf("UI", "Dual-Window Testbed: detected open Local PC Host -> auto-connecting to 127.0.0.1");
-                SaveSync_StartClient("127.0.0.1");
-            } else {
-                ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-                ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14f, 0.10f, 0.07f, 0.95f));
-                ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.75f, 0.25f, 0.95f));
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-                ImGuiWindowFlags wflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                          ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
-                                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
-                if (ImGui::Begin("##RepublicMP_AutoJoinWait", nullptr, wflags)) {
-                    ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.35f, 1.0f), "%s",
-                                       Tr("Тестовый стенд: ожидание запуска окна Хоста (127.0.0.1)...",
-                                          "Testbed: waiting for Host window to open server (127.0.0.1)..."));
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton(Tr("Отмена", "Cancel"))) {
-                        s_autoJoinPending = false;
-                    }
+    if (worldLoaded || screenId != 1 || SaveSync_GetState() != SESSION_IDLE) return;
+    ++s_menuReadyFrames;
+    if (s_autoHostPending && s_menuReadyFrames >= 45) {
+        s_autoHostPending = false;
+        TwoStates_MountSaveBank(true);
+        TwoStates_SetImportingSpSave(false);
+        char autoSaveName[128] = {};
+        if (TwoStates_GetLatestCoopSaveName(autoSaveName, sizeof(autoSaveName)) && autoSaveName[0]) {
+            g_hostOnNextLoad = true;
+            g_delegatedToLaunchScreen = false;
+            g_nativePage = NATIVE_PAGE_ROOT;
+            DiagLog_Printf("UI", "Dual-Window Testbed: auto-starting Host with latest Co-op save [%s]", autoSaveName);
+            TriggerLoadSave(autoSaveName);
+        } else {
+            DiagLog_Printf("UI", "Dual-Window Testbed: no Co-op save found for auto-host; opening Host menu");
+            g_nativePage = NATIVE_PAGE_HOST;
+        }
+    } else if (s_autoJoinPending && s_menuReadyFrames >= 45) {
+        if (SaveSync_IsLocalPcHostWaiting()) {
+            s_autoJoinPending = false;
+            strncpy_s(g_joinAddress, "127.0.0.1", _TRUNCATE);
+            DiagLog_Printf("UI", "Dual-Window Testbed: detected open Local PC Host -> auto-connecting to 127.0.0.1");
+            SaveSync_StartClient("127.0.0.1");
+        } else {
+            ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14f, 0.10f, 0.07f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.75f, 0.25f, 0.95f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+            ImGuiWindowFlags wflags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
+            if (ImGui::Begin("##RepublicMP_AutoJoinWait", nullptr, wflags)) {
+                ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.35f, 1.0f), "%s",
+                                   Tr("Тестовый стенд: ожидание запуска окна Хоста (127.0.0.1)...",
+                                      "Testbed: waiting for Host window to open server (127.0.0.1)..."));
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr("Отмена", "Cancel"))) {
+                    s_autoJoinPending = false;
                 }
-                ImGui::End();
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(2);
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+        }
+    }
+}
+
+static void DrawLaunchScreenCoopBadge(int screenId, ImVec2 displaySize)
+{
+    ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.11f, 0.08f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, g_hostOnNextLoad ? ImVec4(0.95f, 0.75f, 0.25f, 0.95f)
+                                                            : ImVec4(0.55f, 0.42f, 0.28f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_Button, g_hostOnNextLoad ? ImVec4(0.20f, 0.52f, 0.22f, 0.95f)
+                                                            : ImVec4(0.58f, 0.18f, 0.14f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_hostOnNextLoad ? ImVec4(0.26f, 0.66f, 0.28f, 1.0f)
+                                                                   : ImVec4(0.76f, 0.24f, 0.18f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                             ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##RepublicMP_LaunchScreenBar", nullptr, flags)) {
+        if (g_hostOnNextLoad) {
+            if (screenId == 2 && TwoStates_IsCoopBankMounted()) {
+                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "%s",
+                                   Tr("КООП-СОХРАНЕНИЯ (режим и казна из сейва)",
+                                      "CO-OP SAVES (mode & budget restored from save)"));
+            } else {
+                ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "%s",
+                                   (screenId == 2 && TwoStates_IsImportingSpSave())
+                                       ? Tr("Импорт одиночного сейва в КООП:", "Import SP Save to CO-OP:")
+                                       : Tr("Запуск: КООП-СЕРВЕР", "Launch: CO-OP SERVER"));
+                ImGui::SameLine();
+                int mode = TwoStates_GetMode();
+                if (ImGui::SmallButton(mode == COOP_MODE_TWO_STATES
+                                       ? Tr("2 государства", "Two States")
+                                       : Tr("1 государство", "One State"))) {
+                    TwoStates_SetMode(mode == COOP_MODE_TWO_STATES ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES);
+                    TwoStates_SaveSettings();
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton(Tr("Выкл кооп", "Singleplayer"))) {
+                    g_hostOnNextLoad = false;
+                    TwoStates_SetImportingSpSave(false);
+                }
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.85f, 0.80f, 0.70f, 1.0f), "%s",
+                               (screenId == 2)
+                                   ? Tr("Одиночные сохранения", "Singleplayer Saves")
+                                   : Tr("Запуск: Одиночная игра", "Launch: Singleplayer"));
+            ImGui::SameLine();
+            if (ImGui::SmallButton(screenId == 2
+                                   ? Tr("Импорт в Кооп-сервер", "Import to Co-op Server")
+                                   : Tr("Включить Кооп-сервер", "Enable Co-op Server"))) {
+                g_hostOnNextLoad = true;
+                if (screenId == 2 && !TwoStates_IsCoopBankMounted()) {
+                    TwoStates_SetImportingSpSave(true);
+                }
+            }
+        }
+
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+            g_overlayHovered = true;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(4);
+}
+
+static void DrawManualJoinModal(ImVec2 displaySize)
+{
+    ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 195.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.16f, 0.11f, 0.08f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.90f, 0.70f, 0.25f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.45f, 0.14f, 0.10f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.60f, 0.18f, 0.12f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.58f, 0.18f, 0.14f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.25f, 0.18f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+
+    ImGuiWindowFlags mflags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin(Tr("Подключение к серверу — Адрес###ManualJoinModal",
+                        "Join Server — Address###ManualJoinModal"), &g_showManualJoinModal, mflags)) {
+        ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.60f, 1.0f), "%s",
+                           Tr("IP-адрес хоста (например 127.0.0.1) или steam:<SteamID>:",
+                              "Host IP address (e.g. 127.0.0.1) or steam:<SteamID>:"));
+        ImGui::SetNextItemWidth(320.0f);
+        bool enterPressed = ImGui::InputText("##manual_join_ip", g_joinAddress, sizeof(g_joinAddress),
+                                             ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Вставить", "Paste"))) {
+            PasteAddressFromClipboard();
+        }
+
+        if (SteamP2P_IsAvailable()) {
+            ImGui::Spacing();
+            if (ImGui::SmallButton(Tr("Скопировать мой код Steam для друга", "Copy My Steam Code for Friend"))) {
+                CopyMySteamCodeToClipboard();
+            }
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button(Tr("Подключиться", "Connect"), ImVec2(200.0f, 34.0f)) || enterPressed) {
+            g_showManualJoinModal = false;
+            SaveSync_StartClient(g_joinAddress);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Отмена", "Cancel"), ImVec2(120.0f, 34.0f))) {
+            g_showManualJoinModal = false;
+        }
+        g_overlayHovered = true;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(6);
+}
+
+void NativeMenu_DrawOverlay(void)
+{
+    g_overlayHovered = false;
+    bool worldLoaded = SaveSync_IsWorldLoaded();
+    int screenId = NativeMenu_GetActiveScreenId();
+
+    if (g_exeBase && g_inGameCoopSubTab) {
+        __try {
+            if (!*(void**)(g_exeBase + MENU_OBJ_RVA + SYSTAB_TAB_PTR_OFF)) {
+                g_inGameCoopSubTab = false;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
+
+    if (worldLoaded != g_wasWorldLoaded) {
+        ResetSidebarIcons();
+    }
+    if (worldLoaded && !g_wasWorldLoaded) {
+        g_delegatedToLaunchScreen = false;
+        if (g_hostOnNextLoad) {
+            g_hostOnNextLoad = false;
+            g_nativePage = NATIVE_PAGE_ROOT;
+            if (SaveSync_GetState() == SESSION_IDLE) {
+                DiagLog_Printf("SESSION", "World finished loading with HostOnNextLoad=1 -> auto-starting Co-op Host server");
+                SaveSync_StartHost();
             }
         }
     }
+    g_wasWorldLoaded = worldLoaded;
 
-    // 3. On Load Game (2), Campaign (0x62), Custom Game Map (0x63), or Custom Game Settings (3):
-    //    Place a neat badge in the TOP-RIGHT corner so it never overlaps the game's centered window title!
+    if (!worldLoaded && screenId == 1 && g_lastScreenId != 1) {
+        BYTE loadTrig = 0;
+        __try { loadTrig = *(volatile BYTE*)(g_exeBase + LOAD_TRIGGER_DAT_RVA); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        if (loadTrig == 0 && !g_delegatedToLaunchScreen) {
+            g_hostOnNextLoad = false;
+            TwoStates_SetImportingSpSave(false);
+            TwoStates_MountSaveBank(false);
+        }
+    }
+    g_lastScreenId = screenId;
+
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    TickTestbedAutomation(worldLoaded, screenId, displaySize);
+
     bool onLaunchScreen = !worldLoaded && (screenId == 2 || screenId == 0x62 || screenId == 0x63 || screenId == 3);
     if (onLaunchScreen) {
-        ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.11f, 0.08f, 0.96f));
-        ImGui::PushStyleColor(ImGuiCol_Border, g_hostOnNextLoad ? ImVec4(0.95f, 0.75f, 0.25f, 0.95f)
-                                                                : ImVec4(0.55f, 0.42f, 0.28f, 0.85f));
-        ImGui::PushStyleColor(ImGuiCol_Button, g_hostOnNextLoad ? ImVec4(0.20f, 0.52f, 0.22f, 0.95f)
-                                                                : ImVec4(0.58f, 0.18f, 0.14f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_hostOnNextLoad ? ImVec4(0.26f, 0.66f, 0.28f, 1.0f)
-                                                                       : ImVec4(0.76f, 0.24f, 0.18f, 1.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 8.0f));
-
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                                 ImGuiWindowFlags_NoNav;
-        if (ImGui::Begin("##RepublicMP_LaunchScreenBar", nullptr, flags)) {
-            if (g_hostOnNextLoad) {
-                if (screenId == 2 && TwoStates_IsCoopBankMounted()) {
-                    ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "%s",
-                                       Tr("КООП-СОХРАНЕНИЯ (режим и казна из сейва)",
-                                          "CO-OP SAVES (mode & budget restored from save)"));
-                } else {
-                    ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.45f, 1.0f), "%s",
-                                       (screenId == 2 && TwoStates_IsImportingSpSave())
-                                           ? Tr("Импорт одиночного сейва в КООП:", "Import SP Save to CO-OP:")
-                                           : Tr("Запуск: КООП-СЕРВЕР", "Launch: CO-OP SERVER"));
-                    ImGui::SameLine();
-                    int mode = TwoStates_GetMode();
-                    if (ImGui::SmallButton(mode == COOP_MODE_TWO_STATES
-                                           ? Tr("2 государства", "Two States")
-                                           : Tr("1 государство", "One State"))) {
-                        TwoStates_SetMode(mode == COOP_MODE_TWO_STATES ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES);
-                        TwoStates_SaveSettings();
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton(Tr("Выкл кооп", "Singleplayer"))) {
-                        g_hostOnNextLoad = false;
-                        TwoStates_SetImportingSpSave(false);
-                    }
-                }
-            } else {
-                ImGui::TextColored(ImVec4(0.85f, 0.80f, 0.70f, 1.0f), "%s",
-                                   (screenId == 2)
-                                       ? Tr("Одиночные сохранения", "Singleplayer Saves")
-                                       : Tr("Запуск: Одиночная игра", "Launch: Singleplayer"));
-                ImGui::SameLine();
-                if (ImGui::SmallButton(screenId == 2
-                                       ? Tr("Импорт в Кооп-сервер", "Import to Co-op Server")
-                                       : Tr("Включить Кооп-сервер", "Enable Co-op Server"))) {
-                    g_hostOnNextLoad = true;
-                    if (screenId == 2 && !TwoStates_IsCoopBankMounted()) {
-                        TwoStates_SetImportingSpSave(true);
-                    }
-                }
-            }
-
-            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
-                g_overlayHovered = true;
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(4);
+        DrawLaunchScreenCoopBadge(screenId, displaySize);
     }
 
-    // 4. Clean Soviet-styled manual IP / SteamID input dialog
     if (g_showManualJoinModal) {
-        ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(460.0f, 195.0f), ImGuiCond_Always);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.16f, 0.11f, 0.08f, 0.98f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.90f, 0.70f, 0.25f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.45f, 0.14f, 0.10f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.60f, 0.18f, 0.12f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.58f, 0.18f, 0.14f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.25f, 0.18f, 1.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-
-        ImGuiWindowFlags mflags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::Begin(Tr("Подключение к серверу — Адрес###ManualJoinModal",
-                            "Join Server — Address###ManualJoinModal"), &g_showManualJoinModal, mflags)) {
-            ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.60f, 1.0f), "%s",
-                               Tr("IP-адрес хоста (например 127.0.0.1) или steam:<SteamID>:",
-                                  "Host IP address (e.g. 127.0.0.1) or steam:<SteamID>:"));
-            ImGui::SetNextItemWidth(320.0f);
-            bool enterPressed = ImGui::InputText("##manual_join_ip", g_joinAddress, sizeof(g_joinAddress),
-                                                 ImGuiInputTextFlags_EnterReturnsTrue);
-            ImGui::SameLine();
-            if (ImGui::Button(Tr("Вставить", "Paste"))) {
-                PasteAddressFromClipboard();
-            }
-
-            if (SteamP2P_IsAvailable()) {
-                ImGui::Spacing();
-                if (ImGui::SmallButton(Tr("Скопировать мой код Steam для друга", "Copy My Steam Code for Friend"))) {
-                    CopyMySteamCodeToClipboard();
-                }
-            }
-
-            ImGui::Spacing();
-            if (ImGui::Button(Tr("Подключиться", "Connect"), ImVec2(200.0f, 34.0f)) || enterPressed) {
-                g_showManualJoinModal = false;
-                SaveSync_StartClient(g_joinAddress);
-            }
-            ImGui::SameLine();
-            if (ImGui::Button(Tr("Отмена", "Cancel"), ImVec2(120.0f, 34.0f))) {
-                g_showManualJoinModal = false;
-            }
-            g_overlayHovered = true;
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(6);
+        DrawManualJoinModal(displaySize);
     }
 }

@@ -49,7 +49,8 @@ struct TsmScopedCsLock {
 
 inline bool SafeMemcpyPod(void* dst, const void* src, size_t bytes)
 {
-    if (!dst || !src || bytes == 0) return false;
+    if (bytes == 0) return true;
+    if (!dst || !src) return false;
     bool ok = false;
     DiagLog_BeginSafeSeh();
     __try {
@@ -62,6 +63,46 @@ inline bool SafeMemcpyPod(void* dst, const void* src, size_t bytes)
     return ok;
 }
 
+inline bool SafeBytesMatch(const void* addr, const void* expected, size_t bytes)
+{
+    if (bytes == 0) return true;
+    if (!addr || !expected) return false;
+    bool match = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        match = (memcmp(addr, expected, bytes) == 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        match = false;
+    }
+    DiagLog_EndSafeSeh();
+    return match;
+}
+
+struct TsmRoutineSig {
+    unsigned rva;
+    unsigned char entry[16];
+    unsigned size; // 0 means 16
+};
+
+inline bool TsmCheckRoutineTable(const uint8_t* exeBase, int* readyState,
+                                 const TsmRoutineSig* table, size_t count,
+                                 unsigned* outFailedRva = nullptr)
+{
+    if (!exeBase || !readyState || !table) return false;
+    if (*readyState < 0) {
+        *readyState = 1;
+        for (size_t i = 0; i < count; ++i) {
+            size_t len = table[i].size ? table[i].size : 16u;
+            if (!SafeBytesMatch(exeBase + table[i].rva, table[i].entry, len)) {
+                if (outFailedRva) *outFailedRva = table[i].rva;
+                *readyState = 0;
+                break;
+            }
+        }
+    }
+    return *readyState == 1;
+}
+
 template <typename T>
 inline bool SafeReadPod(const void* src, T* outVal)
 {
@@ -72,6 +113,24 @@ template <typename T>
 inline bool SafeWritePod(void* dst, const T& val)
 {
     return SafeMemcpyPod(dst, &val, sizeof(T));
+}
+
+inline bool SafeIsWorldLoaded(const void* exeBase)
+{
+    if (!exeBase) return false;
+    const uint8_t* base = (const uint8_t*)exeBase;
+    uintptr_t b = 0, e = 0;
+    return SafeReadPod(base + 0x9E6A18, &b) && SafeReadPod(base + 0x9E6A20, &e) && b != 0 && e != 0;
+}
+
+inline bool SafeIsToolGuardBusy(uintptr_t worldThisPtr)
+{
+    if (!worldThisPtr) return false;
+    const uint8_t* w = (const uint8_t*)worldThisPtr;
+    uint8_t g1 = 0, g2 = 0, g3 = 0;
+    if (!SafeReadPod(w + 0xFBC, &g1) || !SafeReadPod(w + 0xFBE, &g2) || !SafeReadPod(w + 0xFC3, &g3))
+        return false;
+    return (g1 != 0) || (g2 != 0) || (g3 != 0);
 }
 
 // Safely counts elements in an MSVC x64 std::vector header { begin, end, cap }.

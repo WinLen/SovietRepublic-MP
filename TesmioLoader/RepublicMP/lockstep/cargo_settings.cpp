@@ -4,6 +4,7 @@
 #include "cargo_settings.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include <algorithm>
 #include <string.h>
@@ -59,14 +60,10 @@ struct Span {
 static const Span kScalars[] = { { 0x00, 1 }, { 0x04, 4 }, { 0x20, 9 }, { 0x2C, 8 } };
 #define SCALAR_BYTES 22
 
-struct RoutineEntry {
-    unsigned rva;
-    unsigned char bytes[16];
-};
-static const RoutineEntry kRoutines[] = {
-    { DESTROY_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 } },
-    { COPY_RVA, { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe } },
-    { REFRESH_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 } },
+static const TsmRoutineSig kRoutines[] = {
+    { DESTROY_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 }, 16 },
+    { COPY_RVA, { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe }, 16 },
+    { REFRESH_RVA, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 }, 16 },
 };
 static int g_ready = -1;
 
@@ -77,41 +74,22 @@ void CargoSettings_Bind(const TsmHost* host)
 
 static bool Ready()
 {
-    if (g_ready < 0) {
-        g_ready = 1;
-        for (const RoutineEntry& r : kRoutines)
-            if (memcmp(g_exeBase + r.rva, r.bytes, 16) != 0) {
-                Logf("republicmp  CARGO: exe+0x%X differs - cargo settings stay on the clicking PC", r.rva);
-                g_ready = 0;
-            }
-    }
-    return g_ready == 1;
+    return Ref_CheckRoutineTable(&g_ready, kRoutines, sizeof(kRoutines) / sizeof(kRoutines[0]), "CARGO");
 }
 
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 
-static bool Copy(void* to, const void* from, size_t n)
-{
-    if (!n) return true;
-    __try {
-        memcpy(to, from, n);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-static bool ReadQ(U64 at, U64& v) { return at && Copy(&v, (const void*)at, 8); }
+static bool ReadQ(U64 at, U64& v) { return at && SafeMemcpyPod(&v, (const void*)at, 8); }
 
 static bool ReadVec(U64 at, unsigned elem, std::vector<BYTE>& out)
 {
     U64 v[2] = {};
     out.clear();
-    if (!Copy(v, (const void*)at, 16)) return false;
+    if (!SafeMemcpyPod(v, (const void*)at, 16)) return false;
     if (!v[0] && !v[1]) return true;
     if (!v[0] || v[1] < v[0] || (v[1] - v[0]) % elem || (v[1] - v[0]) / elem > MAX_ELEMENTS) return false;
     out.resize((size_t)(v[1] - v[0]));
-    return Copy(out.data(), (const void*)v[0], out.size());
+    return SafeMemcpyPod(out.data(), (const void*)v[0], out.size());
 }
 
 struct Half {
@@ -131,7 +109,7 @@ static bool ReadHalf(U64 at, Half& h)
     if (!at) return false;
     size_t k = 0;
     for (const Span& s : kScalars) {
-        if (!Copy(h.scalars + k, (const void*)(at + s.at), s.bytes)) return false;
+        if (!SafeMemcpyPod(h.scalars + k, (const void*)(at + s.at), s.bytes)) return false;
         k += s.bytes;
     }
     for (int i = 0; i < VECTORS; i++)
@@ -143,7 +121,7 @@ static bool ReadHalf(U64 at, Half& h)
 static unsigned RecordCount(int kind, U64 object)
 {
     U64 v[2] = {};
-    if (!object || !Copy(v, (const void*)(object + (kind == KIND_STOP ? STOPS_LIST : LINKS_LIST)), 16) || !v[0] || v[1] < v[0])
+    if (!object || !SafeMemcpyPod(v, (const void*)(object + (kind == KIND_STOP ? STOPS_LIST : LINKS_LIST)), 16) || !v[0] || v[1] < v[0])
         return 0;
     U64 each = kind == KIND_STOP ? RECORD_BYTES : 8;
     if ((v[1] - v[0]) % each) return 0;
@@ -164,17 +142,6 @@ static U64 HalfAt(int kind, U64 object, unsigned record, unsigned half)
     return at + (U64)half * HALF_BYTES;
 }
 
-static void SetVec(BYTE* at, const void* begin, size_t bytes)
-{
-    U64 v[3] = {};
-    if (bytes && begin) {
-        v[0] = (U64)begin;
-        v[1] = v[0] + bytes;
-        v[2] = v[1];
-    }
-    memcpy(at, v, 24);
-}
-
 static bool Natives(U64 at, const BYTE* standIn)
 {
     __try {
@@ -191,45 +158,15 @@ static bool Natives(U64 at, const BYTE* standIn)
 static bool Replace(U64 at, const Half& h)
 {
     BYTE standIn[HALF_BYTES];
-    if (!Copy(standIn, (const void*)at, HALF_BYTES)) return false;
+    if (!SafeMemcpyPod(standIn, (const void*)at, HALF_BYTES)) return false;
     size_t k = 0;
     for (const Span& s : kScalars) {
         memcpy(standIn + s.at, h.scalars + k, s.bytes);
         k += s.bytes;
     }
-    for (int i = 0; i < VECTORS; i++) SetVec(standIn + kVecAt[i], h.vec[i].empty() ? nullptr : h.vec[i].data(), h.vec[i].size());
+    for (int i = 0; i < VECTORS; i++)
+        Ref_SetStandInVector(standIn + kVecAt[i], h.vec[i].empty() ? nullptr : h.vec[i].data(), h.vec[i].size());
     return Natives(at, standIn);
-}
-
-// A definition pointer as a table index: resources (world +c2b0) or vehicle types (world +12840).
-static bool PtrRef(U64 p, BYTE& tag, unsigned& index)
-{
-    tag = 0;
-    index = 0;
-    if (!p) return true;
-    const unsigned tables[2] = { RESOURCES, TYPES }, strides[2] = { RESOURCE_STRIDE, TYPE_STRIDE };
-    for (int k = 0; k < 2; k++) {
-        U64 v[2] = {};
-        if (!Copy(v, World() + tables[k], 16) || !v[0] || v[1] < v[0]) continue;
-        if (p >= v[0] && p < v[1] && (p - v[0]) % strides[k] == 0) {
-            tag = (BYTE)(k + 1);
-            index = (unsigned)((p - v[0]) / strides[k]);
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool PtrAt(BYTE tag, unsigned index, U64& p)
-{
-    p = 0;
-    if (tag == 0) return index == 0;
-    if (tag > 2) return false;
-    unsigned table = tag == 1 ? RESOURCES : TYPES, stride = tag == 1 ? RESOURCE_STRIDE : TYPE_STRIDE;
-    U64 v[2] = {};
-    if (!Copy(v, World() + table, 16) || !v[0] || v[1] < v[0] || index >= (v[1] - v[0]) / stride) return false;
-    p = v[0] + (U64)index * stride;
-    return true;
 }
 
 static bool GuardedRef(int kind, U64 object, RouteRef& r)
@@ -298,7 +235,7 @@ static const char* Encode(int kind, const RouteRef& ref, unsigned records, unsig
         for (size_t k = 0; k < v.size(); k += kVecElem[i]) {
             BYTE tag;
             unsigned index;
-            if (!PtrRef(*(const U64*)&v[k], tag, index)) return "a resource or vehicle type is unknown";
+            if (!Ref_DefPtr(*(const U64*)&v[k], tag, index)) return "a resource or vehicle type is unknown";
             w.u8(tag);
             w.u32(index);
             if (kVecElem[i] == 16) w.u64(*(const U64*)&v[k + 8]);
@@ -330,9 +267,9 @@ static bool SortedList(U64 at, std::vector<U64>& out)
 {
     U64 v[2] = {};
     out.clear();
-    if (!Copy(v, (const void*)at, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return false;
+    if (!SafeMemcpyPod(v, (const void*)at, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return false;
     out.resize((size_t)((v[1] - v[0]) / 8));
-    if (!out.empty() && !Copy(out.data(), (const void*)v[0], out.size() * 8)) return false;
+    if (!out.empty() && !SafeMemcpyPod(out.data(), (const void*)v[0], out.size() * 8)) return false;
     std::sort(out.begin(), out.end());
     return true;
 }
@@ -342,9 +279,9 @@ static bool SortedList(U64 at, std::vector<U64>& out)
 static void Shown(std::vector<Watched>& out)
 {
     U64 w[2] = {};
-    if (!Copy(w, g_exeBase + WINDOWS_RVA, 16) || !w[0] || w[1] < w[0] || (w[1] - w[0]) / 8 > MAX_WINDOWS) return;
+    if (!SafeMemcpyPod(w, g_exeBase + WINDOWS_RVA, 16) || !w[0] || w[1] < w[0] || (w[1] - w[0]) / 8 > MAX_WINDOWS) return;
     std::vector<U64> windows((size_t)((w[1] - w[0]) / 8));
-    if (windows.empty() || !Copy(windows.data(), (const void*)w[0], windows.size() * 8)) return;
+    if (windows.empty() || !SafeMemcpyPod(windows.data(), (const void*)w[0], windows.size() * 8)) return;
     std::vector<U64> vehicles, buildings;
     SortedList((U64)World() + VEHICLES_OFFSET, vehicles);
     SortedList((U64)World() + BUILDINGS_OFFSET, buildings);
@@ -352,9 +289,9 @@ static void Shown(std::vector<Watched>& out)
     for (U64 win : windows) {
         U64 objects[2] = {}, parent = 0;
         unsigned kinds[2] = {};
-        if (!win || !Copy(&kinds[0], (const void*)(win + WINDOW_KIND), 4) || !ReadQ(win + WINDOW_OBJECT, objects[0])) continue;
+        if (!win || !SafeMemcpyPod(&kinds[0], (const void*)(win + WINDOW_KIND), 4) || !ReadQ(win + WINDOW_OBJECT, objects[0])) continue;
         if (kinds[0] == PICKER_WINDOW && ReadQ(win + WINDOW_PARENT, parent) && parent) {
-            Copy(&kinds[1], (const void*)(parent + WINDOW_KIND), 4);
+            SafeMemcpyPod(&kinds[1], (const void*)(parent + WINDOW_KIND), 4);
             ReadQ(parent + WINDOW_OBJECT, objects[1]);
         }
         for (int i = 0; i < 2; i++) {
@@ -448,7 +385,7 @@ static const char* Decode(Reader& in, Half& h)
             BYTE tag = in.u8();
             unsigned index = in.u32();
             U64 p = 0;
-            if (in.ok && !PtrAt(tag, index, p)) return "a resource or vehicle type is not here";
+            if (in.ok && !Ref_DefPtrAt(tag, index, p)) return "a resource or vehicle type is not here";
             memcpy(&v[(size_t)k * kVecElem[i]], &p, 8);
             if (kVecElem[i] == 16) {
                 U64 value = in.u64();

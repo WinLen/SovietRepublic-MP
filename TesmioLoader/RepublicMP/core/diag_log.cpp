@@ -347,11 +347,15 @@ static void DumpLiveSnapshot(const char* tag)
                    (int)stmAvail, (unsigned long long)mySteamId, myName ? myName : "");
 
     // Two States & Map Expansion status
-    DiagLog_Printf(tag, "TwoStates: Mode=%d | LocalState=%d | BorderHalf=%.0fm | ExpandBorders=%d | West(RUB=%.0f, USD=%.0f) | East(RUB=%.0f, USD=%.0f)",
+    double westDebtRub = 0.0, westDebtUsd = 0.0, eastDebtRub = 0.0, eastDebtUsd = 0.0;
+    int westLoans = 0, eastLoans = 0;
+    TwoStates_GetLoanDebt(1, &westDebtRub, &westDebtUsd, &westLoans);
+    TwoStates_GetLoanDebt(2, &eastDebtRub, &eastDebtUsd, &eastLoans);
+    DiagLog_Printf(tag, "TwoStates: Mode=%d | LocalState=%d | BorderHalf=%.0fm | ExpandBorders=%d | West(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$) | East(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$)",
                    (int)TwoStates_GetMode(), TwoStates_LocalState(),
                    TwoStates_GetBorderHalfWidth(), (int)TwoStates_GetExpandBorders(),
-                   TwoStates_GetRubles(1), TwoStates_GetDollars(1),
-                   TwoStates_GetRubles(2), TwoStates_GetDollars(2));
+                   TwoStates_GetRubles(1), TwoStates_GetDollars(1), westLoans, westDebtRub, westDebtUsd,
+                   TwoStates_GetRubles(2), TwoStates_GetDollars(2), eastLoans, eastDebtRub, eastDebtUsd);
 
     // ModSync status
     DiagLog_Printf(tag, "ModSync: PackMode=%d | CatalogMods=%d | ActiveServerMods=%d",

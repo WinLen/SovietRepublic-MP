@@ -1073,7 +1073,7 @@ static void SaveConfig(const wchar_t* gameExe)
     char versionA[64] = {0};
     WideCharToMultiByte(CP_ACP, 0, g_version, -1, versionA, sizeof(versionA), NULL, NULL);
     char menu_tagA[128];
-    _snprintf_s(menu_tagA, _countof(menu_tagA), _TRUNCATE, "tesmioloader v. %s", versionA);
+    _snprintf_s(menu_tagA, _countof(menu_tagA), _TRUNCATE, "RepublicMP Co-op"); (void)versionA;
     WritePrivateProfileStringA("tesmioloader", "menu_tag", menu_tagA, g_iniA);
 
     for (int i = 0; i < g_plugCount; i++)
@@ -1849,7 +1849,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
 
     wchar_t game[MAX_PATH] = {0};
     wchar_t dll[MAX_PATH]  = {0};
-    bool    gui            = true;
+    bool    gui            = false;
     bool    findOnly       = false;
     bool    ignoreVersion  = false;
 
@@ -1858,6 +1858,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int)
         if (!_wcsicmp(argv[i], L"--game") && i + 1 < argc) wcscpy_s(game, MAX_PATH, argv[++i]);
         else if (!_wcsicmp(argv[i], L"--dll") && i + 1 < argc) wcscpy_s(dll, MAX_PATH, argv[++i]);
         else if (!_wcsicmp(argv[i], L"--nogui")) gui = false;
+        else if (!_wcsicmp(argv[i], L"--gui")) gui = true;
         else if (!_wcsicmp(argv[i], L"--find")) { findOnly = true; gui = false; }
         else if (!_wcsicmp(argv[i], L"--ignore-version")) ignoreVersion = true;
         else if (!_wcsicmp(argv[i], L"--help"))

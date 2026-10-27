@@ -103,38 +103,42 @@ bool Commands_TakeUi()
     return g_capturing && !(g_applying != 0 && GetCurrentThreadId() == g_applyThread);
 }
 
+static const char* const kCmdKindNames[] = {
+    "?",                              // 0
+    "segment",                        // LS_CMD_SEGMENT (1)
+    "upgrade",                        // LS_CMD_UPGRADE (2)
+    "network demolition",             // LS_CMD_NET_DEMOLISH (3)
+    "placement",                      // LS_CMD_PLACE (4)
+    "building demolition",            // LS_CMD_DEMOLISH (5)
+    "building setting",               // LS_CMD_SETTING (6)
+    "start of planned construction",  // LS_CMD_PLAN_START (7)
+    "group tool",                     // LS_CMD_GROUP_TOOL (8)
+    "factory connection direction",   // LS_CMD_DIRECTION (9)
+    "terrain edits",                  // LS_CMD_TERRAIN (10)
+    "money",                          // LS_CMD_MONEY (11)
+    "purchase",                       // LS_CMD_PURCHASE (12)
+    "route tool",                     // LS_CMD_ROUTE (13)
+    "window button",                  // LS_CMD_GAME_CALL (14)
+    "line accept",                    // LS_CMD_LINE_ACCEPT (15)
+    "vehicle setting",                // LS_CMD_VEHICLE_SWITCH (16)
+    "window setting",                 // LS_CMD_BUILDING_SWITCH (17)
+    "brush",                          // LS_CMD_BRUSH (18)
+    "road hover tool",                // LS_CMD_HOVER (19)
+    "junction accept",                // LS_CMD_JUNCTION (20)
+    "game rules",                     // LS_CMD_GAME_RULES (21)
+    "cargo settings",                 // LS_CMD_CARGO_SETTINGS (22)
+    "source slots",                   // LS_CMD_SOURCE_SLOTS (23)
+    "rename",                         // LS_CMD_RENAME (24)
+    "ledger row",                     // LS_CMD_LEDGER (25)
+    "inter-state money transfer",     // LS_CMD_STATE_TRANSFER (26)
+    "vehicle soft sync",              // LS_CMD_VEHICLE_SOFT_SYNC (27)
+    "bank loan",                      // LS_CMD_LOAN (28)
+};
+
 static const char* KindName(int kind)
 {
-    switch (kind) {
-    case LS_CMD_SEGMENT: return "segment";
-    case LS_CMD_UPGRADE: return "upgrade";
-    case LS_CMD_NET_DEMOLISH: return "network demolition";
-    case LS_CMD_PLACE: return "placement";
-    case LS_CMD_DEMOLISH: return "building demolition";
-    case LS_CMD_SETTING: return "building setting";
-    case LS_CMD_PLAN_START: return "start of planned construction";
-    case LS_CMD_GROUP_TOOL: return "group tool";
-    case LS_CMD_DIRECTION: return "factory connection direction";
-    case LS_CMD_TERRAIN: return "terrain edits";
-    case LS_CMD_MONEY: return "money";
-    case LS_CMD_PURCHASE: return "purchase";
-    case LS_CMD_ROUTE: return "route tool";
-    case LS_CMD_GAME_CALL: return "window button";
-    case LS_CMD_LINE_ACCEPT: return "line accept";
-    case LS_CMD_VEHICLE_SWITCH: return "vehicle setting";
-    case LS_CMD_BUILDING_SWITCH: return "window setting";
-    case LS_CMD_BRUSH: return "brush";
-    case LS_CMD_HOVER: return "road hover tool";
-    case LS_CMD_JUNCTION: return "junction accept";
-    case LS_CMD_GAME_RULES: return "game rules";
-    case LS_CMD_CARGO_SETTINGS: return "cargo settings";
-    case LS_CMD_SOURCE_SLOTS: return "source slots";
-    case LS_CMD_RENAME: return "rename";
-    case LS_CMD_LEDGER: return "ledger row";
-    case LS_CMD_STATE_TRANSFER: return "inter-state money transfer";
-    case LS_CMD_VEHICLE_SOFT_SYNC: return "vehicle soft sync";
-    }
-    return "?";
+    const int n = (int)(sizeof(kCmdKindNames) / sizeof(kCmdKindNames[0]));
+    return (kind > 0 && kind < n) ? kCmdKindNames[kind] : "?";
 }
 
 // Terrain brushes, their cost, and background soft-sync batches come frequently: not logged one by one.
@@ -174,6 +178,100 @@ static bool ApplyMoney(const LsMoneyDelta& d)
 
 static bool g_madeThisFrame = false;
 
+static bool ApplySegmentCommand(const void* p, size_t n)
+{
+    if (n < ROAD_SYNC_MSG_HEADER_BYTES || n > sizeof(RoadSyncMsg)) return false;
+    static RoadSyncMsg s_segMsg;
+    memset(&s_segMsg, 0, sizeof(s_segMsg));
+    memcpy(&s_segMsg, p, n);
+    if (!RoadSync_PointCountValid(s_segMsg.seg.pointCount)) return false;
+    if (n != sizeof(RoadSyncMsg) && n != ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(s_segMsg.seg.pointCount))
+        return false;
+    return RoadSync_ApplyCommandSegment(s_segMsg);
+}
+
+static bool ApplyNetDemolishCommand(const void* p, size_t n)
+{
+    if (n == sizeof(RoadSyncDemolishMsg)) {
+        const RoadSyncDemolishMsg& m = *(const RoadSyncDemolishMsg*)p;
+        bool ok = RoadSync_ApplyCommandDemolish(m);
+        LocalBuilds_DemolishMade(m);
+        return ok;
+    }
+    if (n == sizeof(LsDemolishHoverMsg)) {
+        const LsDemolishHoverMsg& h = *(const LsDemolishHoverMsg*)p;
+        bool ok = RoadSync_ApplyCommandDemolishHover(h);
+        LocalBuilds_DemolishMade(h.m, &h.hover);
+        return ok;
+    }
+    return false;
+}
+
+typedef bool (*RawCmdHandlerFn)(const void*, size_t);
+
+struct RawCmdHandlerEntry {
+    int kind;
+    RawCmdHandlerFn fn;
+};
+
+static const RawCmdHandlerEntry kRawCmdHandlers[] = {
+    { LS_CMD_SEGMENT, ApplySegmentCommand },
+    { LS_CMD_NET_DEMOLISH, ApplyNetDemolishCommand },
+    { LS_CMD_TERRAIN, TerrainHook_ApplyCommand },
+    { LS_CMD_PURCHASE, Purchase_ApplyCommand },
+    { LS_CMD_ROUTE, RouteTools_ApplyCommand },
+    { LS_CMD_GAME_CALL, GameCalls_ApplyCommand },
+    { LS_CMD_LINE_ACCEPT, LineAccept_ApplyCommand },
+    { LS_CMD_VEHICLE_SWITCH, VehicleSwitches_ApplyCommand },
+    { LS_CMD_BUILDING_SWITCH, BuildingSwitches_ApplyCommand },
+    { LS_CMD_BRUSH, BrushTools_ApplyCommand },
+    { LS_CMD_HOVER, HoverTools_ApplyCommand },
+    { LS_CMD_JUNCTION, JunctionAccept_ApplyCommand },
+    { LS_CMD_GAME_RULES, ApplyGameRules },
+    { LS_CMD_CARGO_SETTINGS, CargoSettings_ApplyCommand },
+    { LS_CMD_SOURCE_SLOTS, SourceSlots_ApplyCommand },
+    { LS_CMD_RENAME, Rename_ApplyCommand },
+    { LS_CMD_LEDGER, BrushTools_ApplyLedger },
+    { LS_CMD_VEHICLE_SOFT_SYNC, VehicleSoftSync_ApplyCommand },
+};
+
+static bool DispatchCommandPayload(int kind, const void* p, size_t n)
+{
+    for (const RawCmdHandlerEntry& entry : kRawCmdHandlers) {
+        if (entry.kind == kind) return entry.fn(p, n);
+    }
+    switch (kind) {
+    case LS_CMD_UPGRADE:
+        return n == sizeof(RoadSyncUpgradeMsg) && RoadSync_ApplyCommandUpgrade(*(const RoadSyncUpgradeMsg*)p);
+    case LS_CMD_PLACE:
+        return n == sizeof(BuildSyncMsg) && BuildSync_ApplyPlacementCommand(*(const BuildSyncMsg*)p);
+    case LS_CMD_DEMOLISH:
+        return n == sizeof(BuildSyncMsg) && BuildSync_ApplyDemolishCommand(*(const BuildSyncMsg*)p);
+    case LS_CMD_SETTING:
+        return n == sizeof(SettingWire) && SettingsSync_ApplyCommand(*(const SettingWire*)p);
+    case LS_CMD_PLAN_START:
+        return n == sizeof(RoadSyncPlanStartMsg) && RoadSync_ApplyCommandPlanStart(*(const RoadSyncPlanStartMsg*)p);
+    case LS_CMD_GROUP_TOOL:
+        return n == sizeof(RoadSyncGroupToolMsg) && RoadSync_ApplyCommandGroupTool(*(const RoadSyncGroupToolMsg*)p);
+    case LS_CMD_DIRECTION:
+        return n == sizeof(RoadSyncDirectionMsg) && RoadSync_ApplyCommandDirection(*(const RoadSyncDirectionMsg*)p);
+    case LS_CMD_MONEY:
+        return n == sizeof(LsMoneyDelta) && ApplyMoney(*(const LsMoneyDelta*)p);
+    case LS_CMD_STATE_TRANSFER:
+        return n == sizeof(LsStateTransfer) && TwoStates_ApplyTransferCommand(*(const LsStateTransfer*)p);
+    case LS_CMD_LOAN:
+        return n == sizeof(LsLoanCommand) && TwoStates_ApplyLoanCommand(*(const LsLoanCommand*)p);
+    default:
+        return false;
+    }
+}
+
+static bool CancelsLocalDrag(int kind)
+{
+    return kind == LS_CMD_SEGMENT || kind == LS_CMD_UPGRADE || kind == LS_CMD_NET_DEMOLISH ||
+           kind == LS_CMD_PLACE || kind == LS_CMD_GROUP_TOOL || kind == LS_CMD_DIRECTION;
+}
+
 // Makes one command through the replay of its kind. The payload layout is the
 // wire layout of the replay multiplayer; a size that does not match refuses it.
 static void Apply(const Command& c)
@@ -181,12 +279,10 @@ static void Apply(const Command& c)
     const void* p = c.data.data();
     size_t n = c.data.size();
     if (c.kind == LS_CMD_VEHICLE_SOFT_SYNC) {
-        bool ok = VehicleSoftSync_ApplyCommand(p, n);
-        if (!ok)
+        if (!VehicleSoftSync_ApplyCommand(p, n))
             Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - not made", c.seq, KindName(c.kind), c.afterTick);
         return;
     }
-    bool ok = false;
     int owner = (c.owner == 2) ? 2 : 1;
     g_applyThread = GetCurrentThreadId();
     InterlockedIncrement(&g_applying);
@@ -194,119 +290,13 @@ static void Apply(const Command& c)
     TwoStates_BeginCommand(owner);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
     InputBlock_BeginNeutral();
-    // A drag the local player has under way would share the tool manager with
-    // the replay and change what it builds on this PC only: it is cancelled.
-    if (c.kind == LS_CMD_SEGMENT || c.kind == LS_CMD_UPGRADE || c.kind == LS_CMD_NET_DEMOLISH ||
-        c.kind == LS_CMD_PLACE || c.kind == LS_CMD_GROUP_TOOL || c.kind == LS_CMD_DIRECTION)
+    if (CancelsLocalDrag(c.kind))
         RoadSync_CancelLocalDrag();
-    // This PC's open menus or a window under its cursor (+fbc/+fbe/+fc3) make
-    // the tools return at once: a command is made with them closed, as the
-    // replays are (replay_menus.h). A road from the host was refused on the
-    // player only because its cursor was over a window.
     ReplayUiScope menus;
-    switch (c.kind) {
-    case LS_CMD_SEGMENT:
-        if (n >= ROAD_SYNC_MSG_HEADER_BYTES && n <= sizeof(RoadSyncMsg)) {
-            static RoadSyncMsg s_segMsg;
-            memset(&s_segMsg, 0, sizeof(s_segMsg));
-            memcpy(&s_segMsg, p, n);
-            if (RoadSync_PointCountValid(s_segMsg.seg.pointCount) &&
-                (n == sizeof(RoadSyncMsg) ||
-                 n == ROAD_SYNC_MSG_HEADER_BYTES + RoadSync_PointBytes(s_segMsg.seg.pointCount))) {
-                ok = RoadSync_ApplyCommandSegment(s_segMsg);
-            }
-        }
-        break;
-    case LS_CMD_UPGRADE:
-        if (n == sizeof(RoadSyncUpgradeMsg)) ok = RoadSync_ApplyCommandUpgrade(*(const RoadSyncUpgradeMsg*)p);
-        break;
-    case LS_CMD_NET_DEMOLISH:
-        if (n == sizeof(RoadSyncDemolishMsg)) {
-            ok = RoadSync_ApplyCommandDemolish(*(const RoadSyncDemolishMsg*)p);
-            LocalBuilds_DemolishMade(*(const RoadSyncDemolishMsg*)p);
-        } else if (n == sizeof(LsDemolishHoverMsg)) {
-            const LsDemolishHoverMsg& h = *(const LsDemolishHoverMsg*)p;
-            ok = RoadSync_ApplyCommandDemolishHover(h);
-            LocalBuilds_DemolishMade(h.m, &h.hover);
-        }
-        break;
-    case LS_CMD_PLACE:
-        if (n == sizeof(BuildSyncMsg)) ok = BuildSync_ApplyPlacementCommand(*(const BuildSyncMsg*)p);
-        break;
-    case LS_CMD_DEMOLISH:
-        if (n == sizeof(BuildSyncMsg)) ok = BuildSync_ApplyDemolishCommand(*(const BuildSyncMsg*)p);
-        break;
-    case LS_CMD_SETTING:
-        if (n == sizeof(SettingWire)) ok = SettingsSync_ApplyCommand(*(const SettingWire*)p);
-        break;
-    case LS_CMD_PLAN_START:
-        if (n == sizeof(RoadSyncPlanStartMsg)) ok = RoadSync_ApplyCommandPlanStart(*(const RoadSyncPlanStartMsg*)p);
-        break;
-    case LS_CMD_GROUP_TOOL:
-        if (n == sizeof(RoadSyncGroupToolMsg)) ok = RoadSync_ApplyCommandGroupTool(*(const RoadSyncGroupToolMsg*)p);
-        break;
-    case LS_CMD_DIRECTION:
-        if (n == sizeof(RoadSyncDirectionMsg)) ok = RoadSync_ApplyCommandDirection(*(const RoadSyncDirectionMsg*)p);
-        break;
-    case LS_CMD_TERRAIN:
-        ok = TerrainHook_ApplyCommand(p, n);
-        break;
-    case LS_CMD_MONEY:
-        if (n == sizeof(LsMoneyDelta)) ok = ApplyMoney(*(const LsMoneyDelta*)p);
-        break;
-    case LS_CMD_PURCHASE:
-        ok = Purchase_ApplyCommand(p, n);
-        break;
-    case LS_CMD_ROUTE:
-        ok = RouteTools_ApplyCommand(p, n);
-        break;
-    case LS_CMD_GAME_CALL:
-        ok = GameCalls_ApplyCommand(p, n);
-        break;
-    case LS_CMD_LINE_ACCEPT:
-        ok = LineAccept_ApplyCommand(p, n);
-        break;
-    case LS_CMD_VEHICLE_SWITCH:
-        ok = VehicleSwitches_ApplyCommand(p, n);
-        break;
-    case LS_CMD_BUILDING_SWITCH:
-        ok = BuildingSwitches_ApplyCommand(p, n);
-        break;
-    case LS_CMD_BRUSH:
-        ok = BrushTools_ApplyCommand(p, n);
-        break;
-    case LS_CMD_HOVER:
-        ok = HoverTools_ApplyCommand(p, n);
-        break;
-    case LS_CMD_JUNCTION:
-        ok = JunctionAccept_ApplyCommand(p, n);
-        break;
-    case LS_CMD_GAME_RULES:
-        ok = ApplyGameRules(p, n);
-        break;
-    case LS_CMD_CARGO_SETTINGS:
-        ok = CargoSettings_ApplyCommand(p, n);
-        break;
-    case LS_CMD_SOURCE_SLOTS:
-        ok = SourceSlots_ApplyCommand(p, n);
-        break;
-    case LS_CMD_RENAME:
-        ok = Rename_ApplyCommand(p, n);
-        break;
-    case LS_CMD_LEDGER:
-        ok = BrushTools_ApplyLedger(p, n);
-        break;
-    case LS_CMD_STATE_TRANSFER:
-        if (n == sizeof(LsStateTransfer)) ok = TwoStates_ApplyTransferCommand(*(const LsStateTransfer*)p);
-        break;
-    case LS_CMD_VEHICLE_SOFT_SYNC:
-        ok = VehicleSoftSync_ApplyCommand(p, n);
-        break;
-    }
+    bool ok = DispatchCommandPayload(c.kind, p, n);
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
     g_madeThisFrame = true;
-    // What the command paid or got: compared between the PCs' logs when the money differs.
     double paidRub = *Rubles() - rubBefore, paidUsd = *Dollars() - usdBefore;
     TwoStates_EndCommand(owner);
     char money[128] = "";

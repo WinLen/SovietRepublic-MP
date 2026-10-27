@@ -102,14 +102,10 @@ void TerrainSync_Bind(const TsmHost* host)
 
 static void TerrainSyncStatus(const char* fmt, ...)
 {
-    char body[512];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
+    DebugLog_FormatStatus(Logf, "TERRAIN_SYNC", fmt, ap);
     va_end(ap);
-
-    Logf("republicmp  TERRAIN_SYNC: %s", body);
-    DebugLog_Add(body);
 }
 
 static bool IsWorldLoaded()
@@ -562,23 +558,16 @@ static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
 
 void TerrainSync_StartHost()
 {
-    if (g_connected || g_connecting) return;
-    g_isHost = true;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               HostAcceptWorkerThread);
 }
 
 void TerrainSync_StartClient(const char* hostIp)
 {
-    if (g_connected || g_connecting) return;
-    if (hostIp && hostIp[0]) {
-        strncpy_s(g_targetIp, hostIp, _TRUNCATE);
-    }
-    g_isHost = false;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               ClientConnectWorkerThread);
 }
 
 void TerrainSync_Reset()

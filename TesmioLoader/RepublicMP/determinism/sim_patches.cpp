@@ -13,8 +13,11 @@
 #include "../lockstep/hover_tools.h"
 #include "../lockstep/cargo_settings.h"
 #include "../lockstep/source_slots.h"
+#include "../session/save_sync.h"
+#include "../ui/native_menu.h"
 #include "determinism.h"
 #include "held_frame.h"
+#include "../core/safe_mem.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -117,11 +120,7 @@ static volatile DWORD g_simThread = 0; // the main thread (Early and Late)
 
 static bool BytesAre(const DetPatch& p, const unsigned char* bytes)
 {
-    __try {
-        return memcmp(g_exeBase + p.rva, bytes, p.size) == 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeBytesMatch(g_exeBase + p.rva, bytes, p.size);
 }
 
 static void Write(BYTE* at, const unsigned char* bytes, size_t n)
@@ -589,7 +588,19 @@ static void PrivateLate(__int64 world)
 static void HookedLate(__int64 world)
 {
     bool active = g_on && Determinism_IsActive() && !Determinism_WorldLoading() && world == (__int64)(g_exeBase + WORLD_RVA);
-    if (!active) { o_late(world); return; }
+    if (!active) {
+        if (world == (__int64)(g_exeBase + WORLD_RVA) &&
+            (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+            SaveSync_EnforceWaitingLobbyHold();
+            *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+            o_late(world);
+            SaveSync_EnforceWaitingLobbyHold();
+            *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
+            return;
+        }
+        o_late(world);
+        return;
+    }
     Determinism_BeforeLate();
     g_simThread = GetCurrentThreadId();
     // Note (DET-20): H_MasterSave (0x42CC70 in two_states.cpp) snapshots and restores
@@ -931,7 +942,16 @@ static __int64 DetUiRoutine(void* world)
 {
     typedef __int64 (*UiFn)(void*);
     UiFn original = (UiFn)(g_exeBase + UI_ROUTINE_RVA);
-    if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || (BYTE*)world != g_exeBase + WORLD_RVA) return original(world);
+    if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || (BYTE*)world != g_exeBase + WORLD_RVA) {
+        if ((BYTE*)world == g_exeBase + WORLD_RVA &&
+            (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+            SaveSync_EnforceWaitingLobbyHold();
+            __int64 r = original(world);
+            SaveSync_EnforceWaitingLobbyHold();
+            return r;
+        }
+        return original(world);
+    }
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
     BYTE saved[SEARCH_WORKSPACE_SIZE];
     memcpy(saved, shared, sizeof(saved));
@@ -1003,6 +1023,13 @@ static void DetPrepare(__int64 world)
     typedef void (*PrepareFn)(__int64);
     PrepareFn original = (PrepareFn)(g_exeBase + PREPARE_RVA);
     if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || world != (__int64)(g_exeBase + WORLD_RVA)) {
+        if (world == (__int64)(g_exeBase + WORLD_RVA) &&
+            (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+            SaveSync_EnforceWaitingLobbyHold();
+            original(world);
+            SaveSync_EnforceWaitingLobbyHold();
+            return;
+        }
         original(world);
         return;
     }
@@ -1136,6 +1163,10 @@ static bool DetBuyPress(void* input)
     alignas(16) CONTEXT c = {};
     RtlCaptureContext(&c);
     bool pressed = (*(PressFn*)(g_exeBase + PLACE_PRESS_IMPORT))(input);
+    if (pressed && (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return false;
+    }
     if (!pressed || !Determinism_IsActive()) return pressed;
     DWORD64 base = 0;
     PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &base, nullptr);

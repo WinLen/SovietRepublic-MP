@@ -8,6 +8,8 @@
 #include "junction_accept.h"
 #include "rename.h"
 #include "../session/two_states.h"
+#include "../session/save_sync.h"
+#include "../ui/native_menu.h"
 #include <array>
 #include <limits.h>
 #include <string.h>
@@ -370,6 +372,14 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
 static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
+    if (s.special != CALL_LOCAL &&
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        if (s.special == CALL_DELETE_LINE && a[1]) {
+            __try { *(BYTE*)(a[1] + 1) = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return s.result;
+    }
     if (s.special == CALL_INVITE_CITIZENS) {
         if (TwoStates_IsActive() && a[3]) {
             const BYTE* b = (const BYTE*)a[3];

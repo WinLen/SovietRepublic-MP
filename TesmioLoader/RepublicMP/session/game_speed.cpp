@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See game_speed.h.
 #include "game_speed.h"
+#include "save_sync.h"
 #include "../determinism/determinism.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/buildings/build_sync.h"
@@ -164,6 +165,11 @@ static void ApplyRemoteBoost(int boost)
 
 void GameSpeed_SyncTick()
 {
+    if (SaveSync_IsWaitingLobbyActive()) {
+        EnsureGamePaused();
+        return;
+    }
+
     int cur = ReadGameSpeed();
     int turbo = ReadTurbo();
     int saved = ReadGameSpeedSaved();
@@ -299,4 +305,3 @@ void GameSpeed_OnRemote(int kind, int speed, int speedSaved, int turbo)
         g_lastSeenTurbo = g_appliedBoost == BOOST_HYPER ? ReadTurbo() : turbo;
     }
 }
-

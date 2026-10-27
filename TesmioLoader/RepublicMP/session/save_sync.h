@@ -138,3 +138,32 @@ bool SaveSync_IsHostAwaitingClient();
 // True when another SOVIET64.exe instance on this same PC is currently hosting
 // an open Co-op server in SESSION_HOST_LISTENING on 127.0.0.1:5556.
 bool SaveSync_IsLocalPcHostWaiting();
+
+// Pure predicate (used by runtime and unit tests): true when world edits (buildings,
+// terrain digging/leveling, roads, demolition) and simulation ticks must be held.
+bool SaveSync_ShouldBlockWorldEdits(int sessionState, bool inGameplay, bool syncBlockActive);
+
+// True while the Co-op Waiting Lobby / Synchronization lock is active in gameplay.
+bool SaveSync_IsWaitingLobbyActive();
+
+// True when a partner had already joined this Host session earlier, dropped/disconnected,
+// and the Host is now paused in SESSION_HOST_LISTENING waiting for them to reconnect.
+bool SaveSync_IsWaitingForReconnect();
+
+// True if at least one partner has connected to this Host session since SaveSync_StartHost().
+bool SaveSync_HadPartnerInSession();
+
+// Last partner address/name that was in the game before disconnecting (or "").
+const char* SaveSync_GetLastPartnerPeer();
+
+// Enforces speed = 0, timer paused byte = 1, and clears any selected build/dig/demolish tool
+// and active drag on `exeBase` (or `g_exeBase` when `exeBase == nullptr`).
+void SaveSync_EnforceWaitingLobbyHold(unsigned char* exeBase = nullptr);
+
+// Rate-limited toast & log notification when a player attempts to build/dig/demolish while waiting.
+void SaveSync_NotifyWaitingLobbyActionBlocked();
+
+// Test-only state injection for unit tests in tests/test_main.cpp.
+void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession = false,
+                                  const char* lastPartnerPeer = nullptr);
+

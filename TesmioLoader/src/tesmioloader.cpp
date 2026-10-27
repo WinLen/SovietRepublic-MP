@@ -1402,7 +1402,8 @@ static bool PluginEnabled(const char* file)
     strncpy_s(key, sizeof(key), file, _TRUNCATE);
     if (char* dot = strrchr(key, '.')) *dot = 0;
 
-    return GetPrivateProfileIntA("plugins", key, 1, g_iniPath) != 0;
+    int def = (_stricmp(key, "RepublicMP") == 0) ? 1 : 0;
+    return GetPrivateProfileIntA("plugins", key, def, g_iniPath) != 0;
 }
 
 // The loaded list, keyed the same way PluginEnabled is - the file name
@@ -2210,8 +2211,10 @@ static void ReadConfig()
         // which would decode the file as ANSI. Keep the tag to ASCII: this is a
         // UTF-8 file and anything past 0x7F would arrive as its raw bytes.
         char tag[96] = {0};
-        GetPrivateProfileStringA("tesmioloader", "menu_tag", "", tag, sizeof(tag), ini);
+        GetPrivateProfileStringA("tesmioloader", "menu_tag", "RepublicMP Co-op", tag, sizeof(tag), ini);
         Trim(tag);
+        if (_strnicmp(tag, "tesmioloader", 12) == 0)
+            strcpy_s(tag, "RepublicMP Co-op");
         if (tag[0])
             MultiByteToWideChar(CP_UTF8, 0, tag, -1, g_menuTag,
                                 sizeof(g_menuTag) / sizeof(g_menuTag[0]));

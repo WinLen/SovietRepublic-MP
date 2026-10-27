@@ -8,16 +8,12 @@
 #include "../../lockstep/commands.h"
 #include "../../determinism/determinism.h"
 #include "../../session/two_states.h"
+#include "../../session/save_sync.h"
+#include "../../ui/native_menu.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #pragma intrinsic(_AddressOfReturnAddress)
 
-#define WORLD_THIS_RVA 0x9D4F10
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // = thisPtr+0x11b08, finished buildings list
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
-#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // = thisPtr+0x11c28, unfinished / demolition sites list
-#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
-#define OBJ_POS_OFFSET 0x350
 #define OBJ_TYPE_OFFSET 0x318          // building type record
 #define TYPE_CATEGORY_OFFSET 0x360     // int category in the type record
 #define OBJ_DEMOLISH_FLAG_OFFSET 0xeb1 // zeroed by some player paths before the call, 1 in building window
@@ -176,6 +172,14 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     // side effect of one, or remote work being replayed.
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
+        if (SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+            if (callerRva == 0x7FD000) {
+                *retSlot = g_exeBase + 0x7FD04F;
+            }
+            SaveSync_NotifyWaitingLobbyActionBlocked();
+            InterlockedDecrement(&g_depth);
+            return;
+        }
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args, callerRva)) {
             if (callerRva == 0x7FD000) {

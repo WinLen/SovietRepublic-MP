@@ -291,6 +291,84 @@ static BYTE* FindVehicle(BYTE** begin, size_t total, int place, unsigned vehicle
     return nullptr;
 }
 
+static bool ApplySoftSyncTreasury(BYTE* w, const void* data, size_t baseBytes)
+{
+    VehicleSoftSyncTreasury tr = {};
+    memcpy(&tr, (const BYTE*)data + baseBytes, sizeof(tr));
+    if (tr.magic != VSS_TREASURY_MAGIC || (tr.flags & 1u) == 0 || *(int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) != 0)
+        return false;
+    if ((tr.flags & 2u) != 0 && TwoStates_IsActive()) {
+        TwoStates_SyncBalancesFromHost(tr.stateRub[0], tr.stateRub[1], tr.stateUsd[0], tr.stateUsd[1]);
+    } else if (isfinite(tr.worldRub) && isfinite(tr.worldUsd)) {
+        *(double*)(w + WORLD_RUB_OFFSET) = tr.worldRub;
+        *(double*)(w + WORLD_USD_OFFSET) = tr.worldUsd;
+    }
+    return true;
+}
+
+static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e)
+{
+    BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
+    BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
+    if (!cBegin || cEnd < cBegin || (cEnd - cBegin) % CARGO_ENTRY_SIZE != 0) return;
+    size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
+    if (cn != e.cargoCount) return;
+    for (size_t k = 0; k < cn && k < 2; k++) {
+        BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
+        const char* resName = *(const char**)entry;
+        if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {
+            float prevAmt = *(float*)(entry + CARGO_AMOUNT_OFFSET);
+            if (fabsf(prevAmt - e.cargoAmount[k]) > 1e-4f) g_vssDiag.cargoUpdated++;
+            *(float*)(entry + CARGO_AMOUNT_OFFSET) = e.cargoAmount[k];
+        }
+    }
+}
+
+static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
+{
+    g_vssDiag.vehiclesSynced++;
+    if (isfinite(e.fuel)) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
+    if (isfinite(e.wear[0])) *(float*)(v + VEH_WEAR0_OFFSET) = e.wear[0];
+    if (isfinite(e.wear[1])) *(float*)(v + VEH_WEAR1_OFFSET) = e.wear[1];
+    if (isfinite(e.wear[2])) *(float*)(v + VEH_WEAR2_OFFSET) = e.wear[2];
+    SyncVehicleCargo(v, e);
+
+    if (*(int*)(v + VEH_SCHED_IDX_OFFSET) != e.scheduleIdx) return;
+
+    float* pos = (float*)(v + VEH_POS_OFFSET);
+    float dx = e.pos[0] - pos[0];
+    float dy = e.pos[1] - pos[1];
+    float dz = e.pos[2] - pos[2];
+    float distSq = dx * dx + dy * dy + dz * dz;
+    if (!isfinite(distSq)) return;
+    if (distSq > batchMaxDriftSq && distSq < 1e6f) batchMaxDriftSq = distSq;
+
+    BYTE* curBld = *(BYTE**)(v + VEH_CUR_BLD_OFFSET);
+    int localBldId = curBld ? *(int*)curBld : -1;
+    if (e.currentBldId >= 0 && localBldId == e.currentBldId) {
+        if (distSq > 0.0f && distSq < 400.0f) {
+            TranslateVehicleNodes(v, dx, dy, dz);
+            HeldFrame_OnVehicleSoftSynced(v);
+            g_vssDiag.posSnapped++;
+        }
+        return;
+    }
+    if (e.currentBldId < 0 && localBldId < 0) {
+        float localSpeed = *(float*)(v + VEH_SPEED_OFFSET);
+        if (isfinite(e.speed) && isfinite(localSpeed))
+            *(float*)(v + VEH_SPEED_OFFSET) = localSpeed + (e.speed - localSpeed) * 0.35f;
+        if (distSq > 0.04f && distSq < 64.0f) {
+            TranslateVehicleNodes(v, dx * 0.25f, dy * 0.25f, dz * 0.25f);
+            HeldFrame_OnVehicleSoftSynced(v);
+            g_vssDiag.posBlended++;
+        } else if (distSq > 0.0f && distSq <= 0.04f) {
+            TranslateVehicleNodes(v, dx, dy, dz);
+            HeldFrame_OnVehicleSoftSynced(v);
+            g_vssDiag.posSnapped++;
+        }
+    }
+}
+
 bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
 {
     if (size < sizeof(unsigned)) return false;
@@ -300,27 +378,14 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
     bool hasTreasury = (size == baseBytes + sizeof(VehicleSoftSyncTreasury));
     if (size != baseBytes && !hasTreasury) return false;
     if (msg->count == 0 && !hasTreasury) return false;
-
-    // The Host generated these authoritative values; only the Client needs soft self-healing.
     if (LockstepNet_IsHost()) return true;
 
     bool ok = false;
     DiagLog_BeginSafeSeh();
     __try {
         BYTE* w = g_exeBase + WORLD_RVA;
-        if (hasTreasury) {
-            VehicleSoftSyncTreasury tr = {};
-            memcpy(&tr, (const BYTE*)data + baseBytes, sizeof(tr));
-            if (tr.magic == VSS_TREASURY_MAGIC && (tr.flags & 1u) != 0 && *(int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) == 0) {
-                if ((tr.flags & 2u) != 0 && TwoStates_IsActive()) {
-                    TwoStates_SyncBalancesFromHost(tr.stateRub[0], tr.stateRub[1], tr.stateUsd[0], tr.stateUsd[1]);
-                } else if (isfinite(tr.worldRub) && isfinite(tr.worldUsd)) {
-                    *(double*)(w + WORLD_RUB_OFFSET) = tr.worldRub;
-                    *(double*)(w + WORLD_USD_OFFSET) = tr.worldUsd;
-                }
-                ok = true;
-            }
-        }
+        if (hasTreasury && ApplySoftSyncTreasury(w, data, baseBytes))
+            ok = true;
         BYTE** begin = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
         BYTE** end = *(BYTE***)(w + WORLD_VEHICLES_OFFSET + 8);
         if (msg->count > 0 && begin && end > begin) {
@@ -330,69 +395,7 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                 for (unsigned i = 0; i < msg->count; i++) {
                     const VehicleSoftSyncEntry& e = msg->entries[i];
                     BYTE* v = FindVehicle(begin, total, e.place, e.vehicleId);
-                    if (!v) continue;
-                    g_vssDiag.vehiclesSynced++;
-
-                    // 1. Always synchronize scalar fuel and wear/aging fields.
-                    if (isfinite(e.fuel)) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
-                    if (isfinite(e.wear[0])) *(float*)(v + VEH_WEAR0_OFFSET) = e.wear[0];
-                    if (isfinite(e.wear[1])) *(float*)(v + VEH_WEAR1_OFFSET) = e.wear[1];
-                    if (isfinite(e.wear[2])) *(float*)(v + VEH_WEAR2_OFFSET) = e.wear[2];
-
-                    // 2. Synchronize cargo amounts when the cargo slot structure matches.
-                    BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
-                    BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
-                    if (cBegin && cEnd >= cBegin && (cEnd - cBegin) % CARGO_ENTRY_SIZE == 0) {
-                        size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
-                        if (cn == e.cargoCount) {
-                            for (size_t k = 0; k < cn && k < 2; k++) {
-                                BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
-                                const char* resName = *(const char**)entry;
-                                if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {
-                                    float prevAmt = *(float*)(entry + CARGO_AMOUNT_OFFSET);
-                                    if (fabsf(prevAmt - e.cargoAmount[k]) > 1e-4f) g_vssDiag.cargoUpdated++;
-                                    *(float*)(entry + CARGO_AMOUNT_OFFSET) = e.cargoAmount[k];
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Soft route & position convergence when heading to the same schedule stop.
-                    int localSched = *(int*)(v + VEH_SCHED_IDX_OFFSET);
-                    if (localSched != e.scheduleIdx) continue;
-
-                    float* pos = (float*)(v + VEH_POS_OFFSET);
-                    float dx = e.pos[0] - pos[0];
-                    float dy = e.pos[1] - pos[1];
-                    float dz = e.pos[2] - pos[2];
-                    float distSq = dx * dx + dy * dy + dz * dz;
-                    if (!isfinite(distSq)) continue;
-                    if (distSq > batchMaxDriftSq && distSq < 1e6f) batchMaxDriftSq = distSq;
-
-                    BYTE* curBld = *(BYTE**)(v + VEH_CUR_BLD_OFFSET);
-                    int localBldId = curBld ? *(int*)curBld : -1;
-
-                    if (e.currentBldId >= 0 && localBldId == e.currentBldId) {
-                        if (distSq > 0.0f && distSq < 400.0f) {
-                            TranslateVehicleNodes(v, dx, dy, dz);
-                            HeldFrame_OnVehicleSoftSynced(v);
-                            g_vssDiag.posSnapped++;
-                        }
-                    } else if (e.currentBldId < 0 && localBldId < 0) {
-                        float localSpeed = *(float*)(v + VEH_SPEED_OFFSET);
-                        if (isfinite(e.speed) && isfinite(localSpeed)) {
-                            *(float*)(v + VEH_SPEED_OFFSET) = localSpeed + (e.speed - localSpeed) * 0.35f;
-                        }
-                        if (distSq > 0.04f && distSq < 64.0f) {
-                            TranslateVehicleNodes(v, dx * 0.25f, dy * 0.25f, dz * 0.25f);
-                            HeldFrame_OnVehicleSoftSynced(v);
-                            g_vssDiag.posBlended++;
-                        } else if (distSq > 0.0f && distSq <= 0.04f) {
-                            TranslateVehicleNodes(v, dx, dy, dz);
-                            HeldFrame_OnVehicleSoftSynced(v);
-                            g_vssDiag.posSnapped++;
-                        }
-                    }
+                    if (v) SyncSingleVehicleEntry(v, e, batchMaxDriftSq);
                 }
                 float maxDriftM = sqrtf(batchMaxDriftSq);
                 g_vssDiag.lastMaxDriftM = maxDriftM;

@@ -2,6 +2,7 @@
 // See input_block.h.
 #include "input_block.h"
 #include "../ui/sync_block.h"
+#include "../session/save_sync.h"
 #include "../core/engine_rva.h"
 
 #define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
@@ -24,7 +25,12 @@ static bool Unfocused()
 
 static bool Blocked()
 {
-    return SyncBlock_IsActive() || Unfocused();
+    return SyncBlock_BlocksWorldInput() || Unfocused();
+}
+
+static bool WorldActionBlocked()
+{
+    return Blocked() || SaveSync_IsWaitingLobbyActive();
 }
 
 static volatile LONG g_neutral = 0;
@@ -62,18 +68,18 @@ static VecFn o_MouseRelative, o_MouseSolid, o_MouseSolidInvZoom;
 #define BOOL_NOARG_HOOK(name, orig) \
     static bool name(void* self) { bool r = orig(self); return Blocked() || Neutral() ? false : r; }
 
-static bool H_LeftPress(void* self) { bool r = o_LeftPress(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
-static bool H_LeftPressAOff(void* self) { bool r = o_LeftPressAOff(self); return Neutral() ? PressedByte() : Blocked() ? false : r; }
-static bool H_LeftDown(void* self) { bool r = o_LeftDown(self); return Neutral() ? HeldByte() : Blocked() ? false : r; }
-BOOL_NOARG_HOOK(H_RightPress, o_RightPress)
-BOOL_NOARG_HOOK(H_RightPressAOff, o_RightPressAOff)
-BOOL_NOARG_HOOK(H_RightDown, o_RightDown)
+static bool H_LeftPress(void* self) { bool r = o_LeftPress(self); return Neutral() ? PressedByte() : WorldActionBlocked() ? false : r; }
+static bool H_LeftPressAOff(void* self) { bool r = o_LeftPressAOff(self); return Neutral() ? PressedByte() : WorldActionBlocked() ? false : r; }
+static bool H_LeftDown(void* self) { bool r = o_LeftDown(self); return Neutral() ? HeldByte() : WorldActionBlocked() ? false : r; }
+static bool H_RightPress(void* self) { bool r = o_RightPress(self); return WorldActionBlocked() || Neutral() ? false : r; }
+static bool H_RightPressAOff(void* self) { bool r = o_RightPressAOff(self); return WorldActionBlocked() || Neutral() ? false : r; }
+static bool H_RightDown(void* self) { bool r = o_RightDown(self); return WorldActionBlocked() || Neutral() ? false : r; }
 BOOL_NOARG_HOOK(H_MiddleDown, o_MiddleDown)
 
 static bool H_KeyDown(void* self, int key)       { bool r = o_KeyDown(self, key); return Blocked() || Neutral() ? false : r; }
-static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return Blocked() || Neutral() ? false : r; }
+static bool H_KeyPress(void* self, int key)      { bool r = o_KeyPress(self, key); return WorldActionBlocked() || Neutral() ? false : r; }
 static bool H_ButtonDown(void* self, char* fn)   { bool r = o_ButtonDown(self, fn); return Blocked() || Neutral() ? false : r; }
-static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return Blocked() || Neutral() ? false : r; }
+static bool H_ButtonPress(void* self, char* fn)  { bool r = o_ButtonPress(self, fn); return WorldActionBlocked() || Neutral() ? false : r; }
 
 static float H_AxisValue(void* self, char* fn, int* out, float a, float b)
 {
@@ -153,12 +159,12 @@ bool InstallInputBlockHooks()
 void InputBlock_Tick()
 {
     static bool s_wasSyncBlocked = false;
-    bool syncBlocked = SyncBlock_IsActive();
+    bool syncBlocked = SyncBlock_BlocksWorldInput();
     if (syncBlocked != s_wasSyncBlocked) {
         Logf("republicmp  INPUT_BLOCK: game input %s", syncBlocked ? "BLOCKED" : "released");
         s_wasSyncBlocked = syncBlocked;
     }
-    if (!Blocked()) return;
+    if (!WorldActionBlocked()) return;
 
     __try {
         *(unsigned char*)(g_exeBase + LMB_HELD_RVA) = 0;

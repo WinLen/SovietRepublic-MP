@@ -13,6 +13,7 @@
 #include "../replay_menus.h"
 #include "../../ui/debug_log.h"
 #include "../../ui/sync_block.h"
+#include "../../core/safe_mem.h"
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -99,14 +100,10 @@ void BuildSync_Bind(const TsmHost* host)
 // Logs to the file log and to the Debug window.
 static void BuildSyncStatus(const char* fmt, ...)
 {
-    char body[512];
     va_list ap;
     va_start(ap, fmt);
-    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
+    DebugLog_FormatStatus(Logf, "BUILD_SYNC", fmt, ap);
     va_end(ap);
-
-    Logf("republicmp  BUILD_SYNC: %s", body);
-    DebugLog_Add(body);
 }
 
 static __int64 GetPlacementManagerThisPtr()
@@ -116,13 +113,7 @@ static __int64 GetPlacementManagerThisPtr()
 
 static bool IsWorldLoaded()
 {
-    void** vecBeginPtr = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_BEGIN_RVA);
-    void** vecEndPtr   = (void**)((uintptr_t)g_exeBase + VEC_BUILDINGS_END_RVA);
-    __try {
-        return (*vecBeginPtr != nullptr) && (*vecEndPtr != nullptr);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeIsWorldLoaded(g_exeBase);
 }
 
 // ---------------------------------------------------------------------------
@@ -214,17 +205,7 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
 
 static void StartConnection(SOCKET sock)
 {
-    g_sock = sock;
-
-    // Sends time out so a stalled peer cannot freeze the game thread;
-    // receives block on the dedicated thread.
-    DWORD sendTimeoutMs = 5000;
-    DWORD recvTimeoutMs = 0;
-    setsockopt(g_sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs));
-    setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvTimeoutMs, sizeof(recvTimeoutMs));
-
-    g_connected = true;
-    CreateThread(nullptr, 0, ReceiveLoopThread, nullptr, 0, nullptr);
+    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread);
     BuildSyncStatus("[BUILD_SYNC] connection established - build away");
 }
 
@@ -280,23 +261,16 @@ static DWORD WINAPI ClientConnectWorkerThread(LPVOID)
 
 void BuildSync_StartHost()
 {
-    if (g_connected || g_connecting) return;
-    g_isHost = true;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, HostAcceptWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               HostAcceptWorkerThread);
 }
 
 void BuildSync_StartClient(const char* hostIp)
 {
-    if (g_connected || g_connecting) return;
-    if (hostIp && hostIp[0]) {
-        strncpy_s(g_targetIp, hostIp, _TRUNCATE);
-    }
-    g_isHost = false;
-    g_cancelConnect = false;
-    g_connecting = true;
-    CreateThread(nullptr, 0, ClientConnectWorkerThread, nullptr, 0, nullptr);
+    NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
+                               &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
+                               ClientConnectWorkerThread);
 }
 
 void BuildSync_Reset()
@@ -391,79 +365,59 @@ void BuildSync_SendPlacement(const BuildSyncMsg& in)
     SendOrQueue(msg);
 }
 
-void BuildSync_SendSpeed(int kind, int speed, int speedSaved, int turbo)
+template <typename FillFn>
+static void SendConnectedControlMsg(int kind, const char* tag, FillFn fill)
 {
     if (!g_connected) return;
     BuildSyncMsg msg = {};
     msg.kind = kind;
-    strcpy_s(msg.typeName, "<speed>");
-    msg.speed = speed;
-    msg.speedSaved = speedSaved;
-    msg.speedTurbo = turbo;
-    // Behind queued placements, so order on the connection is kept.
+    strcpy_s(msg.typeName, tag);
+    fill(msg);
     SendOrQueue(msg);
+}
+
+void BuildSync_SendSpeed(int kind, int speed, int speedSaved, int turbo)
+{
+    SendConnectedControlMsg(kind, "<speed>", [&](BuildSyncMsg& m) { m.speed = speed; m.speedSaved = speedSaved; m.speedTurbo = turbo; });
 }
 
 void BuildSync_SendTime(int day, int year, float progress)
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_TIME;
-    strcpy_s(msg.typeName, "<time>");
-    msg.speed = day;
-    msg.speedSaved = year;
-    msg.timeProgress = progress;
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_TIME, "<time>", [&](BuildSyncMsg& m) { m.speed = day; m.speedSaved = year; m.timeProgress = progress; });
 }
   
 void BuildSync_SendWeather(const WeatherWire& w)
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_WEATHER;
-    strcpy_s(msg.typeName, "<weather>");
-    msg.weather = w;
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_WEATHER, "<weather>", [&](BuildSyncMsg& msg) {
+        msg.weather = w;
+    });
 }
   
 void BuildSync_SendMoney(double rub, double usd)
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_MONEY;
-    strcpy_s(msg.typeName, "<money>");
-    msg.moneyRub = rub;
-    msg.moneyUsd = usd;
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_MONEY, "<money>", [&](BuildSyncMsg& msg) {
+        msg.moneyRub = rub;
+        msg.moneyUsd = usd;
+    });
 }
 
 void BuildSync_SendResync()
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_RESYNC;
-    strcpy_s(msg.typeName, "<resync>");
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_RESYNC, "<resync>", [](BuildSyncMsg&) {});
 }
 
 void BuildSync_SendSetting(const SettingWire& w)
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_SETTING;
-    strcpy_s(msg.typeName, "<setting>");
-    msg.setting = w;
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_SETTING, "<setting>", [&](BuildSyncMsg& msg) {
+        msg.setting = w;
+    });
 }
 
 void BuildSync_SendState(const SyncCheckWire& w)
 {
-    if (!g_connected) return;
-    BuildSyncMsg msg = {};
-    msg.kind = BUILD_SYNC_KIND_STATE;
-    strcpy_s(msg.typeName, "<state>");
-    msg.state = w;
-    SendOrQueue(msg);
+    SendConnectedControlMsg(BUILD_SYNC_KIND_STATE, "<state>", [&](BuildSyncMsg& msg) {
+        msg.state = w;
+    });
 }
 
 void BuildSync_SendAccessRoad(const RoadSyncSegment& seg)
@@ -632,13 +586,7 @@ static void DescribeNewObjects(float x, float z, char* out, size_t outSize)
 // True while the placement function would return without doing anything.
 static bool PlacementGuardBusy(__int64 thisPtr)
 {
-    __try {
-        return *(unsigned char*)(thisPtr + TOOL_GUARD1_OFFSET) ||
-               *(unsigned char*)(thisPtr + TOOL_GUARD2_OFFSET) ||
-               *(unsigned char*)(thisPtr + TOOL_GUARD3_OFFSET);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    return SafeIsToolGuardBusy((uintptr_t)thisPtr);
 }
 
 // Replays one placement through the engine's placement function with the

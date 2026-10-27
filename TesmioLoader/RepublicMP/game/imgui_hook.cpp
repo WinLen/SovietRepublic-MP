@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "imgui_hook.h"
+#include "window_focus.h"
 #include "../ui/native_menu.h"
 #include "../ui/sync_block.h"
 #include "../ui/lang.h"
@@ -45,8 +46,18 @@ static void CreateRenderTarget(IDXGISwapChain* swapChain)
 
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    bool syncBlocking = SyncBlock_IsActive();
-    bool overlayActive = NativeMenu_WantsInput();
+    if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wParam == VK_TAB && IsGameWindowFocused() &&
+        SaveSync_GetState() == SESSION_HOST_LISTENING && SaveSync_IsWorldLoaded() && !SyncBlock_IsActive())
+    {
+        if (msg == WM_KEYDOWN && (lParam & 0x40000000) == 0)
+            SyncBlock_SetMapInspectMode(!SyncBlock_IsMapInspectMode());
+        return TRUE;
+    }
+
+    bool lobbyOrSyncVisible = SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() ||
+                              (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
+    bool syncBlocking = SyncBlock_BlocksWorldInput();
+    bool overlayActive = NativeMenu_WantsInput() || lobbyOrSyncVisible;
     bool effectiveVisible = syncBlocking || overlayActive;
 
     ImGuiIO& io = ImGui::GetIO();
@@ -74,6 +85,17 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (!io.WantCaptureKeyboard && overlayActive &&
                 (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP))
                 break; // let keyboard hotkeys reach the game when only hovering the top bar
+            return TRUE;
+        }
+    }
+    else if (lobbyOrSyncVisible)
+    {
+        // In [Tab] Map Inspection Mode: allow camera movement (WASD, MMB rotate, MouseWheel zoom),
+        // but swallow left/right mouse clicks in the 3D world so no buildings/windows/tools can be clicked.
+        switch (msg)
+        {
+        case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
             return TRUE;
         }
     }
@@ -195,7 +217,14 @@ void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
     if (GetFileAttributesA("C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES) {
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+        ImFont* mainFont = io.Fonts->AddFontFromFileTTF(
+            "C:\\Windows\\Fonts\\segoeui.ttf", 16.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+        if (mainFont && GetFileAttributesA("C:\\Windows\\Fonts\\seguisym.ttf") != INVALID_FILE_ATTRIBUTES) {
+            static const ImWchar kSymbolRanges[] = { 0x2000, 0x27BF, 0 };
+            ImFontConfig symCfg;
+            symCfg.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisym.ttf", 16.0f, &symCfg, kSymbolRanges);
+        }
     }
 
     ImGui_ImplWin32_Init(g_hwnd);
@@ -216,8 +245,10 @@ void ImGuiHook_NewFrameAndRender()
 
     UpdateWindowTitlePeriodic(g_hwnd);
 
-    bool syncBlocking = SyncBlock_IsActive();
-    bool overlayActive = NativeMenu_WantsInput();
+    bool lobbyOrSyncVisible = SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() ||
+                              (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
+    bool syncBlocking = SyncBlock_BlocksWorldInput();
+    bool overlayActive = NativeMenu_WantsInput() || lobbyOrSyncVisible;
 
     ImGuiIO& io = ImGui::GetIO();
     io.MouseDrawCursor = syncBlocking || (overlayActive && io.WantCaptureMouse);
