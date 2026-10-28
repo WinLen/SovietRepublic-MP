@@ -986,7 +986,9 @@ static bool RunHostJoin(SOCKET sock)
             HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
             if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
                 if (!g_disconnectRequested) {
-                    SetSessionError("the player's lockstep connection didn't arrive - TCP port %d must reach the host", LOCKSTEP_PORT);
+                    SetSessionError(Tr("Соединение Lockstep от игрока не пришло — порт TCP %d должен быть открыт у хоста",
+                                       "the player's lockstep connection didn't arrive - TCP port %d must reach the host"),
+                                    LOCKSTEP_PORT);
                     SetState(SESSION_HOST_LISTENING);
                     EnsureGamePaused();
                 }
@@ -999,11 +1001,13 @@ static bool RunHostJoin(SOCKET sock)
         }
 
         // 7. Live sync channels.
-        HostStep(sock, 7, "Starting live sync");
+        HostStep(sock, 7, Tr("Запуск живой синхронизации...", "Starting live sync"));
         StartChannelsHost();
         if (!WaitForChannels(false)) {
             if (!g_disconnectRequested) {
-                SetSessionError("the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)", BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
+                SetSessionError(Tr("Каналы синхронизации не подключились — порты TCP %d-%d также должны быть открыты у хоста",
+                                   "the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)"),
+                                BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
                 SetState(SESSION_HOST_LISTENING);
                 EnsureGamePaused();
             }
@@ -1035,7 +1039,7 @@ static bool RunHostJoin(SOCKET sock)
 static void RunHostSession()
 {
     if (!NetworkInit()) {
-        SetSessionError("network init failed");
+        SetSessionError(Tr("Ошибка инициализации сети (Winsock)", "network init failed"));
         return;
     }
 
@@ -1059,11 +1063,11 @@ static void RunHostSession()
             if (rejoin) {
                 rejoin = false;
                 g_resyncing = false;
-                SetSessionError("the player didn't come back for the re-sync");
+                SetSessionError(Tr("Второй игрок не вернулся для пересинхронизации", "the player didn't come back for the re-sync"));
                 SaveStatus("[HOST] the player didn't come back for the re-sync - waiting for a player again");
                 continue;
             }
-            SetSessionError("couldn't listen on port %d (already in use?)", SAVE_SYNC_PORT);
+            SetSessionError(Tr("Не удалось открыть порт %d (возможно, уже занят)", "couldn't listen on port %d (already in use?)"), SAVE_SYNC_PORT);
             break;
         }
 

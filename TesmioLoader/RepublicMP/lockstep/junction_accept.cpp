@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <math.h>
 #include <string.h>
 
@@ -139,7 +140,7 @@ void JunctionAccept_Capture(U64 junction, U64 copy)
     __try {
         if (junction && Count(junction + NODES_OFFSET, 8, MAX_NODES) > 0) {
             U64 first = Q(Q(junction + NODES_OFFSET));
-            if (first) allowed = TwoStates_CheckBuildAllowed(*(float*)(first + 4), *(float*)(first + 0xC), "настройка перекрёстка");
+            if (first) allowed = TwoStates_CheckBuildAllowed(*(float*)(first + 4), *(float*)(first + 0xC), Tr("настройка перекрёстка", "configuring junction"));
         }
         why = junction && copy ? Encode(junction, copy, m) : "no junction";
     } __except (EXCEPTION_EXECUTE_HANDLER) {

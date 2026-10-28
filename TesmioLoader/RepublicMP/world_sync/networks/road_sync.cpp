@@ -13,6 +13,7 @@
 #include "../../session/two_states.h"
 #include "../../session/save_sync.h"
 #include "../../ui/native_menu.h"
+#include "../../ui/lang.h"
 #include "../../core/engine_rva.h"
 #include "../../core/safe_mem.h"
 #include <intrin.h>
@@ -2960,8 +2961,9 @@ static __int64 HookedGroupTool(__int64 world, int mode)
             commit = false;
         }
         if (!commit) return g_origGroupTool(world, mode);
-        if (!TwoStates_CheckBuildAllowed(s.box[0], s.box[2], "групповое строительство") ||
-            !TwoStates_CheckBuildAllowed(s.box[3], s.box[5], "групповое строительство")) {
+        const char* grpBuildDesc = Tr("групповое строительство", "group construction");
+        if (!TwoStates_CheckBuildAllowed(s.box[0], s.box[2], grpBuildDesc) ||
+            !TwoStates_CheckBuildAllowed(s.box[3], s.box[5], grpBuildDesc)) {
             *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
             return 0;
         }
@@ -3034,11 +3036,13 @@ static void HandleCtrlRectTool(__int64 world, int mode, unsigned int rva)
             orig(world);
             return;
         }
+        const char* grpDemDesc = Tr("групповой снос", "group demolition");
+        const char* grpUpgDesc = Tr("групповая модернизация", "group upgrade");
         bool allowed = mode == 10
-            ? (TwoStates_CheckDemolishAllowed(s.box[0], s.box[2], "групповой снос") &&
-               TwoStates_CheckDemolishAllowed(s.box[3], s.box[5], "групповой снос"))
-            : (TwoStates_CheckBuildAllowed(s.box[0], s.box[2], "групповая модернизация") &&
-               TwoStates_CheckBuildAllowed(s.box[3], s.box[5], "групповая модернизация"));
+            ? (TwoStates_CheckDemolishAllowed(s.box[0], s.box[2], grpDemDesc) &&
+               TwoStates_CheckDemolishAllowed(s.box[3], s.box[5], grpDemDesc))
+            : (TwoStates_CheckBuildAllowed(s.box[0], s.box[2], grpUpgDesc) &&
+               TwoStates_CheckBuildAllowed(s.box[3], s.box[5], grpUpgDesc));
         if (!allowed) {
             *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
             return;
@@ -3099,7 +3103,7 @@ void RoadSync_ShiftCancelTool(__int64 world)
         if (clicked) {
             float cx = *(float*)(world + WORLD_CURSOR_OFFSET);
             float cz = *(float*)(world + WORLD_CURSOR_OFFSET + 8);
-            if (TwoStates_CheckDemolishAllowed(cx, cz, "отмена планируемого участка")) {
+            if (TwoStates_CheckDemolishAllowed(cx, cz, Tr("отмена планируемого участка", "cancelling planned segment"))) {
                 RoadSyncGroupToolMsg m = {};
                 m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
                 m.mode = 12;

@@ -10,6 +10,7 @@
 #include "buildings/demolish_hook.h" // DemolishHook_InDemolish
 #include "../ui/sync_block.h"
 #include "../ui/native_menu.h"
+#include "../ui/lang.h"
 #include "../lockstep/commands.h"
 #include "../determinism/determinism.h"
 #include "../session/two_states.h"
@@ -800,7 +801,7 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             m.cursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             m.cursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             m.cursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
-            if (!TwoStates_CheckDemolishAllowed(m.cursor[0], m.cursor[2], "снос инфраструктуры")) {
+            if (!TwoStates_CheckDemolishAllowed(m.cursor[0], m.cursor[2], Tr("снос инфраструктуры", "infrastructure demolition"))) {
                 RoadSync_ClearCategoryPreview(category);
                 return true;
             }
@@ -861,8 +862,9 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
         if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
             RoadSyncUpgradeMsg m = {};
             if (FillUpgrade(manager, category, m)) {
-                if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], "модернизация дороги/сети") ||
-                    !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], "модернизация дороги/сети")) {
+                const char* upgDesc = Tr("модернизация дороги/сети", "road/network upgrade");
+                if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], upgDesc) ||
+                    !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], upgDesc)) {
                     RoadSync_ClearCategoryPreview(category);
                     return true;
                 }
@@ -875,8 +877,9 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
         }
         memset(&g_commandSegment, 0, sizeof(g_commandSegment));
         if (FillSegment(manager, category, g_commandSegment.seg)) {
-            if (!TwoStates_CheckBuildAllowed(g_commandSegment.seg.startNode[0], g_commandSegment.seg.startNode[2], "строительство дороги/сети") ||
-                !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], "строительство дороги/сети")) {
+            const char* segDesc = Tr("строительство дороги/сети", "road/network construction");
+            if (!TwoStates_CheckBuildAllowed(g_commandSegment.seg.startNode[0], g_commandSegment.seg.startNode[2], segDesc) ||
+                !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], segDesc)) {
                 RoadSync_ClearCategoryPreview(category);
                 return true;
             }
@@ -942,9 +945,9 @@ void HookedRoadCommit(__int64 manager,
                     float cx = *(float*)(thisPtr + CURSOR_X_OFFSET);
                     float cz = *(float*)(thisPtr + CURSOR_Z_OFFSET);
                     if (IsDemolishToolActive(manager))
-                        allowed = TwoStates_CheckDemolishAllowed(cx, cz, "снос инфраструктуры");
+                        allowed = TwoStates_CheckDemolishAllowed(cx, cz, Tr("снос инфраструктуры", "infrastructure demolition"));
                     else
-                        allowed = TwoStates_CheckBuildAllowed(cx, cz, "строительство дороги/сети");
+                        allowed = TwoStates_CheckBuildAllowed(cx, cz, Tr("строительство дороги/сети", "road/network construction"));
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                 }
                 if (!allowed) return;
@@ -1141,7 +1144,7 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
             if (dlcOk && TwoStates_IsActive()) {
                 float cx = *(float*)(param_1 + CURSOR_X_OFFSET);
                 float cz = *(float*)(param_1 + CURSOR_Z_OFFSET);
-                terrOk = TwoStates_CheckBuildAllowed(cx, cz, "строительство здания");
+                terrOk = TwoStates_CheckBuildAllowed(cx, cz, Tr("строительство здания", "building construction"));
             }
             if (!dlcOk || !terrOk) {
                 *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
@@ -1194,7 +1197,7 @@ bool LocalBuilds_PlacementPress()
     }
     if (!SaveSync_CheckBuildingDlcAllowed(msg.typeName))
         return true; // swallow click so unshared DLC building is not placed
-    if (!TwoStates_CheckBuildAllowed(msg.x, msg.z, "строительство здания"))
+    if (!TwoStates_CheckBuildAllowed(msg.x, msg.z, Tr("строительство здания", "building construction")))
         return true; // swallow click so building is not placed on foreign territory
     TerrainHook_LockstepFlush();
     Commands_Submit(LS_CMD_PLACE, &msg, sizeof(msg));
@@ -1258,7 +1261,7 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
         lmbDown = *(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA);
         if (lmbDown && !BuildSync_IsApplyingRemote()) {
             bool dlcOk = !LooksLikeValidType(typeName) || SaveSync_CheckBuildingDlcAllowed(typeName);
-            bool terrOk = !TwoStates_IsActive() || TwoStates_CheckBuildAllowed(cursorX, cursorZ, "строительство здания");
+            bool terrOk = !TwoStates_IsActive() || TwoStates_CheckBuildAllowed(cursorX, cursorZ, Tr("строительство здания", "building construction"));
             if (!dlcOk || !terrOk) {
                 *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
                 *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;

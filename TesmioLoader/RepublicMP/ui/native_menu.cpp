@@ -181,11 +181,6 @@ static void Utf8ToWide(const char* utf8, wchar_t* outWide, size_t maxChars)
     MultiByteToWideChar(CP_UTF8, 0, utf8, -1, outWide, (int)maxChars);
 }
 
-static const wchar_t* TrW(const wchar_t* ru, const wchar_t* en)
-{
-    return (Lang_Get() == MP_LANG_EN) ? en : ru;
-}
-
 static void RefreshFriendsIfNeeded(bool force)
 {
     ULONGLONG now = GetTickCount64();
@@ -1176,7 +1171,7 @@ static void DrawSidebarActiveCoopStatus(SessionState st, float leftX, float& cur
         if (myLoanCnt > 0 || partLoanCnt > 0) {
             wchar_t debtLine[112] = {};
             _snwprintf_s(debtLine, _TRUNCATE,
-                         TrW(L"Долг: %.0f₽/%.0f$ | П: %.0f₽/%.0f$",
+                         TrW(L"Долг: %.0fр/%.0f$ | П: %.0fр/%.0f$",
                              L"Debt: %.0fR/%.0f$ | P: %.0fR/%.0f$"),
                          myDebtRub, myDebtUsd, partDebtRub, partDebtUsd);
             DrawSidebarText(leftX, currentY, 0xFF883315, false, debtLine);

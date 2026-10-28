@@ -84,3 +84,8 @@ inline const char* Tr(const char* ru, const char* en)
 {
     return (Lang_Get() == MP_LANG_EN) ? en : ru;
 }
+
+inline const wchar_t* TrW(const wchar_t* ru, const wchar_t* en)
+{
+    return (Lang_Get() == MP_LANG_EN) ? en : ru;
+}

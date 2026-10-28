@@ -4,6 +4,7 @@
 #include "rename.h"
 #include "commands.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <string.h>
 
 typedef unsigned __int64 U64;
@@ -85,7 +86,7 @@ static bool Identify(U64 field, RenameMsg& m, bool* allowed)
                 m.index = i;
                 m.check = CityCheck(city);
                 *allowed = TwoStates_CheckBuildAllowed(*(float*)(city + CITY_POSITION), *(float*)(city + CITY_POSITION + 8),
-                                                       "переименование города");
+                                                       Tr("переименование города", "renaming city"));
                 return true;
             }
         }
@@ -103,7 +104,7 @@ static bool Identify(U64 field, RenameMsg& m, bool* allowed)
             m.kind = KIND_CROSSROAD;
             m.index = i;
             m.check = NodeCheck(first);
-            *allowed = TwoStates_CheckBuildAllowed(*(float*)(first + 4), *(float*)(first + 0xC), "переименование перекрёстка");
+            *allowed = TwoStates_CheckBuildAllowed(*(float*)(first + 4), *(float*)(first + 0xC), Tr("переименование перекрёстка", "renaming junction"));
             return true;
         }
     return false;

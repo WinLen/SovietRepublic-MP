@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <algorithm>
 #include <string.h>
 #include <vector>
@@ -133,7 +134,7 @@ static void Take(const Slots& before, const char* where)
         WriteSlot(before.building, i, before.source[i]);
     }
     if (!m.count) return;
-    if (!TwoStates_CheckBuildingControlAllowed((const BYTE*)before.building, "назначение источника снабжения чужому зданию")) return;
+    if (!TwoStates_CheckBuildingControlAllowed((const BYTE*)before.building, Tr("назначение источника снабжения чужому зданию", "assigning supply source to a foreign building"))) return;
     if (why) {
         Logf("republicmp  SOURCES: %u slot(s) changed by %s not shared - %s; nothing is done", m.count, where, why);
         return;

@@ -6,6 +6,7 @@
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../ui/native_menu.h"
+#include "../ui/lang.h"
 #include <limits.h>
 #include <string.h>
 
@@ -208,7 +209,7 @@ static void RelayDemolishTreesGround(U64 world, const float* pos, float radius, 
         return;
     }
     __try {
-        if (!TwoStates_CheckDemolishAllowed(pos[0], pos[2], "снос деревьев/объектов")) return;
+        if (!TwoStates_CheckDemolishAllowed(pos[0], pos[2], Tr("снос деревьев/объектов", "tree/object clearing"))) return;
         BrushMsg m = {};
         m.origin = g_origin;
         m.kind = KIND_DEMOLISH_GROUND;
@@ -457,7 +458,7 @@ static U64 Run(int kind, U64 world, U64 a2)
         Logf("republicmp  BRUSH: the selected tool is not a build menu record - nothing is done");
         return r;
     }
-    if (!TwoStates_CheckBuildAllowed(m.sample.cursor[0], m.sample.cursor[2], "изменение рельефа/деревьев")) {
+    if (!TwoStates_CheckBuildAllowed(m.sample.cursor[0], m.sample.cursor[2], Tr("изменение рельефа/деревьев", "terraforming/planting trees"))) {
         g_stroke.active = false;
         return r;
     }

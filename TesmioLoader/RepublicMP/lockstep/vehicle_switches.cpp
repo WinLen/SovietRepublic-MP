@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include "../core/diag_log.h"
 #include <string.h>
 #include <vector>
@@ -250,7 +251,7 @@ static void Compare(const Snap& s, int kind, bool click)
                 continue;
             }
             if (!haveRef) {
-                if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)s.vehicle, "изменение настроек чужого транспорта")) {
+                if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)s.vehicle, Tr("изменение настроек чужого транспорта", "changing foreign vehicle settings"))) {
                     Copy((void*)begin, old, bytes);
                     return;
                 }

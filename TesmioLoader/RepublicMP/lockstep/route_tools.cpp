@@ -7,6 +7,7 @@
 #include "world_refs.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <string.h>
 
 #define WORLD_RVA 0x9D4F10
@@ -230,7 +231,7 @@ U64 RouteTools_StopPick(int kind, U64 world, U64 a2, U64 a3, U64 a4, U64 a5, U64
         // The line window's "New stop" edits its working copy: local until the window's Accept.
         if (kind == 1 && LineWindowCopy(Q((U64)World() + TARGET_OFFSET))) return r;
         if (kind == 0 && !TwoStates_CheckVehicleControlAllowed((const BYTE*)Q((U64)World() + TARGET_OFFSET),
-                                                               "изменение маршрута чужого транспорта")) {
+                                                               Tr("изменение маршрута чужого транспорта", "changing foreign vehicle route"))) {
             if (building) *building = 0;
             if (node) *node = 0;
             return r & ~(U64)0xff;
@@ -281,7 +282,7 @@ U64 RouteTools_LineCopyTool(U64 world)
     g_markArmed = false;
     *press = kept;
     if (!g_markSeen || !g_markAllowed || !g_markVehicle) return r;
-    if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_markVehicle, "назначение маршрута чужому транспорту"))
+    if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_markVehicle, Tr("назначение маршрута чужому транспорту", "assigning line to a foreign vehicle")))
         return r;
     const char* what = KindText(ROUTE_LINE_COPY);
     if (!RouteTools_Ready()) {
@@ -372,10 +373,10 @@ U64 RouteTools_DepotTool(U64 world, U64 batch)
     for (unsigned i = 0; i < DEPOT_MAX; i++) m.vehicles[i] = kNoRef;
     __try {
         if (!TwoStates_CheckBuildingControlAllowed(*(int*)g_depot, *(float*)(g_depot + 0x350), *(float*)(g_depot + 0x358),
-                                                   "отправка в чужое депо"))
+                                                   Tr("отправка в чужое депо", "sending to a foreign depot")))
             return r;
         for (unsigned i = 0; i < g_depotCount; i++) {
-            if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depotList[i], "отправка чужого транспорта в депо"))
+            if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depotList[i], Tr("отправка чужого транспорта в депо", "sending foreign vehicle to depot")))
                 return r;
         }
         const char* why = nullptr;
@@ -421,8 +422,9 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
         *(U64*)(world + 0xF610) = *(U64*)(world + 0xF608);
         *(BYTE*)(world + 0xD2AC) = 0;
         if (!valid) return r;
-        if (!TwoStates_CheckBuildAllowed(start[0], start[2], "строительство площади/водоёма") ||
-            !TwoStates_CheckBuildAllowed(end[0], end[2], "строительство площади/водоёма"))
+        const char* sqDesc = Tr("строительство площади/водоёма", "square/water area construction");
+        if (!TwoStates_CheckBuildAllowed(start[0], start[2], sqDesc) ||
+            !TwoStates_CheckBuildAllowed(end[0], end[2], sqDesc))
             return r;
         RouteMsg m;
         memset(&m, 0, sizeof(m));
@@ -454,7 +456,7 @@ U64 RouteTools_GoThereTool(U64 world)
     __try {
         U64 v = Q(world + TARGET_OFFSET);
         if (!v || !Q(world + SELECTED_OFFSET)) return r;
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)v, "отправка чужого транспорта в точку")) return r;
+        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)v, Tr("отправка чужого транспорта в точку", "sending foreign vehicle to a point"))) return r;
         RouteMsg m;
         memset(&m, 0, sizeof(m));
         m.kind = ROUTE_GO_THERE;
@@ -532,7 +534,7 @@ U64 RouteTools_BojkaTool(U64 world, U64 mode)
     __try {
         float pos[3];
         memcpy(pos, (const void*)(world + 0xF6C), 12);
-        SubmitPointRouteTool(ROUTE_BOJKA, (int)(mode & 0xff), pos, "установка/снос буйка");
+        SubmitPointRouteTool(ROUTE_BOJKA, (int)(mode & 0xff), pos, Tr("установка/снос буйка", "placing/removing buoy"));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Refused(KindText(ROUTE_BOJKA), "a fault while reading it");
     }
@@ -556,8 +558,9 @@ U64 RouteTools_JoinHubStopTool(U64 world)
         if (!hubBeg || hubEnd <= hubBeg) return r;
         U64 firstNode = Q(hubBeg);
         if (!firstNode) return r;
-        if (!TwoStates_CheckBuildAllowed(*(float*)(firstNode + 4), *(float*)(firstNode + 0xC), "объединение перекрёстков") ||
-            !TwoStates_CheckBuildAllowed(*(float*)(stopNode + 4), *(float*)(stopNode + 0xC), "объединение перекрёстков"))
+        const char* joinHubDesc = Tr("объединение перекрёстков", "joining intersections");
+        if (!TwoStates_CheckBuildAllowed(*(float*)(firstNode + 4), *(float*)(firstNode + 0xC), joinHubDesc) ||
+            !TwoStates_CheckBuildAllowed(*(float*)(stopNode + 4), *(float*)(stopNode + 0xC), joinHubDesc))
             return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_JOIN_HUB_STOP);
@@ -579,7 +582,7 @@ U64 RouteTools_JoinHubTool(U64 world, U64 a2)
         if (node) {
             float pos[3];
             memcpy(pos, (const void*)(node + 4), 12);
-            SubmitPointRouteTool(ROUTE_JOIN_HUB, 0, pos, "объединение узлов сети");
+            SubmitPointRouteTool(ROUTE_JOIN_HUB, 0, pos, Tr("объединение узлов сети", "joining network nodes"));
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Refused(KindText(ROUTE_JOIN_HUB), "a fault while reading it");
@@ -606,9 +609,9 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
         U64 srcBld = Q(world + TARGET_OFFSET);
         if (!srcBld) return r;
         if (!TwoStates_CheckBuildingControlAllowed(*(int*)srcBld, *(float*)(srcBld + 0x350), *(float*)(srcBld + 0x358),
-                                                   "переселение граждан из чужого здания") ||
+                                                   Tr("переселение граждан из чужого здания", "relocating citizens from a foreign building")) ||
             !TwoStates_CheckBuildingControlAllowed(*(int*)g_depot, *(float*)(g_depot + 0x350), *(float*)(g_depot + 0x358),
-                                                   "переселение граждан в чужое здание"))
+                                                   Tr("переселение граждан в чужое здание", "relocating citizens into a foreign building")))
             return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_WORKER_RELOCATE, mode, ctrl);
@@ -630,7 +633,7 @@ U64 RouteTools_VehicleCopyTool(U64 world)
     if (!InvokeArmedCaptureTool(world, 0x2B18C0, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "копирование расписания чужому транспорту"))
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, Tr("копирование расписания чужому транспорту", "copying schedule to a foreign vehicle")))
             return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_VEHICLE_COPY, 0, ctrl);
@@ -651,7 +654,8 @@ U64 RouteTools_VehicleReplaceTool(U64 world)
     if (!InvokeArmedCaptureTool(world, 0x2B3C80, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "замена чужого транспорта")) return r;
+        const char* replDesc = Tr("замена чужого транспорта", "replacing foreign vehicle");
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, replDesc)) return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_VEHICLE_REPLACE);
         if (!Ref_Vehicle(srcVeh, m.object)) {
@@ -659,7 +663,7 @@ U64 RouteTools_VehicleReplaceTool(U64 world)
             return r;
         }
         if (g_depotReturnTo == (U64)(g_exeBase + 0x2B4464)) {
-            if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "замена чужого транспорта")) return r;
+            if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, replDesc)) return r;
             m.index = 0;
             if (!Ref_Vehicle(g_depot, m.vehicle)) {
                 Refused(KindText(ROUTE_VEHICLE_REPLACE), "the target vehicle");
@@ -685,7 +689,7 @@ U64 RouteTools_VehicleReplaceAutoTool(U64 world)
     U64 r = 0;
     if (!InvokeArmedCaptureTool(world, 0x2B4680, false, &r)) return r;
     __try {
-        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, "автозамена чужого транспорта")) return r;
+        if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, Tr("автозамена чужого транспорта", "auto-replacing foreign vehicle"))) return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_VEHICLE_REPLACE_AUTO);
         if (!Ref_Vehicle(g_depot, m.vehicle)) {
@@ -706,8 +710,8 @@ U64 RouteTools_VehicleToVehicleTool(U64 world)
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
         if (!srcVeh ||
-            !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "погрузка чужого транспорта") ||
-            !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_markVehicle, "погрузка на чужой транспорт"))
+            !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, Tr("погрузка чужого транспорта", "loading foreign vehicle")) ||
+            !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_markVehicle, Tr("погрузка на чужой транспорт", "loading onto a foreign vehicle")))
             return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_VEHICLE_TO_VEHICLE);
@@ -728,7 +732,7 @@ U64 RouteTools_VehicleSendConstrTool(U64 world)
     if (!InvokeArmedCaptureTool(world, 0x1D88A0, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
-        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, "отправка чужой строительной техники"))
+        if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, Tr("отправка чужой строительной техники", "dispatching foreign construction vehicle")))
             return r;
         RouteMsg m;
         InitRouteMsg(m, ROUTE_VEHICLE_SEND_CONSTR, *(int*)(world + 0xD2A8));

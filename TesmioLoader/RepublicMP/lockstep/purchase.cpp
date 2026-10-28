@@ -10,6 +10,7 @@
 #include "world_refs.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <math.h>
 #include <string.h>
 #include <vector>
@@ -367,7 +368,7 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
             BYTE* depot = BuildingAt(g_exeBase + WORLD_RVA, m.depot);
             if (depot) {
                 float x = *(float*)(depot + 0x350), z = *(float*)(depot + 0x358);
-                if (!TwoStates_CheckBuildingControlAllowed(m.depot.id, x, z, "покупка техники/лицензии в чужом здании"))
+                if (!TwoStates_CheckBuildingControlAllowed(m.depot.id, x, z, Tr("покупка техники/лицензии в чужом здании", "buying vehicle/licence in a foreign building")))
                     return false;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {

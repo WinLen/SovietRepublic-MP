@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include <algorithm>
 #include <string.h>
 #include <vector>
@@ -337,8 +338,8 @@ static void Take(const Watched& s, unsigned record, unsigned half, U64 at, const
                                                          : Encode(s.kind, ref, s.records, record, half, now, w);
     // Put back at once: the command makes the change on every PC.
     bool back = Replace(at, s.halves[(size_t)record * HALVES + half]);
-    bool allowed = s.kind == KIND_STOP ? TwoStates_CheckVehicleControlAllowed((const BYTE*)s.object, "настройка груза чужого транспорта")
-                                       : TwoStates_CheckBuildingControlAllowed((const BYTE*)s.object, "настройка груза чужого здания");
+    bool allowed = s.kind == KIND_STOP ? TwoStates_CheckVehicleControlAllowed((const BYTE*)s.object, Tr("настройка груза чужого транспорта", "configuring foreign vehicle cargo"))
+                                       : TwoStates_CheckBuildingControlAllowed((const BYTE*)s.object, Tr("настройка груза чужого здания", "configuring foreign building cargo"));
     if (!allowed) return;
     if (why || !back) {
         Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s", kRecordText[s.kind], record, half ? "unloading" : "loading",

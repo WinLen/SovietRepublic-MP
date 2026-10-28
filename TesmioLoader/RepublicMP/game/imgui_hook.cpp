@@ -174,16 +174,16 @@ static void UpdateWindowTitlePeriodic(HWND hwnd)
     bool twoStates = (TwoStates_GetMode() == COOP_MODE_TWO_STATES);
 
     const wchar_t* roleTag = isHost
-        ? (twoStates ? L"[ХОСТ — Западная ССР]" : L"[ХОСТ]")
-        : (twoStates ? L"[КЛИЕНТ — Восточная ССР]" : L"[КЛИЕНТ]");
+        ? (twoStates ? TrW(L"[ХОСТ — Западная ССР]", L"[HOST — Western SSR]") : TrW(L"[ХОСТ]", L"[HOST]"))
+        : (twoStates ? TrW(L"[КЛИЕНТ — Восточная ССР]", L"[CLIENT — Eastern SSR]") : TrW(L"[КЛИЕНТ]", L"[CLIENT]"));
 
-    const wchar_t* stateTag = L"Главное меню / Одиночная";
-    if (st == SESSION_HOST_LISTENING)      stateTag = L"Ожидание второго игрока (:5556)";
-    else if (st == SESSION_HOST_JOINING)   stateTag = L"Передача сохранения...";
-    else if (st == SESSION_HOST_IN_GAME)   stateTag = L"В ИГРЕ (Lockstep активен)";
-    else if (st == SESSION_CLIENT_JOINING) stateTag = L"Подключение и загрузка мира...";
-    else if (st == SESSION_CLIENT_IN_GAME) stateTag = L"В ИГРЕ (Lockstep активен)";
-    else if (SaveSync_IsWorldLoaded())     stateTag = L"Мир загружен";
+    const wchar_t* stateTag = TrW(L"Главное меню / Одиночная", L"Main Menu / Singleplayer");
+    if (st == SESSION_HOST_LISTENING)      stateTag = TrW(L"Ожидание второго игрока (:5556)", L"Waiting for Player 2 (:5556)");
+    else if (st == SESSION_HOST_JOINING)   stateTag = TrW(L"Передача сохранения...", L"Sending save...");
+    else if (st == SESSION_HOST_IN_GAME)   stateTag = TrW(L"В ИГРЕ (Lockstep активен)", L"IN GAME (Lockstep active)");
+    else if (st == SESSION_CLIENT_JOINING) stateTag = TrW(L"Подключение и загрузка мира...", L"Connecting & loading world...");
+    else if (st == SESSION_CLIENT_IN_GAME) stateTag = TrW(L"В ИГРЕ (Lockstep активен)", L"IN GAME (Lockstep active)");
+    else if (SaveSync_IsWorldLoaded())     stateTag = TrW(L"Мир загружен", L"World loaded");
 
     wchar_t title[256] = {};
     _snwprintf_s(title, _TRUNCATE, L"%ls %ls — Workers & Resources (RepublicMP v" REPUBLICMP_VERSION_W L")",

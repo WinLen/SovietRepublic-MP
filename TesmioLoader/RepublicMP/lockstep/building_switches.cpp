@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "../session/settings_sync.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
@@ -323,7 +324,7 @@ static void Compare(const Range& r, bool click)
             Copy(&bldId, (const void*)r.building, 4);
             Copy(&bx, (const void*)(r.building + 0x350), 4);
             Copy(&bz, (const void*)(r.building + 0x358), 4);
-            if (!TwoStates_CheckBuildingControlAllowed(bldId, bx, bz, "изменение настроек чужого здания")) {
+            if (!TwoStates_CheckBuildingControlAllowed(bldId, bx, bz, Tr("изменение настроек чужого здания", "changing foreign building settings"))) {
                 Copy((void*)r.at, old, r.bytes);
                 return;
             }

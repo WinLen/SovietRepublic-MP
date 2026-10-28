@@ -11,6 +11,7 @@
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../ui/native_menu.h"
+#include "../ui/lang.h"
 #include <array>
 #include <limits.h>
 #include <string.h>
@@ -390,7 +391,7 @@ static U64 Run(unsigned index, const U64* a)
         if (TwoStates_IsActive() && a[3]) {
             const BYTE* b = (const BYTE*)a[3];
             if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
-                                                       "приглашение жителей в чужое здание"))
+                                                       Tr("приглашение жителей в чужое здание", "inviting citizens to a foreign building")))
                 return 0;
         }
         CallSite(s, a); // play click sound locally
@@ -448,14 +449,14 @@ static U64 Run(unsigned index, const U64* a)
         if (!why && TwoStates_IsActive()) {
             for (int j = 0; j < MAX_ARGS; j++) {
                 if (m.kinds[j] == OBJ_VEHICLE && args[j]) {
-                    if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)args[j], "управление/продажа чужого транспорта")) {
+                    if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)args[j], Tr("управление/продажа чужого транспорта", "controlling/selling a foreign vehicle"))) {
                         refusedByTwoStates = true;
                         break;
                     }
                 } else if ( m.kinds[j] == OBJ_BUILDING && args[j]) {
                     const BYTE* b = (const BYTE*)args[j];
                     if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
-                                                               "управление чужим зданием")) {
+                                                               Tr("управление чужим зданием", "controlling a foreign building"))) {
                         refusedByTwoStates = true;
                         break;
                     }

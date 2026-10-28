@@ -8,6 +8,7 @@
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../ui/native_menu.h"
+#include "../ui/lang.h"
 #include "../world_sync/view_list_scope.h"
 #include <math.h>
 #include <string.h>
@@ -40,6 +41,18 @@ static const unsigned char kEntries[KINDS][16] = {
     { 0x48, 0x89, 0x5c, 0x24, 0x18, 0x56, 0x48, 0x83, 0xec, 0x20, 0x80, 0xb9, 0xbc, 0x0f, 0x00, 0x00 },
 };
 static const char* const kKindText[KINDS] = { "waypoint", "sign erase", "sign", "rail signal", "rail signal removal", "junction" };
+static const char* HoverKindToastDesc(int kind)
+{
+    switch (kind) {
+    case 0: return Tr("установка путевой точки", "placing waypoint");
+    case 1: return Tr("снос дорожного знака", "removing road sign");
+    case 2: return Tr("установка дорожного знака", "placing road sign");
+    case 3: return Tr("установка ж/д светофора", "placing rail signal");
+    case 4: return Tr("снос ж/д светофора", "removing rail signal");
+    case 5: return Tr("настройка перекрёстка", "configuring junction");
+    default: return Tr("действие с дорогой/сетью", "road/network action");
+    }
+}
 #define RAIL_PLACE 3
 #define RAIL_REMOVE 4
 #define JUNCTION 5
@@ -273,8 +286,9 @@ static U64 Run(int kind, U64 world, U64 a2)
         float cx = 0.0f, cz = 0.0f;
         memcpy(&cx, &m.pick.cursor[0], 4);
         memcpy(&cz, &m.pick.cursor[2], 4);
-        bool allowed = (kind == 1 || kind == RAIL_REMOVE) ? TwoStates_CheckDemolishAllowed(cx, cz, kKindText[kind])
-                                                          : TwoStates_CheckBuildAllowed(cx, cz, kKindText[kind]);
+        const char* actDesc = HoverKindToastDesc(kind);
+        bool allowed = (kind == 1 || kind == RAIL_REMOVE) ? TwoStates_CheckDemolishAllowed(cx, cz, actDesc)
+                                                          : TwoStates_CheckBuildAllowed(cx, cz, actDesc);
         if (!allowed) return r;
         Commands_Submit(LS_CMD_HOVER, &m, sizeof(m));
     }

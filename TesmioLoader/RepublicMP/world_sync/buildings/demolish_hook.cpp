@@ -10,6 +10,7 @@
 #include "../../session/two_states.h"
 #include "../../session/save_sync.h"
 #include "../../ui/native_menu.h"
+#include "../../ui/lang.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 #pragma intrinsic(_AddressOfReturnAddress)
@@ -152,7 +153,7 @@ static bool DemolishAsCommand(__int64 thisPtr, __int64 building, const unsigned 
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
-    if (!TwoStates_CheckBuildingControlAllowed(bldId, msg.x, msg.z, "снос здания"))
+    if (!TwoStates_CheckBuildingControlAllowed(bldId, msg.x, msg.z, Tr("снос здания", "building demolition")))
         return true; // swallow demolition of another state's building
     Commands_Submit(LS_CMD_DEMOLISH, &msg, sizeof(msg));
     return true;

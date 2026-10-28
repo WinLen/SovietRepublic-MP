@@ -311,13 +311,14 @@ static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent, cons
         }
 
         ImGui::Spacing();
+        const char* dispText = (strcmp(text, "Syncing...") == 0) ? Tr("Синхронизация...", "Syncing...") : text;
         char stepLine[220];
         if (totalSteps > 0) {
             _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE,
                         Tr("Этап %d/%d: %s", "Stage %d/%d: %s"),
-                        step, totalSteps, text);
+                        step, totalSteps, dispText);
         } else {
-            _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE, "%s", text);
+            _snprintf_s(stepLine, sizeof(stepLine), _TRUNCATE, "%s", dispText);
         }
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.93f, 0.86f, 1.0f));
         ImGui::TextUnformatted(stepLine);
