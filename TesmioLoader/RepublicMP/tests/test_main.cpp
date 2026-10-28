@@ -1922,10 +1922,11 @@ static bool TestEconStats_BatchConstructionAndDemographics()
 
     BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
     BYTE* hudBlock = world + WORLD_HUD_POP_BLOCK_OFFSET;
-    // Simulate a newborn child with uninitialized lifespan (0.0f) whose lifespan is mutated by UI (0x2FD2E0 -> 0x8244F0)
+    // Simulate both a newborn child (0.0f) and an existing adult (78.0f) whose lifespans are mutated by UI (0x2FD2E0 -> 0x8244F0)
     *(float*)(citPtrs[2] + 0x18) = 0.0f;
     TwoStates_UiBegin();
-    *(float*)(citPtrs[2] + 0x18) = 71.5f; // UI side-effect during DetUiRoutine
+    *(float*)(citPtrs[0] + 0x18) = 61.25f; // UI side-effect on positive lifespan citizen
+    *(float*)(citPtrs[2] + 0x18) = 71.5f;  // UI side-effect on zero lifespan citizen
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
     TEST_CHECK(*(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 0) == 2);
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 0) == 1); // 1 child < 6
@@ -1952,7 +1953,8 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 2);
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 3);
     TwoStates_UiEnd();
-    TEST_CHECK_NEAR(*(float*)(citPtrs[2] + 0x18), 0.0f, 1e-6f); // Newborn lifespan restored to 0.0f after UI!
+    TEST_CHECK_NEAR(*(float*)(citPtrs[0] + 0x18), 78.0f, 1e-5f); // Adult positive lifespan restored to 78.0f after UI!
+    TEST_CHECK_NEAR(*(float*)(citPtrs[2] + 0x18), 0.0f, 1e-6f);  // Newborn lifespan restored to 0.0f after UI!
     *(float*)(citPtrs[2] + 0x18) = 78.0f;
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
 
@@ -2096,13 +2098,106 @@ static bool TestEconStats_LeafHookRelayStubPreservesRegisters()
     return true;
 }
 
+static bool TestEconStats_PosKeyAndPoisonedSaveHeal()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    int keyWest = TwoStates_BuildingPosKey(-650.0f, 120.0f);
+    int keyEast = TwoStates_BuildingPosKey(+650.0f, 120.0f);
+    TEST_CHECK(keyWest >= 0x40000000 && keyEast >= 0x40000000);
+    TEST_CHECK(keyWest != keyEast);
+    TEST_CHECK(TwoStates_BuildingPosKey(-650.0f, 120.0f) == keyWest);
+
+    double initRub[2] = { 10000000.0, 10000000.0 };
+    double initUsd[2] = {  2000000.0,  2000000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // 1. Attempting to register buildingId == 0 must be rejected so *(int*)b == 0 never poisons West/East lookup
+    TwoStates_RegisterBuildingOwner(0, 2);
+    TEST_CHECK(TwoStates_GetBuildingOwner(0, -650.0f, 120.0f) == 1);
+    TEST_CHECK(TwoStates_GetBuildingOwner(0, +650.0f, 120.0f) == 2);
+
+    // 2. Placing a road/construction on East SSR in the shared border zone (x = +100.0f) with *(int*)c == 0
+    //    must register by TwoStates_BuildingPosKey(+100.0f, -40.0f) and never poison West buildings with *(int*)b == 0
+    std::vector<BYTE> conBorderEast(0x800, 0);
+    *(int32_t*)(conBorderEast.data() + 0) = 0;
+    *(float*)(conBorderEast.data() + OBJ_POS_OFFSET)     = 100.0f;
+    *(float*)(conBorderEast.data() + OBJ_POS_OFFSET + 8) = -40.0f;
+    BYTE* conPtrs[1] = { conBorderEast.data() };
+
+    TwoStates_BeginCommand(2);
+    *(BYTE***)(g_mockExeBuffer + VEC_CONSTRUCTIONS_BEGIN_RVA) = conPtrs;
+    *(BYTE***)(g_mockExeBuffer + VEC_CONSTRUCTIONS_END_RVA)   = conPtrs + 1;
+    TwoStates_EndCommand(2);
+
+    TEST_CHECK(TwoStates_GetBuildingOwner(0, -500.0f, 0.0f) == 1);
+    TEST_CHECK(TwoStates_GetBuildingOwner(0, 100.0f, -40.0f) == 2);
+
+    // 3. Loading a polluted republicmp_coop.ini with building_owners=0:2 and net_trade1=0, net_trade2=-41668554
+    //    must reject 0:2 and automatically merge State 1's polluted R2 trade rows into State 2
+    std::vector<BYTE> resTable(8 * WORLD_RESOURCE_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x00) = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x08) = resTable.data() + resTable.size();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
+    uintptr_t resWork   = (uintptr_t)(resTable.data() + 0 * WORLD_RESOURCE_STRIDE);
+    uintptr_t resGravel = (uintptr_t)(resTable.data() + 5 * WORLD_RESOURCE_STRIDE);
+
+    std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_poisoned_save";
+    std::filesystem::create_directories(saveDir);
+    std::string meta =
+        "[republicmp_coop]\r\n"
+        "version=1\r\n"
+        "coop_mode=1\r\n"
+        "border_half_width_m=250\r\n"
+        "expand_borders=0\r\n"
+        "state1_rub_cents=1000000000\r\n"
+        "state2_rub_cents=957977759\r\n"
+        "state1_usd_cents=200000000\r\n"
+        "state2_usd_cents=200000000\r\n"
+        "net_trade1_rub_cents=0\r\n"
+        "net_trade2_rub_cents=-41668554\r\n"
+        "net_trade1_usd_cents=0\r\n"
+        "net_trade2_usd_cents=0\r\n"
+        "building_owners=0:2\r\n"
+        "vehicle_owners=0:2\r\n"
+        "econ_cur1=D:1,1970;R2:R0:379077:0,R5:42135:133243\r\n"
+        "econ_cur2=D:1,1970;R2:R0:331692:0,R5:36868:116588\r\n"
+        "econ_hist_count=0\r\n";
+    {
+        FILE* f = nullptr;
+        std::string metaPath = (saveDir / "republicmp_coop.ini").string();
+        if (fopen_s(&f, metaPath.c_str(), "wb") == 0 && f) {
+            fwrite(meta.data(), 1, meta.size(), f);
+            fclose(f);
+        }
+    }
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir.string().c_str(), true));
+    TEST_CHECK(TwoStates_GetBuildingOwner(0, -500.0f, 0.0f) == 1);
+
+    float tons = 0.0f, val = 0.0f;
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 2, resWork,   &tons, &val));
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 2, resGravel, &tons, &val));
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 2, resWork, &tons, &val));
+    TEST_CHECK_NEAR(tons, 710.769f, 1e-2f);
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 2, resGravel, &tons, &val));
+    TEST_CHECK_NEAR(tons, 79.003f, 1e-2f);
+    TEST_CHECK_NEAR(val, 2498.31f, 1e-1f);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool Test_TwoStates_EconomyStats()
 {
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
            TestEconStats_UiSwapAndExactSimulationRestore() &&
            TestEconStats_PeriodRolloverAndSaveMetaPersistence() &&
            TestEconStats_BatchConstructionAndDemographics() &&
-           TestEconStats_LeafHookRelayStubPreservesRegisters();
+           TestEconStats_LeafHookRelayStubPreservesRegisters() &&
+           TestEconStats_PosKeyAndPoisonedSaveHeal();
 }
 
 // ---------------------------------------------------------------------------

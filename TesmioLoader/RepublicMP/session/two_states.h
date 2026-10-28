@@ -105,10 +105,11 @@ void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd);
 void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd);
 
 // Territory, building & vehicle ownership checks:
+int  TwoStates_BuildingPosKey(float x, float z);
 void TwoStates_RegisterBuildingOwner(int buildingId, int ownerState);
-int TwoStates_GetBuildingOwner(int buildingId, float x, float z);
+int  TwoStates_GetBuildingOwner(int buildingId, float x, float z);
 void TwoStates_RegisterVehicleOwner(int vehicleId, int ownerState);
-int TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr);
+int  TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr);
 
 // Zone at world X: 1 = West territory, 0 = Shared Border Zone, 2 = East territory.
 int TwoStates_GetZoneAt(float x, float z);

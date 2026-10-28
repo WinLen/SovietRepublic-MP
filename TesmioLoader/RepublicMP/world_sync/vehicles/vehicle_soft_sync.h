@@ -21,6 +21,9 @@ void VehicleSoftSync_RequestImmediate();
 // Host, main thread after a simulation tick completes.
 void VehicleSoftSync_HostTick(unsigned long long tick);
 
+// Host, main thread inside Commands_Boundary right before sending/applying a soft-sync batch.
+void VehicleSoftSync_RefreshCommandTreasury(void* data, size_t size);
+
 // Both PCs, main thread inside Commands_Boundary.
 bool VehicleSoftSync_ApplyCommand(const void* data, size_t size);
 

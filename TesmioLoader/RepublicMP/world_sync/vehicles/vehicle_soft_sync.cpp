@@ -174,6 +174,23 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
     return ok;
 }
 
+static void CaptureSoftSyncTreasury(const BYTE* w, VehicleSoftSyncTreasury& tr)
+{
+    memset(&tr, 0, sizeof(tr));
+    if (!w || *(const int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) != 0) return;
+    tr.magic = VSS_TREASURY_MAGIC;
+    tr.flags = 1u;
+    tr.worldRub = *(const double*)(w + WORLD_RUB_OFFSET);
+    tr.worldUsd = *(const double*)(w + WORLD_USD_OFFSET);
+    if (TwoStates_IsActive()) {
+        tr.flags |= 2u;
+        tr.stateRub[0] = TwoStates_GetRubles(1);
+        tr.stateRub[1] = TwoStates_GetRubles(2);
+        tr.stateUsd[0] = TwoStates_GetDollars(1);
+        tr.stateUsd[1] = TwoStates_GetDollars(2);
+    }
+}
+
 static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr, bool immediate)
 {
     msg.count = 0;
@@ -181,19 +198,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr, boo
     DiagLog_BeginSafeSeh();
     __try {
         BYTE* w = g_exeBase + WORLD_RVA;
-        if (*(int*)(w + WORLD_UNLIMITED_MONEY_OFFSET) == 0) {
-            tr.magic = VSS_TREASURY_MAGIC;
-            tr.flags = 1u;
-            tr.worldRub = *(double*)(w + WORLD_RUB_OFFSET);
-            tr.worldUsd = *(double*)(w + WORLD_USD_OFFSET);
-            if (TwoStates_IsActive()) {
-                tr.flags |= 2u;
-                tr.stateRub[0] = TwoStates_GetRubles(1);
-                tr.stateRub[1] = TwoStates_GetRubles(2);
-                tr.stateUsd[0] = TwoStates_GetDollars(1);
-                tr.stateUsd[1] = TwoStates_GetDollars(2);
-            }
-        }
+        CaptureSoftSyncTreasury(w, tr);
         BYTE** begin = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
         BYTE** end = *(BYTE***)(w + WORLD_VEHICLES_OFFSET + 8);
         if (begin && end > begin) {
@@ -276,6 +281,26 @@ void VehicleSoftSync_HostTick(unsigned long long tick)
         wireBytes += sizeof(tr);
     }
     Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, wireBuf, wireBytes);
+}
+
+void VehicleSoftSync_RefreshCommandTreasury(void* data, size_t size)
+{
+    if (!data || size < sizeof(unsigned) + sizeof(VehicleSoftSyncTreasury) || !g_exeBase) return;
+    const VehicleSoftSyncMsg* msg = (const VehicleSoftSyncMsg*)data;
+    if (msg->count > SOFT_SYNC_BATCH_MAX) return;
+    size_t baseBytes = sizeof(unsigned) + msg->count * sizeof(VehicleSoftSyncEntry);
+    if (size != baseBytes + sizeof(VehicleSoftSyncTreasury)) return;
+
+    DiagLog_BeginSafeSeh();
+    __try {
+        VehicleSoftSyncTreasury tr = {};
+        CaptureSoftSyncTreasury(g_exeBase + WORLD_RVA, tr);
+        if (tr.magic == VSS_TREASURY_MAGIC) {
+            memcpy((BYTE*)data + baseBytes, &tr, sizeof(tr));
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
 }
 
 static BYTE* FindVehicle(BYTE** begin, size_t total, int place, unsigned vehicleId)

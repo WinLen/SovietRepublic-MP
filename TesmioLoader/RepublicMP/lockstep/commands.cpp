@@ -279,8 +279,10 @@ static void Apply(const Command& c)
     const void* p = c.data.data();
     size_t n = c.data.size();
     if (c.kind == LS_CMD_VEHICLE_SOFT_SYNC) {
+        TwoStates_RestoreUiMoneySwap();
         if (!VehicleSoftSync_ApplyCommand(p, n))
             Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - not made", c.seq, KindName(c.kind), c.afterTick);
+        Commands_RecordMoney();
         return;
     }
     int owner = (c.owner == 2) ? 2 : 1;
@@ -373,6 +375,10 @@ void Commands_Boundary(unsigned long long completed)
     for (Command& c : due) {
         c.afterTick = completed;
         c.seq = ++g_seq;
+        if (c.kind == LS_CMD_VEHICLE_SOFT_SYNC) {
+            TwoStates_RestoreUiMoneySwap();
+            VehicleSoftSync_RefreshCommandTreasury(c.data.data(), c.data.size());
+        }
         Apply(c);
         int wireKind = (c.kind & 0xFFFF) | (((c.owner == 2) ? 2 : 1) << 16);
         if (g_session == COMMANDS_HOST) LockstepNet_SendCommand(wireKind, c.afterTick, c.data.data(), c.data.size());
@@ -606,6 +612,7 @@ void Commands_LateBegin()
 {
     g_inLateRecord = g_capturing;
     if (!g_inLateRecord) return;
+    TwoStates_RestoreUiMoneySwap();
     Commands_CheckMoney("the held frame before Late");
     SettingsSync_LockstepBaseline();
     RoadSync_LockstepDirectionsBaseline();
