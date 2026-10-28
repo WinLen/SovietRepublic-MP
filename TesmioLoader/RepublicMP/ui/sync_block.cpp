@@ -6,6 +6,7 @@
 #include "../session/game_speed.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
+#include "../session/mod_sync.h"
 #include "../transport/steam_p2p.h"
 #include "imgui.h"
 #include <windows.h>
@@ -82,6 +83,7 @@ bool SyncBlock_UpdateMapInspectState(int sessionState, bool syncActive)
 
 bool SyncBlock_BlocksWorldInput()
 {
+    if (ModSync_IsDownloadActive()) return true;
     if (g_active) return true;
     if (SaveSync_IsWaitingLobbyActive() && !g_mapInspectMode) return true;
     return false;
@@ -488,6 +490,170 @@ static void DrawLobbyActionButtons(SessionState st, bool syncActive, bool isReco
     }
 }
 
+static void DrawWorkshopDownloadModal(const ImGuiIO& io)
+{
+    ModDownloadProgress prog = {};
+    if (!ModSync_GetDownloadProgress(&prog) || !prog.active) return;
+
+    // Dimmer background
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.04f, 0.03f, 0.74f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGuiWindowFlags dimFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                                ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
+                                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##republicmp_workshop_dimmer", nullptr, dimFlags)) {
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+
+    float cardW = 700.0f;
+    if (cardW > io.DisplaySize.x - 40.0f) cardW = io.DisplaySize.x - 40.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(cardW, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.11f, 0.08f, 0.07f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.84f, 0.67f, 0.24f, 0.96f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 16.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 8.0f));
+
+    ImGuiWindowFlags cardFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+
+    if (ImGui::Begin("##republicmp_workshop_download_card", nullptr, cardFlags)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 winPos = ImGui::GetWindowPos();
+        float winW = ImGui::GetWindowWidth();
+
+        dl->AddRectFilled(winPos, ImVec2(winPos.x + winW, winPos.y + 58.0f),
+                          IM_COL32(112, 22, 20, 255), 8.0f, ImDrawFlags_RoundCornersTop);
+        dl->AddLine(ImVec2(winPos.x, winPos.y + 58.0f), ImVec2(winPos.x + winW, winPos.y + 58.0f),
+                    IM_COL32(214, 171, 61, 240), 2.0f);
+
+        const char* headerTitle = Tr("★ ГОСПЛАН СССР — ЗАГРУЗКА МОДИФИКАЦИЙ ★",
+                                     "★ GOSPLAN USSR — DOWNLOADING WORKSHOP MODS ★");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
+        ImVec2 tSize = ImGui::CalcTextSize(headerTitle);
+        ImGui::SetCursorPosX((winW - tSize.x) * 0.5f);
+        ImGui::TextUnformatted(headerTitle);
+        ImGui::PopStyleColor();
+
+        const char* subTitle = Tr("СИНХРОНИЗАЦИЯ МОДОВ STEAM WORKSHOP ДЛЯ КООП-СЕССИИ",
+                                  "STEAM WORKSHOP MOD SYNCHRONIZATION FOR CO-OP SESSION");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.89f, 0.82f, 1.0f));
+        ImVec2 subSize = ImGui::CalcTextSize(subTitle);
+        ImGui::SetCursorPosX((winW - subSize.x) * 0.5f);
+        ImGui::TextUnformatted(subTitle);
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.05f, 0.04f, 0.88f));
+        if (ImGui::BeginChild("##ws_dl_inner", ImVec2(winW - 40.0f, 0.0f), true, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (prog.allCompleted) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.40f, 0.90f, 0.40f, 1.0f));
+                ImGui::TextUnformatted(Tr("✔ ВСЕ МОДЫ УСПЕШНО ЗАГРУЖЕНЫ ИЗ STEAM WORKSHOP!",
+                                          "✔ ALL MODS SUCCESSFULLY DOWNLOADED FROM STEAM WORKSHOP!"));
+                ImGui::PopStyleColor();
+
+                ImGui::Spacing();
+                ImGui::Text(Tr("Загружено модов: %d из %d.", "Mods downloaded: %d of %d."),
+                            prog.completedCount, prog.totalCount);
+
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.20f, 0.70f, 0.20f, 1.0f));
+                ImGui::ProgressBar(1.0f, ImVec2(-1.0f, 24.0f), "100%");
+                ImGui::PopStyleColor();
+
+                ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.85f, 0.60f, 1.0f));
+                ImGui::TextWrapped(Tr("Для применения новых моделей, текстур и скриптов игра должна быть перезапущена.\n"
+                                      "После перезапуска откройте «Кооператив» -> «Подключиться», чтобы войти в игру к хосту.",
+                                      "To load newly downloaded models, textures and scripts, the game must be restarted.\n"
+                                      "After restart, open 'Co-op' -> 'Join Server' to join the host."));
+                ImGui::PopStyleColor();
+
+                ImGui::Spacing();
+                PushSovietButtonStyle(true);
+                float restartW = 420.0f;
+                if (restartW > winW - 60.0f) restartW = winW - 60.0f;
+                ImGui::SetCursorPosX((winW - 40.0f - restartW) * 0.5f);
+                if (ImGui::Button(Tr("★ ПЕРЕЗАПУСТИТЬ ИГРУ СЕЙЧАС ★", "★ RESTART GAME NOW ★"), ImVec2(restartW, 36.0f))) {
+                    ModSync_RestartGameNow();
+                }
+                PopSovietButtonStyle();
+
+                ImGui::Spacing();
+                PushSovietButtonStyle(false);
+                float closeW = 120.0f;
+                ImGui::SetCursorPosX((winW - 40.0f - closeW) * 0.5f);
+                if (ImGui::Button(Tr("Закрыть", "Close"), ImVec2(closeW, 28.0f))) {
+                    ModSync_CancelDownloadModal();
+                }
+                PopSovietButtonStyle();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
+                ImGui::Text(Tr("Загрузка недостающих модов из Steam Workshop (%d из %d)...",
+                               "Downloading missing mods from Steam Workshop (%d of %d)..."),
+                            prog.completedCount, prog.totalCount);
+                ImGui::PopStyleColor();
+
+                ImGui::Spacing();
+                ImGui::Text(Tr("Текущий мод: %s", "Current mod: %s"),
+                            prog.currentTitle[0] ? prog.currentTitle : Tr("Ожидание Steam...", "Waiting for Steam..."));
+
+                if (prog.currentBytesTotal > 0) {
+                    double mbCur = (double)prog.currentBytesDownloaded / (1024.0 * 1024.0);
+                    double mbTot = (double)prog.currentBytesTotal / (1024.0 * 1024.0);
+                    double pct = (mbTot > 0.0) ? (mbCur / mbTot * 100.0) : 0.0;
+                    ImGui::Text(Tr("Размер: %.1f МБ / %.1f МБ (%.0f%%)", "Size: %.1f MB / %.1f MB (%.0f%%)"),
+                                mbCur, mbTot, pct);
+                }
+
+                float frac = (prog.totalCount > 0) ? ((float)prog.completedCount / (float)prog.totalCount) : 0.0f;
+                if (prog.currentBytesTotal > 0 && prog.totalCount > 0) {
+                    float curFrac = (float)prog.currentBytesDownloaded / (float)prog.currentBytesTotal;
+                    frac += (curFrac / (float)prog.totalCount);
+                }
+                if (frac > 0.99f) frac = 0.99f;
+                if (frac < 0.0f) frac = 0.0f;
+
+                char barOverlay[64];
+                _snprintf_s(barOverlay, sizeof(barOverlay), _TRUNCATE, "%d / %d (%.0f%%)",
+                            prog.completedCount, prog.totalCount, frac * 100.0f);
+
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.84f, 0.67f, 0.24f, 1.0f));
+                ImGui::ProgressBar(frac, ImVec2(-1.0f, 24.0f), barOverlay);
+                ImGui::PopStyleColor();
+
+                ImGui::Spacing();
+                PushSovietButtonStyle(false);
+                float cancelW = 160.0f;
+                ImGui::SetCursorPosX((winW - 40.0f - cancelW) * 0.5f);
+                if (ImGui::Button(Tr("Отмена", "Cancel"), ImVec2(cancelW, 30.0f))) {
+                    ModSync_CancelDownloadModal();
+                }
+                PopSovietButtonStyle();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(2);
+}
+
 void SyncBlock_Draw()
 {
     SessionState st = SaveSync_GetState();
@@ -495,14 +661,21 @@ void SyncBlock_Draw()
     bool waitingLobby = SaveSync_IsWaitingLobbyActive();
     SyncBlock_UpdateMapInspectState((int)st, syncActive);
 
-    if (!syncActive && !waitingLobby)
-        return;
-
     if (waitingLobby) {
         SaveSync_EnforceWaitingLobbyHold();
-    } else {
+    } else if (syncActive || ModSync_IsDownloadActive()) {
         EnsureGamePaused();
     }
+
+    if (ModSync_IsDownloadActive()) {
+        ModSync_TickDownloadProgress();
+        ImGuiIO& io = ImGui::GetIO();
+        DrawWorkshopDownloadModal(io);
+        return;
+    }
+
+    if (!syncActive && !waitingLobby)
+        return;
 
     ImGuiIO& io = ImGui::GetIO();
     bool isReconnect = SaveSync_IsWaitingForReconnect();

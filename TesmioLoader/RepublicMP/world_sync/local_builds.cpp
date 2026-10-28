@@ -15,6 +15,7 @@
 #include "../determinism/determinism.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
+#include "../session/mod_sync.h"
 #include "../core/safe_mem.h"
 #include <stdio.h>
 #include <string.h>
@@ -1139,14 +1140,15 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
         if (lmbDown) {
             char typeName[64] = {};
             SafeReadCStringDirect(param_2, typeName, sizeof(typeName));
-            bool dlcOk = !LooksLikeValidType(typeName) || SaveSync_CheckBuildingDlcAllowed(typeName);
+            bool modOk = ModSync_CheckBuildingTypeAllowed(typeName);
+            bool dlcOk = modOk && (!LooksLikeValidType(typeName) || SaveSync_CheckBuildingDlcAllowed(typeName));
             bool terrOk = true;
             if (dlcOk && TwoStates_IsActive()) {
                 float cx = *(float*)(param_1 + CURSOR_X_OFFSET);
                 float cz = *(float*)(param_1 + CURSOR_Z_OFFSET);
                 terrOk = TwoStates_CheckBuildAllowed(cx, cz, Tr("строительство здания", "building construction"));
             }
-            if (!dlcOk || !terrOk) {
+            if (!modOk || !dlcOk || !terrOk) {
                 *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
                 *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;
             }
@@ -1195,6 +1197,8 @@ bool LocalBuilds_PlacementPress()
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+    if (!ModSync_CheckBuildingTypeAllowed(msg.typeName))
+        return true; // swallow click so unshared Workshop building is not placed
     if (!SaveSync_CheckBuildingDlcAllowed(msg.typeName))
         return true; // swallow click so unshared DLC building is not placed
     if (!TwoStates_CheckBuildAllowed(msg.x, msg.z, Tr("строительство здания", "building construction")))
@@ -1260,9 +1264,10 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
     __try {
         lmbDown = *(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA);
         if (lmbDown && !BuildSync_IsApplyingRemote()) {
-            bool dlcOk = !LooksLikeValidType(typeName) || SaveSync_CheckBuildingDlcAllowed(typeName);
+            bool modOk = ModSync_CheckBuildingTypeAllowed(typeName);
+            bool dlcOk = modOk && (!LooksLikeValidType(typeName) || SaveSync_CheckBuildingDlcAllowed(typeName));
             bool terrOk = !TwoStates_IsActive() || TwoStates_CheckBuildAllowed(cursorX, cursorZ, Tr("строительство здания", "building construction"));
-            if (!dlcOk || !terrOk) {
+            if (!modOk || !dlcOk || !terrOk) {
                 *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;
                 *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA) = 0;
                 lmbDown = false;

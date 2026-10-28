@@ -18,6 +18,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
+#include <shellapi.h>
+
+#pragma comment(lib, "Shell32.lib")
 
 static const BYTE kRefreshPrologue[16] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, // mov [rsp+10h], rbx
@@ -28,10 +31,6 @@ static const BYTE kRefreshPrologue[16] = {
 
 typedef void (__fastcall* Fn_WorkshopRefresh)(void* thisPtr, bool a2, bool skipWip, bool a4);
 static Fn_WorkshopRefresh o_workshopRefresh = nullptr;
-
-// C3DDLL64.dll Workshop forwarding exports
-typedef void (__cdecl* Fn_WorkshopForwardAddItem)(uint64_t itemId, const char* folderPath);
-static Fn_WorkshopForwardAddItem pWorkshopForwardAddItem = nullptr;
 
 // SteamUGC dynamic bindings (steam_api64.dll)
 typedef int32_t HSteamUser;
@@ -90,7 +89,7 @@ struct InternalPluginEntry {
     bool localEnabled;
 };
 
-static ModPackMode g_packMode = MOD_PACK_ALL_SHARED;
+static ModPackMode g_packMode = MOD_PACK_HOST_ONLY;
 static std::vector<LocalModEntry> g_mods;
 static std::vector<uint64_t> g_lastSaveUsedIds;
 static std::vector<InternalPluginEntry> g_plugins;
@@ -100,9 +99,6 @@ static volatile bool g_sessionFilterActive = false;
 static volatile bool g_needMainThreadWorkshopRefresh = false;
 static int g_hiddenTailCount = 0;
 static std::vector<uint64_t> g_sessionAllowedIds;
-static std::vector<std::pair<uint64_t, std::string>> g_sessionSandboxForwards;
-
-#define TEMP_MOD_MARKER_FILE ".republicmp_session_temp"
 
 static void LockMods()
 {
@@ -166,31 +162,6 @@ static bool InitSteamUGC()
                        (int)hUser, s_pSteamUGC);
     }
     return s_pSteamUGC != nullptr;
-}
-
-static void CleanupTempSessionMods()
-{
-    char rootDir[MAX_PATH] = {};
-    if (!GetExeRootDir(rootDir, sizeof(rootDir))) return;
-
-    std::error_code ec;
-    std::filesystem::path wipDir = std::filesystem::path(rootDir) / "media_soviet" / "workshop_wip";
-    if (std::filesystem::exists(wipDir, ec)) {
-        for (const auto& entry : std::filesystem::directory_iterator(wipDir, ec)) {
-            if (!entry.is_directory(ec)) continue;
-            std::filesystem::path marker = entry.path() / TEMP_MOD_MARKER_FILE;
-            if (std::filesystem::exists(marker, ec)) {
-                std::string folderName = entry.path().filename().string();
-                std::filesystem::remove_all(entry.path(), ec);
-                Logf("republicmp  MOD_SYNC: removed temporary session mod folder %s", folderName.c_str());
-            }
-        }
-    }
-
-    std::filesystem::path sessionIniDir = std::filesystem::path(rootDir) / "plugins" / ".mp_session_ini";
-    if (std::filesystem::exists(sessionIniDir, ec)) {
-        std::filesystem::remove_all(sessionIniDir, ec);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -579,15 +550,6 @@ static void CatalogFromEngineManager(void* mgrPtr)
         if (!IsValidWorkshopModId(id))
             continue;
 
-        // Skip temporary session mods downloaded into workshop_wip
-        if (isWip && rootDir[0]) {
-            char marker[MAX_PATH];
-            _snprintf_s(marker, sizeof(marker), _TRUNCATE, "%s\\media_soviet\\workshop_wip\\%llu\\%s",
-                        rootDir, (unsigned long long)id, TEMP_MOD_MARKER_FILE);
-            if (GetFileAttributesA(marker) != INVALID_FILE_ATTRIBUTES)
-                continue;
-        }
-
         bool exists = false;
         for (const auto& m : g_mods) {
             if (m.id == id) { exists = true; break; }
@@ -641,15 +603,6 @@ static void __fastcall Hook_WorkshopRefresh(void* thisPtr, bool a2, bool skipWip
     // Restore any hidden tail items BEFORE o_workshopRefresh runs so the engine
     // frees 100% of previously allocated SOVIET_WORKSHOP_ITEM* objects without leaking.
     SafeRestoreWorkshopMgr(thisPtr, &g_hiddenTailCount);
-    if (g_sessionFilterActive) {
-        // Ensure workshop_wip sandbox mods are always scanned during a Co-op session
-        skipWip = false;
-        if (pWorkshopForwardAddItem) {
-            for (const auto& kv : g_sessionSandboxForwards) {
-                pWorkshopForwardAddItem(kv.first, kv.second.c_str());
-            }
-        }
-    }
     UnlockMods();
 
     o_workshopRefresh(thisPtr, a2, skipWip, a4);
@@ -759,7 +712,6 @@ void ModSync_RefreshCatalog()
         if (std::filesystem::exists(wipRoot, ec)) {
             for (const auto& entry : std::filesystem::directory_iterator(wipRoot, ec)) {
                 if (!entry.is_directory(ec)) continue;
-                if (std::filesystem::exists(entry.path() / TEMP_MOD_MARKER_FILE, ec)) continue;
                 std::string folderName = entry.path().filename().string();
                 uint64_t id = _strtoui64(folderName.c_str(), nullptr, 10);
                 if (id == 0) continue;
@@ -807,16 +759,6 @@ void ModSync_RefreshCatalog()
 
 void ModSync_Init()
 {
-    LockMods();
-    CleanupTempSessionMods();
-    UnlockMods();
-
-    HMODULE hC3d = GetModuleHandleA("C3DDLL64.dll");
-    if (hC3d) {
-        pWorkshopForwardAddItem = (Fn_WorkshopForwardAddItem)GetProcAddress(
-            hC3d, "?C3DPath_WorkshopForwardAddItem@@YAX_KPEAD@Z");
-    }
-
     if (g_host && g_host->consume) {
         g_pluginMgr = (const TsmPluginManagerApi*)g_host->consume(TSM_SERVICE_PLUGINS, TSM_PLUGINS_VERSION);
     }
@@ -838,7 +780,7 @@ ModPackMode ModSync_GetPackMode()
 
 void ModSync_SetPackMode(ModPackMode mode)
 {
-    if (mode < MOD_PACK_SAVE_ONLY || mode > MOD_PACK_HOST_ONLY) mode = MOD_PACK_ALL_SHARED;
+    if (mode != MOD_PACK_HOST_ONLY && mode != MOD_PACK_SAVE_ONLY) mode = MOD_PACK_HOST_ONLY;
     g_packMode = mode;
     DiagLog_Printf("MOD_SYNC", "Server ModPackMode changed to %d", (int)g_packMode);
     TwoStates_SaveSettings();
@@ -846,11 +788,7 @@ void ModSync_SetPackMode(ModPackMode mode)
 
 void ModSync_CyclePackMode()
 {
-    // Cycle: MOD_PACK_ALL_SHARED (1) -> MOD_PACK_HOST_ONLY (2) -> MOD_PACK_SAVE_ONLY (0) -> MOD_PACK_ALL_SHARED (1)
-    ModPackMode next = MOD_PACK_ALL_SHARED;
-    if (g_packMode == MOD_PACK_ALL_SHARED) next = MOD_PACK_HOST_ONLY;
-    else if (g_packMode == MOD_PACK_HOST_ONLY) next = MOD_PACK_SAVE_ONLY;
-    else next = MOD_PACK_ALL_SHARED;
+    ModPackMode next = (g_packMode == MOD_PACK_HOST_ONLY) ? MOD_PACK_SAVE_ONLY : MOD_PACK_HOST_ONLY;
     ModSync_SetPackMode(next);
 }
 
@@ -881,8 +819,8 @@ void ModSync_LoadSettingsFromIni(const char* iniPath)
 {
     if (!iniPath || !iniPath[0]) return;
     LockMods();
-    int mode = GetPrivateProfileIntA("mods", "auto_sync_mode", (int)MOD_PACK_ALL_SHARED, iniPath);
-    if (mode < 0 || mode > 2) mode = (int)MOD_PACK_ALL_SHARED;
+    int mode = GetPrivateProfileIntA("mods", "auto_sync_mode", (int)MOD_PACK_HOST_ONLY, iniPath);
+    if (mode != (int)MOD_PACK_HOST_ONLY && mode != (int)MOD_PACK_SAVE_ONLY) mode = (int)MOD_PACK_HOST_ONLY;
     g_packMode = (ModPackMode)mode;
     DiagLog_Printf("MOD_SYNC", "Loaded settings from [%s]: auto_sync_mode=%d", iniPath, (int)g_packMode);
     UnlockMods();
@@ -904,8 +842,8 @@ void ModSync_SaveSettingsToIni(const char* iniPath)
 
 #pragma pack(push, 1)
 struct WireModManifestHeader {
-    char     magic[8];       // "RPMPMOD2"
-    uint32_t packMode;       // ModPackMode (0=SaveOnly, 1=AllShared, 2=HostOnly)
+    char     magic[8];       // "RPMPMOD3"
+    uint32_t packMode;       // ModPackMode (0=HostOnly, 1=SaveOnly)
     uint32_t modCount;       // Number of WireModEntry records from Host
     uint32_t pluginCount;    // Number of WirePluginIniHeader records from Host
     char     enabledPluginsCsv[256];
@@ -918,19 +856,22 @@ struct WireModEntry {
     char     title[64];
 };
 
-struct WireClientModListHeader {
-    char     magic[8];       // "RPMPCMDS"
-    uint32_t extraModCount;  // Number of additional WireModEntry records from Client
-};
-
 struct WirePluginIniHeader {
     char     id[64];
     uint32_t byteSize;
 };
 
-struct WireModFallbackReq {
-    char     magic[8];       // "RPMPMREQ"
-    uint32_t requestCount;   // Number of uint64_t IDs requested for direct transfer
+enum ModSyncStatus : uint32_t {
+    MOD_SYNC_STATUS_OK      = 0,
+    MOD_SYNC_STATUS_MISSING = 1,
+    MOD_SYNC_STATUS_ERROR   = 2,
+};
+
+struct WireModSyncResponse {
+    char     magic[8];       // "RPMPRESP"
+    uint32_t status;        // ModSyncStatus
+    uint32_t missingCount;  // N missing mods
+    char     details[64];
 };
 #pragma pack(pop)
 
@@ -984,218 +925,263 @@ static void BuildHostActiveModListLocked(const std::vector<uint64_t>& saveIds, s
     std::sort(outActiveIds.begin(), outActiveIds.end());
 }
 
-// Auto-subscribes & downloads any missing Workshop mods via ISteamUGC (used by BOTH Host and Client).
-// Any mod that is local WIP or fails/times out in Steam is added to `outFallbackIds`.
-static bool DownloadMissingSteamMods(SOCKET sockOrInvalid, const std::vector<WireModEntry>& candidates,
-                                     const char* roleTag, std::vector<uint64_t>& outFallbackIds,
-                                     bool* ioAnyNewOnDisk, char* errOut, size_t errSize)
+// ---------------------------------------------------------------------------
+// Non-Blocking Batch Workshop Download Tracking & Game Restart
+// ---------------------------------------------------------------------------
+
+struct DownloadItemTracker {
+    uint64_t id;
+    char     title[64];
+    bool     installed;
+    uint64_t bytesDownloaded;
+    uint64_t bytesTotal;
+};
+
+static std::vector<DownloadItemTracker> g_downloadItems;
+static volatile bool g_downloadActive = false;
+static volatile bool g_downloadAllCompleted = false;
+
+static void ModSync_StartBatchDownload(const std::vector<WireModEntry>& missingMods)
 {
+    LockMods();
     InitSteamUGC();
-    std::vector<WireModEntry> needSteamDownload;
+    g_downloadItems.clear();
+    g_downloadItems.reserve(missingMods.size());
 
-    for (const auto& wm : candidates) {
-        char localFolder[MAX_PATH] = {};
-        bool localWip = false;
-        if (FindLocalModFolder(wm.id, localFolder, sizeof(localFolder), &localWip)) {
-            continue; // Already installed on disk!
-        }
-        if (wm.isWip || !s_pSteamUGC || !pUGC_DownloadItem) {
-            if (std::find(outFallbackIds.begin(), outFallbackIds.end(), wm.id) == outFallbackIds.end())
-                outFallbackIds.push_back(wm.id);
-        } else {
-            needSteamDownload.push_back(wm);
-        }
-    }
-
-    for (size_t i = 0; i < needSteamDownload.size(); ++i) {
-        const auto& wm = needSteamDownload[i];
+    for (const auto& wm : missingMods) {
         if (!IsValidWorkshopModId(wm.id)) continue;
+        if (s_pSteamUGC && pUGC_SubscribeItem) pUGC_SubscribeItem(s_pSteamUGC, wm.id);
+        if (s_pSteamUGC && pUGC_DownloadItem)  pUGC_DownloadItem(s_pSteamUGC, wm.id, true);
 
-        if (pUGC_SubscribeItem) pUGC_SubscribeItem(s_pSteamUGC, wm.id);
-        bool dlStarted = pUGC_DownloadItem ? pUGC_DownloadItem(s_pSteamUGC, wm.id, true) : false;
-
-        if (sockOrInvalid != INVALID_SOCKET) {
-            char stepText[160];
-            _snprintf_s(stepText, sizeof(stepText), _TRUNCATE,
-                        Tr("Steam Workshop (%zu/%zu): %s", "Steam Workshop (%zu/%zu): %s"),
-                        i + 1, needSteamDownload.size(), wm.title);
-            SyncBlock_SetStep(2, 7, stepText, 0);
-        }
-
-        ULONGLONG startWait = GetTickCount64();
-        ULONGLONG maxWaitMs = (sockOrInvalid == INVALID_SOCKET) ? 8000ULL : 30000ULL;
-        bool installed = false;
-        while (GetTickCount64() - startWait < maxWaitMs) {
-            if (sockOrInvalid != INVALID_SOCKET && NetworkPeerGone(sockOrInvalid)) {
-                if (errOut && errSize > 0) {
-                    _snprintf_s(errOut, errSize, _TRUNCATE, "connection closed while downloading Workshop mods");
-                }
-                return false;
-            }
-            char folder[MAX_PATH] = {};
-            bool isWip = false;
-            if (FindLocalModFolder(wm.id, folder, sizeof(folder), &isWip)) {
-                installed = true;
-                if (ioAnyNewOnDisk) *ioAnyNewOnDisk = true;
-                break;
-            }
-            if (pUGC_GetItemState) {
-                uint32_t st = pUGC_GetItemState(s_pSteamUGC, wm.id);
-                ULONGLONG elapsed = GetTickCount64() - startWait;
-                if (elapsed >= 2000ULL &&
-                    !(st & (k_EItemStateDownloading | k_EItemStateDownloadPending | k_EItemStateInstalled)) &&
-                    (!dlStarted || !(st & k_EItemStateNeedsUpdate))) {
-                    break; // Item is removed/unavailable on Steam Workshop; do not hang waiting
-                }
-            }
-            if (sockOrInvalid != INVALID_SOCKET && pUGC_GetItemDownloadInfo) {
-                uint64_t done = 0, total = 0;
-                if (pUGC_GetItemDownloadInfo(s_pSteamUGC, wm.id, &done, &total) && total > 0) {
-                    int pct = (int)((done * 100) / total);
-                    SyncBlock_SetPercent(pct);
-                }
-            }
-            if (sockOrInvalid == INVALID_SOCKET) {
-                MSG msg;
-                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
-            Sleep(100);
-        }
-
-        if (!installed) {
-            Logf("republicmp  MOD_SYNC: [%s] Steam download for %llu (%s) timed out or unavailable - requesting direct transfer",
-                 roleTag, (unsigned long long)wm.id, wm.title);
-            if (std::find(outFallbackIds.begin(), outFallbackIds.end(), wm.id) == outFallbackIds.end())
-                outFallbackIds.push_back(wm.id);
-        } else {
-            Logf("republicmp  MOD_SYNC: [%s] SteamUGC auto-installed mod %llu (%s)",
-                 roleTag, (unsigned long long)wm.id, wm.title);
-        }
+        DownloadItemTracker tracker = {};
+        tracker.id = wm.id;
+        tracker.installed = false;
+        strncpy_s(tracker.title, sizeof(tracker.title), wm.title, _TRUNCATE);
+        g_downloadItems.push_back(tracker);
     }
-    return true;
+    g_downloadActive = !g_downloadItems.empty();
+    g_downloadAllCompleted = g_downloadItems.empty();
+    UnlockMods();
 }
 
-static bool StreamRequestedModZips(SOCKET sock, const std::vector<uint64_t>& requestedIds,
-                                   const char* roleTag, char* errOut, size_t errSize)
+bool ModSync_GetDownloadProgress(ModDownloadProgress* outProgress)
 {
-    char rootDir[MAX_PATH] = {};
-    GetExeRootDir(rootDir, sizeof(rootDir));
+    if (!outProgress) return false;
+    memset(outProgress, 0, sizeof(*outProgress));
 
-    uint32_t reqCount = (uint32_t)requestedIds.size();
-    for (uint32_t i = 0; i < reqCount; ++i) {
-        uint64_t modId = requestedIds[i];
-        char modFolder[MAX_PATH] = {};
-        bool isWip = false;
-        uint8_t hasZip = 0;
+    LockMods();
+    outProgress->active = g_downloadActive;
+    outProgress->allCompleted = g_downloadAllCompleted;
+    outProgress->totalCount = (int)g_downloadItems.size();
 
-        char tempZip[MAX_PATH] = {};
-        _snprintf_s(tempZip, sizeof(tempZip), _TRUNCATE, "%s\\media_soviet\\save_coop\\.mp_mod_send_%llu.zip",
-                    rootDir, (unsigned long long)modId);
+    int doneCount = 0;
+    uint64_t sumDown = 0;
+    uint64_t sumTotal = 0;
+    const char* currentTitle = "";
 
-        if (FindLocalModFolder(modId, modFolder, sizeof(modFolder), &isWip)) {
-            char statusText[128];
-            _snprintf_s(statusText, sizeof(statusText), _TRUNCATE,
-                        Tr("Передача мода #%llu партнёру (%u/%u)...", "Sending mod #%llu to partner (%u/%u)..."),
-                        (unsigned long long)modId, i + 1, reqCount);
-            SyncBlock_SetStep(2, 7, statusText, (int)(((i + 1) * 100) / reqCount));
-
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(rootDir) / "media_soviet" / "save_coop", ec);
-            if (ZipSaveDirectory(modFolder, tempZip, nullptr, nullptr)) {
-                hasZip = 1;
-            }
+    for (const auto& item : g_downloadItems) {
+        if (item.installed) {
+            doneCount++;
+            sumDown += (item.bytesTotal > 0) ? item.bytesTotal : (5 * 1024 * 1024);
+            sumTotal += (item.bytesTotal > 0) ? item.bytesTotal : (5 * 1024 * 1024);
         } else {
-            DiagLog_Printf("MOD_SYNC", "[%s] WARNING: requested fallback mod %llu not found locally on disk!",
-                           roleTag, (unsigned long long)modId);
+            if (!currentTitle[0]) {
+                currentTitle = item.title;
+                outProgress->currentBytesDownloaded = item.bytesDownloaded;
+                outProgress->currentBytesTotal = item.bytesTotal;
+            }
+            sumDown += item.bytesDownloaded;
+            sumTotal += (item.bytesTotal > 0) ? item.bytesTotal : (item.bytesDownloaded + 5 * 1024 * 1024);
+        }
+    }
+
+    outProgress->completedCount = doneCount;
+    strncpy_s(outProgress->currentTitle, sizeof(outProgress->currentTitle),
+              currentTitle[0] ? currentTitle : (doneCount == outProgress->totalCount ? "All items downloaded" : "Downloading..."),
+              _TRUNCATE);
+    outProgress->totalBytesDownloaded = sumDown;
+    outProgress->totalBytesTotal = (sumTotal >= sumDown) ? sumTotal : sumDown;
+
+    UnlockMods();
+    return outProgress->active;
+}
+
+void ModSync_TickDownloadProgress()
+{
+    LockMods();
+    if (!g_downloadActive) {
+        UnlockMods();
+        return;
+    }
+
+    InitSteamUGC();
+    int finishedCount = 0;
+    int totalCount = (int)g_downloadItems.size();
+
+    for (auto& item : g_downloadItems) {
+        if (item.installed) {
+            finishedCount++;
+            continue;
         }
 
-        if (!NetworkSendExact(sock, &hasZip, sizeof(hasZip))) {
-            DeleteFileA(tempZip);
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending fallback mod header");
+        char folder[MAX_PATH] = {};
+        bool isWip = false;
+        if (FindLocalModFolder(item.id, folder, sizeof(folder), &isWip)) {
+            item.installed = true;
+            finishedCount++;
+            continue;
+        }
+
+        if (s_pSteamUGC && pUGC_GetItemState) {
+            uint32_t st = pUGC_GetItemState(s_pSteamUGC, item.id);
+            if (st & k_EItemStateInstalled) {
+                item.installed = true;
+                finishedCount++;
+                continue;
+            }
+        }
+
+        if (s_pSteamUGC && pUGC_GetItemDownloadInfo) {
+            uint64_t done = 0, total = 0;
+            if (pUGC_GetItemDownloadInfo(s_pSteamUGC, item.id, &done, &total)) {
+                item.bytesDownloaded = done;
+                item.bytesTotal = total;
+            }
+        }
+    }
+
+    if (finishedCount >= totalCount && totalCount > 0) {
+        g_downloadAllCompleted = true;
+    }
+    UnlockMods();
+}
+
+void ModSync_RestartGameNow()
+{
+    wchar_t exePath[MAX_PATH] = {};
+    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) == 0) return;
+
+    wchar_t workDir[MAX_PATH] = {};
+    wcsncpy_s(workDir, exePath, _TRUNCATE);
+    wchar_t* lastSlash = wcsrchr(workDir, L'\\');
+    if (lastSlash) *lastSlash = L'\0';
+
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    LPCWSTR cmdLine = GetCommandLineW();
+
+    if (CreateProcessW(exePath, const_cast<LPWSTR>(cmdLine), nullptr, nullptr, FALSE, 0, nullptr, workDir, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    } else {
+        ShellExecuteW(nullptr, L"open", exePath, nullptr, workDir, SW_SHOW);
+    }
+    ExitProcess(0);
+}
+
+void ModSync_CancelDownloadModal()
+{
+    LockMods();
+    g_downloadActive = false;
+    g_downloadAllCompleted = false;
+    g_downloadItems.clear();
+    UnlockMods();
+}
+
+bool ModSync_IsDownloadActive()
+{
+    return g_downloadActive;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin config serialization helpers
+// ---------------------------------------------------------------------------
+
+struct PluginPayload {
+    WirePluginIniHeader hdr;
+    std::vector<BYTE>   data;
+};
+
+static void CollectPluginPayloads(std::string& outEnabledCsv, std::vector<PluginPayload>& outPayloads)
+{
+    outEnabledCsv.clear();
+    outPayloads.clear();
+    for (const auto& pe : g_plugins) {
+        if (!pe.localEnabled) continue;
+        if (!outEnabledCsv.empty()) outEnabledCsv += ",";
+        outEnabledCsv += pe.id;
+
+        FILE* f = nullptr;
+        if (pe.iniPath[0] && fopen_s(&f, pe.iniPath, "rb") == 0 && f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0 && sz <= 256 * 1024) {
+                PluginPayload pp = {};
+                strncpy_s(pp.hdr.id, sizeof(pp.hdr.id), pe.id, _TRUNCATE);
+                pp.hdr.byteSize = (uint32_t)sz;
+                pp.data.resize((size_t)sz);
+                fread(pp.data.data(), 1, (size_t)sz, f);
+                outPayloads.push_back(std::move(pp));
+            }
+            fclose(f);
+        }
+    }
+}
+
+static bool SendPluginPayloads(SOCKET sock, const std::vector<PluginPayload>& payloads, char* errOut, size_t errSize)
+{
+    for (const auto& pp : payloads) {
+        if (!NetworkSendExact(sock, &pp.hdr, sizeof(pp.hdr)) ||
+            (pp.hdr.byteSize > 0 && !NetworkSendExact(sock, pp.data.data(), pp.hdr.byteSize))) {
+            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending plugin configs");
             return false;
         }
-        if (hasZip) {
-            bool sent = NetworkSendFile(sock, tempZip, nullptr, nullptr);
-            DeleteFileA(tempZip);
-            if (!sent) {
-                _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection streaming fallback mod #%llu",
-                            (unsigned long long)modId);
-                return false;
-            }
-            Logf("republicmp  MOD_SYNC: [%s] streamed mod %llu (%s) to partner sandbox",
-                 roleTag, (unsigned long long)modId, isWip ? "WIP" : "Workshop fallback");
-        } else {
-            DeleteFileA(tempZip);
-        }
     }
     return true;
 }
 
-static bool ReceiveRequestedModZips(SOCKET sock, const std::vector<uint64_t>& requestedIds,
-                                    const char* roleTag, bool* ioAnyNewOnDisk, char* errOut, size_t errSize)
+static bool ReceivePluginPayloads(SOCKET sock, uint32_t pluginCount, const char* enabledCsv, char* errOut, size_t errSize)
 {
     char rootDir[MAX_PATH] = {};
     GetExeRootDir(rootDir, sizeof(rootDir));
     std::error_code ec;
+    std::filesystem::path sessionIniDir = std::filesystem::path(rootDir) / "plugins" / ".mp_session_ini";
+    std::filesystem::remove_all(sessionIniDir, ec);
+    std::filesystem::create_directories(sessionIniDir, ec);
 
-    uint32_t reqCount = (uint32_t)requestedIds.size();
-    for (uint32_t i = 0; i < reqCount; ++i) {
-        uint64_t modId = requestedIds[i];
-        uint8_t hasZip = 0;
-        if (!NetworkRecvExact(sock, &hasZip, sizeof(hasZip))) {
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving fallback mod header");
+    for (uint32_t i = 0; i < pluginCount; ++i) {
+        WirePluginIniHeader ph = {};
+        if (!NetworkRecvExact(sock, &ph, sizeof(ph)) || ph.byteSize > 256 * 1024) {
+            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving plugin config header");
             return false;
         }
-        if (!hasZip) continue;
-
-        char statusText[128];
-        _snprintf_s(statusText, sizeof(statusText), _TRUNCATE,
-                    Tr("Приём мода #%llu от партнёра (%u/%u)...", "Receiving mod #%llu from partner (%u/%u)..."),
-                    (unsigned long long)modId, i + 1, reqCount);
-        SyncBlock_SetStep(2, 7, statusText, (int)(((i + 1) * 100) / reqCount));
-
-        char tempZip[MAX_PATH] = {};
-        _snprintf_s(tempZip, sizeof(tempZip), _TRUNCATE,
-                    "%s\\media_soviet\\save_coop\\.mp_mod_recv_%llu.zip",
-                    rootDir, (unsigned long long)modId);
-        std::filesystem::create_directories(std::filesystem::path(rootDir) / "media_soviet" / "save_coop", ec);
-
-        if (!NetworkReceiveFile(sock, tempZip, nullptr, nullptr)) {
-            DeleteFileA(tempZip);
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving mod #%llu",
-                        (unsigned long long)modId);
+        ph.id[sizeof(ph.id) - 1] = '\0';
+        std::vector<BYTE> data(ph.byteSize);
+        if (ph.byteSize > 0 && !NetworkRecvExact(sock, data.data(), ph.byteSize)) {
+            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving plugin config data");
             return false;
         }
-
-        std::filesystem::path targetDir = std::filesystem::path(rootDir) / "media_soviet" / "workshop_wip" / std::to_string(modId);
-        bool existedBefore = std::filesystem::exists(targetDir, ec);
-        std::filesystem::create_directories(targetDir, ec);
-
-        UnzipToDirectory(tempZip, targetDir.string().c_str(), nullptr, nullptr);
-        DeleteFileA(tempZip);
-
-        if (!existedBefore) {
-            std::filesystem::path marker = targetDir / TEMP_MOD_MARKER_FILE;
-            FILE* mf = nullptr;
-            if (fopen_s(&mf, marker.string().c_str(), "wb") == 0 && mf) {
-                fwrite("temp", 1, 4, mf);
-                fclose(mf);
-            }
+        std::filesystem::path iniFile = sessionIniDir / (std::string(ph.id) + ".ini");
+        FILE* f = nullptr;
+        if (fopen_s(&f, iniFile.string().c_str(), "wb") == 0 && f) {
+            if (!data.empty()) fwrite(data.data(), 1, data.size(), f);
+            fclose(f);
         }
+    }
 
-        LockMods();
-        g_sessionSandboxForwards.push_back({ modId, targetDir.string() });
-        UnlockMods();
-        if (ioAnyNewOnDisk) *ioAnyNewOnDisk = true;
-
-        Logf("republicmp  MOD_SYNC: [%s] unpacked mod %llu into session sandbox %s",
-             roleTag, (unsigned long long)modId, targetDir.string().c_str());
+    if (!g_pluginMgr && g_host && g_host->consume) {
+        g_pluginMgr = (const TsmPluginManagerApi*)g_host->consume(TSM_SERVICE_PLUGINS, TSM_PLUGINS_VERSION);
+    }
+    if (g_pluginMgr) {
+        g_pluginMgr->setSessionOverride(sessionIniDir.string().c_str(), enabledCsv);
     }
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Pre-Save Handshake Protocol
+// ---------------------------------------------------------------------------
 
 void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
 {
@@ -1206,32 +1192,24 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
             InspectSaveModsInternal(saveDir, saveIds);
         }
 
-        // If the save references Workshop mods that the Host doesn't have installed yet,
-        // automatically subscribe & download them from Steam Workshop before loading the world!
+        // If Host lacks mods from save, start batch download
         if (!saveIds.empty()) {
-            std::vector<WireModEntry> saveModEntries;
+            std::vector<WireModEntry> missingSaveMods;
             for (uint64_t id : saveIds) {
-                WireModEntry wm = {};
-                wm.id = id;
-                wm.isWip = 0;
-                wm.itemType = 1;
-                _snprintf_s(wm.title, sizeof(wm.title), _TRUNCATE, "Save Mod #%llu", (unsigned long long)id);
-                saveModEntries.push_back(wm);
+                char folder[MAX_PATH] = {};
+                bool isWip = false;
+                if (!FindLocalModFolder(id, folder, sizeof(folder), &isWip)) {
+                    WireModEntry wm = {};
+                    wm.id = id;
+                    wm.isWip = 0;
+                    wm.itemType = 1;
+                    _snprintf_s(wm.title, sizeof(wm.title), _TRUNCATE, "Save Mod #%llu", (unsigned long long)id);
+                    missingSaveMods.push_back(wm);
+                }
             }
-            std::vector<uint64_t> unavailIds;
-            bool downloadedAny = false;
-            DownloadMissingSteamMods(INVALID_SOCKET, saveModEntries, "HOST-SAVE", unavailIds, &downloadedAny, nullptr, 0);
-            if (downloadedAny) {
-                g_needMainThreadWorkshopRefresh = true;
+            if (!missingSaveMods.empty()) {
+                ModSync_StartBatchDownload(missingSaveMods);
             }
-        }
-
-        void* mgrPtr = SafeGetEngineWorkshopMgr();
-        if (!g_inWorkshopRefreshHook && g_needMainThreadWorkshopRefresh && mgrPtr && o_workshopRefresh) {
-            DiagLog_Printf("MOD_SYNC", "[HOST] Refreshing SOVIET_WORKSHOP_MANAGER after downloading save mods");
-            Hook_WorkshopRefresh(mgrPtr, false, false, false);
-            ModSync_RefreshCatalog();
-            mgrPtr = SafeGetEngineWorkshopMgr();
         }
 
         LockMods();
@@ -1240,7 +1218,7 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
         if (g_inWorkshopRefreshHook) {
             g_pendingHostSaveIds = saveIds;
             g_rebuildHostActiveOnRefresh = true;
-        } else if (mgrPtr) {
+        } else if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
             int before = SafeGetWorkshopMgrCount(mgrPtr) + g_hiddenTailCount;
             int kept = SafeFilterAndSortWorkshopMgr(
                 mgrPtr,
@@ -1273,20 +1251,38 @@ void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir)
     }
 }
 
-bool ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_t errSize)
+ModSyncHostResult ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_t errSize)
 {
     ModSync_RefreshCatalog();
 
-    // 1. Collect all Workshop/WIP mods on Host + required by save
     std::vector<uint64_t> saveIds;
-    InspectSaveModsInternal(saveDir, saveIds);
+    if (saveDir && saveDir[0]) {
+        char resolvedDir[MAX_PATH] = {};
+        if (strchr(saveDir, '\\') || strchr(saveDir, '/')) {
+            strncpy_s(resolvedDir, sizeof(resolvedDir), saveDir, _TRUNCATE);
+        } else {
+            char rootDir[MAX_PATH] = {};
+            if (GetExeRootDir(rootDir, sizeof(rootDir))) {
+                _snprintf_s(resolvedDir, sizeof(resolvedDir), _TRUNCATE, "%s\\media_soviet\\save_coop\\%s", rootDir, saveDir);
+                if (GetFileAttributesA(resolvedDir) == INVALID_FILE_ATTRIBUTES) {
+                    _snprintf_s(resolvedDir, sizeof(resolvedDir), _TRUNCATE, "%s\\media_soviet\\save\\%s", rootDir, saveDir);
+                }
+            }
+        }
+        if (resolvedDir[0]) {
+            InspectSaveModsInternal(resolvedDir, saveIds);
+        }
+    }
+    if (saveIds.empty() && !g_lastSaveUsedIds.empty()) {
+        saveIds = g_lastSaveUsedIds;
+    }
 
     LockMods();
-    g_sessionSandboxForwards.clear();
     std::vector<uint64_t> hostActiveIds;
     BuildHostActiveModListLocked(saveIds, hostActiveIds);
 
     std::vector<WireModEntry> hostWireMods;
+    hostWireMods.reserve(hostActiveIds.size());
     for (uint64_t id : hostActiveIds) {
         WireModEntry wm = {};
         wm.id = id;
@@ -1308,44 +1304,17 @@ bool ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_
         hostWireMods.push_back(wm);
     }
 
-    // Collect enabled TesmioLoader gameplay plugins & their .ini contents
     std::string enabledCsv;
-    struct PluginPayload {
-        WirePluginIniHeader hdr;
-        std::vector<BYTE> data;
-    };
     std::vector<PluginPayload> pluginPayloads;
-
-    for (const auto& pe : g_plugins) {
-        if (!pe.localEnabled) continue;
-        if (!enabledCsv.empty()) enabledCsv += ",";
-        enabledCsv += pe.id;
-
-        FILE* f = nullptr;
-        if (pe.iniPath[0] && fopen_s(&f, pe.iniPath, "rb") == 0 && f) {
-            fseek(f, 0, SEEK_END);
-            long sz = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            if (sz > 0 && sz <= 256 * 1024) {
-                PluginPayload pp = {};
-                strncpy_s(pp.hdr.id, sizeof(pp.hdr.id), pe.id, _TRUNCATE);
-                pp.hdr.byteSize = (uint32_t)sz;
-                pp.data.resize((size_t)sz);
-                fread(pp.data.data(), 1, (size_t)sz, f);
-                pluginPayloads.push_back(std::move(pp));
-            }
-            fclose(f);
-        }
-    }
+    CollectPluginPayloads(enabledCsv, pluginPayloads);
     ModPackMode packMode = g_packMode;
     UnlockMods();
 
     DiagLog_Printf("MOD_SYNC", "[HOST] Sending manifest: %zu host mod(s) (saveMods=%zu, packMode=%d), %zu plugin(s) [%s]",
                    hostWireMods.size(), saveIds.size(), (int)packMode, pluginPayloads.size(), enabledCsv.c_str());
 
-    // 2. Send WireModManifestHeader + hostWireMods + pluginPayloads
     WireModManifestHeader hdr = {};
-    memcpy(hdr.magic, "RPMPMOD2", 8);
+    memcpy(hdr.magic, "RPMPMOD3", 8);
     hdr.packMode = (uint32_t)packMode;
     hdr.modCount = (uint32_t)hostWireMods.size();
     hdr.pluginCount = (uint32_t)pluginPayloads.size();
@@ -1353,289 +1322,151 @@ bool ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_
 
     if (!NetworkSendExact(sock, &hdr, sizeof(hdr))) {
         _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection while sending mod manifest");
-        return false;
+        return MOD_SYNC_HOST_ERROR;
     }
     if (!hostWireMods.empty() && !NetworkSendExact(sock, hostWireMods.data(), hostWireMods.size() * sizeof(WireModEntry))) {
         _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection while sending mod entries");
-        return false;
+        return MOD_SYNC_HOST_ERROR;
     }
-    for (const auto& pp : pluginPayloads) {
-        if (!NetworkSendExact(sock, &pp.hdr, sizeof(pp.hdr)) ||
-            (pp.hdr.byteSize > 0 && !NetworkSendExact(sock, pp.data.data(), pp.hdr.byteSize))) {
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection while sending plugin configs");
-            return false;
-        }
+    if (!SendPluginPayloads(sock, pluginPayloads, errOut, errSize)) {
+        return MOD_SYNC_HOST_ERROR;
     }
 
-    // 3. Receive Client's additional mods (when MOD_PACK_ALL_SHARED is active)
-    WireClientModListHeader clientHdr = {};
-    if (!NetworkRecvExact(sock, &clientHdr, sizeof(clientHdr)) ||
-        memcmp(clientHdr.magic, "RPMPCMDS", 8) != 0 || clientHdr.extraModCount > 4096) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving client mod list");
-        return false;
+    WireModSyncResponse resp = {};
+    if (!NetworkRecvExact(sock, &resp, sizeof(resp)) || memcmp(resp.magic, "RPMPRESP", 8) != 0) {
+        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection waiting for client mod verification response");
+        return MOD_SYNC_HOST_ERROR;
     }
 
-    std::vector<WireModEntry> clientExtraMods(clientHdr.extraModCount);
-    if (clientHdr.extraModCount > 0 &&
-        !NetworkRecvExact(sock, clientExtraMods.data(), clientHdr.extraModCount * sizeof(WireModEntry))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving client extra mod entries");
-        return false;
+    if (resp.status == MOD_SYNC_STATUS_MISSING) {
+        _snprintf_s(errOut, errSize, _TRUNCATE, "%u", resp.missingCount);
+        DiagLog_Printf("MOD_SYNC", "[HOST] Client is missing %u mod(s) from Steam Workshop", resp.missingCount);
+        return MOD_SYNC_HOST_CLIENT_MISSING;
     }
 
-    std::vector<WireModEntry> sessionMods = hostWireMods;
-    if (packMode == MOD_PACK_ALL_SHARED) {
-        for (const auto& cm : clientExtraMods) {
-            bool exists = false;
-            for (const auto& hm : sessionMods) {
-                if (hm.id == cm.id) { exists = true; break; }
-            }
-            if (!exists) sessionMods.push_back(cm);
-        }
+    if (resp.status != MOD_SYNC_STATUS_OK) {
+        _snprintf_s(errOut, errSize, _TRUNCATE, "%s", resp.details[0] ? resp.details : "client reported mod sync error");
+        return MOD_SYNC_HOST_ERROR;
     }
 
-    DiagLog_Printf("MOD_SYNC", "[HOST] Combined session mod pool: %zu mod(s) (%zu from host/save, %u extra from client)",
-                   sessionMods.size(), hostWireMods.size(), clientHdr.extraModCount);
-
-    // 4. Auto-download any missing Workshop mods on Host (from save or from Client's extra mods!)
-    bool hostAnyNewModsOnDisk = false;
-    std::vector<uint64_t> hostNeedFromClient;
-    if (!DownloadMissingSteamMods(sock, sessionMods, "HOST", hostNeedFromClient, &hostAnyNewModsOnDisk, errOut, errSize)) {
-        return false;
-    }
-
-    // 5. Wait for Client's fallback request & stream requested Host mods to Client
-    SyncBlock_SetStep(2, 7, Tr("Ожидание проверки и загрузки модов у партнёра...",
-                               "Waiting for partner to verify & download mods..."), 0);
-
-    WireModFallbackReq clientReq = {};
-    if (!NetworkRecvExact(sock, &clientReq, sizeof(clientReq)) ||
-        memcmp(clientReq.magic, "RPMPMREQ", 8) != 0 || clientReq.requestCount > 2048) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection while waiting for client mod verification");
-        return false;
-    }
-    std::vector<uint64_t> clientNeedFromHost(clientReq.requestCount);
-    if (clientReq.requestCount > 0 &&
-        !NetworkRecvExact(sock, clientNeedFromHost.data(), clientReq.requestCount * sizeof(uint64_t))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection while receiving client fallback mod list");
-        return false;
-    }
-    if (!StreamRequestedModZips(sock, clientNeedFromHost, "HOST", errOut, errSize)) {
-        return false;
-    }
-
-    // 6. Send Host's fallback request & receive any local/unavailable Client mods from Client
-    WireModFallbackReq hostReq = {};
-    memcpy(hostReq.magic, "RPMPMREQ", 8);
-    hostReq.requestCount = (uint32_t)hostNeedFromClient.size();
-    if (!NetworkSendExact(sock, &hostReq, sizeof(hostReq)) ||
-        (!hostNeedFromClient.empty() &&
-         !NetworkSendExact(sock, hostNeedFromClient.data(), hostNeedFromClient.size() * sizeof(uint64_t)))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending host fallback mod request");
-        return false;
-    }
-    if (!ReceiveRequestedModZips(sock, hostNeedFromClient, "HOST", &hostAnyNewModsOnDisk, errOut, errSize)) {
-        return false;
-    }
-
-    // 7. Activate combined session mod filter & schedule main-thread RefreshItems if new mods arrived
     LockMods();
-    g_sessionAllowedIds.clear();
-    for (const auto& sm : sessionMods) {
-        g_sessionAllowedIds.push_back(sm.id);
-    }
+    g_sessionAllowedIds = hostActiveIds;
     std::sort(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end());
     g_sessionFilterActive = true;
 
     if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
-        int kept = SafeFilterAndSortWorkshopMgr(
+        SafeFilterAndSortWorkshopMgr(
             mgrPtr,
             g_sessionAllowedIds.empty() ? nullptr : g_sessionAllowedIds.data(),
             (int)g_sessionAllowedIds.size(),
             &g_hiddenTailCount);
-        if (hostAnyNewModsOnDisk || kept < (int)g_sessionAllowedIds.size()) {
-            g_needMainThreadWorkshopRefresh = true;
-        }
     }
     UnlockMods();
 
-    Logf("republicmp  MOD_SYNC: [HOST] bidirectional mod handshake complete (%zu total mods, %u client->host, %u host->client, refreshOnLoad=%d)",
-         sessionMods.size(), hostReq.requestCount, clientReq.requestCount, (int)g_needMainThreadWorkshopRefresh);
-    return true;
+    DiagLog_Printf("MOD_SYNC", "[HOST] Pre-save mod handshake complete: %zu active session mods enabled",
+                   g_sessionAllowedIds.size());
+    return MOD_SYNC_HOST_OK;
 }
 
-bool ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize)
+ModSyncClientResult ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize)
 {
     WireModManifestHeader hdr = {};
-    if (!NetworkRecvExact(sock, &hdr, sizeof(hdr)) || memcmp(hdr.magic, "RPMPMOD2", 8) != 0 ||
+    if (!NetworkRecvExact(sock, &hdr, sizeof(hdr)) || memcmp(hdr.magic, "RPMPMOD3", 8) != 0 ||
         hdr.modCount > 4096 || hdr.pluginCount > 64) {
         _snprintf_s(errOut, errSize, _TRUNCATE, "invalid or incompatible mod manifest from host");
-        return false;
+        return MOD_SYNC_CLIENT_ERROR;
     }
     hdr.enabledPluginsCsv[sizeof(hdr.enabledPluginsCsv) - 1] = '\0';
 
     std::vector<WireModEntry> hostWireMods(hdr.modCount);
     if (hdr.modCount > 0 && !NetworkRecvExact(sock, hostWireMods.data(), hdr.modCount * sizeof(WireModEntry))) {
         _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving mod list from host");
-        return false;
+        return MOD_SYNC_CLIENT_ERROR;
     }
 
-    DiagLog_Printf("MOD_SYNC", "[CLIENT] Received manifest from host: %u mod(s), packMode=%u, %u plugin config(s), enabledPlugins=[%s]",
-                   hdr.modCount, hdr.packMode, hdr.pluginCount, hdr.enabledPluginsCsv);
+    DiagLog_Printf("MOD_SYNC", "[CLIENT] Received manifest from host: %u mod(s), packMode=%u, %u plugin config(s)",
+                   hdr.modCount, hdr.packMode, hdr.pluginCount);
 
-    char rootDir[MAX_PATH] = {};
-    GetExeRootDir(rootDir, sizeof(rootDir));
-    std::error_code ec;
-    std::filesystem::path sessionIniDir = std::filesystem::path(rootDir) / "plugins" / ".mp_session_ini";
-    std::filesystem::remove_all(sessionIniDir, ec);
-    std::filesystem::create_directories(sessionIniDir, ec);
+    if (!ReceivePluginPayloads(sock, hdr.pluginCount, hdr.enabledPluginsCsv, errOut, errSize)) {
+        return MOD_SYNC_CLIENT_ERROR;
+    }
 
-    for (uint32_t i = 0; i < hdr.pluginCount; ++i) {
-        WirePluginIniHeader ph = {};
-        if (!NetworkRecvExact(sock, &ph, sizeof(ph)) || ph.byteSize > 256 * 1024) {
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving plugin config header");
-            return false;
+    InitSteamUGC();
+    std::vector<WireModEntry> missingMods;
+    std::vector<uint64_t> allowedIds;
+    allowedIds.reserve(hostWireMods.size());
+
+    for (const auto& wm : hostWireMods) {
+        allowedIds.push_back(wm.id);
+        char folder[MAX_PATH] = {};
+        bool isWip = false;
+        if (FindLocalModFolder(wm.id, folder, sizeof(folder), &isWip)) {
+            continue;
         }
-        ph.id[sizeof(ph.id) - 1] = '\0';
-        std::vector<BYTE> data(ph.byteSize);
-        if (ph.byteSize > 0 && !NetworkRecvExact(sock, data.data(), ph.byteSize)) {
-            _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving plugin config data");
-            return false;
-        }
-        std::filesystem::path iniFile = sessionIniDir / (std::string(ph.id) + ".ini");
-        FILE* f = nullptr;
-        if (fopen_s(&f, iniFile.string().c_str(), "wb") == 0 && f) {
-            if (!data.empty()) fwrite(data.data(), 1, data.size(), f);
-            fclose(f);
-        }
-    }
-
-    // Apply session plugin override in tesmioloader.dll
-    if (!g_pluginMgr && g_host && g_host->consume) {
-        g_pluginMgr = (const TsmPluginManagerApi*)g_host->consume(TSM_SERVICE_PLUGINS, TSM_PLUGINS_VERSION);
-    }
-    if (g_pluginMgr) {
-        g_pluginMgr->setSessionOverride(sessionIniDir.string().c_str(), hdr.enabledPluginsCsv);
-    }
-
-    // Send Client's additional installed Workshop/WIP mods to Host when in MOD_PACK_ALL_SHARED mode
-    ModSync_RefreshCatalog();
-    std::vector<WireModEntry> clientExtraMods;
-    LockMods();
-    g_sessionSandboxForwards.clear();
-    if (hdr.packMode == (uint32_t)MOD_PACK_ALL_SHARED) {
-        for (const auto& m : g_mods) {
-            if (m.itemType == 4) continue; // skip pure local text translation mods
-            bool alreadyInHost = false;
-            for (const auto& hm : hostWireMods) {
-                if (hm.id == m.id) { alreadyInHost = true; break; }
-            }
-            if (!alreadyInHost) {
-                WireModEntry wm = {};
-                wm.id = m.id;
-                wm.isWip = m.isWip ? 1 : 0;
-                wm.itemType = (uint8_t)m.itemType;
-                strncpy_s(wm.title, sizeof(wm.title), m.title, _TRUNCATE);
-                clientExtraMods.push_back(wm);
+        if (s_pSteamUGC && pUGC_GetItemState) {
+            uint32_t st = pUGC_GetItemState(s_pSteamUGC, wm.id);
+            if (st & k_EItemStateInstalled) {
+                continue;
             }
         }
-    }
-    UnlockMods();
-
-    WireClientModListHeader clientHdr = {};
-    memcpy(clientHdr.magic, "RPMPCMDS", 8);
-    clientHdr.extraModCount = (uint32_t)clientExtraMods.size();
-    if (!NetworkSendExact(sock, &clientHdr, sizeof(clientHdr)) ||
-        (!clientExtraMods.empty() &&
-         !NetworkSendExact(sock, clientExtraMods.data(), clientExtraMods.size() * sizeof(WireModEntry)))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending client mod list to host");
-        return false;
+        missingMods.push_back(wm);
     }
 
-    std::vector<WireModEntry> sessionMods = hostWireMods;
-    for (const auto& cm : clientExtraMods) {
-        sessionMods.push_back(cm);
+    if (!missingMods.empty()) {
+        uint32_t missingCount = (uint32_t)missingMods.size();
+        DiagLog_Printf("MOD_SYNC", "[CLIENT] Missing %u mod(s) from Host - starting batch Steam download", missingCount);
+
+        ModSync_StartBatchDownload(missingMods);
+
+        WireModSyncResponse resp = {};
+        memcpy(resp.magic, "RPMPRESP", 8);
+        resp.status = MOD_SYNC_STATUS_MISSING;
+        resp.missingCount = missingCount;
+        _snprintf_s(resp.details, sizeof(resp.details), _TRUNCATE, "%u mods missing", missingCount);
+        NetworkSendExact(sock, &resp, sizeof(resp));
+
+        _snprintf_s(errOut, errSize, _TRUNCATE, "%u", missingCount);
+        return MOD_SYNC_CLIENT_MISSING;
     }
 
-    // Auto-download any missing Workshop mods from Host
-    bool clientAnyNewModsOnDisk = false;
-    std::vector<uint64_t> clientNeedFromHost;
-    if (!DownloadMissingSteamMods(sock, hostWireMods, "CLIENT", clientNeedFromHost, &clientAnyNewModsOnDisk, errOut, errSize)) {
-        return false;
+    WireModSyncResponse resp = {};
+    memcpy(resp.magic, "RPMPRESP", 8);
+    resp.status = MOD_SYNC_STATUS_OK;
+    resp.missingCount = 0;
+    if (!NetworkSendExact(sock, &resp, sizeof(resp))) {
+        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending mod sync response to host");
+        return MOD_SYNC_CLIENT_ERROR;
     }
 
-    // Send Client's fallback request & receive requested Host mods
-    WireModFallbackReq clientReq = {};
-    memcpy(clientReq.magic, "RPMPMREQ", 8);
-    clientReq.requestCount = (uint32_t)clientNeedFromHost.size();
-    if (!NetworkSendExact(sock, &clientReq, sizeof(clientReq)) ||
-        (!clientNeedFromHost.empty() &&
-         !NetworkSendExact(sock, clientNeedFromHost.data(), clientNeedFromHost.size() * sizeof(uint64_t)))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection sending client fallback mod request");
-        return false;
-    }
-    if (!ReceiveRequestedModZips(sock, clientNeedFromHost, "CLIENT", &clientAnyNewModsOnDisk, errOut, errSize)) {
-        return false;
-    }
-
-    // Receive Host's fallback request & stream any requested Client mods to Host
-    WireModFallbackReq hostReq = {};
-    if (!NetworkRecvExact(sock, &hostReq, sizeof(hostReq)) ||
-        memcmp(hostReq.magic, "RPMPMREQ", 8) != 0 || hostReq.requestCount > 2048) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving host fallback mod request");
-        return false;
-    }
-    std::vector<uint64_t> hostNeedFromClient(hostReq.requestCount);
-    if (hostReq.requestCount > 0 &&
-        !NetworkRecvExact(sock, hostNeedFromClient.data(), hostReq.requestCount * sizeof(uint64_t))) {
-        _snprintf_s(errOut, errSize, _TRUNCATE, "lost connection receiving host fallback mod IDs");
-        return false;
-    }
-    if (!StreamRequestedModZips(sock, hostNeedFromClient, "CLIENT", errOut, errSize)) {
-        return false;
-    }
-
-    // Activate combined session mod filter and schedule main-thread RefreshItems if new mods arrived
     LockMods();
-    g_sessionAllowedIds.clear();
-    for (const auto& sm : sessionMods) {
-        g_sessionAllowedIds.push_back(sm.id);
-    }
+    g_sessionAllowedIds = allowedIds;
     std::sort(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end());
     g_sessionFilterActive = true;
 
     if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
-        int kept = SafeFilterAndSortWorkshopMgr(
+        SafeFilterAndSortWorkshopMgr(
             mgrPtr,
             g_sessionAllowedIds.empty() ? nullptr : g_sessionAllowedIds.data(),
             (int)g_sessionAllowedIds.size(),
             &g_hiddenTailCount);
-        if (clientAnyNewModsOnDisk || kept < (int)g_sessionAllowedIds.size()) {
-            g_needMainThreadWorkshopRefresh = true;
-        }
     }
     UnlockMods();
 
-    Logf("republicmp  MOD_SYNC: [CLIENT] bidirectional mod handshake complete (%zu active session mods, plugins=\"%s\", refreshOnLoad=%d)",
-         sessionMods.size(), hdr.enabledPluginsCsv, (int)g_needMainThreadWorkshopRefresh);
-    return true;
+    DiagLog_Printf("MOD_SYNC", "[CLIENT] Pre-save mod handshake complete: all %zu host mods present",
+                   g_sessionAllowedIds.size());
+    return MOD_SYNC_CLIENT_OK;
 }
 
 void ModSync_EndSession()
 {
     bool wasActive = false;
-    bool hadSandboxMods = false;
     LockMods();
-    if (g_sessionFilterActive || !g_sessionSandboxForwards.empty() || g_hiddenTailCount > 0) {
+    if (g_sessionFilterActive || g_hiddenTailCount > 0) {
         wasActive = true;
-        hadSandboxMods = !g_sessionSandboxForwards.empty();
         g_sessionFilterActive = false;
         g_sessionAllowedIds.clear();
-        g_sessionSandboxForwards.clear();
         if (void* mgrPtr = SafeGetEngineWorkshopMgr()) {
             SafeRestoreWorkshopMgr(mgrPtr, &g_hiddenTailCount);
-        }
-        if (hadSandboxMods) {
-            g_needMainThreadWorkshopRefresh = true;
         }
     }
     UnlockMods();
@@ -1645,8 +1476,118 @@ void ModSync_EndSession()
     }
 
     if (wasActive) {
-        CleanupTempSessionMods();
-        Logf("republicmp  MOD_SYNC: session ended, singleplayer mods & plugins restored (hadSandbox=%d)",
-             (int)hadSandboxMods);
+        Logf("republicmp  MOD_SYNC: session ended, singleplayer mods & plugins restored");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2: Workshop Action Hook Guards
+// ---------------------------------------------------------------------------
+
+static uint64_t ParseWorkshopIdFromTypeName(const char* typeName)
+{
+    if (!typeName || !typeName[0]) return 0;
+    const char* p = typeName;
+    if (_strnicmp(p, "MIRRORZ_", 8) == 0) {
+        p += 8;
+    }
+    const char* slash = strchr(p, '/');
+    if (!slash) slash = strchr(p, '\\');
+    if (!slash || slash <= p || (slash - p) > 20) return 0;
+
+    for (const char* c = p; c < slash; ++c) {
+        if (*c < '0' || *c > '9') return 0;
+    }
+    return _strtoui64(p, nullptr, 10);
+}
+
+static bool SafeReadAsciiDirect(const char* src, char* outBuf, size_t outBufSize)
+{
+    if (!src || !outBuf || outBufSize == 0) return false;
+    outBuf[0] = '\0';
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        size_t i = 0;
+        for (; i < outBufSize - 1; ++i) {
+            char c = src[i];
+            outBuf[i] = c;
+            if (c == '\0') break;
+        }
+        outBuf[i] = '\0';
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outBuf[0] = '\0';
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+bool ModSync_IsModIdAllowedInSession(uint64_t modId)
+{
+    if (!g_sessionFilterActive) return true;
+    if (modId == 0 || IsRepublicMpSelfId(modId)) return true;
+
+    LockMods();
+    bool allowed = std::binary_search(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end(), modId);
+    UnlockMods();
+    return allowed;
+}
+
+bool ModSync_CheckBuildingTypeAllowed(const char* typeName)
+{
+    if (!g_sessionFilterActive) return true;
+    uint64_t wsId = ParseWorkshopIdFromTypeName(typeName);
+    if (wsId == 0) return true;
+
+    if (!ModSync_IsModIdAllowedInSession(wsId)) {
+        static ULONGLONG s_lastBuildingToastMs = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastBuildingToastMs >= 1500) {
+            s_lastBuildingToastMs = now;
+            TwoStates_AddToast(Tr("Постройка заблокирована: этот мод Мастерской не установлен на сервере Хоста",
+                                  "Construction blocked: this Workshop mod is not installed on the Host server"), 3);
+        }
+        return false;
+    }
+    return true;
+}
+
+bool ModSync_CheckVehicleTypeAllowed(const void* vehicleTypePtr)
+{
+    if (!vehicleTypePtr || !g_sessionFilterActive) return true;
+    char typeName[64] = {};
+    if (!SafeReadAsciiDirect((const char*)vehicleTypePtr + 0x200, typeName, sizeof(typeName)) || !typeName[0]) {
+        return true;
+    }
+
+    uint64_t wsId = ParseWorkshopIdFromTypeName(typeName);
+    if (wsId == 0) return true;
+
+    if (!ModSync_IsModIdAllowedInSession(wsId)) {
+        static ULONGLONG s_lastVehicleToastMs = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastVehicleToastMs >= 1500) {
+            s_lastVehicleToastMs = now;
+            TwoStates_AddToast(Tr("Покупка заблокирована: эта техника из Мастерской не установлена на сервере Хоста",
+                                  "Purchase blocked: this Workshop vehicle is not installed on the Host server"), 3);
+        }
+        return false;
+    }
+    return true;
+}
+
+void ModSync_SetTestSessionFilter(bool active, const uint64_t* allowedIds, int count)
+{
+    LockMods();
+    g_sessionFilterActive = active;
+    g_sessionAllowedIds.clear();
+    if (active && allowedIds && count > 0) {
+        for (int i = 0; i < count; ++i) {
+            g_sessionAllowedIds.push_back(allowedIds[i]);
+        }
+        std::sort(g_sessionAllowedIds.begin(), g_sessionAllowedIds.end());
+    }
+    UnlockMods();
 }

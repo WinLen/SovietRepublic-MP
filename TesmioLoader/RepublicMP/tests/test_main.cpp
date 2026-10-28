@@ -873,6 +873,52 @@ static bool Test_ModSync_HeaderBinAndWorkshopFilter()
     TEST_CHECK(hiddenTail == 0);
     TEST_CHECK((activeEnd - activeBegin) == 5);
 
+    // 3. Test Layer 2 Mod Checks (ModSync_IsModIdAllowedInSession, ModSync_CheckBuildingTypeAllowed, ModSync_CheckVehicleTypeAllowed)
+    // When filter is inactive, all are allowed
+    ModSync_SetTestSessionFilter(false, nullptr, 0);
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(9999999999ULL) == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("9999999999/some_building") == true);
+
+    // Activate session filter with allowed IDs { 1000000001ULL, 3000000003ULL }
+    ModSync_SetTestSessionFilter(true, allowed, 2);
+
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(1000000001ULL) == true);
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(3000000003ULL) == true);
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(2000000002ULL) == false);
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(3823543010ULL) == true); // RepublicMP mod itself is always allowed
+    TEST_CHECK(ModSync_IsModIdAllowedInSession(0) == true);
+
+    // Building type strings
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed(nullptr) == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("media_soviet/buildings/hospital") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("dlc1_school") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("3000000003/large_school") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("MIRRORZ_1000000001/bus_station") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("1000000001\\truck_depot") == true);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("9999999999/super_plant") == false);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("MIRRORZ_8888888888/factory") == false);
+
+    // Vehicle type pointers with name at offset +0x200
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(nullptr) == true);
+
+    std::vector<BYTE> vehVanilla(0x250, 0);
+    strncpy_s((char*)(vehVanilla.data() + 0x200), 64, "media_soviet/vehicles/bus_vanilla", _TRUNCATE);
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehVanilla.data()) == true);
+
+    std::vector<BYTE> vehAllowed(0x250, 0);
+    strncpy_s((char*)(vehAllowed.data() + 0x200), 64, "1000000001/trolley_ziu9", _TRUNCATE);
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehAllowed.data()) == true);
+
+    std::vector<BYTE> vehUnallowed(0x250, 0);
+    strncpy_s((char*)(vehUnallowed.data() + 0x200), 64, "7777777777/electric_locomotive", _TRUNCATE);
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehUnallowed.data()) == false);
+
+    // Restore / deactivate filter
+    ModSync_SetTestSessionFilter(false, nullptr, 0);
+    TEST_CHECK(ModSync_CheckBuildingTypeAllowed("9999999999/super_plant") == true);
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehUnallowed.data()) == true);
+
     return true;
 }
 

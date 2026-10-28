@@ -261,18 +261,25 @@ int main(int argc, char** argv)
         desc = "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep, Steam P2P, One State & Two States modes, 30x30 km maps, Auto-Updater).";
     }
 
+        bool updateMeta = (argc > 1 && (strcmp(argv[1], "--meta") == 0 || strcmp(argv[1], "--preview") == 0));
+    bool updatePreview = (argc > 1 && strcmp(argv[1], "--preview") == 0);
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
-    bool bTitle = pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " — Кооператив / Co-op Multiplayer (One State & Two States)");
-    bool bDesc = pSetDesc(pUGC, hUpdate, desc.c_str());
-    bool bVis = pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */);
+    bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (One State & Two States)") : true;
+    bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, desc.c_str()) : true;
+    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */) : true;
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
-    bool bPreview = pSetPreview(pUGC, hUpdate, previewFile.c_str());
-    printf("[UGC] SetItem: title=%d desc=%d vis=%d content=%d preview=%d\n",
-           (int)bTitle, (int)bDesc, (int)bVis, (int)bContent, (int)bPreview);
+    bool bPreview = updatePreview ? pSetPreview(pUGC, hUpdate, previewFile.c_str()) : true;
+    printf("[UGC] SetItem: title=%d desc=%d vis=%d content=%d preview=%d (uploadPreview=%d)\n",
+           (int)bTitle, (int)bDesc, (int)bVis, (int)bContent, (int)bPreview, (int)updatePreview);
 
-    printf("[UGC] Submitting content (%s) and preview (%s)...\n", contentDir.c_str(), previewFile.c_str());
+    char defaultNote[512];
+    _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
+                "v%s (Protocol %d) - Host-authoritative Workshop mod sync, pre-save MSG_MOD_SYNC handshake, non-blocking batch SteamUGC download modal with one-click game restart, and strict dual-layer ban on unauthorized Client mods",
+                REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
+
+    printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, "v" REPUBLICMP_VERSION " (protocol 47) - Two-States per-republic Economy & Trade statistics ($STAT_CURRENT / $STAT_RECORD, 16 resource ledgers, construction batch auto-purchase, tourism, vehicles, demographics & loans), overdue loan trampoline fix, and P<off> special resource serialization");
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, defaultNote);
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;

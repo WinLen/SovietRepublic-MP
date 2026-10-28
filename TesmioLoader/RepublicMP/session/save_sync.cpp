@@ -842,6 +842,31 @@ static bool RunHostJoin(SOCKET sock)
             break;
         }
 
+        // 1b. Mod sync handshake (pre-save, host-authoritative)
+        HostStep(sock, 1, Tr("Синхронизация модов Мастерской Steam", "Synchronizing Steam Workshop mods"), 0);
+        SendMsg(sock, MSG_MOD_SYNC, 1, 0, Tr("проверка модов", "checking mods"));
+        char activeSaveDir[MAX_PATH] = {};
+        const char* activeName = origSaveField[0] ? origSaveField : (origSaveDat[0] ? origSaveDat : nullptr);
+        if (activeName) {
+            GetGameSaveDir(activeSaveDir, sizeof(activeSaveDir), activeName);
+        }
+        char modWhy[256] = {};
+        ModSyncHostResult modRes = ModSync_HostHandshake(sock, activeSaveDir, modWhy, sizeof(modWhy));
+        if (modRes == MOD_SYNC_HOST_CLIENT_MISSING) {
+            char missingToast[256] = {};
+            _snprintf_s(missingToast, sizeof(missingToast), _TRUNCATE,
+                        Tr("Клиент скачивает %s недостающих модов из Steam Workshop...",
+                           "Client is downloading %s missing mods from Steam Workshop..."),
+                        modWhy[0] ? modWhy : "N");
+            SaveStatus("[HOST] %s", missingToast);
+            TwoStates_AddToast(missingToast, 5);
+            break;
+        } else if (modRes != MOD_SYNC_HOST_OK) {
+            SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
+            SaveStatus("[HOST] mod sync failed: %s", modWhy);
+            break;
+        }
+
         // 2. Save.
         char liveSaveName[64];
         GenerateRandomSaveName(liveSaveName, sizeof(liveSaveName));
@@ -869,17 +894,7 @@ static bool RunHostJoin(SOCKET sock)
             TwoStates_PatchSaveScriptIni(saveDir, 0.0f);
         }
 
-        // 2b. Synchronize Workshop/local mods and TesmioLoader gameplay plugins.
-        HostStep(sock, 2, Tr("Авто-синхронизация модов Мастерской", "Synchronizing Workshop mods"), 0);
-        SendMsg(sock, MSG_MOD_SYNC, 2, 0, Tr("синхронизация модов", "synchronizing mods"));
-        char modWhy[256] = {};
-        if (!ModSync_HostHandshake(sock, saveDir, modWhy, sizeof(modWhy))) {
-            SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
-            SaveStatus("[HOST] mod sync failed: %s", modWhy);
-            break;
-        }
-
-        // 2c. If diagnostic log sharing is enabled, also exchange diagnostic logs before packing/sending the world.
+        // 2b. If diagnostic log sharing is enabled, also exchange diagnostic logs before packing/sending the world.
         if (TwoStates_GetSendClientLogs()) {
             const char* hostLogReason = DiagLog_HasPrevCrashOrDesyncLog() ? "HOST_PREV_CRASH" : "HOST_JOIN";
             std::vector<unsigned char> hostLogBundle;
@@ -1146,6 +1161,63 @@ static bool JoinHostGone(void* sockPtr)
     return NetworkPeerGone(*(SOCKET*)sockPtr);
 }
 
+static bool ClientPerformHandshake(SOCKET sock, SessionHello* outHostHello)
+{
+    if (!outHostHello) return false;
+    SessionHello mine = {};
+    MakeHello(&mine);
+    if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, outHostHello, sizeof(*outHostHello))) {
+        SetSessionError(Tr("Соединение с хостом прервалось при проверке версий", "the host dropped during the version check"));
+        return false;
+    }
+    char why[256];
+    if (!HelloMatches(*outHostHello, why, sizeof(why))) {
+        SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
+        SaveStatus("[CLIENT] join refused: %s", why);
+        return false;
+    }
+    SessionDlcs myDlcs, theirDlcs;
+    MakeDlcs(&myDlcs);
+    if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
+        memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+        SetSessionError(Tr("Соединение с хостом прервалось при проверке DLC", "the host dropped during the DLC check"));
+        return false;
+    }
+    char dlcWhy[512];
+    if (!DlcsMatch(myDlcs, theirDlcs, false, dlcWhy, sizeof(dlcWhy))) {
+        SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
+        SaveStatus("[CLIENT] join refused: %s", dlcWhy);
+        return false;
+    }
+    g_lockstep = outHostHello->lockstep != 0;
+    if (g_lockstep) SaveStatus("[CLIENT] the host runs this session in lockstep");
+
+    ClientStep(1, Tr("Синхронизация модов Мастерской Steam", "Synchronizing Steam Workshop mods"), 0);
+    SessionMsg modMsg = {};
+    if (!RecvMsg(sock, &modMsg) || modMsg.code != MSG_MOD_SYNC) {
+        SetSessionError(Tr("Соединение с хостом прервалось при проверке модов", "the host dropped during the mod check"));
+        return false;
+    }
+    char modWhy[256] = {};
+    ModSyncClientResult clientRes = ModSync_ClientHandshake(sock, modWhy, sizeof(modWhy));
+    if (clientRes == MOD_SYNC_CLIENT_MISSING) {
+        char missingMsg[256] = {};
+        _snprintf_s(missingMsg, sizeof(missingMsg), _TRUNCATE,
+                    Tr("Требуется загрузка %s модов из Steam Workshop (см. окно загрузки)",
+                       "Need to download %s missing mods from Steam Workshop (see download modal)"),
+                    modWhy[0] ? modWhy : "N");
+        SetSessionError("%s", missingMsg);
+        SaveStatus("[CLIENT] %s", missingMsg);
+        return false;
+    }
+    if (clientRes != MOD_SYNC_CLIENT_OK) {
+        SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
+        SaveStatus("[CLIENT] mod sync failed: %s", modWhy);
+        return false;
+    }
+    return true;
+}
+
 // Returns true when the player is in the host's game with all channels up.
 // rejoin: coming back for a re-sync - the host may need a moment to listen
 // again, so refused connects are retried.
@@ -1195,33 +1267,10 @@ static bool RunClientJoin(bool rejoin)
         // A Disconnect that came while connecting found no socket to shut
         // down; without this the whole world would still be downloaded.
         if (g_disconnectRequested) break;
-        SessionHello mine, theirs;
-        MakeHello(&mine);
-        if (!NetworkSendExact(sock, &mine, sizeof(mine)) || !NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError(Tr("Соединение с хостом прервалось при проверке версий", "the host dropped during the version check"));
+        SessionHello theirs = {};
+        if (!ClientPerformHandshake(sock, &theirs)) {
             break;
         }
-        char why[256];
-        if (!HelloMatches(theirs, why, sizeof(why))) {
-            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
-            SaveStatus("[CLIENT] join refused: %s", why);
-            break;
-        }
-        SessionDlcs myDlcs, theirDlcs;
-        MakeDlcs(&myDlcs);
-        if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
-            memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
-            SetSessionError(Tr("Соединение с хостом прервалось при проверке DLC", "the host dropped during the DLC check"));
-            break;
-        }
-        char dlcWhy[512];
-        if (!DlcsMatch(myDlcs, theirDlcs, false, dlcWhy, sizeof(dlcWhy))) {
-            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
-            SaveStatus("[CLIENT] join refused: %s", dlcWhy);
-            break;
-        }
-        g_lockstep = theirs.lockstep != 0;
-        if (g_lockstep) SaveStatus("[CLIENT] the host runs this session in lockstep");
 
         // 2-3. The host saves and packs; its steps arrive as messages.
         ClientStep(2, Tr("Ожидание хоста — сохранение мира", "Waiting for the host - saving the world"));
@@ -1236,16 +1285,6 @@ static bool RunClientJoin(bool rejoin)
             if (m.code == MSG_ABORT) {
                 SetSessionError(Tr("Хост прервал подключение: %s", "the host gave up: %s"), m.text);
                 break;
-            }
-            if (m.code == MSG_MOD_SYNC) {
-                ClientStep(2, Tr("Авто-синхронизация модов Мастерской", "Synchronizing Workshop mods"), 0);
-                char modWhy[256] = {};
-                if (!ModSync_ClientHandshake(sock, modWhy, sizeof(modWhy))) {
-                    SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
-                    SaveStatus("[CLIENT] mod sync failed: %s", modWhy);
-                    break;
-                }
-                continue;
             }
             if (m.code == MSG_CLIENT_LOGS) {
                 if (m.step > 0 && m.step <= (2 << 20)) {

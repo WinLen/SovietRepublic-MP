@@ -465,9 +465,7 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
             : TrW(L"Карта: 20x20 с границей", L"Map: 20x20 w/ Borders"));
 
         ModPackMode pm = ModSync_GetPackMode();
-        if (pm == MOD_PACK_ALL_SHARED) {
-            addEntry(SACT_MODS, TrW(L"Моды: Общие (Авто)", L"Mods: Shared (Auto)"));
-        } else if (pm == MOD_PACK_HOST_ONLY) {
+        if (pm == MOD_PACK_HOST_ONLY) {
             addEntry(SACT_MODS, TrW(L"Моды: Только Хоста", L"Mods: Host Only"));
         } else {
             addEntry(SACT_MODS, TrW(L"Моды: Из сейва", L"Mods: Save Only"));
@@ -516,10 +514,7 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
         } else if (act == SACT_MODS) {
             ModSync_CyclePackMode();
             ModPackMode pm = ModSync_GetPackMode();
-            if (pm == MOD_PACK_ALL_SHARED) {
-                TwoStates_AddToast(Tr("Моды: Все моды Хоста, Клиента и сейва включены автоматически (обоюдная докачка из Steam)",
-                                      "Mods: All Host, Client & Save mods enabled automatically (two-way Steam auto-download)"), 1);
-            } else if (pm == MOD_PACK_HOST_ONLY) {
+            if (pm == MOD_PACK_HOST_ONLY) {
                 TwoStates_AddToast(Tr("Моды: Все моды Хоста и сейва включены автоматически (Клиент докачивает моды Хоста)",
                                       "Mods: All Host & Save mods enabled automatically (Client auto-downloads Host mods)"), 0);
             } else {

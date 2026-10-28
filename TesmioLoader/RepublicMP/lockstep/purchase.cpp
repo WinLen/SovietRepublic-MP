@@ -10,6 +10,7 @@
 #include "world_refs.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
+#include "../session/mod_sync.h"
 #include "../ui/lang.h"
 #include <math.h>
 #include <string.h>
@@ -364,6 +365,8 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
         why = "game routines differ";
     }
     if (o == PRESS_TAKE) {
+        if (!ModSync_CheckVehicleTypeAllowed(caller ? (const void*)caller->R13 : nullptr))
+            return false;
         __try {
             BYTE* depot = BuildingAt(g_exeBase + WORLD_RVA, m.depot);
             if (depot) {
@@ -604,6 +607,7 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
         }
     }
     if (!CanPay(world, m.rubles, m.dollars) && !fail) fail = "refused (money)";
+    if (!ModSync_CheckVehicleTypeAllowed(type)) return "refused (mod not allowed in session)";
     if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x627E80))(world, depot, type + 0x200) ? "refused (campaign)" : nullptr;
     if (fail) return fail;
     if (Banned(world, m.kind, cat)) return "refused (banned)";

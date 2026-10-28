@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Automatic Bidirectional Mod & Plugin Synchronization for RepublicMP Co-op:
-// - Inspects save header.bin / headerE.bin / tesmioloader.save.ini to find
-//   Workshop buildings & vehicles used in a save.
-// - Hooks SOVIET_WORKSHOP_MANAGER::RefreshItems (RVA 0x8407C0) to catalog
-//   installed Workshop & workshop_wip mods and sort/filter the active mod list
-//   during a Co-op session so both players have identical type tables.
-// - Automatically enables all installed Workshop/WIP mods without manual clicking,
-//   and bidirectionally auto-subscribes & downloads missing mods on BOTH Host and
-//   Client via ISteamUGC (with automatic network archive fallback into a temporary
-//   session sandbox for local workshop_wip or unavailable items).
-// - Synchronizes TesmioLoader gameplay plugins & .ini configs in a temporary
-//   session sandbox (plugins\.mp_session_ini) with hot-reload before LoadWorld.
+// Host-Authoritative Steam Workshop Mod Synchronization for RepublicMP Co-op:
+// - Inspects save header.bin / headerE.bin to find Workshop items used in a save.
+// - Pre-save handshake executes before world save: Host transmits required Workshop
+//   manifest, Client checks disk. If missing mods exist, Client starts non-blocking
+//   batch ISteamUGC download, Host stays in SESSION_HOST_LISTENING without saving/packing.
+// - In-game Soviet UI progress modal displays batch download status; at 100%, offers
+//   one-click game restart (ModSync_RestartGameNow) to cleanly re-initialize engine type tables.
+// - Strict Dual-Layer Ban:
+//     * Layer 1: In-place partition & sort of SOVIET_WORKSHOP_MANAGER vector (WORKSHOP_MGR_PTR_RVA 0x9E22B8),
+//       keeping allowed IDs + text localization (itemType 4), restoring on session end.
+//     * Layer 2: Action hook guards in local_builds.cpp and purchase.cpp rejecting uninstalled
+//       Workshop items with 1500ms debounced localized red toasts.
 #pragma once
 
 #include "tesmio_plugin.h"
@@ -18,9 +18,32 @@
 #include <stdint.h>
 
 enum ModPackMode {
-    MOD_PACK_SAVE_ONLY  = 0, // Only mods already used in the save (auto-downloaded by Host & Client)
-    MOD_PACK_ALL_SHARED = 1, // Default: All Host + Client + Save mods enabled & auto-downloaded both ways
-    MOD_PACK_HOST_ONLY  = 2, // All Host + Save mods enabled (Host downloads missing save mods, Client downloads Host mods)
+    MOD_PACK_HOST_ONLY = 0, // Default: All installed Host mods + mods in save
+    MOD_PACK_SAVE_ONLY = 1, // Only mods referenced by the save
+};
+
+enum ModSyncHostResult {
+    MOD_SYNC_HOST_OK = 0,
+    MOD_SYNC_HOST_CLIENT_MISSING = 1,
+    MOD_SYNC_HOST_ERROR = 2,
+};
+
+enum ModSyncClientResult {
+    MOD_SYNC_CLIENT_OK = 0,
+    MOD_SYNC_CLIENT_MISSING = 1,
+    MOD_SYNC_CLIENT_ERROR = 2,
+};
+
+struct ModDownloadProgress {
+    bool     active;
+    bool     allCompleted;
+    int      completedCount;
+    int      totalCount;
+    char     currentTitle[128];
+    uint64_t currentBytesDownloaded;
+    uint64_t currentBytesTotal;
+    uint64_t totalBytesDownloaded;
+    uint64_t totalBytesTotal;
 };
 
 void ModSync_Bind(const TsmHost* host);
@@ -45,14 +68,25 @@ void ModSync_SaveSettingsToIni(const char* iniPath);
 // Called on the main thread inside TwoStates_BeforeAnyWorldLoad right before o_loadWorld:
 // - If isHostStart is true, auto-downloads any missing Workshop mods referenced by saveDir
 //   and activates the Host's server mod filter.
-// - If new mods were downloaded/unpacked during handshake, refreshes SOVIET_WORKSHOP_MANAGER
-//   safely on the main thread before LoadWorld parses header.bin.
+// - If new mods were downloaded, refreshes SOVIET_WORKSHOP_MANAGER safely on the main thread.
 void ModSync_BeforeWorldLoad(bool isHostStart, const char* saveDir);
 
-// Bidirectional handshake between Host and Client (called inside RunHostJoin / RunClientJoin
-// right after CheckDlcs, before the shared world save is loaded).
-bool ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_t errSize);
-bool ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize);
+// Pre-save handshake between Host and Client (called inside RunHostJoin / RunClientJoin
+// right after DlcsMatch, before the shared world save is created).
+ModSyncHostResult   ModSync_HostHandshake(SOCKET sock, const char* saveDir, char* errOut, size_t errSize);
+ModSyncClientResult ModSync_ClientHandshake(SOCKET sock, char* errOut, size_t errSize);
+
+// Download progress and restart controls
+bool ModSync_GetDownloadProgress(ModDownloadProgress* outProgress);
+void ModSync_TickDownloadProgress();
+void ModSync_RestartGameNow();
+void ModSync_CancelDownloadModal();
+bool ModSync_IsDownloadActive();
+
+// Layer 2 action hook query predicates
+bool ModSync_IsModIdAllowedInSession(uint64_t modId);
+bool ModSync_CheckBuildingTypeAllowed(const char* typeName);
+bool ModSync_CheckVehicleTypeAllowed(const void* vehicleTypePtr);
 
 // Called when a Co-op session ends or returns to the main menu:
 // clears the session mod filter and restores singleplayer mods & plugins.
@@ -62,4 +96,5 @@ void ModSync_EndSession();
 void ModSync_ExtractHeaderBinModIdsFromBuffer(const void* data, size_t size, uint64_t* outIds, int maxOut, int* ioCount);
 int  ModSync_FilterAndSortWorkshopMgrForTest(void* mgrPtr, const uint64_t* allowedIds, int allowedCount, int* ioHiddenTail);
 void ModSync_RestoreWorkshopMgrForTest(void* mgrPtr, int* ioHiddenTail);
+void ModSync_SetTestSessionFilter(bool active, const uint64_t* allowedIds, int count);
 
