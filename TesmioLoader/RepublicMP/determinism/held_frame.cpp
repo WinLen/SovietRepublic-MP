@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "held_frame.h"
 #include "determinism.h"
+#include "../core/engine_rva.h"
 #include "../core/diag_log.h"
 #include <vector>
 #include <new>
@@ -41,20 +42,32 @@ static bool HeapPointer(unsigned long long v)
     return Read((const void*)v, &probe, sizeof(probe));
 }
 
-// Each VEHICLE (0x1AD8 bytes) contains 5 C3D_NODE transforms (0xBC bytes each)
-// saved by VEHICLE::Save (0x6C6770): +0xD60, +0xE1C, +0xED8, +0xF94, +0x1080.
+// Each VEHICLE (0x1AD8 bytes) contains 5 primary C3D_NODE transforms (0xBC bytes each)
+// saved by VEHICLE::Save (0x6C6770): +0xD60, +0xE1C, +0xED8, +0xF94, +0x1080, plus an
+// optional 6th C3D_NODE at +0x1318 (active when *(int32_t*)(v + 0x1314) >= 0, rendered by 0x66EDD0).
 // Inside each C3D_NODE:
 //   +0x00..+0x3F: 4x4 Matrix (translation row at +0x30..+0x3B)
 //   +0x40..+0x7F: 4x4 MatrixInv (translation row at +0x70..+0x7B)
 //   +0x80..+0x8B: C3DVECTOR3 Position
-static const unsigned kVehicleNodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+//   +0x8C..+0x97: C3DVECTOR3 Orientation
+//   +0x98..+0xA3: C3DVECTOR3 Up
+static constexpr int VEH_MAX_NODES = 6;
+static constexpr int NODE_SNAPSHOT_FLOATS = 41; // 0xA4 bytes: m[16], minv[16], pos[3], ori[3], up[3]
+static const unsigned kVehicleNodeOffsets[VEH_MAX_NODES] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080, VEH_SIXTH_NODE_OFFSET };
+
+static int GetActiveVehicleNodeCount(const BYTE* p)
+{
+    return (*(const int32_t*)(p + VEH_SIXTH_NODE_ACTIVE_OFFSET) >= 0) ? 6 : 5;
+}
 
 struct VehicleInterpRecord {
     unsigned id;
     unsigned long long prevTick;
     unsigned long long currTick;
-    float prevPos[5][3];
-    float currPos[5][3];
+    int nodeCount;
+    float prevNode[VEH_MAX_NODES][NODE_SNAPSHOT_FLOATS];
+    float currNode[VEH_MAX_NODES][NODE_SNAPSHOT_FLOATS];
+    float smoothOffset[3];
 };
 
 static std::unordered_map<BYTE*, VehicleInterpRecord> g_vehicleInterp;
@@ -74,58 +87,147 @@ void HeldFrame_GetDiagStats(HeldFrameDiagStats* out)
     *out = g_hfDiag;
 }
 
-static void TranslateC3DNode(BYTE* node, float dx, float dy, float dz)
+static void NormalizeVec3(float v[3], const float fallback[3])
+{
+    float lenSq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if (lenSq > 1e-8f && isfinite(lenSq)) {
+        float inv = 1.0f / sqrtf(lenSq);
+        v[0] *= inv;
+        v[1] *= inv;
+        v[2] *= inv;
+    } else {
+        v[0] = fallback[0];
+        v[1] = fallback[1];
+        v[2] = fallback[2];
+    }
+}
+
+void HeldFrame_InterpolateC3DNode(BYTE* node, const float prevNode[41], const float currNode[41],
+                                  float alpha, const float smoothOff[3])
 {
     float* m = (float*)node;
     float* minv = (float*)(node + 0x40);
     float* pos = (float*)(node + 0x80);
-    pos[0] += dx;
-    pos[1] += dy;
-    pos[2] += dz;
-    m[12] += dx;
-    m[13] += dy;
-    m[14] += dz;
-    minv[12] -= dx * minv[0] + dy * minv[4] + dz * minv[8];
-    minv[13] -= dx * minv[1] + dy * minv[5] + dz * minv[9];
-    minv[14] -= dx * minv[2] + dy * minv[6] + dz * minv[10];
+    float* ori = (float*)(node + 0x8C);
+    float* up = (float*)(node + 0x98);
+
+    const float sox = smoothOff ? smoothOff[0] : 0.0f;
+    const float soy = smoothOff ? smoothOff[1] : 0.0f;
+    const float soz = smoothOff ? smoothOff[2] : 0.0f;
+
+    const float px = prevNode[32] + (currNode[32] - prevNode[32]) * alpha + sox;
+    const float py = prevNode[33] + (currNode[33] - prevNode[33]) * alpha + soy;
+    const float pz = prevNode[34] + (currNode[34] - prevNode[34]) * alpha + soz;
+    pos[0] = m[12] = px;
+    pos[1] = m[13] = py;
+    pos[2] = m[14] = pz;
+
+    const float sx = sqrtf(currNode[0] * currNode[0] + currNode[1] * currNode[1] + currNode[2] * currNode[2]);
+    const float sy = sqrtf(currNode[4] * currNode[4] + currNode[5] * currNode[5] + currNode[6] * currNode[6]);
+    const float sz = sqrtf(currNode[8] * currNode[8] + currNode[9] * currNode[9] + currNode[10] * currNode[10]);
+    const float dotZ = prevNode[8] * currNode[8] + prevNode[9] * currNode[9] + prevNode[10] * currNode[10];
+
+    if (sx > 1e-4f && sy > 1e-4f && sz > 1e-4f && sx < 100.0f && sy < 100.0f && sz < 100.0f &&
+        dotZ > 0.25f * sz * sz && isfinite(sx + sy + sz + dotZ)) {
+        float uz[3] = {
+            prevNode[8] + (currNode[8] - prevNode[8]) * alpha,
+            prevNode[9] + (currNode[9] - prevNode[9]) * alpha,
+            prevNode[10] + (currNode[10] - prevNode[10]) * alpha,
+        };
+        float currUz[3] = { currNode[8] / sz, currNode[9] / sz, currNode[10] / sz };
+        NormalizeVec3(uz, currUz);
+
+        float ry[3] = {
+            prevNode[4] + (currNode[4] - prevNode[4]) * alpha,
+            prevNode[5] + (currNode[5] - prevNode[5]) * alpha,
+            prevNode[6] + (currNode[6] - prevNode[6]) * alpha,
+        };
+        float projYZ = ry[0] * uz[0] + ry[1] * uz[1] + ry[2] * uz[2];
+        float uy[3] = { ry[0] - projYZ * uz[0], ry[1] - projYZ * uz[1], ry[2] - projYZ * uz[2] };
+        float currUy[3] = { currNode[4] / sy, currNode[5] / sy, currNode[6] / sy };
+        NormalizeVec3(uy, currUy);
+
+        float cx = currNode[5] * currNode[10] - currNode[6] * currNode[9];
+        float cy = currNode[6] * currNode[8] - currNode[4] * currNode[10];
+        float cz = currNode[4] * currNode[9] - currNode[5] * currNode[8];
+        float handedness = (cx * currNode[0] + cy * currNode[1] + cz * currNode[2] >= 0.0f) ? 1.0f : -1.0f;
+        float ux[3] = {
+            (uy[1] * uz[2] - uy[2] * uz[1]) * handedness,
+            (uy[2] * uz[0] - uy[0] * uz[2]) * handedness,
+            (uy[0] * uz[1] - uy[1] * uz[0]) * handedness,
+        };
+
+        m[0] = ux[0] * sx; m[1] = ux[1] * sx; m[2] = ux[2] * sx;
+        m[4] = uy[0] * sy; m[5] = uy[1] * sy; m[6] = uy[2] * sy;
+        m[8] = uz[0] * sz; m[9] = uz[1] * sz; m[10] = uz[2] * sz;
+
+        const float invSx = 1.0f / sx, invSy = 1.0f / sy, invSz = 1.0f / sz;
+        minv[0] = ux[0] * invSx; minv[4] = ux[1] * invSx; minv[8]  = ux[2] * invSx;
+        minv[1] = uy[0] * invSy; minv[5] = uy[1] * invSy; minv[9]  = uy[2] * invSy;
+        minv[2] = uz[0] * invSz; minv[6] = uz[1] * invSz; minv[10] = uz[2] * invSz;
+    }
+
+    minv[12] = -(px * minv[0] + py * minv[4] + pz * minv[8]);
+    minv[13] = -(px * minv[1] + py * minv[5] + pz * minv[9]);
+    minv[14] = -(px * minv[2] + py * minv[6] + pz * minv[10]);
+
+    float newOri[3] = {
+        prevNode[35] + (currNode[35] - prevNode[35]) * alpha,
+        prevNode[36] + (currNode[36] - prevNode[36]) * alpha,
+        prevNode[37] + (currNode[37] - prevNode[37]) * alpha,
+    };
+    NormalizeVec3(newOri, &currNode[35]);
+    ori[0] = newOri[0]; ori[1] = newOri[1]; ori[2] = newOri[2];
+
+    float newUp[3] = {
+        prevNode[38] + (currNode[38] - prevNode[38]) * alpha,
+        prevNode[39] + (currNode[39] - prevNode[39]) * alpha,
+        prevNode[40] + (currNode[40] - prevNode[40]) * alpha,
+    };
+    NormalizeVec3(newUp, &currNode[38]);
+    up[0] = newUp[0]; up[1] = newUp[1]; up[2] = newUp[2];
 }
 
 static void RecordOneVehicleTick(BYTE* p, unsigned long long tick)
 {
     if (!p) return;
     unsigned id = *(unsigned*)(p + 0x04);
+    int nNodes = GetActiveVehicleNodeCount(p);
     auto it = g_vehicleInterp.find(p);
     if (it == g_vehicleInterp.end()) {
         VehicleInterpRecord rec = {};
         rec.id = id;
         rec.prevTick = tick;
         rec.currTick = tick;
-        for (int k = 0; k < 5; k++) {
-            const float* pos = (const float*)(p + kVehicleNodeOffsets[k] + 0x80);
-            memcpy(rec.prevPos[k], pos, 12);
-            memcpy(rec.currPos[k], pos, 12);
+        rec.nodeCount = nNodes;
+        for (int k = 0; k < nNodes; k++) {
+            const float* nodeData = (const float*)(p + kVehicleNodeOffsets[k]);
+            memcpy(rec.prevNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
+            memcpy(rec.currNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
         }
         g_vehicleInterp.emplace(p, rec);
         return;
     }
     VehicleInterpRecord& rec = it->second;
     if (rec.id == id && rec.currTick == tick) return;
-    if (rec.id != id || rec.currTick + 1 != tick) {
+    if (rec.id != id || rec.currTick + 1 != tick || rec.nodeCount != nNodes) {
         rec.id = id;
         rec.prevTick = tick;
         rec.currTick = tick;
-        for (int k = 0; k < 5; k++) {
-            const float* pos = (const float*)(p + kVehicleNodeOffsets[k] + 0x80);
-            memcpy(rec.prevPos[k], pos, 12);
-            memcpy(rec.currPos[k], pos, 12);
+        rec.nodeCount = nNodes;
+        rec.smoothOffset[0] = rec.smoothOffset[1] = rec.smoothOffset[2] = 0.0f;
+        for (int k = 0; k < nNodes; k++) {
+            const float* nodeData = (const float*)(p + kVehicleNodeOffsets[k]);
+            memcpy(rec.prevNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
+            memcpy(rec.currNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
         }
         return;
     }
     rec.prevTick = rec.currTick;
     rec.currTick = tick;
-    for (int k = 0; k < 5; k++) {
-        memcpy(rec.prevPos[k], rec.currPos[k], 12);
-        memcpy(rec.currPos[k], p + kVehicleNodeOffsets[k] + 0x80, 12);
+    for (int k = 0; k < nNodes; k++) {
+        memcpy(rec.prevNode[k], rec.currNode[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
+        memcpy(rec.currNode[k], p + kVehicleNodeOffsets[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
     }
 }
 
@@ -136,24 +238,42 @@ void HeldFrame_OnVehicleSoftSynced(BYTE* vehicle)
     if (it == g_vehicleInterp.end()) return;
     DiagLog_BeginSafeSeh();
     __try {
-        for (int k = 0; k < 5; k++) {
-            const float* pos = (const float*)(vehicle + kVehicleNodeOffsets[k] + 0x80);
-            float sx = pos[0] - it->second.currPos[k][0];
-            float sy = pos[1] - it->second.currPos[k][1];
-            float sz = pos[2] - it->second.currPos[k][2];
+        int nNodes = GetActiveVehicleNodeCount(vehicle);
+        it->second.nodeCount = nNodes;
+        for (int k = 0; k < nNodes; k++) {
+            const float* nodeData = (const float*)(vehicle + kVehicleNodeOffsets[k]);
+            const float* pos = nodeData + 32;
+            float sx = pos[0] - it->second.currNode[k][32];
+            float sy = pos[1] - it->second.currNode[k][33];
+            float sz = pos[2] - it->second.currNode[k][34];
             float shiftSq = sx * sx + sy * sy + sz * sz;
             if (shiftSq < 16.0f && isfinite(shiftSq)) {
-                it->second.prevPos[k][0] += sx;
-                it->second.prevPos[k][1] += sy;
-                it->second.prevPos[k][2] += sz;
+                it->second.prevNode[k][32] += sx;
+                it->second.prevNode[k][33] += sy;
+                it->second.prevNode[k][34] += sz;
+                it->second.prevNode[k][12] += sx;
+                it->second.prevNode[k][13] += sy;
+                it->second.prevNode[k][14] += sz;
             } else {
-                memcpy(it->second.prevPos[k], pos, 12);
+                memcpy(it->second.prevNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
             }
-            memcpy(it->second.currPos[k], pos, 12);
+            memcpy(it->second.currNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     DiagLog_EndSafeSeh();
+}
+
+void HeldFrame_AddVehicleSmoothOffset(BYTE* vehicle, float ox, float oy, float oz)
+{
+    if (!vehicle || !isfinite(ox + oy + oz)) return;
+    auto it = g_vehicleInterp.find(vehicle);
+    if (it == g_vehicleInterp.end()) return;
+    float magSq = ox * ox + oy * oy + oz * oz;
+    if (magSq > 100.0f) return;
+    it->second.smoothOffset[0] += ox;
+    it->second.smoothOffset[1] += oy;
+    it->second.smoothOffset[2] += oz;
 }
 
 void HeldFrame_OnSimTick(unsigned long long tick)
@@ -179,6 +299,11 @@ void HeldFrame_OnSimTick(unsigned long long tick)
                         if (*cit) RecordOneVehicleTick(*cit, tick);
                     }
                 }
+                BYTE* trailer = *(BYTE**)(p + VEH_LINKED_TRAILER_OFFSET);
+                for (int depth = 0; trailer && depth < 16; ++depth) {
+                    RecordOneVehicleTick(trailer, tick);
+                    trailer = *(BYTE**)(trailer + VEH_LINKED_TRAILER_OFFSET);
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -199,30 +324,40 @@ static bool ApplySubTickVisualInterp(BYTE* p, float alpha)
     if (!p || alpha <= 0.001f || alpha >= 0.999f) return false;
     auto it = g_vehicleInterp.find(p);
     if (it == g_vehicleInterp.end()) return false;
-    const VehicleInterpRecord& rec = it->second;
+    VehicleInterpRecord& rec = it->second;
     if (rec.currTick != g_interpTick || rec.prevTick + 1 != rec.currTick) return false;
 
     bool moved = false;
     DiagLog_BeginSafeSeh();
     __try {
         if (*(unsigned*)(p + 0x04) == rec.id) {
+            for (int c = 0; c < 3; c++) {
+                rec.smoothOffset[c] *= 0.85f;
+                if (fabsf(rec.smoothOffset[c]) < 1e-4f) rec.smoothOffset[c] = 0.0f;
+            }
             const float* cur0 = (const float*)(p + kVehicleNodeOffsets[0] + 0x80);
-            float ex0 = cur0[0] - rec.currPos[0][0];
-            float ey0 = cur0[1] - rec.currPos[0][1];
-            float ez0 = cur0[2] - rec.currPos[0][2];
+            float ex0 = cur0[0] - rec.currNode[0][32];
+            float ey0 = cur0[1] - rec.currNode[0][33];
+            float ez0 = cur0[2] - rec.currNode[0][34];
             if (ex0 * ex0 + ey0 * ey0 + ez0 * ez0 < 1e-4f) {
-                float dx0 = rec.currPos[0][0] - rec.prevPos[0][0];
-                float dy0 = rec.currPos[0][1] - rec.prevPos[0][1];
-                float dz0 = rec.currPos[0][2] - rec.prevPos[0][2];
+                float dx0 = rec.currNode[0][32] - rec.prevNode[0][32];
+                float dy0 = rec.currNode[0][33] - rec.prevNode[0][33];
+                float dz0 = rec.currNode[0][34] - rec.prevNode[0][34];
                 float distSq0 = dx0 * dx0 + dy0 * dy0 + dz0 * dz0;
-                if (distSq0 > 1e-8f && distSq0 < 400.0f && isfinite(distSq0)) {
-                    for (int k = 0; k < 5; k++) {
-                        float dx = rec.currPos[k][0] - rec.prevPos[k][0];
-                        float dy = rec.currPos[k][1] - rec.prevPos[k][1];
-                        float dz = rec.currPos[k][2] - rec.prevPos[k][2];
+                float smoothSq = rec.smoothOffset[0] * rec.smoothOffset[0] +
+                                 rec.smoothOffset[1] * rec.smoothOffset[1] +
+                                 rec.smoothOffset[2] * rec.smoothOffset[2];
+                if ((distSq0 > 1e-8f || smoothSq > 1e-8f) && distSq0 < 400.0f && isfinite(distSq0)) {
+                    int nNodes = GetActiveVehicleNodeCount(p);
+                    if (nNodes > rec.nodeCount) nNodes = rec.nodeCount;
+                    for (int k = 0; k < nNodes; k++) {
+                        float dx = rec.currNode[k][32] - rec.prevNode[k][32];
+                        float dy = rec.currNode[k][33] - rec.prevNode[k][33];
+                        float dz = rec.currNode[k][34] - rec.prevNode[k][34];
                         float distSq = dx * dx + dy * dy + dz * dz;
                         if (distSq < 400.0f && isfinite(distSq)) {
-                            TranslateC3DNode(p + kVehicleNodeOffsets[k], dx * alpha, dy * alpha, dz * alpha);
+                            HeldFrame_InterpolateC3DNode(p + kVehicleNodeOffsets[k], rec.prevNode[k], rec.currNode[k],
+                                                         alpha, rec.smoothOffset);
                             moved = true;
                         }
                     }
@@ -262,9 +397,12 @@ public:
         }
         for (size_t i = 0; i < targets_.size(); i++) {
             if (targets_.size() > (64ull << 20) / Bytes) return false;
-            BYTE* parent = nullptr; BYTE** children[2] = {};
-            if (!Read(targets_[i] + 0x398, &parent, 8) || !Read(targets_[i] + 0x3A0, children, 16)) return false;
+            BYTE* parent = nullptr; BYTE* trailer = nullptr; BYTE** children[2] = {};
+            if (!Read(targets_[i] + 0x398, &parent, 8) ||
+                !Read(targets_[i] + VEH_LINKED_TRAILER_OFFSET, &trailer, 8) ||
+                !Read(targets_[i] + 0x3A0, children, 16)) return false;
             Add(parent);
+            Add(trailer);
             uintptr_t begin = (uintptr_t)children[0], end = (uintptr_t)children[1];
             if (end < begin || (end - begin) % 8 || (end - begin) / 8 > 1024) return false;
             std::vector<BYTE*> c((end - begin) / 8);
@@ -307,7 +445,7 @@ public:
                 memcpy(&before, copies_.data() + i * Bytes + o, 8);
                 now = current[o / 8];
                 if (now == before) continue;
-                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140);
+                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) || (o >= 0x1318 && o < 0x13D8);
                 if (!inNodes && HeapPointer(before) && HeapPointer(now)) {
                     Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", o);
                     g_hfDiag.restoreRefusals++;

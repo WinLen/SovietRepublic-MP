@@ -502,8 +502,6 @@ static const GameRulePair kGameRules[] = {
     { 0xC838, 0x5D8, 4 }, { 0xC83C, 0x5DC, 4 }, { 0xC840, 0x5E0, 4 }, { 0xC850, 0x14451, 1 }, { 0xC851, 0x14453, 1 },
     { 0xC852, 0x14452, 1 },
 };
-#define CHEATS_OFFSET 0x9
-
 #define RELOAD_FLAGS_OFFSET 0x14D3C // 4 bytes: a critical rule's save and reload
 #define GAME_RULES_APPLY_RVA 0x337170
 
@@ -513,17 +511,34 @@ struct LsGameRules {
 };
 #pragma pack(pop)
 
+bool Commands_SanitizeCheatState(BYTE* world)
+{
+    if (!world) return false;
+    bool changed = false;
+    if (world[WORLD_CHEAT_MODE_OFFSET]) {
+        world[WORLD_CHEAT_MODE_OFFSET] = 0;
+        changed = true;
+    }
+    if (world[WORLD_DEV_MODE_OFFSET]) {
+        world[WORLD_DEV_MODE_OFFSET] = 0;
+        changed = true;
+    }
+    int32_t subPage = *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET);
+    if (subPage >= 5 && subPage <= 7) {
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = -1;
+        changed = true;
+    }
+    return changed;
+}
+
 void Commands_GuardSettings()
 {
     static int s_logged = 0;
     if (!g_capturing) return;
-    BYTE* world = g_exeBase + 0x9D4F10;
+    BYTE* world = g_exeBase + WORLD_RVA;
     bool reload = false, cheats = false;
     __try {
-        if (world[CHEATS_OFFSET]) {
-            world[CHEATS_OFFSET] = 0;
-            cheats = true;
-        }
+        cheats = Commands_SanitizeCheatState(world);
         if (*(unsigned*)(world + RELOAD_FLAGS_OFFSET)) {
             *(unsigned*)(world + RELOAD_FLAGS_OFFSET) = 0;
             reload = true;

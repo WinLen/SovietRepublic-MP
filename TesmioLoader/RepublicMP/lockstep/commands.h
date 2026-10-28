@@ -83,6 +83,8 @@ void Commands_CaptureGameRules();
 // In a session: cheats off, and no save and reload after a critical rule
 // (called before the frame's commands and after the interface).
 void Commands_GuardSettings();
+// Clears world cheat/dev flags (+0x9, +0xA) and closes cheat systab sub-pages (+0xC65C == 5..7).
+bool Commands_SanitizeCheatState(BYTE* world);
 
 // Counts the commands made so far (any thread): a comparison around the
 // interface that saw it change knows a command, not the interface, wrote.

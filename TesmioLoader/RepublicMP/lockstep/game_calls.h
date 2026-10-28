@@ -20,3 +20,7 @@ bool GameCalls_Install();
 
 // The command (lockstep/commands).
 bool GameCalls_ApplyCommand(const void* data, size_t size);
+
+// Pure helper for rail/road depot row drag-drop self-drop filtering (0x7C7E87 / 0x7C7ED8).
+bool GameCalls_IsDepotRowSelfDrop(unsigned long long dragged, unsigned long long hoveredResolved,
+                                  unsigned long long hoveredRaw, unsigned long long rowHead);

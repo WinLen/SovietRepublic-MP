@@ -441,6 +441,7 @@ static unsigned g_tickTimer[4] = {}, g_uiTimer[4] = {};
 static LARGE_INTEGER g_frameClock = {}, g_frameFrequency = {};
 static double g_tickDebt = 0;
 static double g_subTickAlpha = 0;
+static double g_subTickSpan = 1.0;
 // For the hang report: frames started and where the current one stands
 // (1 Prepare, 2 step Early, 3 held Early, 4 after Early, 5 Late, 6 after Late).
 static volatile unsigned long long g_frameBeats = 0;
@@ -865,6 +866,7 @@ static void ResetFrames()
     InterlockedExchange(&g_pauseRequests, 0);
     g_tickDebt = 1.0;
     g_subTickAlpha = 0.0;
+    g_subTickSpan = 1.0;
     QueryPerformanceCounter(&g_frameClock);
     QueryPerformanceFrequency(&g_frameFrequency);
     HeldFrame_Reset();
@@ -1217,6 +1219,65 @@ static void ProbeAdmission(BYTE* timer)
 // LOCKSTEP_WINDOW ticks behind - and grants it; the player runs a tick only
 // once it was granted, at the host's speed. A selected tool does not stop the
 // ticks: what it does stays on this PC (Determinism_ToolScopeBegin).
+static void ResetSubTickOnStep()
+{
+    g_subTickAlpha = 0.0;
+    g_subTickSpan = (g_tickDebt > 0.0 && g_tickDebt < 0.85) ? (1.0 - g_tickDebt) : 1.0;
+}
+
+static void AdvanceSubTickOnHold(double step)
+{
+    g_subTickAlpha += step / g_subTickSpan;
+    if (g_subTickAlpha > 0.95) g_subTickAlpha = 0.95;
+}
+
+static void SessionClientAdmission(BYTE* timer, double elapsed)
+{
+    // The Esc menu sets the timer's menu byte (timer+13), which the tick
+    // would run with; the player waits instead, and the host stops
+    // LOCKSTEP_WINDOW ticks ahead.
+    bool menu = timer[13] != 0;
+    bool paused;
+    int speed;
+    if (LockstepNet_HostState(&paused, &speed)) {
+        g_paused = paused;
+        g_requestedSpeed = speed;
+    }
+    int backlog = LockstepNet_GrantBacklog(g_stepCount + 1);
+    bool hold = menu || g_frameFault || !LockstepNet_IsConnected() || (g_paused && backlog == 0);
+    double rate = 1.0;
+    if (hold) {
+        g_subTickAlpha = 0.0;
+        if (g_paused && backlog == 0) g_tickDebt = 0.0;
+    } else {
+        if (backlog == 0) rate = 0.85;       // waiting for next packet: advance sub-tick phase smoothly
+        else if (backlog == 1) rate = 0.95;  // 1 grant left: stretch slightly to avoid draining to 0
+        else if (backlog <= 3) rate = 1.00;  // ideal buffer (1..3 grants): exact 1.0x speed
+        else if (backlog <= 6) rate = 1.08;  // mild TCP burst: catch up smoothly (+8%)
+        else if (backlog <= 12) rate = 1.18; // larger backlog: catch up faster (+18%)
+        else rate = 1.35;                    // lag spike recovery (+35%)
+
+        g_tickDebt += elapsed * DETERMINISM_FIXED_FPS * rate;
+        if (backlog == 0 && g_tickDebt > 0.98) g_tickDebt = 0.98;
+        else if (backlog <= 3 && g_tickDebt > 1.25) g_tickDebt = 1.25;
+        else if (g_tickDebt > 2.0) g_tickDebt = 2.0;
+    }
+    if (!menu && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_TakeGrant(g_stepCount + 1, &speed)) {
+        g_frameStep = true;
+        g_tickDebt -= 1.0;
+        if (backlog <= 3 && g_tickDebt > 0.5) g_tickDebt = 0.5;
+        ResetSubTickOnStep();
+        g_tickSpeed = speed < 1 ? 1 : speed > 4 ? 4 : speed;
+    } else if (!hold) {
+        AdvanceSubTickOnHold(elapsed * DETERMINISM_FIXED_FPS * rate);
+    }
+    int boost = LocalBoost();
+    if (boost != g_sentBoost) {
+        LockstepNet_SendSpeed(10 + boost);
+        g_sentBoost = boost;
+    }
+}
+
 static void SessionAdmission(BYTE* timer)
 {
     LockstepNet_Poll();
@@ -1229,50 +1290,7 @@ static void SessionAdmission(BYTE* timer)
     if (elapsed < 0.0) elapsed = 0.0;
     if (elapsed > 0.1) elapsed = 0.1;
     if (!g_sessionHost) {
-        // The Esc menu sets the timer's menu byte (timer+13), which the tick
-        // would run with; the player waits instead, and the host stops
-        // LOCKSTEP_WINDOW ticks ahead.
-        bool menu = timer[13] != 0;
-        bool paused;
-        int speed;
-        if (LockstepNet_HostState(&paused, &speed)) {
-            g_paused = paused;
-            g_requestedSpeed = speed;
-        }
-        int backlog = LockstepNet_GrantBacklog(g_stepCount + 1);
-        bool hold = menu || g_frameFault || !LockstepNet_IsConnected() || (g_paused && backlog == 0);
-        double rate = 1.0;
-        if (hold) {
-            g_subTickAlpha = 0.0;
-            if (g_paused && backlog == 0) g_tickDebt = 0.0;
-        } else {
-            if (backlog == 0) rate = 0.85;       // waiting for next packet: advance sub-tick phase smoothly
-            else if (backlog == 1) rate = 0.95;  // 1 grant left: stretch slightly to avoid draining to 0
-            else if (backlog <= 3) rate = 1.00;  // ideal buffer (1..3 grants): exact 1.0x speed
-            else if (backlog <= 6) rate = 1.08;  // mild TCP burst: catch up smoothly (+8%)
-            else if (backlog <= 12) rate = 1.18; // larger backlog: catch up faster (+18%)
-            else rate = 1.35;                    // lag spike recovery (+35%)
-
-            g_tickDebt += elapsed * DETERMINISM_FIXED_FPS * rate;
-            if (backlog == 0 && g_tickDebt > 0.98) g_tickDebt = 0.98;
-            else if (backlog <= 3 && g_tickDebt > 1.25) g_tickDebt = 1.25;
-            else if (g_tickDebt > 2.0) g_tickDebt = 2.0;
-        }
-        if (!menu && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_TakeGrant(g_stepCount + 1, &speed)) {
-            g_frameStep = true;
-            g_tickDebt -= 1.0;
-            if (backlog <= 3 && g_tickDebt > 0.5) g_tickDebt = 0.5;
-            g_subTickAlpha = 0.0;
-            g_tickSpeed = speed < 1 ? 1 : speed > 4 ? 4 : speed;
-        } else if (!hold) {
-            g_subTickAlpha += elapsed * DETERMINISM_FIXED_FPS * rate;
-            if (g_subTickAlpha > 0.95) g_subTickAlpha = 0.95;
-        }
-        int boost = LocalBoost();
-        if (boost != g_sentBoost) {
-            LockstepNet_SendSpeed(10 + boost);
-            g_sentBoost = boost;
-        }
+        SessionClientAdmission(timer, elapsed);
         return;
     }
     if (LockstepNet_TakePauseToggles() & 1) g_paused = !g_paused;
@@ -1297,13 +1315,12 @@ static void SessionAdmission(BYTE* timer)
     if (!hold && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_MayRun(g_stepCount + 1)) {
         g_frameStep = true;
         g_tickDebt -= 1.0;
-        g_subTickAlpha = 0.0;
+        ResetSubTickOnStep();
         int boost = LocalBoost() > g_remoteBoost ? LocalBoost() : g_remoteBoost;
         g_tickSpeed = g_requestedSpeed > 1 ? 2 + boost : 1;
         LockstepNet_Grant(g_stepCount + 1, g_tickSpeed);
     } else if (!hold) {
-        g_subTickAlpha += elapsed * DETERMINISM_FIXED_FPS;
-        if (g_subTickAlpha > 0.95) g_subTickAlpha = 0.95;
+        AdvanceSubTickOnHold(elapsed * DETERMINISM_FIXED_FPS);
     }
 }
 

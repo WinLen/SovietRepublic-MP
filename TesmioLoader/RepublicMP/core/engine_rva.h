@@ -57,6 +57,12 @@
 // WORLD Object Offsets (relative to g_exeBase + WORLD_RVA)
 // ---------------------------------------------------------------------------
 
+#ifndef WORLD_CHEAT_MODE_OFFSET
+#define WORLD_CHEAT_MODE_OFFSET     0x0009
+#endif
+#ifndef WORLD_DEV_MODE_OFFSET
+#define WORLD_DEV_MODE_OFFSET       0x000A
+#endif
 #ifndef WORLD_UNLIMITED_MONEY_OFFSET
 #define WORLD_UNLIMITED_MONEY_OFFSET 0x578
 #endif
@@ -120,6 +126,9 @@
 #endif
 #ifndef WORLD_ECON_TAB_OFFSET
 #define WORLD_ECON_TAB_OFFSET       0xC65C
+#endif
+#ifndef WORLD_SYSTAB_SUBPAGE_OFFSET
+#define WORLD_SYSTAB_SUBPAGE_OFFSET 0xC65C
 #endif
 #ifndef WORLD_RESOURCE_STRIDE
 #define WORLD_RESOURCE_STRIDE       0x340
@@ -304,6 +313,12 @@
 #ifndef RVA_STAT_RECORD_CLEAR
 #define RVA_STAT_RECORD_CLEAR       0x2FC290
 #endif
+#ifndef CHEAT_KEYS_STEP_RVA
+#define CHEAT_KEYS_STEP_RVA         0x309D80
+#endif
+#ifndef CHEAT_KEYS_CALL_RVA
+#define CHEAT_KEYS_CALL_RVA         0x30D959
+#endif
 #ifndef RVA_CALC_STORED_RESOURCES
 #define RVA_CALC_STORED_RESOURCES   0x33E620
 #endif
@@ -474,6 +489,18 @@ struct SovietStatResEntry {
 #ifndef VEH_POS_OFFSET
 #define VEH_POS_OFFSET              0xDE0
 #endif
+#ifndef VEH_SIXTH_NODE_ACTIVE_OFFSET
+#define VEH_SIXTH_NODE_ACTIVE_OFFSET 0x1314
+#endif
+#ifndef VEH_SIXTH_NODE_OFFSET
+#define VEH_SIXTH_NODE_OFFSET       0x1318
+#endif
+#ifndef VEH_LINKED_TRAILER_OFFSET
+#define VEH_LINKED_TRAILER_OFFSET   0x1A68
+#endif
+#ifndef C3D_NODE_BYTE_SIZE
+#define C3D_NODE_BYTE_SIZE          0xBC
+#endif
 
 #ifndef CIT_HOME_BUILDING_OFFSET
 #define CIT_HOME_BUILDING_OFFSET    0x20
@@ -557,3 +584,8 @@ static_assert(STAT_CITIZEN_SATISFACTION_OFF == STAT_CITIZEN_COUNTS_OFF + 5 * siz
               STAT_CITIZEN_BRACKETS_OFF == STAT_CITIZEN_DEMOGRAPHICS_OFF + 4 * sizeof(int32_t) &&
               STAT_EXTRA_COUNTS_OFF == STAT_CITIZEN_BRACKETS_OFF + 9 * sizeof(int32_t),
               "SOVIET_STAT_RECORD citizen satisfaction/averages/demographics/brackets offsets must match 0x2FD2E0");
+static_assert(WORLD_CHEAT_MODE_OFFSET == 0x9 && WORLD_DEV_MODE_OFFSET == 0xA &&
+              WORLD_SYSTAB_SUBPAGE_OFFSET == WORLD_ECON_TAB_OFFSET,
+              "Cheat/dev mode byte offsets (0x9, 0xA) and systab subpage offset (0xC65C) must match 0x309D80 / 0x329390");
+static_assert(VEH_SIXTH_NODE_OFFSET == VEH_SIXTH_NODE_ACTIVE_OFFSET + 4 && C3D_NODE_BYTE_SIZE == 0xBC,
+              "Vehicle 6th C3D_NODE (+0x1318, 0xBC bytes) must follow active index (+0x1314) per 0x66EDD0");

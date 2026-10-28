@@ -927,9 +927,23 @@ static void DetFrameLock(LPCRITICAL_SECTION cs)
 #define UI_ROUTINE_CALL 0x482B52
 #define SEARCH_WORKSPACE_OFFSET 0x14478
 #define SEARCH_WORKSPACE_SIZE 72 // three vector headers {begin, end, capacity}
+#define GAME_TIMER_RVA_VIEW 0x9D4EE0
 static const unsigned char kUiCallOriginal[5] = { 0xe8, 0x59, 0x52, 0xe9, 0xff };
 static BYTE g_privateSearch[SEARCH_WORKSPACE_SIZE] = {};
 static volatile LONG g_uiEnclosed = 0;
+static LARGE_INTEGER g_viewClock = {}, g_uiClock = {}, g_viewFrequency = {};
+
+static float MeasureClockFps(LARGE_INTEGER* clockState)
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!g_viewFrequency.QuadPart) QueryPerformanceFrequency(&g_viewFrequency);
+    double dt = clockState->QuadPart ? double(now.QuadPart - clockState->QuadPart) / g_viewFrequency.QuadPart : 0.0;
+    *clockState = now;
+    if (dt < 0.001) dt = 0.001;  // at most 1000 FPS
+    if (dt > 0.25) dt = 0.25;    // a stall (loading, alt-tab) does not throw the camera away
+    return (float)(1.0 / dt);
+}
 
 void SimPatches_ResetSearches()
 {
@@ -969,7 +983,11 @@ static __int64 DetUiRoutine(void* world)
     BuildingSwitches_Before(g_inPhase);
     CargoSettings_Before(g_inPhase);
     SourceSlots_Before(g_inPhase);
+    BYTE* uiTimer = g_exeBase + GAME_TIMER_RVA_VIEW;
+    float savedUnscaledFps = *(float*)(uiTimer + 4);
+    *(float*)(uiTimer + 4) = MeasureClockFps(&g_uiClock);
     __int64 r = original(world);
+    *(float*)(uiTimer + 4) = savedUnscaledFps;
     // The cargo settings first: a half they put back is the same again for the switches.
     CargoSettings_After(g_inPhase);
     SourceSlots_After(g_inPhase);
@@ -1006,19 +1024,9 @@ static const unsigned char kPrepareCallOriginal[5] = { 0xe8, 0x45, 0x27, 0x2d, 0
 // on held frames and jumped on tick frames. For Prepare the timer carries this
 // PC's real frame rate and runs; the tick's values are put back after it.
 // Prepare runs at speed 0, so nothing of the simulation advances with it.
-#define GAME_TIMER_RVA_VIEW 0x9D4EE0
-static LARGE_INTEGER g_viewClock = {}, g_viewFrequency = {};
-
 static float RealFrameRate()
 {
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    if (!g_viewFrequency.QuadPart) QueryPerformanceFrequency(&g_viewFrequency);
-    double dt = g_viewClock.QuadPart ? double(now.QuadPart - g_viewClock.QuadPart) / g_viewFrequency.QuadPart : 0.0;
-    g_viewClock = now;
-    if (dt < 0.001) dt = 0.001;  // at most 1000 FPS
-    if (dt > 0.25) dt = 0.25;    // a stall (loading, alt-tab) does not throw the camera away
-    return (float)(1.0 / dt);
+    return MeasureClockFps(&g_viewClock);
 }
 
 static void DetPrepare(__int64 world)
@@ -1240,17 +1248,40 @@ static float* DetPickRay(float* out, const float* in)
     return (*(NormalizeFn*)(g_exeBase + NORMALIZE_IMPORT))(out, in);
 }
 
-#define STEP_CALL_COUNT 28
+// Cheat & dev key combinations (309d80, called from Late at 30d959: C+H+E,
+// D+E+V, E+L+T, LCtrl+Z+Q) toggle world+0x9 / world+0xA and show the "Cheat mode
+// enabled" popup on one PC only. Block the routine completely during any
+// multiplayer session or waiting lobby and sanitize any cheat flags loaded from a save.
+static void DetCheatKeys(void* world)
+{
+    bool blockCheats = Determinism_IsActive() || Commands_Capturing() ||
+                       SaveSync_IsWaitingLobbyActive() ||
+                       (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
+    if (blockCheats) {
+        if (world) {
+            __try {
+                Commands_SanitizeCheatState((BYTE*)world);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+        return;
+    }
+    ((void (*)(void*))(g_exeBase + CHEAT_KEYS_STEP_RVA))(world);
+}
+
+#define STEP_CALL_COUNT 29
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790,
-                                                      0x2B6ECA, 0x2B9263, 0x2B2152, 0x2B445F, 0x2B45CB, 0x2B49DF, 0x1D8EA6, 0x1D9188 };
+                                                      0x2B6ECA, 0x2B9263, 0x2B2152, 0x2B445F, 0x2B45CB, 0x2B49DF, 0x1D8EA6, 0x1D9188,
+                                                      CHEAT_KEYS_CALL_RVA };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60,
-                                                        0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60 };
+                                                        0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60,
+                                                        CHEAT_KEYS_STEP_RVA };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18,
-                                                 17, 18, 18, 18, 18, 18, 18, 18 }; // relay slot of each site
+                                                 17, 18, 18, 18, 18, 18, 18, 18, 20 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1268,7 +1299,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 20
+#define RELAY_SLOTS 21
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1303,7 +1334,7 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay };
+                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetCheatKeys };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

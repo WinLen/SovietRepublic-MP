@@ -61,6 +61,10 @@ enum {
     CALL_RENAME,
     // Residential building window (6f8cc0): invite immigrants/experts buttons (6fee1e, 6ff31a, 6ff52d, 6ffa4e).
     CALL_INVITE_CITIZENS,
+    // Depot window row drop (7c7e87 uncouple + 7c7ed8 couple): relay passes hovered vehicle r15 in r8
+    // and raw slot vehicle r14 in r9 to guard against self-drops on click/double-click.
+    CALL_DEPOT_ROW_UNCOUPLE,
+    CALL_DEPOT_ROW_COUPLE,
 };
 
 // Appended only: a command names its site by index.
@@ -141,8 +145,8 @@ static const GameCallSite kSites[] = {
     // tool selected, its rows act like the line window's.
     { 0x7C7A08, 0x3FDEF0, "depot window: uncouple the dragged vehicle (train drop)", "WV", 0, 0, false },
     { 0x7C7A15, 0x3FE520, "depot window: attach the dragged train to the vehicle", "VV", 0, 0, false, CALL_DRAG },
-    { 0x7C7E87, 0x3FDEF0, "depot window: uncouple the dragged vehicle (row drop)", "WV", 0, 0, false },
-    { 0x7C7ED8, 0x3FD5D0, "depot window: couple the dragged vehicle at the row", "WVVIbbx", 0, 0, false },
+    { 0x7C7E87, 0x3FDEF0, "depot window: uncouple the dragged vehicle (row drop)", "WV", 0, 0, false, CALL_DEPOT_ROW_UNCOUPLE },
+    { 0x7C7ED8, 0x3FD5D0, "depot window: couple the dragged vehicle at the row", "WVVIbbx", 0, 0, false, CALL_DEPOT_ROW_COUPLE },
     { 0x7C8CB0, 0x3FDEF0, "depot window: uncouple the dragged vehicle (end drop)", "WV", 0, 0, false },
     { 0x7C8CE7, 0x3FD5D0, "depot window: couple the dragged vehicle at the end", "WVVIbbx", 0, 0, false },
     { 0x7C81F4, 0x1AB290, "depot window: replace tool (prepare the replaced vehicle)", "WV", 0, 0, false },
@@ -376,6 +380,21 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
     return nullptr;
 }
 
+static bool g_skipDepotRowCouple = false;
+
+bool GameCalls_IsDepotRowSelfDrop(unsigned long long dragged, unsigned long long hoveredResolved,
+                                  unsigned long long hoveredRaw, unsigned long long rowHead)
+{
+    if (!dragged) return false;
+    if (dragged == hoveredResolved || dragged == hoveredRaw || dragged == rowHead) return true;
+    __try {
+        if (hoveredResolved && *(U64*)(hoveredResolved + 0x398) == dragged) return true;
+        if (hoveredRaw && *(U64*)(hoveredRaw + 0x398) == dragged) return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
 static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
@@ -386,6 +405,14 @@ static U64 Run(unsigned index, const U64* a)
         }
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return s.result;
+    }
+    if (s.special == CALL_DEPOT_ROW_UNCOUPLE && Commands_TakeUi()) {
+        g_skipDepotRowCouple = GameCalls_IsDepotRowSelfDrop(a[1], a[2], a[3], 0);
+        if (g_skipDepotRowCouple) return s.result;
+    } else if (s.special == CALL_DEPOT_ROW_COUPLE && Commands_TakeUi()) {
+        bool skip = g_skipDepotRowCouple || GameCalls_IsDepotRowSelfDrop(a[2], 0, 0, a[1]);
+        g_skipDepotRowCouple = false;
+        if (skip) return s.result;
     }
     if (s.special == CALL_INVITE_CITIZENS) {
         if (TwoStates_IsActive() && a[3]) {
@@ -521,7 +548,8 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     __try {
         why = Rebuild(m, a);
         if (!why && s.special != CALL_PLAIN && s.special != CALL_DELETE_LINE && s.special != CALL_DRAG &&
-            s.special != CALL_INVITE_CITIZENS)
+            s.special != CALL_INVITE_CITIZENS && s.special != CALL_DEPOT_ROW_UNCOUPLE &&
+            s.special != CALL_DEPOT_ROW_COUPLE)
             why = "not a command site";
         if (!why) {
             if (s.special == CALL_INVITE_CITIZENS) {
@@ -577,6 +605,12 @@ bool GameCalls_Install()
             memcpy(r + 7, &skip, 4);
             r[11] = 0xFF; r[12] = 0x25; r[13] = r[14] = r[15] = r[16] = 0;
             memcpy(r + 17, &to, 8);
+        } else if (kSites[i].special == CALL_DEPOT_ROW_UNCOUPLE) {
+            // mov r8, r15 (4D 89 F8); mov r9, r14 (4D 89 F1); jmp qword ptr [rip+0]
+            r[0] = 0x4D; r[1] = 0x89; r[2] = 0xF8;
+            r[3] = 0x4D; r[4] = 0x89; r[5] = 0xF1;
+            r[6] = 0xFF; r[7] = 0x25; r[8] = r[9] = r[10] = r[11] = 0;
+            memcpy(r + 12, &to, 8);
         } else {
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &to, 8);

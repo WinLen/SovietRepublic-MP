@@ -5,24 +5,15 @@
 #include "../../lockstep/lockstep_net.h"
 #include "../../determinism/held_frame.h"
 #include "../../session/two_states.h"
+#include "../../core/engine_rva.h"
 #include "../../core/diag_log.h"
 #include <string.h>
 #include <math.h>
 
-#define WORLD_RVA 0x9D4F10
-#define WORLD_UNLIMITED_MONEY_OFFSET 0x578
-#define WORLD_USD_OFFSET 0x580
-#define WORLD_RUB_OFFSET 0x588
-#define WORLD_VEHICLES_OFFSET 0x12810
-
-#define VEH_ID_OFFSET 0x04
-#define VEH_CARGO_OFFSET 0x3B8
 #define VEH_CUR_BLD_OFFSET 0x4F0
-#define VEH_SCHED_IDX_OFFSET 0x698
 #define VEH_FUEL_OFFSET 0x770
 #define VEH_SPEED_OFFSET 0xD24
 #define VEH_NODE0_OFFSET 0xD60
-#define VEH_POS_OFFSET 0xDE0
 #define VEH_WEAR0_OFFSET 0x17E8
 #define VEH_WEAR1_OFFSET 0x1A54
 #define VEH_WEAR2_OFFSET 0x1A7C
@@ -67,7 +58,7 @@ struct VehicleSoftSyncMsg {
 
 #define VSS_TREASURY_MAGIC 0x54525359u
 
-static const unsigned kVehicleNodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+static const unsigned kVehicleNodeOffsets[6] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080, VEH_SIXTH_NODE_OFFSET };
 
 static volatile LONG g_immediateRequested = 0;
 static int g_immediateSweepLeft = 0;
@@ -131,7 +122,8 @@ static void TranslateNode(BYTE* node, float dx, float dy, float dz)
 
 static void TranslateVehicleNodes(BYTE* v, float dx, float dy, float dz)
 {
-    for (int k = 0; k < 5; k++) {
+    int nNodes = (*(const int32_t*)(v + VEH_SIXTH_NODE_ACTIVE_OFFSET) >= 0) ? 6 : 5;
+    for (int k = 0; k < nNodes; k++) {
         TranslateNode(v + kVehicleNodeOffsets[k], dx, dy, dz);
     }
 }
@@ -378,19 +370,11 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
         }
         return;
     }
-    if (e.currentBldId < 0 && localBldId < 0) {
-        float localSpeed = *(float*)(v + VEH_SPEED_OFFSET);
-        if (isfinite(e.speed) && isfinite(localSpeed))
-            *(float*)(v + VEH_SPEED_OFFSET) = localSpeed + (e.speed - localSpeed) * 0.35f;
-        if (distSq > 0.04f && distSq < 64.0f) {
-            TranslateVehicleNodes(v, dx * 0.25f, dy * 0.25f, dz * 0.25f);
-            HeldFrame_OnVehicleSoftSynced(v);
-            g_vssDiag.posBlended++;
-        } else if (distSq > 0.0f && distSq <= 0.04f) {
-            TranslateVehicleNodes(v, dx, dy, dz);
-            HeldFrame_OnVehicleSoftSynced(v);
-            g_vssDiag.posSnapped++;
-        }
+    if (e.currentBldId < 0 && localBldId < 0 && distSq >= 64.0f && distSq < 2500.0f) {
+        TranslateVehicleNodes(v, dx, dy, dz);
+        HeldFrame_OnVehicleSoftSynced(v);
+        HeldFrame_AddVehicleSmoothOffset(v, -dx, -dy, -dz);
+        g_vssDiag.posSnapped++;
     }
 }
 

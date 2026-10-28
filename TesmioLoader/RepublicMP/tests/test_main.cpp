@@ -25,8 +25,10 @@
 #include "../core/safe_mem.h"
 #include "../lockstep/world_refs.h"
 #include "../lockstep/commands.h"
+#include "../lockstep/game_calls.h"
 #include "../lockstep/building_switches.h"
 #include "../determinism/state_hash.h"
+#include "../determinism/held_frame.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../session/mod_sync.h"
@@ -995,6 +997,95 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
 
     Commands_SetSession(COMMANDS_OFF);
     TwoStates_OnSessionEnded();
+
+    // 2b. Cheat / dev mode sanitization (C+H+E / D+E+V / cheat systab pages 5..7)
+    {
+        BYTE* world = g_mockExeBuffer + WORLD_RVA;
+        world[WORLD_CHEAT_MODE_OFFSET] = 1;
+        world[WORLD_DEV_MODE_OFFSET]   = 1;
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6; // "cheatgeneral"
+        TEST_CHECK(Commands_SanitizeCheatState(world));
+        TEST_CHECK(world[WORLD_CHEAT_MODE_OFFSET] == 0);
+        TEST_CHECK(world[WORLD_DEV_MODE_OFFSET] == 0);
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == -1);
+        // Idempotent when already clean, and preserves normal sub-pages (0..4)
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 2;
+        TEST_CHECK(!Commands_SanitizeCheatState(world));
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 2);
+    }
+
+    // 2c. Rail/road depot row self-drop uncoupling guard (0x7C7E87 / 0x7C7ED8)
+    {
+        std::vector<BYTE> locoA(0x600, 0), wagonA1(0x600, 0), locoB(0x600, 0);
+        unsigned long long ptrLocoA   = (unsigned long long)locoA.data();
+        unsigned long long ptrWagonA1 = (unsigned long long)wagonA1.data();
+        unsigned long long ptrLocoB   = (unsigned long long)locoB.data();
+        *(unsigned long long*)(wagonA1.data() + 0x398) = ptrLocoA; // wagonA1 attached to locoA
+
+        // Clicking/double-clicking locoA or its attached wagonA1 is a self-drop -> must be blocked
+        TEST_CHECK(GameCalls_IsDepotRowSelfDrop(ptrLocoA, ptrLocoA, ptrLocoA, ptrLocoA));
+        TEST_CHECK(GameCalls_IsDepotRowSelfDrop(ptrLocoA, ptrWagonA1, ptrWagonA1, ptrLocoA));
+        TEST_CHECK(GameCalls_IsDepotRowSelfDrop(ptrWagonA1, ptrWagonA1, ptrWagonA1, ptrLocoA));
+        // Dragging independent locoB onto locoA's row is a valid couple -> must be allowed
+        TEST_CHECK(!GameCalls_IsDepotRowSelfDrop(ptrLocoB, ptrLocoA, ptrLocoA, ptrLocoA));
+        TEST_CHECK(!GameCalls_IsDepotRowSelfDrop(ptrLocoB, ptrWagonA1, ptrWagonA1, ptrLocoA));
+    }
+
+    // 2d. Sub-tick C3D_NODE position + 3x3 rotation matrix interpolation & Gram-Schmidt orthonormalization
+    {
+        float prevNode[41] = {};
+        float currNode[41] = {};
+        // prevNode: identity rotation at (10, 0, 20)
+        prevNode[0] = 1.0f; prevNode[5] = 1.0f; prevNode[10] = 1.0f; prevNode[15] = 1.0f;
+        prevNode[16] = 1.0f; prevNode[21] = 1.0f; prevNode[26] = 1.0f; prevNode[31] = 1.0f;
+        prevNode[12] = prevNode[32] = 10.0f;
+        prevNode[13] = prevNode[33] = 0.0f;
+        prevNode[14] = prevNode[34] = 20.0f;
+        prevNode[37] = 1.0f; // ori = (0,0,1)
+        prevNode[39] = 1.0f; // up  = (0,1,0)
+
+        // currNode: 45-degree yaw around Y at (20, 0, 30)
+        const float c45 = 0.70710678f, s45 = 0.70710678f;
+        currNode[0] =  c45; currNode[2]  = -s45;
+        currNode[5] = 1.0f;
+        currNode[8] =  s45; currNode[10] =  c45;
+        currNode[15] = 1.0f;
+        currNode[16] =  c45; currNode[24] = -s45;
+        currNode[21] = 1.0f;
+        currNode[18] =  s45; currNode[26] =  c45;
+        currNode[31] = 1.0f;
+        currNode[12] = currNode[32] = 20.0f;
+        currNode[13] = currNode[33] = 0.0f;
+        currNode[14] = currNode[34] = 30.0f;
+        currNode[35] = s45; currNode[37] = c45;
+        currNode[39] = 1.0f;
+
+        alignas(16) BYTE nodeBuf[C3D_NODE_BYTE_SIZE] = {};
+        memcpy(nodeBuf, currNode, sizeof(currNode));
+        const float smoothOff[3] = { 1.0f, 0.0f, -1.0f };
+        HeldFrame_InterpolateC3DNode(nodeBuf, prevNode, currNode, 0.5f, smoothOff);
+
+        const float* m    = (const float*)nodeBuf;
+        const float* minv = (const float*)(nodeBuf + 0x40);
+        const float* pos  = (const float*)(nodeBuf + 0x80);
+        const float* ori  = (const float*)(nodeBuf + 0x8C);
+        TEST_CHECK_NEAR(pos[0], 16.0f, 1e-4f);
+        TEST_CHECK_NEAR(pos[2], 24.0f, 1e-4f);
+        TEST_CHECK_NEAR(m[12],  16.0f, 1e-4f);
+        TEST_CHECK_NEAR(m[14],  24.0f, 1e-4f);
+        // Halfway between 0 deg and 45 deg is 22.5 deg (sin=0.382683, cos=0.923880)
+        TEST_CHECK_NEAR(m[8],   0.382683f, 1e-3f);
+        TEST_CHECK_NEAR(m[10],  0.923880f, 1e-3f);
+        TEST_CHECK_NEAR(ori[0], 0.382683f, 1e-3f);
+        TEST_CHECK_NEAR(ori[2], 0.923880f, 1e-3f);
+        // Orthonormality of m and exactness of m * minv translation
+        float dotXZ = m[0] * m[8] + m[1] * m[9] + m[2] * m[10];
+        TEST_CHECK_NEAR(dotXZ, 0.0f, 1e-5f);
+        float tx = m[12] * minv[0] + m[13] * minv[4] + m[14] * minv[8]  + minv[12];
+        float tz = m[12] * minv[2] + m[13] * minv[6] + m[14] * minv[10] + minv[14];
+        TEST_CHECK_NEAR(tx, 0.0f, 1e-4f);
+        TEST_CHECK_NEAR(tz, 0.0f, 1e-4f);
+    }
 
     // 3. SaveZip pack & unpack roundtrip
     std::filesystem::path baseDir(g_mockBaseDir);

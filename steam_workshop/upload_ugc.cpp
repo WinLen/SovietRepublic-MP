@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Host-authoritative Workshop mod sync, pre-save MSG_MOD_SYNC handshake, non-blocking batch SteamUGC download modal with one-click game restart, and strict dual-layer ban on unauthorized Client mods",
+                "v%s (Protocol %d) - Disable multiplayer cheat keys (C+H+E / D+E+V), ultra-smooth 60-165+ FPS vehicle & train sub-tick interpolation (6th C3D_NODE, 3x3 rotation matrix, uniform sub-tick span, soft-sync rubber-banding fix), and fix rail depot double-click window open + prevent self-drop train uncoupling",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
