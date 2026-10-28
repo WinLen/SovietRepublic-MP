@@ -3,6 +3,7 @@
 #include "input_block.h"
 #include "../ui/sync_block.h"
 #include "../session/save_sync.h"
+#include "../determinism/determinism.h"
 #include "../core/engine_rva.h"
 
 #define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
@@ -25,12 +26,21 @@ static bool Unfocused()
 
 static bool Blocked()
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return false;
     return SyncBlock_BlocksWorldInput() || Unfocused();
 }
 
 static bool WorldActionBlocked()
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return false;
     return Blocked() || SaveSync_IsWaitingLobbyActive();
+}
+
+bool InputBlock_IsBlocked()
+{
+    return Blocked();
 }
 
 static volatile LONG g_neutral = 0;

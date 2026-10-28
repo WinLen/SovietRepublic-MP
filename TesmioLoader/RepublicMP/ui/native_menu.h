@@ -14,9 +14,13 @@ bool NativeMenu_Install(void);
 // True if the player selected "Host Server" from the Main Menu or enabled
 // "Launch as Co-op Server" on the Load Save / New Game screen.
 bool NativeMenu_IsHostOnNextLoad(void);
+void NativeMenu_ClearHostOnNextLoad(void);
+void NativeMenu_SetHostOnNextLoadForTest(bool host);
 
 // Returns the game's current menu screen ID (1 = Root Main Menu, 2 = Load Game,
 // 0x62 = Campaign, 0x63 = Custom Game Map Select, 3 = Custom Game Setup).
+#define MENU_OBJ_RVA            0x9D4F10
+#define MENU_SCREEN_ID_OFF      0x5044
 int NativeMenu_GetActiveScreenId(void);
 
 // True when the Load/New Game Co-op bar or manual IP input modal is hovered/active.

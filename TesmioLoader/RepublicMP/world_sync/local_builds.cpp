@@ -905,8 +905,12 @@ void HookedRoadCommit(__int64 manager,
                       unsigned __int64 p4, unsigned int p5,
                       unsigned __int64 p6, unsigned __int64 p7)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        g_origRoadCommit(manager, p2, p3, p4, p5, p6, p7);
+        return;
+    }
     int category = RoadSync_CategoryForManager(GetPlacementManagerThisPtr(), manager);
-    if ((SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) &&
+    if ((SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) &&
         category >= 0 && p2 == 0 && !RoadSync_IsApplyingSegment()) {
         RoadSync_ClearCategoryPreview(category);
         SaveSync_NotifyWaitingLobbyActionBlocked();
@@ -1172,7 +1176,9 @@ static void PlacementAsCommand(__int64 param_1, char* param_2, char param_3, cha
 
 bool LocalBuilds_PlacementPress()
 {
-    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return false;
+    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return true;
     }
@@ -1214,8 +1220,12 @@ void HookedUniversal(__int64 param_1, char* param_2, char param_3, char param_4,
                       unsigned __int64 param_5, unsigned int param_6,
                       char param_7, char param_8)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        g_origUniversal(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+        return;
+    }
     // Placements are refused while the save-sync block screen or waiting lobby is up.
-    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+    if (SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
         __try {
             if (*(g_exeBase + PLACE_LMB_HELD_RVA) || *(g_exeBase + PLACE_LMB_JUST_PRESSED_RVA)) {
                 *(g_exeBase + PLACE_LMB_HELD_RVA) = 0;

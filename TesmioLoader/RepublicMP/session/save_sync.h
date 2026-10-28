@@ -167,3 +167,7 @@ void SaveSync_NotifyWaitingLobbyActionBlocked();
 void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession = false,
                                   const char* lastPartnerPeer = nullptr);
 
+// True when running in dual-window automation (REPUBLICMP_ROLE, CLI flags, or test-host/test-client).
+bool SaveSync_IsDualTestbed();
+inline bool IsDualTestbed() { return SaveSync_IsDualTestbed(); }
+

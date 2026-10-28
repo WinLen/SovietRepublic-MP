@@ -7,6 +7,7 @@
 // escape into the game.
 #include "terrain_hook.h"
 #include "../../lockstep/commands.h"
+#include "../../determinism/determinism.h"
 #include "../../session/save_sync.h"
 #include "../../ui/native_menu.h"
 #include "../networks/road_sync.h"
@@ -363,9 +364,13 @@ static bool IsMapGenCaller(void* returnAddress)
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        x.suppressed = 0;
+        return true;
+    }
     bool remote = g_terrainApplyingRemote != 0 || RoadSync_IsApplyingSegment();
     if (!remote && !IsMapGenCaller(returnAddress) &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         x.suppressed = 1;
         Record(method, returnAddress, x);
         SaveSync_NotifyWaitingLobbyActionBlocked();
@@ -384,6 +389,8 @@ static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
 
 static void EndEdit(int method, const TerrainArgs& x)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return;
     if (g_terrainApplyingRemote == 0 && !RoadSync_IsApplyingSegment()) TerrainSync_CaptureEdit(method, x);
 }
 

@@ -16,3 +16,7 @@ void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain);
 
 // Called every frame right before the original Present.
 void ImGuiHook_NewFrameAndRender();
+
+// Test helpers for unit tests in tests/test_main.cpp.
+void ImGuiHook_UpdateWindowTitleForTest(HWND hwnd);
+void ImGuiHook_ResetTitleTrackingForTest();

@@ -27,7 +27,6 @@
 // SOVIET64.exe native menu constants (verified via disassembly of 0x140261400 & 0x14028AF60)
 #define MENU_CALL_SITE_RVA      0x261897
 #define MENU_BUILD_FN_RVA       0x28AF60
-#define MENU_OBJ_RVA            0x9D4F10
 
 // SOVIET64.exe in-game Left Sidebar 'system' (Hammer & Sickle) tab constants
 // (verified via disassembly of 0x14031E800, 0x140337450, 0x14021CC20)
@@ -81,7 +80,6 @@
 #define MENU_HAS_CONTINUE_OFF   0x502C  // BYTE: 1 if "Continue" save exists
 #define MENU_CLICKED_FLAG_OFF   0x5038  // int: 1 if a button was clicked on the previous frame
 #define MENU_CLICKED_IDX_OFF    0x503C  // int: index of the clicked button
-#define MENU_SCREEN_ID_OFF      0x5044  // int: 1=Main, 2=Load, 0x62=Campaign, 0x63=CustomMap, 3=CustomSetup
 
 typedef void (__fastcall* MainMenuBuildFn)(BYTE* menuObj);
 typedef void (__fastcall* SystemTabBuildFn)(BYTE* menuObj);
@@ -137,6 +135,19 @@ void NativeMenu_Bind(const TsmHost* host)
 bool NativeMenu_IsHostOnNextLoad(void)
 {
     return g_hostOnNextLoad;
+}
+
+void NativeMenu_ClearHostOnNextLoad(void)
+{
+    g_hostOnNextLoad = false;
+    g_delegatedToLaunchScreen = false;
+    TwoStates_SetImportingSpSave(false);
+    TwoStates_MountSaveBank(false);
+}
+
+void NativeMenu_SetHostOnNextLoadForTest(bool host)
+{
+    g_hostOnNextLoad = host;
 }
 
 int NativeMenu_GetActiveScreenId(void)
@@ -273,6 +284,7 @@ static void BuildCoopHubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
             return;
         } else if (clickedIdx == 3) {
             g_nativePage = NATIVE_PAGE_ROOT;
+            NativeMenu_ClearHostOnNextLoad();
             *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
             g_origMainMenuBuild(menuObj);
             return;
@@ -736,6 +748,7 @@ static void Hook_MainMenuBuildInner(BYTE* menuObj)
                 g_nativePage = NATIVE_PAGE_COOP_HUB;
             } else {
                 g_nativePage = NATIVE_PAGE_ROOT;
+                NativeMenu_ClearHostOnNextLoad();
             }
             clicked = 0;
             *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
@@ -767,13 +780,11 @@ static void Hook_MainMenuBuildInner(BYTE* menuObj)
             if (clickedIdx == insertIdx) {
                 *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
                 openCoopHub = true;
-            } else if (clickedIdx > insertIdx) {
-                *(int*)(menuObj + MENU_CLICKED_IDX_OFF) = clickedIdx - 1;
             } else {
-                g_hostOnNextLoad = false;
-                g_delegatedToLaunchScreen = false;
-                TwoStates_SetImportingSpSave(false);
-                TwoStates_MountSaveBank(false);
+                if (clickedIdx > insertIdx) {
+                    *(int*)(menuObj + MENU_CLICKED_IDX_OFF) = clickedIdx - 1;
+                }
+                NativeMenu_ClearHostOnNextLoad();
             }
         }
 
@@ -1346,6 +1357,14 @@ static void DrawSidebarCoopSubTab(BYTE* menuObj)
 static void Hook_SystemTabBuildInner(BYTE* menuObj)
 {
     __try {
+        SessionState st = SaveSync_GetState();
+        bool inActiveGame = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME) || TwoStates_IsActive();
+        if (!inActiveGame) {
+            g_inGameCoopSubTab = false;
+            if (g_origSystemTabBuild) g_origSystemTabBuild(menuObj);
+            return;
+        }
+
         bool focused = (*(BYTE*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) != 0) && IsGameWindowFocused() &&
                        !SyncBlock_BlocksWorldInput() && !SaveSync_IsWaitingLobbyActive();
         bool lmbDown = focused &&
@@ -1383,8 +1402,8 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
         float leftX = guiScale * 102.0f;
         float currentY = (*(float*)(menuObj + SYSTAB_PANEL_H_OFF) - guiScale * 730.0f) + guiScale * 30.0f;
 
-        SessionState st = SaveSync_GetState();
-        bool inActiveGame = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
+        st = SaveSync_GetState();
+        inActiveGame = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME);
         unsigned int btnCol = (inActiveGame || TwoStates_IsActive()) ? 0xFF155518 : 0xFF881818;
         const wchar_t* btnText = (inActiveGame || TwoStates_IsActive())
             ? TrW(L"КООПЕРАТИВ [В СЕТИ]", L"CO-OP [ONLINE]")
@@ -1577,6 +1596,8 @@ static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 display
 
 static void DrawLaunchScreenCoopBadge(int screenId, ImVec2 displaySize)
 {
+    if (!g_hostOnNextLoad && !g_delegatedToLaunchScreen) return;
+
     ImGui::SetNextWindowPos(ImVec2(displaySize.x - 16.0f, 14.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.11f, 0.08f, 0.96f));
     ImGui::PushStyleColor(ImGuiCol_Border, g_hostOnNextLoad ? ImVec4(0.95f, 0.75f, 0.25f, 0.95f)
@@ -1737,7 +1758,7 @@ void NativeMenu_DrawOverlay(void)
     TickTestbedAutomation(worldLoaded, screenId, displaySize);
 
     bool onLaunchScreen = !worldLoaded && (screenId == 2 || screenId == 0x62 || screenId == 0x63 || screenId == 3);
-    if (onLaunchScreen) {
+    if (onLaunchScreen && (g_hostOnNextLoad || g_delegatedToLaunchScreen)) {
         DrawLaunchScreenCoopBadge(screenId, displaySize);
     }
 

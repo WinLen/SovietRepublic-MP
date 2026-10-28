@@ -61,6 +61,13 @@ static bool g_loadedFromCoopSave = false;
 static volatile bool g_importingSpSave = false;
 static char g_savedJoinAddress[64] = "";
 
+static constexpr ULONGLONG PING_LIFETIME_MS = 20000;
+static bool      g_localPingActive = false;
+static float     g_localPingX      = 0.0f;
+static float     g_localPingY      = 0.0f;
+static float     g_localPingZ      = 0.0f;
+static ULONGLONG g_localPingSentMs = 0;
+
 static INIT_ONCE g_ownerLockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION g_ownerLock;
 static std::unordered_map<int, int> g_buildingOwners; // buildingId -> 1 (West) or 2 (East)
@@ -3205,6 +3212,14 @@ void TwoStates_OnSessionEnded()
     if (!SaveSync_IsWorldLoaded()) {
         g_treasuryInitialized = false;
         g_haveLobbyBaseMoney = false;
+        g_stateRub[0] = g_stateRub[1] = 0.0;
+        g_stateUsd[0] = g_stateUsd[1] = 0.0;
+        g_loadedFromCoopSave = false;
+        EnsureOwnerLock();
+        EnterCriticalSection(&g_ownerLock);
+        g_buildingOwners.clear();
+        g_vehicleOwners.clear();
+        LeaveCriticalSection(&g_ownerLock);
     } else if (!g_loadedFromCoopSave && g_haveLobbyBaseMoney && !SaveSync_HadPartnerInSession()) {
         // Server was stopped in the Waiting Lobby before any partner ever joined:
         // restore the exact pre-lobby Singleplayer world balance so 100%-each never doubles SP money.
@@ -3212,11 +3227,28 @@ void TwoStates_OnSessionEnded()
             SafeWriteWorldMoney(g_lobbyBaseWorldRub, g_lobbyBaseWorldUsd);
         }
         g_treasuryInitialized = false;
+        g_haveLobbyBaseMoney = false;
         g_stateRub[0] = g_stateRub[1] = 0.0;
         g_stateUsd[0] = g_stateUsd[1] = 0.0;
+        g_loadedFromCoopSave = false;
+        EnsureOwnerLock();
+        EnterCriticalSection(&g_ownerLock);
+        g_buildingOwners.clear();
+        g_vehicleOwners.clear();
+        LeaveCriticalSection(&g_ownerLock);
     } else if (g_treasuryInitialized && TwoStates_GetMode() == COOP_MODE_TWO_STATES && !IsUnlimitedMoney()) {
         SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
     }
+
+    g_localPingActive = false;
+
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    g_toasts.clear();
+    LeaveCriticalSection(&g_ownerLock);
+
+    TwoStates_MountSaveBank(false);
+    NativeMenu_ClearHostOnNextLoad();
     ModSync_EndSession();
 }
 
@@ -3954,7 +3986,7 @@ int TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr)
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
-    return 1;
+    return 0;
 }
 
 int TwoStates_GetZoneAt(float x, float z)
@@ -4134,12 +4166,6 @@ bool TwoStates_JumpCameraTo(float wx, float wz)
     }
 }
 
-static constexpr ULONGLONG PING_LIFETIME_MS = 20000;
-static bool      g_localPingActive = false;
-static float     g_localPingX      = 0.0f;
-static float     g_localPingY      = 0.0f;
-static float     g_localPingZ      = 0.0f;
-static ULONGLONG g_localPingSentMs = 0;
 
 bool TwoStates_JumpCameraToPartner()
 {
@@ -4259,6 +4285,9 @@ static bool GetNativeMinimapRect(float* outCenterX, float* outCenterY, float* ou
 
 static void DrawMinimapOverlay(ImDrawList* dl)
 {
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
+    if (!inCoop) return;
+
     float cx = 0.0f, cy = 0.0f, mapSize = 0.0f;
     if (!GetNativeMinimapRect(&cx, &cy, &mapSize)) return;
 
@@ -4268,7 +4297,7 @@ static void DrawMinimapOverlay(ImDrawList* dl)
 
     dl->PushClipRect(mapMin, mapMax, true);
 
-    bool twoStates = (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES);
+    bool twoStates = TwoStates_IsActive();
     if (twoStates) {
         int myState = TwoStates_LocalState(); // 1 = West (X < 0), 2 = East (X > 0)
         float borderZoneHalfPx = (g_borderHalfWidth / 20000.0f) * mapSize;
@@ -4526,11 +4555,14 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
 
 void TwoStates_DrawOverlay()
 {
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
+    if (!inCoop) return;
+
     bool worldLoaded = SaveSync_IsWorldLoaded();
     bool focused = IsGameWindowFocused();
 
     // Hotkeys when game window is focused:
-    //   F7: toggle 3D state border lines
+    //   F7: toggle 3D state border lines (Two States mode only)
     //   F6: jump camera to partner / active ping
     //   Alt + LMB: send map ping at cursor
     static bool s_f7WasDown = false;
@@ -4539,7 +4571,7 @@ void TwoStates_DrawOverlay()
 
     bool allowWorldHotkeys = focused && !SyncBlock_BlocksWorldInput();
 
-    bool f7Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+    bool f7Down = allowWorldHotkeys && TwoStates_IsActive() && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
     if (f7Down && !s_f7WasDown) {
         g_show3DBorder = !g_show3DBorder;
         TwoStates_SaveSettings();
@@ -4578,8 +4610,8 @@ void TwoStates_DrawOverlay()
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
 
-    // Draw 3D border lines whenever world is loaded & Two States mode is selected/active & g_show3DBorder is true
-    if (worldLoaded && g_show3DBorder && (TwoStates_IsActive() || TwoStates_GetMode() == COOP_MODE_TWO_STATES)) {
+    // Draw 3D border lines whenever world is loaded & Two States mode is active & g_show3DBorder is true
+    if (worldLoaded && g_show3DBorder && TwoStates_IsActive()) {
         Draw3DBorderLines(bg, displaySize);
     }
 
@@ -4750,8 +4782,15 @@ static bool GetExeDir(char* outDir, size_t outSize)
 {
     if (!outDir || outSize == 0) return false;
     outDir[0] = '\0';
+    if (g_baseDir && g_baseDir[0] != '\0') {
+        strncpy_s(outDir, outSize, g_baseDir, _TRUNCATE);
+        return true;
+    }
     char exePath[MAX_PATH] = {};
     DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    if (len == 0) {
+        len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    }
     if (len == 0 || len == MAX_PATH) return false;
     char* lastSlash = strrchr(exePath, '\\');
     if (!lastSlash) return false;
@@ -5778,7 +5817,8 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         return;
     }
 
-    if (hasSaveDir && ReadCoopSaveMetaInternal(fullSaveDir, true)) {
+    const bool inCoop = g_inSession || NativeMenu_IsHostOnNextLoad() || SaveSync_IsBusy();
+    if (inCoop && hasSaveDir && ReadCoopSaveMetaInternal(fullSaveDir, true)) {
         g_haveLobbyBaseMoney = false;
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);

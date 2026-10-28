@@ -44,34 +44,42 @@ static void CreateRenderTarget(IDXGISwapChain* swapChain)
     }
 }
 
-static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+static int g_testbedRole = 0; // 0 = normal, 1 = test-host (left), 2 = test-client (right)
+static bool g_testbedWindowArranged = false;
+static ULONGLONG g_lastTitleUpdateMs = 0;
+static wchar_t g_lastWindowTitle[256] = {};
+static wchar_t g_origWindowTitle[256] = {};
+static bool g_hasOrigWindowTitle = false;
+
+static bool IsDualTestbedActive()
 {
-    if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wParam == VK_TAB && IsGameWindowFocused() &&
-        SaveSync_GetState() == SESSION_HOST_LISTENING && SaveSync_IsWorldLoaded() && !SyncBlock_IsActive())
-    {
-        if (msg == WM_KEYDOWN && (lParam & 0x40000000) == 0)
-            SyncBlock_SetMapInspectMode(!SyncBlock_IsMapInspectMode());
-        return TRUE;
-    }
+    if (g_testbedRole != 0) return true;
+    return IsDualTestbed();
+}
 
-    bool lobbyOrSyncVisible = SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() ||
-                              (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
-    bool syncBlocking = SyncBlock_BlocksWorldInput();
-    bool overlayActive = NativeMenu_WantsInput() || lobbyOrSyncVisible;
-    bool effectiveVisible = syncBlocking || overlayActive;
+static bool IsInCoopOrOverlay()
+{
+    return (SaveSync_GetState() != SESSION_IDLE) ||
+           NativeMenu_WantsInput() ||
+           SaveSync_IsWaitingLobbyActive() ||
+           SyncBlock_IsActive() ||
+           IsDualTestbedActive();
+}
 
-    ImGuiIO& io = ImGui::GetIO();
+static bool HandleTabInspectToggle(UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (wParam != VK_TAB || (msg != WM_KEYDOWN && msg != WM_KEYUP)) return false;
+    if (!IsGameWindowFocused() || !SaveSync_IsWorldLoaded() || SyncBlock_IsActive()) return false;
+    if (SaveSync_GetState() != SESSION_HOST_LISTENING) return false;
 
-    bool showOurCursor = syncBlocking || (overlayActive && io.WantCaptureMouse);
-    io.MouseDrawCursor = showOurCursor;
+    if (msg == WM_KEYDOWN && (lParam & 0x40000000) == 0)
+        SyncBlock_SetMapInspectMode(!SyncBlock_IsMapInspectMode());
+    return true;
+}
 
-    // Always let ImGui track mouse position so top bar hover works seamlessly.
-    if (effectiveVisible || msg == WM_MOUSEMOVE)
-        ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
-
-    bool imguiWantsInput = overlayActive && (io.WantCaptureMouse || io.WantCaptureKeyboard);
-
-    // During a sync all input is swallowed regardless of ImGui's capture flags.
+static bool ShouldSwallowInputMessage(UINT msg, bool overlayActive, bool imguiWantsInput,
+                                      bool syncBlocking, bool lobbyOrSyncVisible, const ImGuiIO& io)
+{
     if (imguiWantsInput || syncBlocking)
     {
         switch (msg)
@@ -84,20 +92,57 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_CHAR: case WM_SYSKEYDOWN: case WM_SYSKEYUP:
             if (!io.WantCaptureKeyboard && overlayActive &&
                 (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP))
-                break; // let keyboard hotkeys reach the game when only hovering the top bar
-            return TRUE;
+                return false; // let keyboard hotkeys reach the game when only hovering the top bar
+            return true;
+        default:
+            break;
         }
     }
     else if (lobbyOrSyncVisible)
     {
-        // In [Tab] Map Inspection Mode: allow camera movement (WASD, MMB rotate, MouseWheel zoom),
-        // but swallow left/right mouse clicks in the 3D world so no buildings/windows/tools can be clicked.
         switch (msg)
         {
         case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
         case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-            return TRUE;
+            return true;
+        default:
+            break;
         }
+    }
+    return false;
+}
+
+static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (!IsInCoopOrOverlay())
+    {
+        return CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam);
+    }
+
+    if (HandleTabInspectToggle(msg, wParam, lParam))
+    {
+        return TRUE;
+    }
+
+    bool lobbyOrSyncVisible = SyncBlock_IsActive() || SaveSync_IsWaitingLobbyActive() ||
+                              (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
+    bool syncBlocking = SyncBlock_BlocksWorldInput();
+    bool overlayActive = NativeMenu_WantsInput() || lobbyOrSyncVisible;
+    bool effectiveVisible = syncBlocking || overlayActive;
+
+    ImGuiIO& io = ImGui::GetIO();
+    bool showOurCursor = syncBlocking || (overlayActive && io.WantCaptureMouse);
+    io.MouseDrawCursor = showOurCursor;
+
+    // Always let ImGui track mouse position so top bar hover works seamlessly.
+    if (effectiveVisible || msg == WM_MOUSEMOVE)
+        ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+
+    bool imguiWantsInput = overlayActive && (io.WantCaptureMouse || io.WantCaptureKeyboard);
+
+    if (ShouldSwallowInputMessage(msg, overlayActive, imguiWantsInput, syncBlocking, lobbyOrSyncVisible, io))
+    {
+        return TRUE;
     }
 
     if (showOurCursor && msg == WM_SETCURSOR)
@@ -105,11 +150,6 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     return CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam);
 }
-
-static int g_testbedRole = 0; // 0 = normal, 1 = test-host (left), 2 = test-client (right)
-static bool g_testbedWindowArranged = false;
-static ULONGLONG g_lastTitleUpdateMs = 0;
-static wchar_t g_lastWindowTitle[256] = {};
 
 static bool IsCurrentThreadWindowOwner(HWND hwnd)
 {
@@ -162,12 +202,30 @@ static void UpdateWindowTitlePeriodic(HWND hwnd)
 
     DetectAndArrangeTestbedWindow(hwnd);
 
+    if (!g_hasOrigWindowTitle) {
+        if (GetWindowTextW(hwnd, g_origWindowTitle, 256) > 0) {
+            g_hasOrigWindowTitle = true;
+        } else {
+            wcscpy_s(g_origWindowTitle, L"Workers & Resources: Soviet Republic");
+            g_hasOrigWindowTitle = true;
+        }
+    }
+
     ULONGLONG now = GetTickCount64();
     if (g_lastTitleUpdateMs != 0 && (now - g_lastTitleUpdateMs) < 500) return;
     g_lastTitleUpdateMs = now;
 
     SessionState st = SaveSync_GetState();
-    if (g_testbedRole == 0 && st == SESSION_IDLE) return;
+    if (g_testbedRole == 0 && st == SESSION_IDLE) {
+        if (g_lastWindowTitle[0] != L'\0') {
+            const wchar_t* defaultTitle = (g_origWindowTitle[0] != L'\0')
+                ? g_origWindowTitle
+                : L"Workers & Resources: Soviet Republic";
+            SetWindowTextW(hwnd, defaultTitle);
+            g_lastWindowTitle[0] = L'\0';
+        }
+        return;
+    }
 
     bool isHost = (st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING || st == SESSION_HOST_IN_GAME) ||
                   (st == SESSION_IDLE && g_testbedRole == 1);
@@ -192,6 +250,20 @@ static void UpdateWindowTitlePeriodic(HWND hwnd)
         wcsncpy_s(g_lastWindowTitle, title, _TRUNCATE);
         SetWindowTextW(hwnd, title);
     }
+}
+
+void ImGuiHook_UpdateWindowTitleForTest(HWND hwnd)
+{
+    g_lastTitleUpdateMs = 0;
+    UpdateWindowTitlePeriodic(hwnd);
+}
+
+void ImGuiHook_ResetTitleTrackingForTest()
+{
+    g_lastTitleUpdateMs = 0;
+    g_lastWindowTitle[0] = L'\0';
+    g_origWindowTitle[0] = L'\0';
+    g_hasOrigWindowTitle = false;
 }
 
 void ImGuiHook_EnsureInit(IDXGISwapChain* swapChain)

@@ -171,7 +171,7 @@ static void Apply()
     Logf("republicmp  SESSION_PATCHES: %d applied (frame-rate tests, construction-site camera, citizen init)", (int)PATCH_COUNT);
 }
 
-static void Restore()
+void SessionPatches_Restore()
 {
     for (size_t i = 0; i < PATCH_COUNT; i++)
         if (BytesAre(kPatches[i], kPatches[i].patch)) Write(kPatches[i], kPatches[i].original);
@@ -179,20 +179,20 @@ static void Restore()
     Logf("republicmp  SESSION_PATCHES: restored");
 }
 
+
+bool SessionPatches_IsApplied()
+{
+    return g_applied;
+}
+
+void SessionPatches_SetAppliedForTest(bool applied)
+{
+    g_applied = applied;
+}
+
 void SessionPatches_Tick()
 {
-    static int s_dualWindowCheck = -1;
-    if (s_dualWindowCheck < 0) {
-        char envBuf[32] = {};
-        bool dual = (GetEnvironmentVariableA("REPUBLICMP_ROLE", envBuf, sizeof(envBuf)) > 0);
-        if (!dual) {
-            char exePath[MAX_PATH] = {};
-            GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-            dual = (strstr(exePath, "test-host") != nullptr || strstr(exePath, "test-client") != nullptr);
-        }
-        s_dualWindowCheck = dual ? 1 : 0;
-    }
-    bool want = (s_dualWindowCheck == 1) || SaveSync_IsBusy() || BuildSync_IsConnected() || Determinism_IsActive();
+    bool want = IsDualTestbed() || SaveSync_IsBusy() || BuildSync_IsConnected() || Determinism_IsActive();
     if (want && !g_applied && !g_refused) Apply();
-    else if (!want && g_applied) Restore();
+    else if (!want && g_applied) SessionPatches_Restore();
 }

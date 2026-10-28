@@ -35,6 +35,11 @@
 #include "../save/save_zip.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/networks/road_sync.h"
+#include "../game/session_patches.h"
+#include "../game/input_block.h"
+#include "../game/imgui_hook.h"
+#include "../ui/native_menu.h"
+#include "imgui.h"
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
 
@@ -2292,6 +2297,223 @@ static bool Test_TwoStates_EconomyStats()
 }
 
 // ---------------------------------------------------------------------------
+// Test 11: Singleplayer Isolation & Session Transition State Reset
+// ---------------------------------------------------------------------------
+
+static bool TestSingleplayer_InitialDormancy()
+{
+    ResetMockWorldMemory();
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TwoStates_OnSessionEnded();
+    NativeMenu_ClearHostOnNextLoad();
+
+    // 1. Session state must be idle and not busy
+    TEST_CHECK(SaveSync_GetState() == SESSION_IDLE);
+    TEST_CHECK(!SaveSync_IsBusy());
+    TEST_CHECK(!SaveSync_IsWaitingLobbyActive());
+
+    // 2. Two States co-op subsystems must be inactive
+    TEST_CHECK(!TwoStates_IsActive());
+    TEST_CHECK(!TwoStates_IsCoopBankMounted());
+
+    // 3. Native menu host trigger must be dormant
+    TEST_CHECK(!NativeMenu_IsHostOnNextLoad());
+    TEST_CHECK(!NativeMenu_WantsInput());
+
+    // 4. Input blocking must be inactive
+    TEST_CHECK(!InputBlock_IsBlocked());
+
+    // 5. Session patches must not be applied
+    SessionPatches_Tick();
+    TEST_CHECK(!SessionPatches_IsApplied());
+
+    return true;
+}
+
+static bool TestSingleplayer_OverlayZeroDrawCalls()
+{
+    ResetMockWorldMemory();
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // mock world loaded
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    TEST_CHECK(SaveSync_IsWorldLoaded());
+
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TwoStates_OnSessionEnded();
+    NativeMenu_ClearHostOnNextLoad();
+
+    // Initialize headless ImGui context for draw call verification
+    ImGuiContext* ctx = ImGui::CreateContext();
+    TEST_CHECK(ctx != nullptr);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+    unsigned char* texPixels = nullptr;
+    int texW = 0, texH = 0;
+    io.Fonts->GetTexDataAsRGBA32(&texPixels, &texW, &texH);
+    ImGui::NewFrame();
+
+    ImDrawList* bg = ImGui::GetBackgroundDrawList();
+    TEST_CHECK(bg != nullptr);
+    const int initialCmdCount = bg->CmdBuffer.Size;
+    const int initialVtxCount = bg->VtxBuffer.Size;
+
+    // In singleplayer, TwoStates_DrawOverlay must be completely dormant:
+    // 0 3D border lines, 0 partner cursors/pings, 0 minimap zone rects/badges, 0 toasts
+    TwoStates_DrawOverlay();
+
+    TEST_CHECK(bg->CmdBuffer.Size == initialCmdCount);
+    TEST_CHECK(bg->VtxBuffer.Size == initialVtxCount);
+
+    // Call NativeMenu_DrawOverlay for singleplayer screen (screenId = 1: Root Main Menu)
+    *(int*)(g_mockExeBuffer + MENU_OBJ_RVA + MENU_SCREEN_ID_OFF) = 1;
+    NativeMenu_DrawOverlay();
+    TEST_CHECK(!NativeMenu_WantsInput());
+
+    // Also verify native Load Game screen (screenId = 2) without co-op delegation:
+    // DrawLaunchScreenCoopBadge must be suppressed in singleplayer
+    *(int*)(g_mockExeBuffer + MENU_OBJ_RVA + MENU_SCREEN_ID_OFF) = 2;
+    NativeMenu_DrawOverlay();
+    TEST_CHECK(!NativeMenu_WantsInput());
+
+    ImGui::EndFrame();
+    ImGui::DestroyContext(ctx);
+    return true;
+}
+
+static bool TestSingleplayer_InputBlockAndPatchesDormancy()
+{
+    ResetMockWorldMemory();
+    BYTE* focusByte = g_mockExeBuffer + WINDOW_FOCUS_BYTE_RVA;
+
+    // In singleplayer (SESSION_IDLE), losing window focus must NOT block input
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *focusByte = 0; // window loses focus
+    TEST_CHECK(!InputBlock_IsBlocked());
+
+    *focusByte = 1; // window focused
+    TEST_CHECK(!InputBlock_IsBlocked());
+
+    // In co-op session, unfocused window or waiting lobby blocks input
+    SaveSync_SetTestSessionState(SESSION_HOST_JOINING, false, "");
+    *focusByte = 0;
+    TEST_CHECK(InputBlock_IsBlocked());
+
+    // Transition back to singleplayer: input blocking immediately drops
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TEST_CHECK(!InputBlock_IsBlocked());
+    *focusByte = 1;
+
+    // Verify SessionPatches state transitions:
+    SessionPatches_SetAppliedForTest(true);
+    TEST_CHECK(SessionPatches_IsApplied());
+
+    // Ticking session patches in singleplayer must restore them
+    SessionPatches_Tick();
+    TEST_CHECK(!SessionPatches_IsApplied());
+
+    return true;
+}
+
+static bool TestSingleplayer_SessionTransitionReset()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+
+    // 1. Setup co-op Two States session with distinct balances and ownership
+    *(double*)(world + WORLD_RUB_OFFSET) = 2000000.0;
+    *(double*)(world + WORLD_USD_OFFSET) = 800000.0;
+    double startRub[2] = { 1200000.0, 800000.0 };
+    double startUsd[2] = {  500000.0, 300000.0 };
+    TwoStates_OnSessionJoined(/*isHost=*/true, COOP_MODE_TWO_STATES, 250.0f, false, startRub, startUsd);
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "127.0.0.1:5556");
+    TwoStates_MountSaveBank(true);
+    NativeMenu_SetHostOnNextLoadForTest(true);
+
+    // Register cross-territory owners (entity 7001 owned by State 2 on West territory)
+    TwoStates_RegisterBuildingOwner(7001, 2);
+    TwoStates_RegisterVehicleOwner(8001, 2);
+    TEST_CHECK(TwoStates_GetBuildingOwner(7001, -400.0f, 0.0f) == 2);
+    TEST_CHECK(TwoStates_GetVehicleOwner(8001, nullptr) == 2);
+    TEST_CHECK(TwoStates_IsActive());
+    TEST_CHECK(TwoStates_IsCoopBankMounted());
+    TEST_CHECK(NativeMenu_IsHostOnNextLoad());
+
+    // 2. Exit co-op session (Main Menu transition)
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TwoStates_OnSessionEnded();
+    NativeMenu_ClearHostOnNextLoad();
+
+    // 3. Load singleplayer game
+    *(double*)(world + WORLD_RUB_OFFSET) = 750000.0;
+    *(double*)(world + WORLD_USD_OFFSET) = 250000.0;
+    *(unsigned char*)(g_mockExeBuffer + TERRAIN_FLAG_DAT_RVA) = 1;
+    TwoStates_OnAnyWorldLoaded(false);
+
+    // 4. Verify complete decoupling & state reset
+    TEST_CHECK(!TwoStates_IsActive());
+    TEST_CHECK(!TwoStates_IsCoopBankMounted());
+    TEST_CHECK(!NativeMenu_IsHostOnNextLoad());
+    TEST_CHECK(!SaveSync_IsBusy());
+
+    // Building ownership map must be cleared: 7001 reverts to West territory default (1)
+    TEST_CHECK(TwoStates_GetBuildingOwner(7001, -400.0f, 0.0f) == 1);
+    // Vehicle ownership map must be cleared: 8001 reverts to 0 (unowned)
+    TEST_CHECK(TwoStates_GetVehicleOwner(8001, nullptr) == 0);
+
+    // Singleplayer money query must return current world currency (not stale co-op split)
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 750000.0, 1e-2);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 250000.0, 1e-2);
+
+    return true;
+}
+
+static bool TestSingleplayer_WindowTitleRestoration()
+{
+    // Create a temporary hidden Win32 STATIC window with the vanilla game title
+    const wchar_t kVanillaTitle[] = L"Workers & Resources: Soviet Republic";
+    HWND hwnd = CreateWindowExW(0, L"STATIC", kVanillaTitle, WS_POPUP,
+                                0, 0, 10, 10, nullptr, nullptr,
+                                GetModuleHandleW(nullptr), nullptr);
+    TEST_CHECK(hwnd != nullptr);
+
+    ImGuiHook_ResetTitleTrackingForTest();
+
+    // 1. Initial singleplayer state: title remains untouched
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    ImGuiHook_UpdateWindowTitleForTest(hwnd);
+    wchar_t titleBuf[128] = {};
+    GetWindowTextW(hwnd, titleBuf, (int)(sizeof(titleBuf) / sizeof(titleBuf[0])));
+    TEST_CHECK(wcscmp(titleBuf, kVanillaTitle) == 0);
+
+    // 2. Entering co-op session: title receives co-op status tag
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "127.0.0.1:5556");
+    ImGuiHook_UpdateWindowTitleForTest(hwnd);
+    GetWindowTextW(hwnd, titleBuf, (int)(sizeof(titleBuf) / sizeof(titleBuf[0])));
+    TEST_CHECK(wcsstr(titleBuf, L"Workers & Resources") != nullptr);
+    TEST_CHECK(wcsstr(titleBuf, L"RepublicMP") != nullptr);
+
+    // 3. Exiting back to singleplayer: title must be cleanly restored to vanilla
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    ImGuiHook_UpdateWindowTitleForTest(hwnd);
+    GetWindowTextW(hwnd, titleBuf, (int)(sizeof(titleBuf) / sizeof(titleBuf[0])));
+    TEST_CHECK(wcscmp(titleBuf, kVanillaTitle) == 0);
+
+    DestroyWindow(hwnd);
+    ImGuiHook_ResetTitleTrackingForTest();
+    return true;
+}
+
+static bool Test_SingleplayerIsolationAndReset()
+{
+    return TestSingleplayer_InitialDormancy() &&
+           TestSingleplayer_OverlayZeroDrawCalls() &&
+           TestSingleplayer_InputBlockAndPatchesDormancy() &&
+           TestSingleplayer_SessionTransitionReset() &&
+           TestSingleplayer_WindowTitleRestoration();
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -2302,6 +2524,8 @@ struct TestCase {
 
 int main()
 {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
     printf("================================================================\n");
     printf(" RepublicMP Automated Unit & Integration Test Suite (v%s)\n", REPUBLICMP_VERSION);
     printf("================================================================\n");
@@ -2319,6 +2543,7 @@ int main()
         { "WaitingLobbyAndActionLock (Pause, Lock, Inspect)",    &Test_WaitingLobbyAndActionLock },
         { "TwoStates_Loans (Borrow Ceiling, UI Swap, Daily)",    &Test_TwoStates_Loans },
         { "TwoStates_EconomyStats (Ledgers, UI Swap, Rollover)", &Test_TwoStates_EconomyStats },
+        { "SingleplayerIsolationAndReset (Dormancy, Reset, SP)", &Test_SingleplayerIsolationAndReset },
     };
 
     for (const auto& tc : kTests) {

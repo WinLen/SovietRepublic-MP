@@ -16,6 +16,9 @@
 #include <limits.h>
 #include <string.h>
 #include <utility>
+#include "../determinism/determinism.h"
+#include <intrin.h>
+#pragma intrinsic(_AddressOfReturnAddress)
 
 #define SEND_TO_DEPOT 0x3FBDC0
 #define LINES_OFFSET 0x12800
@@ -399,7 +402,7 @@ static U64 Run(unsigned index, const U64* a)
 {
     const GameCallSite& s = kSites[index];
     if (s.special != CALL_LOCAL &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         if (s.special == CALL_DELETE_LINE && a[1]) {
             __try { *(BYTE*)(a[1] + 1) = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
@@ -415,6 +418,9 @@ static U64 Run(unsigned index, const U64* a)
         if (skip) return s.result;
     }
     if (s.special == CALL_INVITE_CITIZENS) {
+        if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+            return CallSite(s, a);
+        }
         if (TwoStates_IsActive() && a[3]) {
             const BYTE* b = (const BYTE*)a[3];
             if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
@@ -505,6 +511,11 @@ template <unsigned I>
 static U64 Thunk(U64 a1, U64 a2, U64 a3, U64 a4, U64 a5, U64 a6, U64 a7)
 {
     U64 a[MAX_ARGS] = { a1, a2, a3, a4, a5, a6, a7 };
+    if (kSites[I].special == CALL_INVITE_CITIZENS &&
+        SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        *(uintptr_t*)_AddressOfReturnAddress() -= kSites[I].result;
+        return CallSite(kSites[I], a);
+    }
     return Run(I, a);
 }
 

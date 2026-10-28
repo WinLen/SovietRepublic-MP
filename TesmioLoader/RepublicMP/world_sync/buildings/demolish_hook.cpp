@@ -164,6 +164,13 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
                            unsigned long long p5, unsigned long long p6,
                            unsigned long long p7)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        InterlockedIncrement(&g_depth);
+        g_origDemolish(thisPtr, building, p3, p4, p5, p6, p7);
+        InterlockedDecrement(&g_depth);
+        return;
+    }
+
     void* ret = _ReturnAddress();
     void** retSlot = (void**)_AddressOfReturnAddress();
     unsigned long long callerRva = (unsigned long long)((BYTE*)ret - g_exeBase);
@@ -173,7 +180,7 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     // side effect of one, or remote work being replayed.
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
-        if (SaveSync_IsWaitingLobbyActive() || NativeMenu_IsHostOnNextLoad()) {
+        if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
             if (callerRva == 0x7FD000) {
                 *retSlot = g_exeBase + 0x7FD04F;
             }

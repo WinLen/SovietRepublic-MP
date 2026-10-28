@@ -22,6 +22,9 @@
 void InputBlock_Bind(const TsmHost* host);
 bool InstallInputBlockHooks();
 
+// True if world input is currently blocked by sync screen or unfocused window in co-op.
+bool InputBlock_IsBlocked();
+
 // Lockstep commands (main thread): while a command is made, the keys and
 // bindings read up and the left button reads what the command wrote into the
 // button bytes, so this PC's own keyboard and mouse cannot change it.

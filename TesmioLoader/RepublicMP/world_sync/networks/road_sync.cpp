@@ -2611,8 +2611,11 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
                                unsigned char rubles, __int64 count, __int64 group)
 {
     PlanStartFn orig = exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return orig(network, dollars, rubles, count, group);
+
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return 0;
     }
@@ -2678,8 +2681,12 @@ static __int64 g_lastBottomBarCancelNet = 0;
 
 static __int64 HookedBottomBarCancelSeg(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        typedef __int64 (*CancelSegFn)(__int64, __int64, unsigned char, int, unsigned char);
+        return ((CancelSegFn)(g_exeBase + CANCEL_SEG_RVA))(network, seg, p3, p4, p5);
+    }
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return 0;
     }
@@ -2943,8 +2950,11 @@ static int CountPlannedPieces(__int64 world)
 
 static __int64 HookedGroupTool(__int64 world, int mode)
 {
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return g_origGroupTool(world, mode);
+
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         __try { *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0; } __except (EXCEPTION_EXECUTE_HANDLER) {}
         return 0;
     }
@@ -3017,8 +3027,12 @@ static void HandleCtrlRectTool(__int64 world, int mode, unsigned int rva)
 {
     typedef void (*RectToolFn)(__int64);
     RectToolFn orig = (RectToolFn)(g_exeBase + rva);
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        orig(world);
+        return;
+    }
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         __try { *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0; } __except (EXCEPTION_EXECUTE_HANDLER) {}
         return;
     }
@@ -3087,8 +3101,12 @@ void RoadSync_ShiftCancelTool(__int64 world)
 {
     typedef void (*ShiftCancelFn)(__int64);
     ShiftCancelFn orig = (ShiftCancelFn)(g_exeBase + SHIFT_CANCEL_PLAN_RVA);
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        orig(world);
+        return;
+    }
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
+        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         return;
     }
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {

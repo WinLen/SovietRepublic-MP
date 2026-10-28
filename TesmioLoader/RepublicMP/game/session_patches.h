@@ -30,3 +30,12 @@ void SessionPatches_Bind(const TsmHost* host);
 // Per frame (Present hook): applies the patches while connected or while
 // the determinism probe runs, restores them otherwise.
 void SessionPatches_Tick();
+
+// Returns true if session patches are currently applied to SOVIET64.exe code pages.
+bool SessionPatches_IsApplied();
+
+// Restores patches back to original engine bytes and clears applied status.
+void SessionPatches_Restore();
+
+// Test helper for unit tests in tests/test_main.cpp.
+void SessionPatches_SetAppliedForTest(bool applied);

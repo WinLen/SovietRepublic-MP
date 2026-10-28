@@ -1798,3 +1798,26 @@ void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession, 
 // the UI reads them once per frame.
 const char* SaveSync_GetPeerIp()    { return g_peerIp; }
 const char* SaveSync_GetLastError() { return g_lastError; }
+
+bool SaveSync_IsDualTestbed()
+{
+    static int s_cached = -1;
+    if (s_cached < 0) {
+        char envBuf[32] = {};
+        bool dual = (GetEnvironmentVariableA("REPUBLICMP_ROLE", envBuf, sizeof(envBuf)) > 0);
+        if (!dual) {
+            const char* cmdLine = GetCommandLineA();
+            if (cmdLine && (strstr(cmdLine, "--mp-host") || strstr(cmdLine, "--mp-left") ||
+                            strstr(cmdLine, "--mp-client") || strstr(cmdLine, "--mp-right"))) {
+                dual = true;
+            }
+        }
+        if (!dual) {
+            char exePath[MAX_PATH] = {};
+            GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+            dual = (strstr(exePath, "test-host") != nullptr || strstr(exePath, "test-client") != nullptr);
+        }
+        s_cached = dual ? 1 : 0;
+    }
+    return s_cached == 1;
+}
