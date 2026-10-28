@@ -168,6 +168,7 @@ static int                               g_uiSavedHistCount = 0;
 static bool                              g_uiCitVecSwapped = false;
 static uintptr_t                         g_uiSavedCitVecHdr[3] = {};
 static std::vector<BYTE*>                g_uiLocalCitizens;
+static std::vector<BYTE*>                g_uiZeroLifespanCitizens;
 static bool                              g_uiHudPopSwapped = false;
 static BYTE                              g_uiSavedHudPopBlock[WORLD_HUD_POP_BLOCK_SIZE] = {};
 static BYTE                              g_stateHudPopBlock[2][WORLD_HUD_POP_BLOCK_SIZE] = {};
@@ -707,16 +708,58 @@ static void PopulateHudPopBlockFromScalars(BYTE* outBlock, const StateEconScalar
     if (!outBlock) return;
     memset(outBlock, 0, WORLD_HUD_POP_BLOCK_SIZE);
     float fPop = (float)localPop;
+    int32_t adults = sc.demographics[3];
     *(float*)(outBlock + 0x00)   = fPop;
+    *(float*)(outBlock + 0x04)   = (adults > 0) ? ((float)sc.citizenBrackets[0] / (float)adults) : 0.0f;
     *(float*)(outBlock + 0x08)   = sc.satisfaction[2];
     *(float*)(outBlock + 0x0C)   = sc.satisfaction[0];
     *(float*)(outBlock + 0x10)   = sc.satisfaction[1];
     *(float*)(outBlock + 0x14)   = 0.0f;
-    *(int32_t*)(outBlock + 0x24) = (int32_t)localPop;
-    *(float*)(outBlock + 0xA4)   = sc.satisfaction[7] * fPop;
-    *(float*)(outBlock + 0xAC)   = sc.satisfaction[8] * fPop;
-    *(float*)(outBlock + 0xB0)   = sc.satisfaction[3] * fPop;
-    *(float*)(outBlock + 0xB8)   = sc.citizenAverages[0] * fPop;
+    *(int32_t*)(outBlock + 0x24) = adults;
+    *(int32_t*)(outBlock + 0x58) = (int32_t)localPop;
+    memcpy(outBlock + 0x5C, sc.citizenBrackets, sizeof(sc.citizenBrackets));
+    memcpy(outBlock + 0x80, sc.demographics, sizeof(sc.demographics));
+    for (int i = 0; i < 8; ++i) {
+        *(float*)(outBlock + 0x90 + (size_t)i * sizeof(float)) = sc.satisfaction[i + 1] * fPop;
+    }
+    *(float*)(outBlock + 0xB0)   = (float)sc.citizenBrackets[6];
+    *(float*)(outBlock + 0xB4)   = (float)sc.citizenBrackets[5];
+    *(float*)(outBlock + 0xB8)   = sc.citizenAverages[1] * fPop;
+    *(float*)(outBlock + 0xBC)   = sc.satisfaction[0] * fPop;
+}
+
+static void RecordZeroLifespanCitizens(const BYTE* const* begin, const BYTE* const* end, std::vector<BYTE*>& outZeroLife)
+{
+    outZeroLife.clear();
+    if (!begin || end <= begin) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (const BYTE* const* it = begin; it < end; ++it) {
+            BYTE* c = const_cast<BYTE*>(*it);
+            if (c && *(const float*)(c + 0x18) <= 0.0f) {
+                outZeroLife.push_back(c);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outZeroLife.clear();
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void RestoreZeroLifespanCitizens(std::vector<BYTE*>& zeroLife)
+{
+    if (zeroLife.empty()) return;
+    BYTE* const* b = zeroLife.data();
+    BYTE* const* e = b + zeroLife.size();
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (BYTE* const* it = b; it < e; ++it) {
+            if (*it) *(float*)(*it + 0x18) = 0.0f;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+    zeroLife.clear();
 }
 
 static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
@@ -726,10 +769,11 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
     g_uiCitVecSwapped = SwapWorldPtrVecForState(world, WORLD_CITIZENS_OFFSET, localState,
                                                 &ResolveCitizenOwnerFast, 2000000,
                                                 g_uiSavedCitVecHdr, g_uiLocalCitizens);
+    const BYTE* const* lb = g_uiLocalCitizens.empty() ? nullptr : g_uiLocalCitizens.data();
+    RecordZeroLifespanCitizens(lb, lb ? (lb + g_uiLocalCitizens.size()) : nullptr, g_uiZeroLifespanCitizens);
 
     if (SafeMemcpyPod(g_uiSavedHudPopBlock, world + WORLD_HUD_POP_BLOCK_OFFSET, WORLD_HUD_POP_BLOCK_SIZE)) {
         g_uiHudPopSwapped = true;
-        const BYTE* const* lb = g_uiLocalCitizens.empty() ? nullptr : g_uiLocalCitizens.data();
         int localPop = CountLocalHudPopulation(lb, lb ? (lb + g_uiLocalCitizens.size()) : nullptr);
         if (!g_stateHudPopInitialized[sIdx]) {
             PopulateHudPopBlockFromScalars(g_stateHudPopBlock[sIdx], g_stateCurEcon[sIdx].scalars, localPop);
@@ -743,11 +787,11 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
             SafeWritePod((float*)(world + WORLD_POP_STAT_TIMER_OFF), zeroTimer);
             g_stateLastLocalPop[sIdx] = localPop;
         }
-    }
 
-    BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
-    SafeReadStatScalars(popWinStat, &g_uiSavedPopWinScalars);
-    SafeWriteStatScalars(popWinStat, g_stateCurEcon[sIdx].scalars);
+        BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
+        SafeReadStatScalars(popWinStat, &g_uiSavedPopWinScalars);
+        SafeWriteStatScalars(popWinStat, g_stateCurEcon[sIdx].scalars);
+    }
 
     if (g_lastUiSwappedState != localState || g_lastUiSwappedHistLen[sIdx] != g_stateHistEcon[sIdx].size()) {
         BYTE dirty = 1;
@@ -760,6 +804,7 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
 
 static void RestoreUiCitizenVecAndHudPop(BYTE* world)
 {
+    RestoreZeroLifespanCitizens(g_uiZeroLifespanCitizens);
     if (g_uiHudPopSwapped) {
         g_uiHudPopSwapped = false;
         if (world) {
@@ -1199,45 +1244,60 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
 static int ResolveBuildingOwnerFast(const BYTE* b)
 {
     if (!b) return 1;
+    int owner = 1;
+    DiagLog_BeginSafeSeh();
     __try {
         int id = *(const int*)b;
         float x = *(const float*)(b + OBJ_POS_OFFSET);
         float z = *(const float*)(b + OBJ_POS_OFFSET + 8);
-        return TwoStates_GetBuildingOwner(id, x, z);
+        owner = TwoStates_GetBuildingOwner(id, x, z);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 1;
+        owner = 1;
     }
+    DiagLog_EndSafeSeh();
+    return owner;
 }
 
 static int ResolveVehicleOwnerFast(const BYTE* v)
 {
     if (!v) return 1;
+    int owner = 1;
+    DiagLog_BeginSafeSeh();
     __try {
         int id = *(const int*)(v + VEH_ID_OFFSET);
-        return TwoStates_GetVehicleOwner(id, v);
+        owner = TwoStates_GetVehicleOwner(id, v);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 1;
+        owner = 1;
     }
+    DiagLog_EndSafeSeh();
+    return owner;
 }
 
 static int ResolveCitizenOwnerFast(const BYTE* cit)
 {
     if (!cit) return 1;
+    int owner = 1;
+    DiagLog_BeginSafeSeh();
     __try {
         const BYTE* home = *(const BYTE* const*)(cit + CIT_HOME_BUILDING_OFFSET);
-        if (home) return ResolveBuildingOwnerFast(home);
-        const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
-        if (parent) {
-            const BYTE* parentHome = *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET);
-            if (parentHome) return ResolveBuildingOwnerFast(parentHome);
+        if (home) {
+            owner = ResolveBuildingOwnerFast(home);
+        } else {
+            const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
+            const BYTE* parentHome = parent ? *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET) : nullptr;
+            if (parentHome) {
+                owner = ResolveBuildingOwnerFast(parentHome);
+            } else {
+                float x = *(const float*)(cit + CIT_POS_OFFSET);
+                float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
+                if (isfinite(x) && isfinite(z)) owner = (x <= 0.0f) ? 1 : 2;
+            }
         }
-        float x = *(const float*)(cit + CIT_POS_OFFSET);
-        float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
-        if (isfinite(x) && isfinite(z)) return (x <= 0.0f) ? 1 : 2;
-        return 1;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 1;
+        owner = 1;
     }
+    DiagLog_EndSafeSeh();
+    return owner;
 }
 
 static __int64 CallBuildingEconHook(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
@@ -1417,7 +1477,8 @@ static void __fastcall H_CitizenRemove(BYTE* world, BYTE* citizen, unsigned char
 static void __fastcall H_CalcStoredResources(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
                                              uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8)
 {
-    bool filter = TwoStates_IsActive() && world && (!g_exeBase || world == g_exeBase + WORLD_RVA);
+    bool filter = TwoStates_IsActive() && !g_inSimStep && !g_inCommand && !TwoStates_IsSaveInProgress() &&
+                  world && (!g_exeBase || world == g_exeBase + WORLD_RVA);
     uintptr_t savedBldHdr[3] = {};
     uintptr_t savedVehHdr[3] = {};
     bool bldSwapped = false;
@@ -1616,10 +1677,12 @@ static void ComputeStateCitizenDemographics(const BYTE* world, int state, StateE
                 if (!isfinite(age) || age < 0.0f) age = 0.0f;
                 ageSum += age;
 
-                if (parent) {
-                    if (age < 6.0f) ioScalars->demographics[0]++;
-                    else if (age < 21.0f) ioScalars->demographics[1]++;
-                    else ioScalars->demographics[2]++;
+                if ((age > 0.0f && age < 6.0f) || (parent && age < 6.0f)) {
+                    ioScalars->demographics[0]++;
+                } else if ((age > 0.0f && age < 21.0f) || (parent && age < 21.0f)) {
+                    ioScalars->demographics[1]++;
+                } else if (parent) {
+                    ioScalars->demographics[2]++;
                 } else {
                     ioScalars->demographics[3]++;
                     AccumulateAdultCitizenBrackets(cit, home, ioScalars->citizenBrackets, &prodSum);
@@ -3479,6 +3542,7 @@ static void BackfillLegacyHistCitizenScalars(int sIdx)
     const StateEconScalars& cur = g_stateCurEcon[sIdx].scalars;
     if (cur.citizenAverages[1] <= 0.0f) return;
     int curPop = cur.demographics[0] + cur.demographics[1] + cur.demographics[2] + cur.demographics[3];
+    int curAdults = cur.demographics[3];
     std::vector<StateEconPeriodStats>& hist = g_stateHistEcon[sIdx];
     for (size_t i = 0; i < hist.size(); ++i) {
         StateEconScalars& hs = hist[i].scalars;
@@ -3486,9 +3550,12 @@ static void BackfillLegacyHistCitizenScalars(int sIdx)
         if (histPop > 0 && hs.citizenAverages[1] <= 0.0f) {
             memcpy(hs.satisfaction, cur.satisfaction, sizeof(hs.satisfaction));
             memcpy(hs.citizenAverages, cur.citizenAverages, sizeof(hs.citizenAverages));
-            float ratio = (curPop > 0) ? ((float)histPop / (float)curPop) : 1.0f;
+            if (hs.demographics[3] <= 0) hs.citizenAverages[0] = 0.0f;
+            float popRatio = (curPop > 0) ? ((float)histPop / (float)curPop) : 1.0f;
+            float adultRatio = (curAdults > 0) ? ((float)hs.demographics[3] / (float)curAdults) : popRatio;
             for (int b = 0; b < 9; ++b) {
-                hs.citizenBrackets[b] = (int32_t)lroundf((float)cur.citizenBrackets[b] * ratio);
+                float r = (b == 0 || (b >= 4 && b <= 7)) ? adultRatio : popRatio;
+                hs.citizenBrackets[b] = (int32_t)lroundf((float)cur.citizenBrackets[b] * r);
             }
         }
     }

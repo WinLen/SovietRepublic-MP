@@ -1876,7 +1876,10 @@ static bool TestEconStats_BatchConstructionAndDemographics()
 
     BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
     BYTE* hudBlock = world + WORLD_HUD_POP_BLOCK_OFFSET;
+    // Simulate a newborn child with uninitialized lifespan (0.0f) whose lifespan is mutated by UI (0x2FD2E0 -> 0x8244F0)
+    *(float*)(citPtrs[2] + 0x18) = 0.0f;
     TwoStates_UiBegin();
+    *(float*)(citPtrs[2] + 0x18) = 71.5f; // UI side-effect during DetUiRoutine
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
     TEST_CHECK(*(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 0) == 2);
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_DEMOGRAPHICS_OFF + 0) == 1); // 1 child < 6
@@ -1888,18 +1891,23 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 2 * 4), 0.80f, 1e-3f); // West Clothes = 80%
     TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 7 * 4), 0.75f, 1e-3f); // West Loyalty = 75%
     TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.88f, 1e-3f); // West Happiness = 88%
-    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_AVERAGES_OFF + 4), 78.0f, 1e-2f);         // West Life Expectancy = 78y
+    TEST_CHECK_NEAR(*(float*)(curStat + STAT_CITIZEN_AVERAGES_OFF + 4), 75.333f, 1e-2f);       // (78 + 78 + 70 fallback)/3
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 3 * 4) == 3);                 // 3 university educated
     TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 6 * 4) == 2);                 // 2 adults with TV
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.90f, 1e-3f);
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.88f, 1e-3f);
     TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 3);          // Top HUD population = 3
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x24) == 2);                             // Top HUD independent adults = 2
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.90f, 1e-3f);                 // Top HUD Health = 90%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xA8) / *(float*)(hudBlock + 0x00), 0.75f, 1e-3f); // Top HUD Loyalty = 75%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.88f, 1e-3f); // Top HUD Happiness = 88%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xB8) / *(float*)(hudBlock + 0x00), 75.333f, 1e-2f); // Top HUD Lifespan
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_COUNTS_OFF + 0) == 3);
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 2);
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 3);
     TwoStates_UiEnd();
+    TEST_CHECK_NEAR(*(float*)(citPtrs[2] + 0x18), 0.0f, 1e-6f); // Newborn lifespan restored to 0.0f after UI!
+    *(float*)(citPtrs[2] + 0x18) = 78.0f;
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
 
     TwoStates_OnSessionJoined(false /*Client*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
@@ -1925,13 +1933,40 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.50f, 1e-3f);
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.42f, 1e-3f);
     TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 7);          // Top HUD population = 7
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x24) == 5);                             // Top HUD independent adults = 5
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.50f, 1e-3f);                 // Top HUD Health = 50%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xA8) / *(float*)(hudBlock + 0x00), 0.35f, 1e-3f); // Top HUD Loyalty = 35%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.42f, 1e-3f); // Top HUD Happiness = 42%
+    TEST_CHECK_NEAR(*(float*)(hudBlock + 0xB8) / *(float*)(hudBlock + 0x00), 64.0f, 1e-2f);  // Top HUD Lifespan = 64y
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_COUNTS_OFF + 0) == 0);
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 5);
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 7);
     TwoStates_UiEnd();
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
+
+    // Verify period rollover + republicmp_coop.ini round-trip of ;S:, ;A:, ;P:, ;B: tags
+    std::vector<BYTE> histBuf(STAT_RECORD_SIZE, 0);
+    *(int32_t*)(histBuf.data() + 0) = 15;
+    *(int32_t*)(histBuf.data() + 4) = 1961;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x00) = histBuf.data();
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x08) = histBuf.data() + STAT_RECORD_SIZE;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x10) = histBuf.data() + STAT_RECORD_SIZE;
+    TwoStates_StatRecordClearForTest(world, curStat);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(1) == 1);
+    TEST_CHECK(TwoStates_GetStateEconHistoryCount(2) == 1);
+
+    std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_demo_save";
+    std::filesystem::create_directories(saveDir);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(saveDir.string().c_str()));
+    TwoStates_ResetEconStatsForTest(nullptr);
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir.string().c_str(), false));
+    TwoStates_UiBegin();
+    TEST_CHECK_NEAR(*(float*)(histBuf.data() + STAT_CITIZEN_SATISFACTION_OFF + 0 * 4), 0.50f, 1e-2f);
+    TEST_CHECK_NEAR(*(float*)(histBuf.data() + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.42f, 1e-2f);
+    TEST_CHECK_NEAR(*(float*)(histBuf.data() + STAT_CITIZEN_AVERAGES_OFF + 4), 64.0f, 1e-2f);
+    TEST_CHECK(*(int32_t*)(histBuf.data() + STAT_CITIZEN_ADULTS_OFF) == 5);
+    TEST_CHECK(*(int32_t*)(histBuf.data() + STAT_CITIZEN_BRACKETS_OFF + 5 * 4) == 5);
+    TwoStates_UiEnd();
 
     TwoStates_OnSessionEnded();
     ResetMockWorldMemory();
