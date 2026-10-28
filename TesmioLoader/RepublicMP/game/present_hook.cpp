@@ -8,6 +8,7 @@
 #include "../world_sync/terrain/terrain_hook.h"
 #include "../world_sync/buildings/demolish_hook.h"
 #include "session_patches.h"
+#include "../determinism/determinism.h"
 #include "../determinism/sim_patches.h"
 #include "input_block.h"
 #include "../world_sync/buildings/build_sync.h"
@@ -79,6 +80,13 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* pSwapChain, UINT 
 static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     g_presentCallCount++;
+    // While MainThread is inside o_loadWorld() (0x28CFD0 -> 0x005920), the engine's dedicated
+    // Loading Screen Render Thread (0x4AC020) calls Present after releasing the engine D3D11 lock
+    // while still holding CRITICAL_SECTION 0x140A564A8. Never touch the shared D3D11 Immediate Context
+    // via ImGui or run gameplay *_Tick() callbacks on half-loaded world structures during loading.
+    if (Determinism_WorldLoading()) {
+        return g_origPresent(pSwapChain, SyncInterval, Flags);
+    }
     SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
     SimPatches_Tick();     // determinism patches back once the probe ends (see sim_patches.h)
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up

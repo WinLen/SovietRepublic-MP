@@ -766,11 +766,14 @@ static void EmptySearchPool()
     Logf("republicmp  PROBE: search pool after the load: %lld / %lld / %lld entries - emptied", counts[0], counts[1], counts[2]);
 }
 
+static volatile bool g_inLoadWorldCall = false;
+
 static void HookedLoadWorld(void)
 {
     // A probe run starts its generator epoch exactly at the load, so the
     // random numbers the load itself draws are the same in both runs.
     bool session = g_sessionLoadPending;
+    g_inLoadWorldCall = true;
     TwoStates_BeforeAnyWorldLoad();
     if (g_probeState == PROBE_WAIT_LOAD || session) {
         if (!SimPatches_Apply()) {
@@ -781,6 +784,7 @@ static void HookedLoadWorld(void)
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
             o_loadWorld();
+            g_inLoadWorldCall = false;
             TwoStates_OnAnyWorldLoaded(false);
             return;
         }
@@ -795,6 +799,7 @@ static void HookedLoadWorld(void)
         }
     }
     o_loadWorld();
+    g_inLoadWorldCall = false;
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
@@ -926,7 +931,7 @@ bool Determinism_BeginSession(bool host)
 
 bool Determinism_WorldLoading()
 {
-    return g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD;
+    return g_inLoadWorldCall || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD;
 }
 
 bool Determinism_SessionRunning()

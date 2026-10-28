@@ -1486,6 +1486,7 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 
 bool SaveSync_IsWorldLoaded()
 {
+    if (Determinism_WorldLoading()) return false;
     bool loaded = false;
     DiagLog_BeginSafeSeh();
     __try {

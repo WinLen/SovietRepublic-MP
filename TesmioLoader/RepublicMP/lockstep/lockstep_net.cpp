@@ -328,24 +328,26 @@ static void Compare(const LsHash& theirs)
     const StateSummary& a = mine->s;
     const StateSummary& b = theirs.s;
 
+    bool bldCountDiff = (a.buildings != b.buildings);
+    bool bldSoftDiff = (!bldCountDiff && a.hashBuildings != b.hashBuildings);
     bool vehLogicalDiff = (a.hashVehicles != b.hashVehicles);
     bool vehPosDiff = (a.hashVehiclesPos != b.hashVehiclesPos);
     bool citDiff = (a.hashCitizens != b.hashCitizens);
     bool moneyDiff = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05);
-    if (vehLogicalDiff || vehPosDiff || citDiff || moneyDiff) {
+    if (bldSoftDiff || vehLogicalDiff || vehPosDiff || citDiff || moneyDiff) {
         VehicleSoftSync_RequestImmediate();
         if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
             g_lastSoftDriftLogTick = theirs.tick;
-            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (vehLogic=%d vehPos=%d cit=%d money=%d, vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
-                 theirs.tick, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, (int)moneyDiff,
-                 a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
+            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (bldSoft=%d vehLogic=%d vehPos=%d cit=%d money=%d, buildings %d/%d vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
+                 theirs.tick, (int)bldSoftDiff, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, (int)moneyDiff,
+                 a.buildings, b.buildings, a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
                  a.citizens, b.citizens, a.ageTotal, b.ageTotal, a.rub, b.rub);
         }
     }
 
     char what[160] = "";
     if (a.hashClock != b.hashClock) strcat_s(what, "clock ");
-    if (a.hashBuildings != b.hashBuildings) strcat_s(what, "buildings ");
+    if (bldCountDiff) strcat_s(what, "buildings ");
     if (!what[0]) {
         g_hardMismatchCount = 0;
         g_lastMatched = theirs.tick;

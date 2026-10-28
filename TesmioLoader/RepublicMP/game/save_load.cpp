@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See save_load.h.
 #include "save_load.h"
+#include "../determinism/determinism.h"
 #include "../session/two_states.h"
 #include <string.h>
 
@@ -52,7 +53,7 @@ bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag, bool (*abor
     if (timeoutMs == 0) {
         // No cap - just wait however long the load actually takes.
         for (;;) {
-            if (*trigger == 0) return true; // game's dispatcher (FUN_140105700) cleared it - load is done
+            if (*trigger == 0 && !Determinism_WorldLoading()) return true; // game's dispatcher (FUN_140105700) cleared it - load is done
             if (cancelFlag && *cancelFlag) {
                 Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
                 return false;
@@ -66,7 +67,7 @@ bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag, bool (*abor
     }
 
     for (DWORD waited = 0; waited < timeoutMs; waited += stepMs) {
-        if (*trigger == 0) return true;
+        if (*trigger == 0 && !Determinism_WorldLoading()) return true;
         if (cancelFlag && *cancelFlag) {
             Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
             return false;
