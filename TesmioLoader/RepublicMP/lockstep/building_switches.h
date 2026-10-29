@@ -30,6 +30,11 @@ void BuildingSwitches_After(bool simBusy);
 // The command (lockstep/commands).
 bool BuildingSwitches_ApplyCommand(const void* data, size_t size);
 
+// Captures manual one-time resource purchase sliders from world + WORLD_UI_RES_SLIDERS_OFFSET.
+bool BuildingSwitches_CaptureManualBuy(unsigned long long world, unsigned long long building, int currencyMode);
+
 // Testable predicate: true if `offset` in a BUILDING struct (0x1420 bytes) is excluded as a view/vector field.
 bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset);
 
+// Testable predicate: true if `offset` in a KIND_SLOT switch range is excluded from switch capture/revert.
+bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset);

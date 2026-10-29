@@ -102,12 +102,36 @@ bool SaveSync_GetLockstep();
 // Refuse a join when the two games' DLCs differ (on by default; a join goes ahead when either player turns it off).
 void SaveSync_SetDlcCheck(bool on);
 bool SaveSync_GetDlcCheck();
-// Extracts a lowercase DLC token (e.g. "dlc3") from a building type name like "DLC3_swimming_hall"; returns false if not a DLC building.
-bool SaveSync_ExtractBuildingDlcToken(const char* typeName, char* outToken, size_t outSize);
+// Extracts a lowercase DLC token (e.g. "dlc3") from building or vehicle type name (e.g. "dlc3_school", "media_soviet/dlc3/vehicles/bus", "dlc1\\vehicles\\car"); returns false if not a DLC token.
+bool SaveSync_ExtractDlcToken(const char* typeName, char* outToken, size_t outSize);
+inline bool SaveSync_ExtractBuildingDlcToken(const char* typeName, char* outToken, size_t outSize) {
+    return SaveSync_ExtractDlcToken(typeName, outToken, outSize);
+}
+
+// Safely reads a null-terminated ASCII string under SEH protection without page faults.
+bool SaveSync_SafeReadAscii(const char* src, char* outBuf, size_t outBufSize);
+inline bool SafeReadAsciiDirect(const char* src, char* outBuf, size_t outBufSize) {
+    return SaveSync_SafeReadAscii(src, outBuf, outBufSize);
+}
+
+// Parses a comma-separated DLC string (e.g. "dlc2,dlc3") into bitmask (1 << (dlcNum - 1)).
+uint32_t SaveSync_GetDlcMask(const char* dlcList);
+
+// Formats human-readable DLC titles from bitmask (e.g. "Biomes (dlc2), Early Start (dlc3)").
+void SaveSync_FormatDlcNames(uint32_t mask, char* out, size_t outSize);
+
+// Returns the current session's host, client, and negotiated common DLC bitmasks.
+void SaveSync_GetDlcMasks(uint32_t* outHostMask, uint32_t* outClientMask, uint32_t* outCommonMask);
+
 // True if `dlcToken` (e.g. "dlc3") is present in a comma-separated DLC list (e.g. "dlc2,dlc3").
 bool SaveSync_IsDlcTokenInList(const char* list, const char* dlcToken);
+
 // True if placing `typeName` is allowed in the current session (blocks DLC buildings when the peer lacks that DLC).
 bool SaveSync_CheckBuildingDlcAllowed(const char* typeName);
+
+// True if purchasing/creating `vehicleTypePtr` (and all coupled trailers) is allowed in the current session.
+bool SaveSync_CheckVehicleDlcAllowed(const void* vehicleTypePtr);
+
 // The current session runs in lockstep.
 bool SaveSync_IsLockstepSession();
 
@@ -166,6 +190,7 @@ void SaveSync_NotifyWaitingLobbyActionBlocked();
 // Test-only state injection for unit tests in tests/test_main.cpp.
 void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession = false,
                                   const char* lastPartnerPeer = nullptr);
+void SaveSync_SetTestDlcLists(const char* hostList, const char* clientList);
 
 // True when running in dual-window automation (REPUBLICMP_ROLE, CLI flags, or test-host/test-client).
 bool SaveSync_IsDualTestbed();

@@ -165,6 +165,7 @@ static void ApplyRemoteBoost(int boost)
 
 void GameSpeed_SyncTick()
 {
+    if (Determinism_IsActive()) return;
     if (SaveSync_IsWaitingLobbyActive()) {
         EnsureGamePaused();
         return;
@@ -238,6 +239,7 @@ void GameSpeed_SyncTick()
 
 void GameSpeed_OnRemoteTime(int day, int year, float progress)
 {
+    if (Determinism_IsActive()) return;
     if (SyncBlock_IsActive() || BuildSync_IsHostRole()) return;
     if (!(progress >= 0.0f && progress <= GAME_DAY_LENGTH)) return; // also rejects NaN
 
@@ -272,6 +274,7 @@ void GameSpeed_OnRemoteTime(int day, int year, float progress)
 
 void GameSpeed_OnRemote(int kind, int speed, int speedSaved, int turbo)
 {
+    if (Determinism_IsActive()) return;
     if (SyncBlock_IsActive()) return; // the sync screen owns the pause; the host re-sends after it
     if (kind == BUILD_SYNC_KIND_SPEED_BOOST) {
         if (speed >= BOOST_NONE && speed <= BOOST_PLAID) {

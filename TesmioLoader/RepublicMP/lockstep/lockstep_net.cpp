@@ -43,8 +43,15 @@ struct LsGrant { unsigned long long tick; int speed; };
 struct LsCommandHead { unsigned long long afterTick; int kind; };
 struct LsHash { unsigned long long tick; StateSummary s; };
 struct LsState { int paused; int speed; };
-struct LsPing { unsigned long long sentMs; int reply; };
-struct LsCursor { float x, y, z; float camX, camZ; unsigned char isPing; };
+struct LsPing { ULONGLONG sentMs; unsigned char reply; };
+struct LsCursorLegacy { float x, y, z; float camX, camZ; unsigned char isPing; };
+struct LsCursor {
+    float x, y, z;
+    float camX, camZ;
+    float camPos[3];
+    float camLookAt[3];
+    unsigned char isPing;
+};
 #pragma pack(pop)
 
 #define LS_MAX_PAYLOAD (1u << 20)
@@ -176,6 +183,38 @@ static DWORD WINAPI RecvThread(LPVOID)
                 g_partnerCursor.z = c.z;
                 g_partnerCursor.camX = c.camX;
                 g_partnerCursor.camZ = c.camZ;
+                g_partnerCursor.camPos[0] = c.camPos[0];
+                g_partnerCursor.camPos[1] = c.camPos[1];
+                g_partnerCursor.camPos[2] = c.camPos[2];
+                g_partnerCursor.camLookAt[0] = c.camLookAt[0];
+                g_partnerCursor.camLookAt[1] = c.camLookAt[1];
+                g_partnerCursor.camLookAt[2] = c.camLookAt[2];
+                g_partnerCursor.lastUpdateMs = now;
+                if (c.isPing) {
+                    g_partnerCursor.hasPing = true;
+                    g_partnerCursor.pingX = c.x;
+                    g_partnerCursor.pingY = c.y;
+                    g_partnerCursor.pingZ = c.z;
+                    g_partnerCursor.pingReceivedMs = now;
+                    g_partnerCursor.pingSeq++;
+                }
+                LeaveCriticalSection(&g_inLock);
+            } else if (m.data.size() == sizeof(LsCursorLegacy)) {
+                LsCursorLegacy c = *(const LsCursorLegacy*)m.data.data();
+                ULONGLONG now = GetTickCount64();
+                EnterCriticalSection(&g_inLock);
+                g_partnerCursor.valid = true;
+                g_partnerCursor.x = c.x;
+                g_partnerCursor.y = c.y;
+                g_partnerCursor.z = c.z;
+                g_partnerCursor.camX = c.camX;
+                g_partnerCursor.camZ = c.camZ;
+                g_partnerCursor.camPos[0] = c.camX;
+                g_partnerCursor.camPos[1] = 160.0f;
+                g_partnerCursor.camPos[2] = c.camZ;
+                g_partnerCursor.camLookAt[0] = c.camX;
+                g_partnerCursor.camLookAt[1] = 20.0f;
+                g_partnerCursor.camLookAt[2] = c.camZ;
                 g_partnerCursor.lastUpdateMs = now;
                 if (c.isPing) {
                     g_partnerCursor.hasPing = true;
@@ -599,11 +638,36 @@ void LockstepNet_SendCommand(int kind, unsigned long long afterTick, const void*
     Send(g_isHost ? LS_CMDS : LS_CMD, &h, sizeof(h), data, size);
 }
 
-void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, bool isPing)
+void LockstepNet_SendCursor(float x, float y, float z,
+                            const float camPos[3], const float camLookAt[3],
+                            bool isPing)
 {
     if (!g_connected) return;
-    LsCursor c = { x, y, z, camX, camZ, (unsigned char)(isPing ? 1 : 0) };
+    LsCursor c = {};
+    c.x = x;
+    c.y = y;
+    c.z = z;
+    if (camLookAt) {
+        c.camX = camLookAt[0];
+        c.camZ = camLookAt[2];
+        c.camLookAt[0] = camLookAt[0];
+        c.camLookAt[1] = camLookAt[1];
+        c.camLookAt[2] = camLookAt[2];
+    }
+    if (camPos) {
+        c.camPos[0] = camPos[0];
+        c.camPos[1] = camPos[1];
+        c.camPos[2] = camPos[2];
+    }
+    c.isPing = (unsigned char)(isPing ? 1 : 0);
     Send(LS_CURSOR, &c, sizeof(c));
+}
+
+void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, bool isPing)
+{
+    float p[3] = { camX, 160.0f, camZ };
+    float l[3] = { camX, 20.0f, camZ };
+    LockstepNet_SendCursor(x, y, z, p, l, isPing);
 }
 
 PartnerCursorInfo LockstepNet_GetPartnerCursor()

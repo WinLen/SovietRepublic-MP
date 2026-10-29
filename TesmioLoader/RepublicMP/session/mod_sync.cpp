@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See mod_sync.h.
 #include "mod_sync.h"
+#include "save_sync.h"
 #include "two_states.h"
 #include "../determinism/determinism.h"
 #include "../save/save_zip.h"
@@ -428,8 +429,17 @@ void ModSync_ExtractHeaderBinModIdsFromBuffer(const void* data, size_t size, uin
         if (_strnicmp(p, "MIRRORZ_", 8) == 0) {
             p += 8;
         }
-        const char* slash = strchr(p, '/');
-        if (!slash) slash = strchr(p, '\\');
+        if (_strnicmp(p, "media_soviet/", 13) == 0 || _strnicmp(p, "media_soviet\\", 13) == 0) {
+            p += 13;
+        }
+        if (_strnicmp(p, "workshop_wip/", 13) == 0 || _strnicmp(p, "workshop_wip\\", 13) == 0) {
+            p += 13;
+        } else if (_strnicmp(p, "workshop/", 9) == 0 || _strnicmp(p, "workshop\\", 9) == 0) {
+            p += 9;
+        }
+        const char* s1 = strchr(p, '/');
+        const char* s2 = strchr(p, '\\');
+        const char* slash = (!s1) ? s2 : (!s2 ? s1 : (s1 < s2 ? s1 : s2));
         if (slash && slash > p && (slash - p) <= 20) {
             bool allDigits = true;
             for (const char* c = p; c < slash; ++c) {
@@ -1484,15 +1494,24 @@ void ModSync_EndSession()
 // Layer 2: Workshop Action Hook Guards
 // ---------------------------------------------------------------------------
 
-static uint64_t ParseWorkshopIdFromTypeName(const char* typeName)
+uint64_t ModSync_ParseWorkshopIdFromTypeName(const char* typeName)
 {
     if (!typeName || !typeName[0]) return 0;
     const char* p = typeName;
     if (_strnicmp(p, "MIRRORZ_", 8) == 0) {
         p += 8;
     }
-    const char* slash = strchr(p, '/');
-    if (!slash) slash = strchr(p, '\\');
+    if (_strnicmp(p, "media_soviet/", 13) == 0 || _strnicmp(p, "media_soviet\\", 13) == 0) {
+        p += 13;
+    }
+    if (_strnicmp(p, "workshop_wip/", 13) == 0 || _strnicmp(p, "workshop_wip\\", 13) == 0) {
+        p += 13;
+    } else if (_strnicmp(p, "workshop/", 9) == 0 || _strnicmp(p, "workshop\\", 9) == 0) {
+        p += 9;
+    }
+    const char* s1 = strchr(p, '/');
+    const char* s2 = strchr(p, '\\');
+    const char* slash = (!s1) ? s2 : (!s2 ? s1 : (s1 < s2 ? s1 : s2));
     if (!slash || slash <= p || (slash - p) > 20) return 0;
 
     for (const char* c = p; c < slash; ++c) {
@@ -1501,27 +1520,9 @@ static uint64_t ParseWorkshopIdFromTypeName(const char* typeName)
     return _strtoui64(p, nullptr, 10);
 }
 
-static bool SafeReadAsciiDirect(const char* src, char* outBuf, size_t outBufSize)
+static uint64_t ParseWorkshopIdFromTypeName(const char* typeName)
 {
-    if (!src || !outBuf || outBufSize == 0) return false;
-    outBuf[0] = '\0';
-    bool ok = false;
-    DiagLog_BeginSafeSeh();
-    __try {
-        size_t i = 0;
-        for (; i < outBufSize - 1; ++i) {
-            char c = src[i];
-            outBuf[i] = c;
-            if (c == '\0') break;
-        }
-        outBuf[i] = '\0';
-        ok = true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        outBuf[0] = '\0';
-        ok = false;
-    }
-    DiagLog_EndSafeSeh();
-    return ok;
+    return ModSync_ParseWorkshopIdFromTypeName(typeName);
 }
 
 bool ModSync_IsModIdAllowedInSession(uint64_t modId)
@@ -1556,6 +1557,9 @@ bool ModSync_CheckBuildingTypeAllowed(const char* typeName)
 
 bool ModSync_CheckVehicleTypeAllowed(const void* vehicleTypePtr)
 {
+    if (!SaveSync_CheckVehicleDlcAllowed(vehicleTypePtr)) {
+        return false;
+    }
     if (!vehicleTypePtr || !g_sessionFilterActive) return true;
     char typeName[64] = {};
     if (!SafeReadAsciiDirect((const char*)vehicleTypePtr + 0x200, typeName, sizeof(typeName)) || !typeName[0]) {

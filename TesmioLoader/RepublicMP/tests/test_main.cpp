@@ -27,12 +27,16 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/game_calls.h"
 #include "../lockstep/building_switches.h"
+#include "../determinism/determinism.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/held_frame.h"
+#include "../session/game_speed.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../session/mod_sync.h"
 #include "../save/save_zip.h"
+#include "../lockstep/purchase.h"
+#include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../game/session_patches.h"
@@ -788,6 +792,21 @@ static bool Test_TwoStates_SaveMetaAndScriptIniSafety()
     TEST_CHECK_NEAR(prepRub[1], 987654.32, 1e-2);
     *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
 
+    // Staging save promotion: a newer mp_syncsave_* folder with header.bin, stats.ini, and republicmp_coop.ini
+    // must be promoted to coop_last_session so user saves into mp_syncsave_* are never lost.
+    std::filesystem::path bankDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save_promo_test";
+    std::filesystem::path stagingSave = bankDir / "mp_syncsave_test99";
+    std::error_code promoEc;
+    std::filesystem::create_directories(stagingSave, promoEc);
+    writeTextFile(stagingSave / "header.bin", "HEADER_V2");
+    writeTextFile(stagingSave / "stats.ini", "STATS_V2");
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(stagingSave.string().c_str()));
+    TEST_CHECK(TwoStates_PromoteStagingSavesInDir(bankDir.string().c_str()));
+    TEST_CHECK(readTextFile(bankDir / "coop_last_session" / "header.bin") == "HEADER_V2");
+    // Second call with identical timestamp must be a no-op (returns false)
+    TEST_CHECK(!TwoStates_PromoteStagingSavesInDir(bankDir.string().c_str()));
+    std::filesystem::remove_all(bankDir, promoEc);
+
     TwoStates_OnSessionEnded();
     return true;
 }
@@ -933,6 +952,326 @@ static bool Test_ModSync_HeaderBinAndWorkshopFilter()
 // Test 7: BuildingSwitches Exclusions (Invariant #12), Lockstep Commands & SaveZip
 // ---------------------------------------------------------------------------
 
+struct GuardModifyContext {
+    BYTE* loco;
+    BYTE* wagon2;
+    BYTE* wheelBuf;
+    float interpSteerDuringGuard;
+    float interpWheel0DuringGuard;
+    float interpWheel1DuringGuard;
+};
+
+static void GuardModifyCallback(void* ud)
+{
+    auto* ctx = (GuardModifyContext*)ud;
+    // Simulate engine render 0x6712B0 updating dynamic matrices in 0x1480..0x16F0
+    // to values that look like heap pointers
+    *(uintptr_t*)(ctx->loco + 0x1480) = (uintptr_t)ctx->wagon2;
+    ctx->interpSteerDuringGuard = *(const float*)(ctx->loco + VEH_STEER_CURRENT_OFFSET);
+    if (ctx->wheelBuf) {
+        ctx->interpWheel0DuringGuard = *(const float*)(ctx->wheelBuf + 0 * VEH_WHEEL_STRUCT_STRIDE);
+        ctx->interpWheel1DuringGuard = *(const float*)(ctx->wheelBuf + 1 * VEH_WHEEL_STRUCT_STRIDE);
+    }
+}
+
+static bool SubTest_HeldFrameVehicleGraphAndSmoothOffset()
+{
+    HeldFrame_Reset();
+
+    // 0. Shortest-arc angle interpolation across +/-pi
+    constexpr float kPi = 3.14159265358979323846f;
+    TEST_CHECK_NEAR(HeldFrame_LerpAngleRadians(0.0f, 1.0f, 0.25f), 0.25f, 1e-5f);
+    TEST_CHECK_NEAR(HeldFrame_LerpAngleRadians(0.0f, 1.0f, -0.5f), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(HeldFrame_LerpAngleRadians(0.0f, 1.0f, 1.5f), 1.0f, 1e-5f);
+    // Wrap across +pi -> -pi (e.g. +3.04 rad -> -3.04 rad has shortest delta = +0.203 rad)
+    float wrapPosToNeg = HeldFrame_LerpAngleRadians(kPi - 0.1f, -kPi + 0.1f, 0.5f);
+    TEST_CHECK_NEAR(fabsf(wrapPosToNeg), kPi, 1e-4f);
+    TEST_CHECK_NEAR(HeldFrame_LerpAngleRadians(NAN, 0.5f, 0.5f), 0.5f, 1e-5f);
+
+    // 1. Setup 3 mock vehicles (size 0x1AD8): loco, wagon1, wagon2
+    std::vector<BYTE> loco(0x1AD8, 0);
+    std::vector<BYTE> wagon1(0x1AD8, 0);
+    std::vector<BYTE> wagon2(0x1AD8, 0);
+    // Setup 2 wheels (24 bytes each) for loco at +0x1438 and steering at +0x115C/+0x1160
+    std::vector<BYTE> locoWheels(2 * VEH_WHEEL_STRUCT_STRIDE, 0);
+    *(BYTE**)(loco.data() + VEH_WHEELS_BEGIN_OFFSET) = locoWheels.data();
+    *(BYTE**)(loco.data() + VEH_WHEELS_END_OFFSET)   = locoWheels.data() + locoWheels.size();
+    *(float*)(locoWheels.data() + 0 * VEH_WHEEL_STRUCT_STRIDE) = 1.0f;
+    *(float*)(locoWheels.data() + 1 * VEH_WHEEL_STRUCT_STRIDE) = kPi - 0.1f;
+    *(float*)(loco.data() + VEH_STEER_CURRENT_OFFSET) = 0.10f;
+    *(float*)(loco.data() + VEH_STEER_TARGET_OFFSET)  = 0.50f;
+
+    // Setup follow camera manager at world+0x18 pointing to wagon2 (with wagon2 hidden externally)
+    std::vector<BYTE> mockCamMgr(CAM_MGR_STRUCT_BYTES, 0);
+    std::vector<BYTE> mockFollowWin(0x80, 0);
+    mockCamMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] = 1;
+    *(BYTE**)(mockCamMgr.data() + CAM_MGR_FOLLOW_WIN_PTR_OFF) = mockFollowWin.data();
+    *(BYTE**)(mockFollowWin.data() + FOLLOW_WIN_VEHICLE_PTR_OFF) = wagon2.data();
+    *(BYTE**)(g_mockExeBuffer + WORLD_RVA + WORLD_CAMERA_MGR_PTR_OFF) = mockCamMgr.data();
+
+    *(unsigned*)(loco.data() + 0x04)   = 1001;
+    *(unsigned*)(wagon1.data() + 0x04) = 1002;
+    *(unsigned*)(wagon2.data() + 0x04) = 1003;
+
+    *(int32_t*)(loco.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET)   = -1;
+    *(int32_t*)(wagon1.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+    *(int32_t*)(wagon2.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+
+    loco[VEH_RENDER_VISIBLE_OFFSET]   = 1;
+    wagon1[VEH_RENDER_VISIBLE_OFFSET] = 1;
+    wagon2[VEH_RENDER_VISIBLE_OFFSET] = 1;
+
+    loco[VEH_WORKER_SIM_FLAG_OFFSET]   = 1;
+    wagon1[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+    wagon2[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+
+    // Critical root cause reproduction: +0x1A68 is a 32-bit integer counter, NOT a pointer!
+    *(uint32_t*)(loco.data() + 0x1A68)   = 0x42;
+    *(uint32_t*)(wagon1.data() + 0x1A68) = 0x42;
+    *(uint32_t*)(wagon2.data() + 0x1A68) = 0x42;
+
+    // Pre-seed 0x1480 with a pointer-like value to test dynamic node restore
+    *(uintptr_t*)(loco.data() + 0x1480) = (uintptr_t)wagon1.data();
+
+    // Graph links:
+    // loco -> link (+0x4A0) points to wagon1
+    *(BYTE**)(loco.data() + VEH_LINK_PTR_OFFSET) = wagon1.data();
+    // wagon1 -> parent (+0x398) points to loco
+    *(BYTE**)(wagon1.data() + VEH_PARENT_PTR_OFFSET) = loco.data();
+
+    // wagon1 -> children vector (+0x3A0..+0x3A8) points to wagon2
+    std::vector<BYTE*> wagon1Children = { wagon2.data() };
+    *(BYTE***)(wagon1.data() + VEH_CHILDREN_BEGIN_OFFSET) = wagon1Children.data();
+    *(BYTE***)(wagon1.data() + VEH_CHILDREN_END_OFFSET)   = wagon1Children.data() + wagon1Children.size();
+    // wagon2 -> parent (+0x398) points to wagon1
+    *(BYTE**)(wagon2.data() + VEH_PARENT_PTR_OFFSET) = wagon1.data();
+
+    // Node setup for 5 C3D_NODES at 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080
+    const unsigned nodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+    for (int k = 0; k < 5; ++k) {
+        float* nLoco   = (float*)(loco.data() + nodeOffsets[k]);
+        float* nWagon1 = (float*)(wagon1.data() + nodeOffsets[k]);
+        float* nWagon2 = (float*)(wagon2.data() + nodeOffsets[k]);
+        nLoco[0]  = nWagon1[0]  = nWagon2[0]  = 1.0f;
+        nLoco[5]  = nWagon1[5]  = nWagon2[5]  = 1.0f;
+        nLoco[10] = nWagon1[10] = nWagon2[10] = 1.0f;
+        nLoco[15] = nWagon1[15] = nWagon2[15] = 1.0f;
+        nLoco[32]   = 100.0f + (float)k;
+        nWagon1[32] = 80.0f + (float)k;
+        nWagon2[32] = 60.0f + (float)k;
+        nLoco[33] = nWagon1[33] = nWagon2[33] = 10.0f;
+        nLoco[34] = nWagon1[34] = nWagon2[34] = 200.0f;
+        nLoco[38] = nWagon1[38] = nWagon2[38] = 1.0f; // scale.x
+        nLoco[39] = nWagon1[39] = nWagon2[39] = 1.0f; // scale.y
+        nLoco[40] = nWagon1[40] = nWagon2[40] = 1.0f; // scale.z
+        nLoco[43] = nWagon1[43] = nWagon2[43] = 1.0f; // ori.z (+0xA4)
+        nLoco[45] = nWagon1[45] = nWagon2[45] = 1.0f; // up.y  (+0xB0)
+    }
+
+    // Set up engine vehicle render vector at 0x9E7720 with only the lead loco
+    std::vector<BYTE*> engineVehList = { loco.data() };
+    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = engineVehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = engineVehList.data() + engineVehList.size();
+
+    // 2. Tick 1: HeldFrame_OnSimTick traverses graph without failing on +0x1A68
+    HeldFrame_OnSimTick(1);
+    HeldFrameDiagStats stats = {};
+    HeldFrame_GetDiagStats(&stats);
+    TEST_CHECK(stats.trackedVehicles >= 3);
+
+    // 3. Move vehicles slightly on Tick 2 (dx = 2.0f, distSq = 4.0f < 400.0f) and advance wheels/steering
+    for (int k = 0; k < 5; ++k) {
+        float* nLoco   = (float*)(loco.data() + nodeOffsets[k]);
+        float* nWagon1 = (float*)(wagon1.data() + nodeOffsets[k]);
+        float* nWagon2 = (float*)(wagon2.data() + nodeOffsets[k]);
+        nLoco[32]   += 2.0f;
+        nWagon1[32] += 2.0f;
+        nWagon2[32] += 2.0f;
+    }
+    *(float*)(locoWheels.data() + 0 * VEH_WHEEL_STRUCT_STRIDE) = 2.0f;
+    *(float*)(locoWheels.data() + 1 * VEH_WHEEL_STRUCT_STRIDE) = -kPi + 0.1f; // wrapped across +pi/-pi
+    // Leave VEH_STEER_CURRENT_OFFSET at 0.10f while target is 0.50f so AdvanceVehicleSteerAndWheels steps by +0.05f -> 0.15f
+    HeldFrame_OnSimTick(2);
+    HeldFrame_GetDiagStats(&stats);
+    TEST_CHECK(stats.trackedVehicles >= 3);
+    TEST_CHECK_NEAR(*(float*)(loco.data() + VEH_STEER_CURRENT_OFFSET), 0.15f, 1e-5f);
+
+    // 4. Test smooth offset rejection cap
+    // a) magSq <= 2500.0f accepted (30^2 + 30^2 = 1800.0f)
+    HeldFrame_AddVehicleSmoothOffset(loco.data(), 30.0f, 0.0f, 30.0f);
+    // b) magSq == 2500.0f exact boundary accepted (50^2 = 2500.0f)
+    HeldFrame_AddVehicleSmoothOffset(loco.data(), 50.0f, 0.0f, 0.0f);
+    // c) magSq > 2500.0f rejected (50^2 + 10^2 = 2600.0f)
+    HeldFrame_AddVehicleSmoothOffset(loco.data(), 50.0f, 0.0f, 10.0f);
+    // d) Non-finite inputs safely rejected
+    HeldFrame_AddVehicleSmoothOffset(loco.data(), NAN, 0.0f, 0.0f);
+    HeldFrame_AddVehicleSmoothOffset(loco.data(), 0.0f, INFINITY, 0.0f);
+
+    // 5. Test VehicleGuard Begin/End lifecycle with sub-tick interpolation & dynamic node restore
+    GuardModifyContext ctx = { loco.data(), wagon2.data(), locoWheels.data(), 0.0f, 0.0f, 0.0f };
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0x9E7720, 0.5f, GuardModifyCallback, &ctx));
+    // Verify wheel pitch & steering were interpolated at alpha=0.5 during guard
+    TEST_CHECK_NEAR(ctx.interpSteerDuringGuard, 0.125f, 1e-4f);
+    TEST_CHECK_NEAR(ctx.interpWheel0DuringGuard, 1.5f, 1e-4f);
+    TEST_CHECK_NEAR(fabsf(ctx.interpWheel1DuringGuard), kPi, 1e-4f);
+    // Verify wheel pitch & steering were restored to Tick 2 values after guard End()
+    TEST_CHECK_NEAR(*(float*)(loco.data() + VEH_STEER_CURRENT_OFFSET), 0.15f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(loco.data() + VEH_STEER_TARGET_OFFSET), 0.50f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(locoWheels.data() + 0 * VEH_WHEEL_STRUCT_STRIDE), 2.0f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(locoWheels.data() + 1 * VEH_WHEEL_STRUCT_STRIDE), -kPi + 0.1f, 1e-5f);
+    *(BYTE**)(g_mockExeBuffer + WORLD_RVA + WORLD_CAMERA_MGR_PTR_OFF) = nullptr;
+
+    HeldFrame_GetDiagStats(&stats);
+    TEST_CHECK(stats.guardFallbacks == 0);
+    TEST_CHECK(stats.lastTargetsCount >= 3);
+    TEST_CHECK(stats.lastInterpolatedCount >= 1);
+    TEST_CHECK(stats.restoreRefusals == 0);
+
+    // Verify worker sim flag 0xD41 restored to 1 on all vehicles
+    TEST_CHECK(loco[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
+    TEST_CHECK(wagon1[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
+    TEST_CHECK(wagon2[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
+
+    // Verify dynamic sub-node matrix at +0x1480 restored to original value
+    TEST_CHECK(*(uintptr_t*)(loco.data() + 0x1480) == (uintptr_t)wagon1.data());
+
+    // 6. Test HeldFrame_SubmitVehicleHighlight: highlighting a coupled wagon (wagon2) interpolates
+    //    the entire train subgraph (loco, wagon1, wagon2) during the highlight call and restores after.
+    struct HighlightTestCtx {
+        BYTE* loco;
+        BYTE* wagon2;
+        float locoXDuring;
+        float wagon2XDuring;
+        int calls;
+    } hlCtx = { loco.data(), wagon2.data(), 0.0f, 0.0f, 0 };
+    auto HlCallback = [](BYTE* /*veh*/, bool /*isExtraPass*/, void* ud) {
+        auto* c = (HighlightTestCtx*)ud;
+        c->locoXDuring   = *(const float*)(c->loco + 0xD60 + 0x80);
+        c->wagon2XDuring = *(const float*)(c->wagon2 + 0xD60 + 0x80);
+        c->calls++;
+    };
+    HeldFrame_SetHighlightCaptureForTest(HlCallback, &hlCtx);
+    const float hlColor[4] = { 1.0f, 0.8f, 0.2f, 1.0f };
+    HeldFrame_SubmitVehicleHighlight(wagon2.data(), 0, 1, hlColor, 0, false);
+    HeldFrame_SubmitVehicleHighlight(wagon2.data(), 0, 1, hlColor, 0, true);
+    HeldFrame_SetHighlightCaptureForTest(nullptr, nullptr);
+    TEST_CHECK(hlCtx.calls == 2);
+    // wagon2 had prevX=60, currX=62, smoothOff=0 -> at alpha=0.5f, interpolated X is 61.0f during highlight
+    TEST_CHECK_NEAR(hlCtx.wagon2XDuring, 61.0f, 1e-4f);
+    // And after HeldFrame_SubmitVehicleHighlight returns, both loco and wagon2 are restored to Tick 2 currX (102.0f and 62.0f)
+    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD60 + 0x80), 102.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(wagon2.data() + 0xD60 + 0x80), 62.0f, 1e-4f);
+
+    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = nullptr;
+    HeldFrame_Reset();
+
+    return true;
+}
+
+static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
+{
+    HeldFrame_Reset();
+
+    // Setup lead loco
+    std::vector<BYTE> leadLoco(0x1AD8, 0);
+    *(unsigned*)(leadLoco.data() + 0x04) = 2001;
+    *(int32_t*)(leadLoco.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+    leadLoco[VEH_RENDER_VISIBLE_OFFSET] = 1;
+    leadLoco[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+
+    // Create a pool of 2100 mock vehicles coupled in a chain via VEH_LINK_PTR_OFFSET
+    const size_t kPoolSize = 2100;
+    std::vector<std::vector<BYTE>> pool(kPoolSize, std::vector<BYTE>(0x1AD8, 0));
+
+    for (size_t i = 0; i < kPoolSize; ++i) {
+        *(unsigned*)(pool[i].data() + 0x04) = (unsigned)(3000 + i);
+        *(int32_t*)(pool[i].data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+        pool[i][VEH_RENDER_VISIBLE_OFFSET] = 1;
+        pool[i][VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+        if (i + 1 < kPoolSize) {
+            *(BYTE**)(pool[i].data() + VEH_LINK_PTR_OFFSET) = pool[i + 1].data();
+        }
+    }
+
+    // Lead loco links to the first wagon in the chain
+    *(BYTE**)(leadLoco.data() + VEH_LINK_PTR_OFFSET) = pool[0].data();
+
+    // Inject unmapped and malformed pointers into leadLoco children to verify traversal resilience
+    std::vector<BYTE*> childPtrs = { (BYTE*)0x0000000400000000ull, (BYTE*)0x1234 };
+    *(BYTE***)(leadLoco.data() + VEH_CHILDREN_BEGIN_OFFSET) = childPtrs.data();
+    *(BYTE***)(leadLoco.data() + VEH_CHILDREN_END_OFFSET)   = childPtrs.data() + childPtrs.size();
+
+    // Set engine vehicle list at 0x9E7720
+    std::vector<BYTE*> engineVehList = { leadLoco.data() };
+    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = engineVehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = engineVehList.data() + engineVehList.size();
+
+    // OnSimTick: Queue must process all up to 2048 without aborting early
+    HeldFrame_OnSimTick(10);
+    HeldFrameDiagStats stats = {};
+    HeldFrame_GetDiagStats(&stats);
+    TEST_CHECK(stats.trackedVehicles >= 2048);
+
+    // VehicleGuard Begin/End: Must discard invalid pointers without guard fallback
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0x9E7720, 0.0f));
+    HeldFrame_GetDiagStats(&stats);
+    TEST_CHECK(stats.guardFallbacks == 0);
+
+    // 3. Test SafeRestoreWorkerFlags & End() restoration resilience when intermediate vehicle memory becomes unmapped
+    std::vector<BYTE> vehA(0x1AD8, 0);
+    std::vector<BYTE> vehC(0x1AD8, 0);
+    BYTE* vehPage = (BYTE*)VirtualAlloc(nullptr, 0x2000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_CHECK(vehPage != nullptr);
+    if (vehPage) {
+        *(unsigned*)(vehA.data() + 0x04) = 5001;
+        *(unsigned*)(vehPage + 0x04) = 5002;
+        *(unsigned*)(vehC.data() + 0x04) = 5003;
+
+        *(int32_t*)(vehA.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+        *(int32_t*)(vehPage + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+        *(int32_t*)(vehC.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+
+        vehA[VEH_RENDER_VISIBLE_OFFSET] = 1;
+        vehPage[VEH_RENDER_VISIBLE_OFFSET] = 1;
+        vehC[VEH_RENDER_VISIBLE_OFFSET] = 1;
+
+        vehA[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+        vehPage[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+        vehC[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
+
+        std::vector<BYTE*> testVehList = { vehA.data(), vehPage, vehC.data() };
+        *(BYTE***)(g_mockExeBuffer + 0x9E7720) = testVehList.data();
+        *(BYTE***)(g_mockExeBuffer + 0x9E7728) = testVehList.data() + testVehList.size();
+
+        struct UnmapContext {
+            BYTE* page;
+            DWORD oldProtect;
+        } unmapCtx = { vehPage, 0 };
+
+        auto UnmapCallback = [](void* ud) {
+            auto* ctx = (UnmapContext*)ud;
+            VirtualProtect(ctx->page, 0x2000, PAGE_NOACCESS, &ctx->oldProtect);
+        };
+
+        // Guard Begin succeeds on all 3; in callback vehPage is unmapped; End must safely restore vehA and vehC
+        HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0x9E7720, 0.0f, UnmapCallback, &unmapCtx);
+
+        VirtualProtect(vehPage, 0x2000, unmapCtx.oldProtect, &unmapCtx.oldProtect);
+        TEST_CHECK(vehA[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
+        TEST_CHECK(vehC[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
+
+        VirtualFree(vehPage, 0, MEM_RELEASE);
+    }
+
+    // Clean up mock engine vehicle list & reset HeldFrame state
+    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = nullptr;
+    HeldFrame_Reset();
+
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -1025,7 +1364,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         unsigned long long ptrLocoA   = (unsigned long long)locoA.data();
         unsigned long long ptrWagonA1 = (unsigned long long)wagonA1.data();
         unsigned long long ptrLocoB   = (unsigned long long)locoB.data();
-        *(unsigned long long*)(wagonA1.data() + 0x398) = ptrLocoA; // wagonA1 attached to locoA
+        *(unsigned long long*)(wagonA1.data() + VEH_PARENT_PTR_OFFSET) = ptrLocoA; // wagonA1 attached to locoA
 
         // Clicking/double-clicking locoA or its attached wagonA1 is a self-drop -> must be blocked
         TEST_CHECK(GameCalls_IsDepotRowSelfDrop(ptrLocoA, ptrLocoA, ptrLocoA, ptrLocoA));
@@ -1037,17 +1376,24 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     }
 
     // 2d. Sub-tick C3D_NODE position + 3x3 rotation matrix interpolation & Gram-Schmidt orthonormalization
+    //     Verifies the true 47-float (0xBC-byte) C3D_NODE layout:
+    //       +0x80 (float[32..34]): Position
+    //       +0x8C (float[35..37]): Rotation (Euler angles, preserved)
+    //       +0x98 (float[38..40]): Scale ((1,1,1), preserved and never normalized to 0.577)
+    //       +0xA4 (float[41..43]): Orientation (interpolated & normalized)
+    //       +0xB0 (float[44..46]): UpVector (interpolated & normalized)
     {
-        float prevNode[41] = {};
-        float currNode[41] = {};
+        float prevNode[47] = {};
+        float currNode[47] = {};
         // prevNode: identity rotation at (10, 0, 20)
         prevNode[0] = 1.0f; prevNode[5] = 1.0f; prevNode[10] = 1.0f; prevNode[15] = 1.0f;
         prevNode[16] = 1.0f; prevNode[21] = 1.0f; prevNode[26] = 1.0f; prevNode[31] = 1.0f;
         prevNode[12] = prevNode[32] = 10.0f;
         prevNode[13] = prevNode[33] = 0.0f;
         prevNode[14] = prevNode[34] = 20.0f;
-        prevNode[37] = 1.0f; // ori = (0,0,1)
-        prevNode[39] = 1.0f; // up  = (0,1,0)
+        prevNode[38] = prevNode[39] = prevNode[40] = 1.0f; // scale = (1,1,1)
+        prevNode[43] = 1.0f; // ori = (0,0,1) at +0xA4
+        prevNode[45] = 1.0f; // up  = (0,1,0) at +0xB0
 
         // currNode: 45-degree yaw around Y at (20, 0, 30)
         const float c45 = 0.70710678f, s45 = 0.70710678f;
@@ -1062,27 +1408,38 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         currNode[12] = currNode[32] = 20.0f;
         currNode[13] = currNode[33] = 0.0f;
         currNode[14] = currNode[34] = 30.0f;
-        currNode[35] = s45; currNode[37] = c45;
-        currNode[39] = 1.0f;
+        currNode[36] = 0.78539816f; // Euler yaw at +0x8C
+        currNode[38] = currNode[39] = currNode[40] = 1.0f; // scale = (1,1,1) at +0x98
+        currNode[41] = s45; currNode[43] = c45; // ori at +0xA4
+        currNode[45] = 1.0f; // up at +0xB0
 
         alignas(16) BYTE nodeBuf[C3D_NODE_BYTE_SIZE] = {};
         memcpy(nodeBuf, currNode, sizeof(currNode));
         const float smoothOff[3] = { 1.0f, 0.0f, -1.0f };
         HeldFrame_InterpolateC3DNode(nodeBuf, prevNode, currNode, 0.5f, smoothOff);
 
-        const float* m    = (const float*)nodeBuf;
-        const float* minv = (const float*)(nodeBuf + 0x40);
-        const float* pos  = (const float*)(nodeBuf + 0x80);
-        const float* ori  = (const float*)(nodeBuf + 0x8C);
+        const float* m     = (const float*)nodeBuf;
+        const float* minv  = (const float*)(nodeBuf + 0x40);
+        const float* pos   = (const float*)(nodeBuf + 0x80);
+        const float* rot   = (const float*)(nodeBuf + 0x8C);
+        const float* scale = (const float*)(nodeBuf + 0x98);
+        const float* ori   = (const float*)(nodeBuf + 0xA4);
+        const float* up    = (const float*)(nodeBuf + 0xB0);
         TEST_CHECK_NEAR(pos[0], 16.0f, 1e-4f);
         TEST_CHECK_NEAR(pos[2], 24.0f, 1e-4f);
         TEST_CHECK_NEAR(m[12],  16.0f, 1e-4f);
         TEST_CHECK_NEAR(m[14],  24.0f, 1e-4f);
+        // Scale (+0x98) and Euler rotation (+0x8C) must be preserved intact
+        TEST_CHECK_NEAR(rot[1],   0.78539816f, 1e-5f);
+        TEST_CHECK_NEAR(scale[0], 1.0f, 1e-5f);
+        TEST_CHECK_NEAR(scale[1], 1.0f, 1e-5f);
+        TEST_CHECK_NEAR(scale[2], 1.0f, 1e-5f);
         // Halfway between 0 deg and 45 deg is 22.5 deg (sin=0.382683, cos=0.923880)
         TEST_CHECK_NEAR(m[8],   0.382683f, 1e-3f);
         TEST_CHECK_NEAR(m[10],  0.923880f, 1e-3f);
         TEST_CHECK_NEAR(ori[0], 0.382683f, 1e-3f);
         TEST_CHECK_NEAR(ori[2], 0.923880f, 1e-3f);
+        TEST_CHECK_NEAR(up[1],  1.0f,      1e-5f);
         // Orthonormality of m and exactness of m * minv translation
         float dotXZ = m[0] * m[8] + m[1] * m[9] + m[2] * m[10];
         TEST_CHECK_NEAR(dotXZ, 0.0f, 1e-5f);
@@ -1090,7 +1447,19 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         float tz = m[12] * minv[2] + m[13] * minv[6] + m[14] * minv[10] + minv[14];
         TEST_CHECK_NEAR(tx, 0.0f, 1e-4f);
         TEST_CHECK_NEAR(tz, 0.0f, 1e-4f);
+
+        // Verify alpha = 0.0f places node at prevNode + smoothOff (not currNode)
+        memcpy(nodeBuf, currNode, sizeof(currNode));
+        HeldFrame_InterpolateC3DNode(nodeBuf, prevNode, currNode, 0.0f, nullptr);
+        TEST_CHECK_NEAR(pos[0], 10.0f, 1e-4f);
+        TEST_CHECK_NEAR(pos[2], 20.0f, 1e-4f);
+        TEST_CHECK_NEAR(ori[0], 0.0f,  1e-4f);
+        TEST_CHECK_NEAR(ori[2], 1.0f,  1e-4f);
     }
+
+    // 2e. HeldFrame OnSimTick & VehicleGuard with +0x1A68 integer counters, graph traversal, and soft-sync smoothing cap
+    TEST_CHECK(SubTest_HeldFrameVehicleGraphAndSmoothOffset());
+    TEST_CHECK(SubTest_HeldFrameQueueBoundAndCorruptedLinks());
 
     // 3. SaveZip pack & unpack roundtrip
     std::filesystem::path baseDir(g_mockBaseDir);
@@ -1123,6 +1492,83 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         TEST_CHECK(got == binPayload.size());
     }
     TEST_CHECK(memcmp(binPayload.data(), readBack.data(), binPayload.size()) == 0);
+
+    // 4. InviteCitizensNow (0x6F8CC0 -> 0x823470): verify USD (mode 0), Soviet RUB (mode 2), and Expert RUB (mode 3)
+    {
+        ResetMockWorldMemory();
+        BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+        static std::vector<std::vector<BYTE>> s_spawnedCitizens;
+        static std::vector<BYTE*> s_worldCitVec;
+        static int s_mockRandCounter = 0;
+        s_spawnedCitizens.clear();
+        s_worldCitVec.clear();
+        s_mockRandCounter = 0;
+
+        auto mockSpawnCit = +[](unsigned long long w, unsigned long long bld, unsigned char /*isChild*/,
+                                unsigned char /*isSoviet*/, unsigned char /*isThirdWorld*/, unsigned char /*unusedZero*/) -> unsigned long long {
+            s_spawnedCitizens.emplace_back(0x750, 0);
+            BYTE* cit = s_spawnedCitizens.back().data();
+            *(unsigned long long*)(cit + CIT_HOME_BUILDING_OFFSET) = bld;
+            s_worldCitVec.push_back(cit);
+            *(BYTE***)(w + WORLD_CITIZENS_OFFSET)     = s_worldCitVec.data();
+            *(BYTE***)(w + WORLD_CITIZENS_OFFSET + 8) = s_worldCitVec.data() + s_worldCitVec.size();
+            return (unsigned long long)cit;
+        };
+        auto mockRand = +[]() -> int { return s_mockRandCounter++; };
+        auto mockRandFloat = +[](float minVal, float maxVal) -> float { return 0.5f * (minVal + maxVal); };
+
+        *(decltype(mockSpawnCit)*)(g_mockExeBuffer + RVA_SPAWN_CITIZEN) = mockSpawnCit;
+        *(decltype(mockRand)*)(g_mockExeBuffer + RVA_IAT_RAND) = mockRand;
+        *(decltype(mockRandFloat)*)(g_mockExeBuffer + RVA_IAT_RAND_FLOAT) = mockRandFloat;
+        *(float*)(g_mockExeBuffer + RVA_INVITE_EXPERT_MULT_FLOAT)    = 2.5f;
+        *(float*)(g_mockExeBuffer + RVA_INVITE_EXPERT_EDU_MIN_FLOAT) = 2.05f;
+        *(float*)(g_mockExeBuffer + RVA_INVITE_EXPERT_EDU_MAX_FLOAT) = 2.30f;
+
+        *(double*)(world + WORLD_USD_OFFSET) = 50000.0;
+        *(double*)(world + WORLD_RUB_OFFSET) = 100000.0;
+        *(float*)(world + WORLD_PRICE_IMMIGRANT_USD_OFF)      = 100.0f;
+        *(float*)(world + WORLD_PRICE_IMMIGRANT_RUB_OFF)      = 200.0f;
+        *(float*)(world + WORLD_IMMIGRANT_BASE_SPEND_USD_OFF) = 100.0f;
+        *(float*)(world + WORLD_IMMIGRANT_BASE_SPEND_RUB_OFF) = 200.0f;
+        *(float*)(world + WORLD_IMMIGRANT_RATE_MULT_USD_OFF)  = 1.5f;
+        *(float*)(world + WORLD_IMMIGRANT_RATE_MULT_RUB_OFF)  = 1.2f;
+
+        std::vector<BYTE> resSpec(0x100, 0);
+        *(float*)(resSpec.data() + RES_SPEC_MAX_FLATS_FLOAT_OFF) = 12.0f; // 12 flats max
+        std::vector<BYTE> bldType(0x400, 0);
+        *(BYTE**)(bldType.data() + BLD_TYPE_RES_SPEC_PTR_OFF) = resSpec.data();
+        std::vector<BYTE> cityStat(STAT_RECORD_SIZE, 0);
+        std::vector<BYTE> bldArea(0x200, 0);
+        *(BYTE**)(bldArea.data() + AREA_CITY_STAT_PTR_OFF) = cityStat.data();
+        std::vector<BYTE> resBld(0x1420, 0);
+        *(BYTE**)(resBld.data() + BLD_TYPE_OFFSET)   = bldType.data();
+        *(BYTE**)(resBld.data() + BLD_AREA_PTR_OFF)  = bldArea.data();
+
+        // Mode 3: Invite up to 5 educated Soviet experts (RUB)
+        GameCalls_InviteCitizensForTest((unsigned long long)world, (unsigned long long)resBld.data(), 3);
+        // 5 experts spawned (price = 200 * 1.2 * 2.5 = 600 RUB each -> 3000 RUB total)
+        TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 97000.0, 1e-2);
+        TEST_CHECK(*(int*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12) == 5);
+        TEST_CHECK(*(int*)(cityStat.data() + STAT_CITIZEN_COUNTS_OFF + 12) == 5);
+        TEST_CHECK_NEAR(*(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF + 4), 3000.0f, 1e-1f);
+        // First spawned adult (index 0) must have education ~2.175f and a linked child (index 1, since rand()==0 % 2 == 0)
+        TEST_CHECK(s_worldCitVec.size() >= 2);
+        TEST_CHECK_NEAR(*(float*)(s_worldCitVec[0] + CIT_EDUCATION_FLOAT_OFF), 2.175f, 1e-3f);
+        TEST_CHECK(*(BYTE**)(s_worldCitVec[0] + CIT_CHILD_PTR_OFF)  == s_worldCitVec[1]);
+        TEST_CHECK(*(BYTE**)(s_worldCitVec[1] + CIT_PARENT_PTR_OFF) == s_worldCitVec[0]);
+
+        // Populate building's citizen vector so currentIndependent == 5, leaving 7 free flats out of 12
+        *(BYTE***)(resBld.data() + BLD_CITIZENS_BEGIN_OFF) = s_worldCitVec.data();
+        *(BYTE***)(resBld.data() + BLD_CITIZENS_END_OFF)   = s_worldCitVec.data() + s_worldCitVec.size();
+
+        // Mode 0: Invite Third World immigrants (USD) -> capped by remaining 7 free flats (price = 100 * 1.5 = 150 USD each -> 1050 USD)
+        GameCalls_InviteCitizensForTest((unsigned long long)world, (unsigned long long)resBld.data(), 0);
+        TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 48950.0, 1e-2);
+        TEST_CHECK(*(int*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 16) == 7);
+        TEST_CHECK(*(int*)(cityStat.data() + STAT_CITIZEN_COUNTS_OFF + 16) == 7);
+        TEST_CHECK_NEAR(*(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF), 1050.0f, 1e-1f);
+    }
 
     return true;
 }
@@ -2514,6 +2960,1111 @@ static bool Test_SingleplayerIsolationAndReset()
 }
 
 // ---------------------------------------------------------------------------
+// Test 12: Vehicle DLC Filtering, Canonical ScriptName Remapping & Diag Telemetry
+// ---------------------------------------------------------------------------
+
+static bool SubTest_DlcTokenExtractionAndMasks()
+{
+    char dlcTok[16] = {};
+
+    // 1. Building DLC token extraction (dlc[0-9]+_)
+    TEST_CHECK(SaveSync_ExtractDlcToken("dlc2_residential01", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc2") == 0);
+
+    TEST_CHECK(SaveSync_ExtractDlcToken("DLC3_swimming_hall", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc3") == 0);
+
+    TEST_CHECK(!SaveSync_ExtractDlcToken("building_vanilla_farm", dlcTok, sizeof(dlcTok)));
+
+    // 2. Vehicle DLC token extraction (forward and back slashes, media_soviet/ prefix)
+    TEST_CHECK(SaveSync_ExtractDlcToken("media_soviet/dlc2/vehicles/truck.ini", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc2") == 0);
+
+    TEST_CHECK(SaveSync_ExtractDlcToken("dlc3\\vehicles\\steam_p36.ini", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc3") == 0);
+
+    TEST_CHECK(SaveSync_ExtractDlcToken("media_soviet/dlc1/vehicles/bus.ini", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(strcmp(dlcTok, "dlc1") == 0);
+
+    TEST_CHECK(!SaveSync_ExtractDlcToken("media_soviet/vehicles/bus.ini", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(!SaveSync_ExtractDlcToken("workshop/123456/truck.ini", dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(!SaveSync_ExtractDlcToken(nullptr, dlcTok, sizeof(dlcTok)));
+    TEST_CHECK(!SaveSync_ExtractDlcToken("", dlcTok, sizeof(dlcTok)));
+
+    // 3. Bitmask mapping
+    TEST_CHECK(SaveSync_GetDlcMask("dlc1") == 0x01);
+    TEST_CHECK(SaveSync_GetDlcMask("dlc2") == 0x02);
+    TEST_CHECK(SaveSync_GetDlcMask("dlc3") == 0x04);
+    TEST_CHECK(SaveSync_GetDlcMask("dlc2,dlc3") == 0x06);
+    TEST_CHECK(SaveSync_GetDlcMask("dlc_unknown") == 0x00);
+    TEST_CHECK(SaveSync_GetDlcMask(nullptr) == 0x00);
+
+    // 4. Formatting DLC names
+    char namesBuf[128] = {};
+    SaveSync_FormatDlcNames(0x02, namesBuf, sizeof(namesBuf));
+    TEST_CHECK(strstr(namesBuf, "Biomes") != nullptr);
+
+    SaveSync_FormatDlcNames(0x06, namesBuf, sizeof(namesBuf));
+    TEST_CHECK(strstr(namesBuf, "Biomes") != nullptr && strstr(namesBuf, "Early Start") != nullptr);
+
+    SaveSync_FormatDlcNames(0x00, namesBuf, sizeof(namesBuf));
+    TEST_CHECK(_stricmp(namesBuf, "none") == 0);
+
+    return true;
+}
+
+static bool SubTest_VehicleDlcSessionValidation()
+{
+    // 1. Singleplayer Isolation: All vehicles allowed regardless of DLC state
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    SaveSync_SetTestDlcLists("dlc2", ""); // host has dlc2, client has none
+
+    std::vector<BYTE> vehType(0xA000, 0);
+    char dlcPath[64] = "dlc3/vehicles/steam_p36.ini";
+    strncpy_s((char*)vehType.data() + 0x200, 64, dlcPath, _TRUNCATE);
+
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehType.data()));
+
+    // 2. Co-op Session: Host has dlc2,dlc3 (0x06), Client has dlc2 (0x02) -> Common is dlc2 (0x02)
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "127.0.0.1:5556");
+    SaveSync_SetTestDlcLists("dlc2,dlc3", "dlc2");
+
+    uint32_t hostM = 0, clientM = 0, commonM = 0;
+    SaveSync_GetDlcMasks(&hostM, &clientM, &commonM);
+    TEST_CHECK(hostM == 0x06 && clientM == 0x02 && commonM == 0x02);
+
+    // 2a. Vehicle with shared DLC (dlc2) -> ALLOWED
+    strncpy_s((char*)vehType.data() + 0x200, 64, "media_soviet/dlc2/vehicles/truck.ini", _TRUNCATE);
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehType.data()));
+
+    // 2b. Vehicle with unshared DLC (dlc3) -> BLOCKED
+    strncpy_s((char*)vehType.data() + 0x200, 64, "dlc3\\vehicles\\steam_p36.ini", _TRUNCATE);
+    TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    TEST_CHECK(!ModSync_CheckVehicleTypeAllowed(vehType.data()));
+
+    // 2c. Vanilla vehicle -> ALLOWED
+    strncpy_s((char*)vehType.data() + 0x200, 64, "media_soviet/vehicles/bus.ini", _TRUNCATE);
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehType.data()));
+
+    // 2d. Workshop mod vehicle -> ALLOWED by DLC check (falls through to workshop check)
+    strncpy_s((char*)vehType.data() + 0x200, 64, "media_soviet/workshop/12345/truck.ini", _TRUNCATE);
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+
+    // Cleanup session state back to singleplayer
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    SaveSync_SetTestDlcLists("", "");
+    return true;
+}
+
+static bool SubTest_TrailerDlcValidation()
+{
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "127.0.0.1:5556");
+    SaveSync_SetTestDlcLists("dlc2,dlc3", "dlc2"); // dlc3 is unshared
+
+    // Lead vehicle is vanilla (no DLC requirement)
+    std::vector<BYTE> leadType(0xA000, 0);
+    strncpy_s((char*)leadType.data() + 0x200, 64, "media_soviet/vehicles/train_loco.ini", _TRUNCATE);
+
+    // Coupled trailer array at leadType + 0x7C08
+    // Vector of elements with stride 0x110. Pointer to trailer VehicleType is at offset +0x100 within each record.
+    const unsigned kNumTrailers = 2;
+    std::vector<BYTE> trailerRecords(0x110 * kNumTrailers, 0);
+
+    std::vector<BYTE> tr0Type(0x1000, 0);
+    strncpy_s((char*)tr0Type.data() + 0x200, 64, "media_soviet/vehicles/boxcar.ini", _TRUNCATE); // vanilla trailer
+
+    std::vector<BYTE> tr1Type(0x1000, 0);
+    strncpy_s((char*)tr1Type.data() + 0x200, 64, "dlc3/vehicles/wagon_2axle.ini", _TRUNCATE); // unowned DLC!
+
+    *(BYTE**)(trailerRecords.data() + 0 * 0x110 + 0x100) = tr0Type.data();
+    *(BYTE**)(trailerRecords.data() + 1 * 0x110 + 0x100) = tr1Type.data();
+
+    *(BYTE**)(leadType.data() + 0x7C08) = trailerRecords.data();
+    *(BYTE**)(leadType.data() + 0x7C10) = trailerRecords.data() + trailerRecords.size();
+
+    // Must block because trailer 1 requires unshared dlc3
+    TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(leadType.data()));
+
+    // Change trailer 1 to owned dlc2 -> now both trailers allowed -> returns true
+    strncpy_s((char*)tr1Type.data() + 0x200, 64, "media_soviet/dlc2/vehicles/flatcar.ini", _TRUNCATE);
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(leadType.data()));
+
+    // Consist length 20+: verify trailer inspection extends past legacy 16 cap
+    const unsigned kNumTrailers20 = 21;
+    std::vector<BYTE> trailerRecords20(0x110 * kNumTrailers20, 0);
+    std::vector<std::vector<BYTE>> trailerTypes20(kNumTrailers20, std::vector<BYTE>(0x1000, 0));
+
+    for (unsigned i = 0; i < kNumTrailers20; ++i) {
+        strncpy_s((char*)trailerTypes20[i].data() + 0x200, 64, "media_soviet/vehicles/boxcar.ini", _TRUNCATE);
+        *(BYTE**)(trailerRecords20.data() + i * 0x110 + 0x100) = trailerTypes20[i].data();
+    }
+
+    // Trailer 17 (index 16) requires unshared DLC (dlc3)
+    strncpy_s((char*)trailerTypes20[16].data() + 0x200, 64, "dlc3/vehicles/wagon_special.ini", _TRUNCATE);
+    *(BYTE**)(leadType.data() + 0x7C08) = trailerRecords20.data();
+    *(BYTE**)(leadType.data() + 0x7C10) = trailerRecords20.data() + trailerRecords20.size();
+
+    // Must block because trailer 17 (index 16) requires unshared dlc3 (verifies cap > 16)
+    TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(leadType.data()));
+
+    // Revert trailer 17 to owned dlc2 -> now all trailers allowed -> returns true
+    strncpy_s((char*)trailerTypes20[16].data() + 0x200, 64, "media_soviet/dlc2/vehicles/flatcar.ini", _TRUNCATE);
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(leadType.data()));
+
+    // Cleanup session state
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    SaveSync_SetTestDlcLists("", "");
+    return true;
+}
+
+static bool SubTest_ScriptNameResolutionWithShiftedIndices()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // Create 4 vehicle types, each of size WORLD_VEHICLE_TYPE_STRIDE (0x9F08)
+    const size_t kTypeCount = 4;
+    const size_t kStride = WORLD_VEHICLE_TYPE_STRIDE;
+    std::vector<BYTE> typePool(kStride * kTypeCount, 0);
+
+    BYTE* t0 = typePool.data() + 0 * kStride;
+    BYTE* t1 = typePool.data() + 1 * kStride;
+    BYTE* t2 = typePool.data() + 2 * kStride;
+    BYTE* t3 = typePool.data() + 3 * kStride;
+
+    strncpy_s((char*)t0 + 0x200, 64, "media_soviet/vehicles/bus_old.ini", _TRUNCATE);
+    strncpy_s((char*)t1 + 0x200, 64, "media_soviet/dlc2/vehicles/bus_bi.ini", _TRUNCATE);
+    strncpy_s((char*)t2 + 0x200, 64, "media_soviet/vehicles/truck_tatra.ini", _TRUNCATE);
+    strncpy_s((char*)t3 + 0x200, 64, "dlc2\\vehicles\\loader_win.ini", _TRUNCATE);
+
+    // Setup vehicle types vector at world + WORLD_VEHICLE_TYPES_OFFSET (0x12840)
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET)     = typePool.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = typePool.data() + typePool.size();
+
+    // Direct match by full path
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/dlc2/vehicles/bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "dlc2/vehicles/bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/vehicles/bus_old.ini") == t0);
+
+    // Case-insensitive match without "media_soviet/" prefix
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "vehicles/truck_tatra.ini") == t2);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "MEDIA_SOVIET/VEHICLES/TRUCK_TATRA.INI") == t2);
+
+    // Slash variations (forward slashes, backslashes, mixed slashes)
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet\\dlc2\\vehicles\\bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "dlc2\\vehicles\\bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/dlc2\\vehicles/bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet\\dlc2/vehicles\\bus_bi.ini") == t1);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "dlc2/vehicles/loader_win.ini") == t3);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/dlc2/vehicles/loader_win.ini") == t3);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet\\dlc2\\vehicles\\loader_win.ini") == t3);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/dlc2\\vehicles/loader_win.ini") == t3);
+
+    // Inexistent vehicle
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(world, "media_soviet/vehicles/non_existent.ini") == nullptr);
+
+    // Index drift test: simulated host has t2 at index 0, but on our client t2 is at index 2
+    // Wire message has index 0 (which points to bus_old), but m.scriptName is "truck_tatra.ini"
+    // Purchase_FindVehicleTypeByScriptName recovers the true type t2
+    BYTE* recoveredType = Purchase_FindVehicleTypeByScriptName(world, "vehicles/truck_tatra.ini");
+    TEST_CHECK(recoveredType == t2);
+    TEST_CHECK(recoveredType != t0);
+
+    return true;
+}
+
+static bool SubTest_CabinCategoryHandling()
+{
+    // Cable car cabin category is 7 (VEHICLETYPE_CABIN).
+    // Categories 1, 4, 5 route to customs slots.
+    // Categories 6, 8, 10 route to border points via PlaceRealisticVehicleAtBorder.
+    // Category 7 MUST be excluded from border arrival logic to avoid navigation/aviation crashes.
+    const unsigned catTrain = 1;
+    const unsigned catRoad = 4;
+    const unsigned catTram = 5;
+    const unsigned catShip = 6;
+    const unsigned catCabin = 7;
+    const unsigned catPlane = 8;
+    const unsigned catHeli = 10;
+
+    auto IsCustomsSlotCategory = [](unsigned c) { return c == 1 || c - 4 <= 1; };
+    auto IsBorderArrivalCategory = [](unsigned c) { return c == 6 || c == 8 || c == 10; };
+
+    TEST_CHECK(IsCustomsSlotCategory(catTrain));
+    TEST_CHECK(IsCustomsSlotCategory(catRoad));
+    TEST_CHECK(IsCustomsSlotCategory(catTram));
+    TEST_CHECK(!IsCustomsSlotCategory(catCabin));
+
+    TEST_CHECK(IsBorderArrivalCategory(catShip));
+    TEST_CHECK(IsBorderArrivalCategory(catPlane));
+    TEST_CHECK(IsBorderArrivalCategory(catHeli));
+    TEST_CHECK(!IsBorderArrivalCategory(catCabin));
+
+    return true;
+}
+
+static bool SubTest_TelemetryCountersAndMemorySafety()
+{
+    Purchase_ResetDiagStatsForTest();
+    VehicleSyncDiagStats stats = {};
+    Purchase_GetDiagStats(&stats);
+    TEST_CHECK(stats.purchasesAttempted == 0);
+    TEST_CHECK(stats.purchasesMade == 0);
+    TEST_CHECK(stats.vehiclesSold == 0);
+
+    // Record sales across diverse vehicle categories
+    Purchase_RecordDiagSale(1); // road (cat 1: ROAD)
+    Purchase_RecordDiagSale(4); // rail (cat 4: RAIL_LOCOMOTIVE)
+    Purchase_RecordDiagSale(6); // water (cat 6: SHIP)
+    Purchase_RecordDiagSale(8); // air (cat 8: AIRPLANE)
+    Purchase_RecordDiagSale(7); // special / cabin (cat 7: CABIN)
+
+    Purchase_GetDiagStats(&stats);
+    TEST_CHECK(stats.vehiclesSold == 5);
+    TEST_CHECK(stats.countRoad == 1);
+    TEST_CHECK(stats.countRail == 1);
+    TEST_CHECK(stats.countWater == 1);
+    TEST_CHECK(stats.countAir == 1);
+    TEST_CHECK(stats.countSpecial == 1);
+
+    // Memory Safety Probes: nullptr and unmapped pointers must not crash
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(nullptr));
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed((const void*)0x1234));
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(nullptr, "test.ini") == nullptr);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(g_mockExeBuffer + WORLD_RVA, nullptr) == nullptr);
+    TEST_CHECK(Purchase_FindVehicleTypeByScriptName(g_mockExeBuffer + WORLD_RVA, (const char*)0x1234) == nullptr);
+
+    // Direct test of NormalizeVehicleScriptName
+    {
+        char out[64] = {};
+        NormalizeVehicleScriptName("media_soviet\\dlc2\\vehicles\\bus.ini", out, sizeof(out));
+        TEST_CHECK(strcmp(out, "dlc2/vehicles/bus.ini") == 0);
+        NormalizeVehicleScriptName("MEDIA_SOVIET/VEHICLES/CAR.INI", out, sizeof(out));
+        TEST_CHECK(strcmp(out, "vehicles/car.ini") == 0);
+    }
+
+    // Defense-in-depth: Malformed network packet with 64 non-null bytes in scriptName
+    {
+        std::vector<BYTE> rawPacket(208, 0xAA);
+        memset(rawPacket.data() + rawPacket.size() - 64, 'X', 64);
+        TEST_CHECK(!Purchase_ApplyCommand(rawPacket.data(), rawPacket.size()));
+    }
+
+    return true;
+}
+
+static bool Test_VehicleDlcFilter_ScriptName_DiagLog()
+{
+    return SubTest_DlcTokenExtractionAndMasks() &&
+           SubTest_VehicleDlcSessionValidation() &&
+           SubTest_TrailerDlcValidation() &&
+           SubTest_ScriptNameResolutionWithShiftedIndices() &&
+           SubTest_CabinCategoryHandling() &&
+           SubTest_TelemetryCountersAndMemorySafety();
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: Train/Wagon Cargo Soft-Sync, Building Storage Healing & Vehicle Window Actions
+// ---------------------------------------------------------------------------
+
+static bool SubTest_StoppedTrainAndWagonEffectiveBld()
+{
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(int*)bld.data() = 64;
+
+    std::vector<BYTE> truck(0x1B00, 0);
+    *(BYTE**)(truck.data() + VEH_CUR_BLD_OFFSET) = bld.data();
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(truck.data()) == bld.data());
+
+    std::vector<BYTE> loco(0x1B00, 0);
+    *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = bld.data();
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(loco.data()) == bld.data());
+
+    std::vector<BYTE> wagon(0x1B00, 0);
+    *(BYTE**)(wagon.data() + VEH_LINK_PTR_OFFSET) = loco.data();
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(wagon.data()) == bld.data());
+
+    *(BYTE**)(wagon.data() + VEH_LINK_PTR_OFFSET) = nullptr;
+    *(BYTE**)(wagon.data() + VEH_PARENT_PTR_OFFSET) = loco.data();
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(wagon.data()) == bld.data());
+
+    *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = nullptr;
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(wagon.data()) == nullptr);
+    return true;
+}
+
+static bool SubTest_BuildingStorageAndWagonLoadingSoftSync()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Setup 3 canonical resources: iron, coal, steel
+    std::vector<BYTE> resTable(WORLD_RESOURCE_STRIDE * 3, 0);
+    const char* resIron  = (const char*)(resTable.data() + 0 * WORLD_RESOURCE_STRIDE);
+    const char* resCoal  = (const char*)(resTable.data() + 1 * WORLD_RESOURCE_STRIDE);
+    const char* resSteel = (const char*)(resTable.data() + 2 * WORLD_RESOURCE_STRIDE);
+    strcpy_s((char*)resIron, 32, "iron");
+    strcpy_s((char*)resCoal, 32, "coal");
+    strcpy_s((char*)resSteel, 32, "steel");
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET)     = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 8) = resTable.data() + resTable.size();
+
+    // 2. Setup Bld [64] steel_mill_v2 with 3 storage slots (0: empty on Host, 1: 120t coal on Host, 2: 10t steel on Host)
+    std::vector<BYTE> bld64(BUILDING_STRUCT_BYTES, 0);
+    *(int*)bld64.data() = 64;
+    *(float*)(bld64.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(bld64.data() + BLD_PRODUCED_OFFSET) = 10.0f;
+
+    std::vector<BYTE> slots(BLD_STORAGE_SLOT_SIZE * 3, 0);
+    std::vector<BYTE> slotEntries(0x10 * 3, 0);
+    // Slot 0: empty on Host (sBeg == sEnd, sCap = sBeg + 16)
+    *(BYTE**)(slots.data() + 0 * BLD_STORAGE_SLOT_SIZE + 0x00) = slotEntries.data() + 0x00;
+    *(BYTE**)(slots.data() + 0 * BLD_STORAGE_SLOT_SIZE + 0x08) = slotEntries.data() + 0x00;
+    *(BYTE**)(slots.data() + 0 * BLD_STORAGE_SLOT_SIZE + 0x10) = slotEntries.data() + 0x10;
+    // Slot 1: 120t coal on Host
+    *(const char**)(slotEntries.data() + 0x10) = resCoal;
+    *(float*)(slotEntries.data() + 0x18) = 120.0f;
+    *(BYTE**)(slots.data() + 1 * BLD_STORAGE_SLOT_SIZE + 0x00) = slotEntries.data() + 0x10;
+    *(BYTE**)(slots.data() + 1 * BLD_STORAGE_SLOT_SIZE + 0x08) = slotEntries.data() + 0x20;
+    *(BYTE**)(slots.data() + 1 * BLD_STORAGE_SLOT_SIZE + 0x10) = slotEntries.data() + 0x20;
+    // Slot 2: 0t steel on Host (empty)
+    *(BYTE**)(slots.data() + 2 * BLD_STORAGE_SLOT_SIZE + 0x00) = slotEntries.data() + 0x20;
+    *(BYTE**)(slots.data() + 2 * BLD_STORAGE_SLOT_SIZE + 0x08) = slotEntries.data() + 0x20;
+    *(BYTE**)(slots.data() + 2 * BLD_STORAGE_SLOT_SIZE + 0x10) = slotEntries.data() + 0x30;
+
+    *(BYTE**)(bld64.data() + BLD_STORAGE_OFFSET)     = slots.data();
+    *(BYTE**)(bld64.data() + BLD_STORAGE_OFFSET + 8) = slots.data() + slots.size();
+    BYTE* bldList[1] = { bld64.data() };
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET)     = bldList;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = bldList + 1;
+
+    // 3. Setup stopped locomotive #32 + coupled wagon #34 at Bld [64], plus moving truck #38
+    std::vector<BYTE> loco(0x1B00, 0), wagon(0x1B00, 0), truck(0x1B00, 0);
+    *(unsigned*)(loco.data() + VEH_ID_OFFSET) = 32;
+    *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = bld64.data();
+    *(unsigned*)(wagon.data() + VEH_ID_OFFSET) = 34;
+    *(BYTE**)(wagon.data() + VEH_LINK_PTR_OFFSET) = loco.data();
+    *(unsigned*)(truck.data() + VEH_ID_OFFSET) = 38;
+    *(float*)(truck.data() + 0xD24) = 42.0f; // moving
+
+    std::vector<BYTE> wagonCargo(0x10, 0);
+    *(const char**)wagonCargo.data() = resSteel;
+    *(float*)(wagonCargo.data() + 0x08) = 10.0f; // Host wagon has 10.0t steel
+    *(BYTE**)(wagon.data() + VEH_CARGO_OFFSET)     = wagonCargo.data();
+    *(BYTE**)(wagon.data() + VEH_CARGO_OFFSET + 8) = wagonCargo.data() + 0x10;
+
+    BYTE* vehList[3] = { loco.data(), wagon.data(), truck.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET)     = vehList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = vehList + 3;
+
+    // 4. Build periodic soft-sync batch (immediate = false): stopped loco & wagon MUST be skipped!
+    std::vector<BYTE> wire(8192, 0);
+    size_t wireBytes = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(wire.data(), wire.size(), &wireBytes, false));
+    TEST_CHECK(*(const unsigned*)wire.data() == 1u); // only moving truck #38!
+
+    // 5. Build immediate soft-sync batch (immediate = true): includes all 3 vehicles + Bld [64] storage
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(wire.data(), wire.size(), &wireBytes, true));
+    TEST_CHECK(*(const unsigned*)wire.data() == 3u);
+
+    // 6. Simulate Client drift:
+    //    - Slot 0 on Client has phantom 150.94t iron (sEnd = sBeg + 16)
+    //    - Slot 1 on Client is empty (sEnd = sBeg)
+    //    - Wagon #34 on Client is actively loading at 10.5t steel (only 0.5t ahead of Host's 10.0t)
+    *(const char**)(slotEntries.data() + 0x00) = resIron;
+    *(float*)(slotEntries.data() + 0x08) = 150.94f;
+    *(BYTE**)(slots.data() + 0 * BLD_STORAGE_SLOT_SIZE + 0x08) = slotEntries.data() + 0x10;
+    *(BYTE**)(slots.data() + 1 * BLD_STORAGE_SLOT_SIZE + 0x08) = slotEntries.data() + 0x10; // empty on Client
+    *(float*)(wagonCargo.data() + 0x08) = 10.5f;
+
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(wire.data(), wireBytes));
+
+    // Verify Client Slot 0 had its storedTons zeroed while preserving sEnd (slot + 8), and Slot 1 was populated with 120t coal!
+    TEST_CHECK(*(BYTE**)(slots.data() + 0 * BLD_STORAGE_SLOT_SIZE + 0x08) == slotEntries.data() + 0x10);
+    TEST_CHECK_NEAR(*(float*)(slotEntries.data() + 0x08), 0.0f, 1e-4f);
+    TEST_CHECK(*(BYTE**)(slots.data() + 1 * BLD_STORAGE_SLOT_SIZE + 0x08) == slotEntries.data() + 0x20);
+    TEST_CHECK(*(const char**)(slotEntries.data() + 0x10) == resCoal);
+    TEST_CHECK_NEAR(*(float*)(slotEntries.data() + 0x18), 120.0f, 1e-4f);
+
+    // Verify actively loading wagon #34 was NOT jittered back from 10.5t to 10.0t while stopped at Bld [64]
+    TEST_CHECK_NEAR(*(float*)(wagonCargo.data() + 0x08), 10.5f, 1e-4f);
+
+    // 7. Now test phantom cargo on stopped wagon when Host has 0.0t and Client has 0.24t:
+    *(float*)(wagonCargo.data() + 0x08) = 0.0f;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(wire.data(), wire.size(), &wireBytes, true));
+    *(float*)(wagonCargo.data() + 0x08) = 0.24f; // Client has phantom 0.24t
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(wire.data(), wireBytes));
+    TEST_CHECK_NEAR(*(float*)(wagonCargo.data() + 0x08), 0.0f, 1e-4f);
+
+    VehicleSoftSyncDiagStats vss = {};
+    VehicleSoftSync_GetDiagStats(&vss);
+    TEST_CHECK(vss.bldStorageUpdated >= 2);
+    return true;
+}
+
+static bool SubTest_VehicleWindowScheduleAndLaunchCommands()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. AddBorderStopForTest on Airplane (cat == 8):
+    std::vector<BYTE> planeType(0x400, 0), plane(0x1B00, 0), borderBld(0x400, 0);
+    *(int*)(planeType.data() + VEH_TYPE_CATEGORY_OFFSET) = 8; // AIRPLANE
+    *(BYTE**)(plane.data() + VEH_TYPE_PTR_OFFSET) = planeType.data();
+    *(int*)(plane.data() + 0x1794) = 1;
+
+    std::vector<BYTE> stopRecs(VEH_STOP_RECORD_STRIDE * 2, 0xFF);
+    // First stop (nStops == 1): aircraft first stop must set load=0, unload=0
+    *(BYTE**)(plane.data() + VEH_STOPS_LIST_OFFSET)     = stopRecs.data();
+    *(BYTE**)(plane.data() + VEH_STOPS_LIST_OFFSET + 8) = stopRecs.data() + VEH_STOP_RECORD_STRIDE;
+    GameCalls_AddBorderStopForTest((unsigned long long)world, (unsigned long long)plane.data(),
+                                   (unsigned long long)borderBld.data(), -1);
+    TEST_CHECK(stopRecs[0] == 0 && stopRecs[VEH_STOP_HALF_STRIDE] == 0);
+
+    // Second stop (nStops == 2) with "passengers" in carried summary (+0x458): sets load=1, unload=1
+    const char* passName = "passengers";
+    BYTE carriedEntry[16] = {};
+    *(const char**)carriedEntry = passName;
+    *(BYTE**)(plane.data() + 0x458) = carriedEntry;
+    *(BYTE**)(plane.data() + 0x460) = carriedEntry + 16;
+    *(BYTE**)(plane.data() + VEH_STOPS_LIST_OFFSET + 8) = stopRecs.data() + 2 * VEH_STOP_RECORD_STRIDE;
+    GameCalls_AddBorderStopForTest((unsigned long long)world, (unsigned long long)plane.data(),
+                                   (unsigned long long)borderBld.data(), -1);
+    TEST_CHECK(stopRecs[VEH_STOP_RECORD_STRIDE + 0] == 1);
+    TEST_CHECK(stopRecs[VEH_STOP_RECORD_STRIDE + VEH_STOP_HALF_STRIDE] == 1);
+
+    // 2. DeleteStopForTest + ChangeCurrentStopForTest on Train (cat == 4):
+    std::vector<BYTE> trainType(0x400, 0), train(0x1B00, 0), stationA(0x100, 0), stationB(0x100, 0);
+    *(int*)(trainType.data() + VEH_TYPE_CATEGORY_OFFSET) = 4; // RAIL_LOCOMOTIVE
+    *(BYTE**)(train.data() + VEH_TYPE_PTR_OFFSET) = trainType.data();
+    BYTE* stopBlds[2] = { stationA.data(), stationB.data() };
+    *(BYTE***)(train.data() + VEH_STOP_BLD_PTR_VEC_OFF)     = stopBlds;
+    *(BYTE***)(train.data() + VEH_STOP_BLD_PTR_VEC_OFF + 8) = stopBlds + 2;
+
+    // In depot (+0x528 == 0 && +0x530 == 0): ChangeCurrentStop updates +0x698, +0xD3A, +0xD3B
+    GameCalls_ChangeCurrentStopForTest((unsigned long long)train.data(), 1);
+    TEST_CHECK(*(int*)(train.data() + VEH_SCHED_IDX_OFFSET) == 1);
+    TEST_CHECK(train[0xD3A] == 1 && train[0xD3B] == 1);
+
+    // Out of depot (+0x530 == stationA): ChangeCurrentStop updates +0x610 to stationB
+    *(BYTE**)(train.data() + VEH_STOPPED_BLD_OFFSET) = stationA.data();
+    GameCalls_ChangeCurrentStopForTest((unsigned long long)train.data(), 1);
+    TEST_CHECK(*(BYTE**)(train.data() + VEH_TARGET_STOP_BLD_OFF) == stationB.data());
+
+    // DeleteStopForTest on stop 0 (stationA): clears +0x530 since it matched stationA
+    train[0xD3A] = 0;
+    GameCalls_DeleteStopForTest((unsigned long long)world, (unsigned long long)train.data(), 0);
+    TEST_CHECK(train[0xD3A] == 1);
+    TEST_CHECK(*(BYTE**)(train.data() + VEH_STOPPED_BLD_OFFSET) == nullptr);
+
+    // 3. ReleaseVehicleForTest on Ship (cat == 7) and Cableway (cat == 6):
+    std::vector<BYTE> shipType(0x400, 0), ship(0x1B00, 0), dock(0x100, 0);
+    *(int*)(shipType.data() + VEH_TYPE_CATEGORY_OFFSET) = 7; // SHIP in 0x7DA236
+    *(BYTE**)(ship.data() + VEH_TYPE_PTR_OFFSET) = shipType.data();
+    *(BYTE**)(ship.data() + VEH_CUR_BLD_OFFSET) = dock.data();
+    GameCalls_ReleaseVehicleForTest((unsigned long long)ship.data());
+    TEST_CHECK(*(BYTE**)(ship.data() + VEH_CUR_BLD_OFFSET) == nullptr);
+
+    std::vector<BYTE> cableType(0x400, 0), cableVeh(0x1B00, 0);
+    *(int*)(cableType.data() + VEH_TYPE_CATEGORY_OFFSET) = 6; // CABLEWAY in 0x7DA236
+    *(BYTE**)(cableVeh.data() + VEH_TYPE_PTR_OFFSET) = cableType.data();
+    GameCalls_ReleaseVehicleForTest((unsigned long long)cableVeh.data());
+    TEST_CHECK(cableVeh[VEH_CABLEWAY_START_FLAG_OFF] == 1);
+
+    return true;
+}
+
+static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Setup 6 construction/warehouse resources with USD (+0x58) and RUB (+0x5C) prices
+    const char* const kResNames[6] = { "gravel", "steel", "bricks", "boards", "prefabpanels", "cement" };
+    const float kRubPrices[6]      = { 20.0f, 300.0f, 100.0f, 80.0f, 150.0f, 120.0f };
+    const float kHostTons[6]       = { 45.0f,  30.0f,  60.0f, 25.0f,  80.0f,  50.0f };
+    std::vector<BYTE> resTable(WORLD_RESOURCE_STRIDE * 6, 0);
+    const char* resPtrs[6] = {};
+    for (int i = 0; i < 6; ++i) {
+        BYTE* r = resTable.data() + (size_t)i * WORLD_RESOURCE_STRIDE;
+        strcpy_s((char*)r, 32, kResNames[i]);
+        *(float*)(r + RES_PRICE_USD_OFFSET) = kRubPrices[i] * 0.5f;
+        *(float*)(r + RES_PRICE_RUB_OFFSET) = kRubPrices[i];
+        resPtrs[i] = (const char*)r;
+    }
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET)     = resTable.data();
+    *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 8) = resTable.data() + resTable.size();
+
+    // 2. Setup multi-resource warehouse building #88 with 1 storage slot containing 6 resource entries
+    std::vector<BYTE> bldType(0x400, 0), bld88(BUILDING_STRUCT_BYTES, 0);
+    strcpy_s((char*)bldType.data(), 64, "storage_general");
+    *(int*)bld88.data() = 88;
+    *(BYTE**)(bld88.data() + BLD_TYPE_OFFSET) = bldType.data();
+    *(float*)(bld88.data() + OBJ_POS_OFFSET) = -300.0f;
+    *(float*)(bld88.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+
+    std::vector<BYTE> slotBuf(BLD_STORAGE_SLOT_SIZE, 0);
+    std::vector<BYTE> entriesBuf(0x10 * 6, 0);
+    for (int i = 0; i < 6; ++i) {
+        BYTE* e = entriesBuf.data() + (size_t)i * 0x10;
+        *(const char**)e    = resPtrs[i];
+        *(float*)(e + 0x08) = kHostTons[i];
+        *(float*)(e + 0x0C) = 25.0f; // autoPurchaseTons slider target
+    }
+    *(BYTE**)(slotBuf.data() + 0x00) = entriesBuf.data();
+    *(BYTE**)(slotBuf.data() + 0x08) = entriesBuf.data() + entriesBuf.size();
+    *(BYTE**)(slotBuf.data() + 0x10) = entriesBuf.data() + entriesBuf.size();
+    *(BYTE**)(bld88.data() + BLD_STORAGE_OFFSET)     = slotBuf.data();
+    *(BYTE**)(bld88.data() + BLD_STORAGE_OFFSET + 8) = slotBuf.data() + slotBuf.size();
+
+    BYTE* bldList[1] = { bld88.data() };
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET)     = bldList;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = bldList + 1;
+
+    // 3. Build VehicleSoftSync packet on Host, then simulate Client having 0.0f storedTons and 25.0f autoPurchaseTons
+    std::vector<BYTE> wire(8192, 0);
+    size_t wireBytes = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(wire.data(), wire.size(), &wireBytes, true));
+
+    for (int i = 0; i < 6; ++i) {
+        BYTE* e = entriesBuf.data() + (size_t)i * 0x10;
+        *(float*)(e + 0x08) = 0.0f;
+        *(float*)(e + 0x0C) = 25.0f;
+    }
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(wire.data(), wireBytes));
+
+    // Verify all 6 entries are preserved (no truncation to 2), storedTons match Host, and autoPurchaseTons stay 25.0f!
+    size_t finalEntryCount = (size_t)((*(BYTE**)(slotBuf.data() + 0x08) - *(BYTE**)(slotBuf.data() + 0x00)) / 0x10);
+    TEST_CHECK(finalEntryCount == 6);
+    for (int i = 0; i < 6; ++i) {
+        const BYTE* e = entriesBuf.data() + (size_t)i * 0x10;
+        TEST_CHECK_NEAR(*(const float*)(e + 0x08), kHostTons[i], 1e-4f);
+        TEST_CHECK_NEAR(*(const float*)(e + 0x0C), 25.0f, 1e-4f);
+    }
+
+    // 4. Verify BuildingSwitches slot offset filtering:
+    //    - Region 0 dynamic header (< 0x48, e.g. 0x38 + 8) -> true (excluded)
+    //    - Region 1 (+0x1000) storedTons (+0x08) -> true (excluded so UI never reverts soft-synced stock)
+    //    - Region 1 (+0x1000) autoPurchaseTons (+0x0C) -> false (carried as slider setting)
+    TEST_CHECK(BuildingSwitches_IsLeftOutSlotOffsetForTest(0x38 + 8));
+    TEST_CHECK(BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000 + 0 * 16 + 8));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000 + 0 * 16 + 12));
+    TEST_CHECK(BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000 + 3 * 16 + 8));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000 + 3 * 16 + 12));
+
+    // 5. Verify BuildingSwitches_CaptureManualBuy + Lockstep replay (ApplyManualBuyFallback):
+    for (int i = 0; i < 6; ++i) {
+        *(float*)(entriesBuf.data() + (size_t)i * 0x10 + 0x08) = 0.0f;
+    }
+    *(int*)(bld88.data() + BLD_EXPORT_MODE_OFFSET) = 1;
+    *(double*)(world + WORLD_RUB_OFFSET) = 100000.0;
+
+    std::vector<BYTE> uiSliderSlot(BLD_STORAGE_SLOT_SIZE, 0);
+    std::vector<BYTE> uiSliderEntries(0x10 * 3, 0);
+    *(float*)(uiSliderEntries.data() + 0 * 0x10 + 0x08) = 10.0f; // 10t gravel @ 20 RUB = 200 RUB
+    *(float*)(uiSliderEntries.data() + 1 * 0x10 + 0x08) =  0.0f; // 0t steel
+    *(float*)(uiSliderEntries.data() + 2 * 0x10 + 0x08) =  5.0f; // 5t bricks @ 100 RUB = 500 RUB
+    *(BYTE**)(uiSliderSlot.data() + 0x00) = uiSliderEntries.data();
+    *(BYTE**)(uiSliderSlot.data() + 0x08) = uiSliderEntries.data() + uiSliderEntries.size();
+    *(BYTE**)(world + WORLD_UI_RES_SLIDERS_OFFSET + 0x00) = uiSliderSlot.data();
+    *(BYTE**)(world + WORLD_UI_RES_SLIDERS_OFFSET + 0x08) = uiSliderSlot.data() + uiSliderSlot.size();
+
+    Commands_SetSession(COMMANDS_HOST);
+    TEST_CHECK(BuildingSwitches_CaptureManualBuy((unsigned long long)world, (unsigned long long)bld88.data(), 4 /*RUB*/));
+    Commands_Boundary(1);
+    Commands_SetSession(COMMANDS_OFF);
+
+    TEST_CHECK_NEAR(*(float*)(entriesBuf.data() + 0 * 0x10 + 0x08), 10.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(entriesBuf.data() + 1 * 0x10 + 0x08),  0.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(entriesBuf.data() + 2 * 0x10 + 0x08),  5.0f, 1e-4f);
+    TEST_CHECK(*(int*)(bld88.data() + BLD_EXPORT_MODE_OFFSET) == 0);
+    TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 99300.0, 1e-2);
+
+    return true;
+}
+
+static bool SubTest_CoopGameSpeedAndTimerScaling()
+{
+    ResetMockWorldMemory();
+    *(float*)(g_mockExeBuffer + 0x909D64) = 0.35f; // FAST_FACTOR_RVA (2x)
+    *(float*)(g_mockExeBuffer + 0x909C14) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
+    *(float*)(g_mockExeBuffer + 0x909B90) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
+    *(uint8_t*)(g_mockExeBuffer + 0x9D4EE0 + 13) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 0;
+
+    // 1. Activate determinism and run initial Prepare: buttons armed, speed 1 (30.0f)
+    Determinism_SetActiveForTest(true);
+    Determinism_BeforePrepare();
+    bool paused = true;
+    int speed = 0;
+    Determinism_SessionSpeed(&paused, &speed);
+    TEST_CHECK(!paused && speed == 1);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 30.0f, 1e-4f);
+
+    // 2. Click UI Speed 2 ([>>]) and verify a second UI frame before Prepare does not clobber it
+    Determinism_UiSpeedBegin();
+    *(int*)(g_mockExeBuffer + 0x9D54B4) = 2;
+    *(int*)(g_mockExeBuffer + 0x9D54BC) = 0;
+    Determinism_UiSpeedEnd();
+
+    Determinism_UiSpeedBegin();
+    Determinism_UiSpeedEnd();
+
+    Determinism_BeforePrepare();
+    Determinism_SessionSpeed(&paused, &speed);
+    TEST_CHECK(!paused && speed == 2);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 10.5f, 1e-4f);
+
+    // 3. Hold 4th UI speed button ([>>>]) across two UI frames without touching 0x9D54BC:
+    //    must never spam-toggle pause, and must set Plaid (speed 4 -> 30.0f * 0.01f = 0.3f)
+    for (int f = 0; f < 2; ++f) {
+        Determinism_UiSpeedBegin();
+        *(int*)(g_mockExeBuffer + 0x9D54B4) = 2;
+        *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 1;
+        Determinism_UiSpeedEnd();
+    }
+    Determinism_BeforePrepare();
+    Determinism_SessionSpeed(&paused, &speed);
+    TEST_CHECK(!paused && speed == 4);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 0.3f, 1e-4f);
+
+    // 4. Release [>>>], switch to Speed 1 ([>]), and hold LCtrl + Numpad1:
+    //    must boost to Hyper (speed 3 -> 30.0f * 0.05f = 1.5f) even from requested speed 1
+    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
+    Determinism_UiSpeedBegin();
+    *(int*)(g_mockExeBuffer + 0x9D54B4) = 1;
+    *(int*)(g_mockExeBuffer + 0x9D54BC) = 0;
+    Determinism_UiSpeedEnd();
+
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 1;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 1;
+    Determinism_BeforePrepare();
+    Determinism_SessionSpeed(&paused, &speed);
+    TEST_CHECK(!paused && speed == 3);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 1.5f, 1e-4f);
+
+    // 5. GameSpeed_OnRemote while Determinism_IsActive() must not overwrite 0x9D54BC (kSpeedSentinel)
+    int sentinelBefore = *(int*)(g_mockExeBuffer + 0x9D54BC);
+    GameSpeed_OnRemote(0, 1, 1, 0);
+    TEST_CHECK(*(int*)(g_mockExeBuffer + 0x9D54BC) == sentinelBefore);
+
+    // 6. Clean up
+    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 0;
+    Determinism_SetActiveForTest(false);
+    return true;
+}
+
+static bool Test_VehicleCargoAndScheduleSync()
+{
+    return SubTest_StoppedTrainAndWagonEffectiveBld() &&
+           SubTest_BuildingStorageAndWagonLoadingSoftSync() &&
+           SubTest_VehicleWindowScheduleAndLaunchCommands() &&
+           SubTest_MultiResourceStorageSoftSyncAndManualBuy() &&
+           SubTest_CoopGameSpeedAndTimerScaling();
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: Per-Player Camera Persistence, Resync Restore & Initial Framing
+// ---------------------------------------------------------------------------
+
+static bool Test_CameraPersistenceAndFraming()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    std::vector<BYTE> mockCamMgr(CAM_MGR_STRUCT_BYTES, 0);
+    *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = mockCamMgr.data();
+
+    // Put dirty follow/transition state in camMgr to verify TwoStates_ApplyCameraView clears snapback triggers
+    mockCamMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] = 1;
+    *(void**)(mockCamMgr.data() + CAM_MGR_RIDE_VEH_PTR_OFF) = (void*)0x12345678ULL;
+    *(float*)(mockCamMgr.data() + CAM_MGR_TRANS_TIMER_OFFSET) = 2.5f;
+    *(float*)(mockCamMgr.data() + CAM_MGR_TRANS_DUR_OFFSET) = 5.0f;
+
+    std::filesystem::path camSaveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save_cam_test";
+    std::error_code ec;
+    std::filesystem::remove_all(camSaveDir, ec);
+    std::filesystem::create_directories(camSaveDir, ec);
+
+    // 1. First load without saved camera metadata -> initial central framing facing each player's territory
+    double initRub[2] = { 500000.0, 500000.0 }, initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    TwoStates_RestoreOrFrameCameraForTest(true);
+    float hostPos[3] = {}, hostLook[3] = {};
+    TEST_CHECK(TwoStates_GetCameraView(hostPos, hostLook));
+    TEST_CHECK_NEAR(hostPos[0], -80.0f, 1e-2f);
+    TEST_CHECK_NEAR(hostPos[2], 0.0f, 1e-2f);
+    TEST_CHECK(hostLook[0] < hostPos[0]); // Host looks West (X < 0)
+    TEST_CHECK_NEAR(hostLook[0], -450.0f, 1e-2f);
+    // Verify camMgr was synchronized and snapback triggers were cleared
+    TEST_CHECK(mockCamMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] == 0);
+    TEST_CHECK(*(void**)(mockCamMgr.data() + CAM_MGR_RIDE_VEH_PTR_OFF) == nullptr);
+    TEST_CHECK_NEAR(*(float*)(mockCamMgr.data() + CAM_MGR_TRANS_TIMER_OFFSET), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(mockCamMgr.data() + CAM_MGR_POS_OFFSET), -80.0f, 1e-2f);
+    TEST_CHECK_NEAR(*(float*)(mockCamMgr.data() + CAM_MGR_CUR_POS_OFFSET), -80.0f, 1e-2f);
+
+    TwoStates_RestoreOrFrameCameraForTest(false);
+    float clientPos[3] = {}, clientLook[3] = {};
+    TEST_CHECK(TwoStates_GetCameraView(clientPos, clientLook));
+    TEST_CHECK_NEAR(clientPos[0], 80.0f, 1e-2f);
+    TEST_CHECK_NEAR(clientPos[2], 0.0f, 1e-2f);
+    TEST_CHECK(clientLook[0] > clientPos[0]); // Client looks East (X > 0)
+    TEST_CHECK_NEAR(clientLook[0], 450.0f, 1e-2f);
+
+    // 2. Save both players' custom cameras in republicmp_coop.ini and verify round-trip restore
+    const float customCam1Pos[3]  = { -1234.56f, 210.25f, 456.78f };
+    const float customCam1Look[3] = { -1550.00f,  25.50f, 600.00f };
+    const float customCam2Pos[3]  = {  2345.67f, 195.75f, -789.12f };
+    const float customCam2Look[3] = {  2700.00f,  32.00f, -900.00f };
+
+    TEST_CHECK(TwoStates_ApplyCameraView(customCam1Pos, customCam1Look));
+    TwoStates_SetSavedCameraForTest(2, customCam2Pos, customCam2Look);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(camSaveDir.string().c_str()));
+
+    // Overwrite live camera with unrelated coordinates, then read save metadata back
+    const float dummyPos[3] = { 10.0f, 50.0f, 10.0f }, dummyLook[3] = { 20.0f, 20.0f, 20.0f };
+    TEST_CHECK(TwoStates_ApplyCameraView(dummyPos, dummyLook));
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(camSaveDir.string().c_str(), true));
+
+    float readCam1Pos[3] = {}, readCam1Look[3] = {};
+    float readCam2Pos[3] = {}, readCam2Look[3] = {};
+    TEST_CHECK(TwoStates_GetSavedCameraForTest(1, readCam1Pos, readCam1Look));
+    TEST_CHECK(TwoStates_GetSavedCameraForTest(2, readCam2Pos, readCam2Look));
+    TEST_CHECK_NEAR(readCam1Pos[0], customCam1Pos[0], 0.02f);
+    TEST_CHECK_NEAR(readCam1Look[0], customCam1Look[0], 0.02f);
+    TEST_CHECK_NEAR(readCam2Pos[0], customCam2Pos[0], 0.02f);
+    TEST_CHECK_NEAR(readCam2Look[0], customCam2Look[0], 0.02f);
+
+    // Host restore applies Cam1; Client restore applies Cam2
+    TwoStates_RestoreOrFrameCameraForTest(true);
+    TEST_CHECK(TwoStates_GetCameraView(hostPos, hostLook));
+    TEST_CHECK_NEAR(hostPos[0], customCam1Pos[0], 0.02f);
+    TEST_CHECK_NEAR(hostLook[2], customCam1Look[2], 0.02f);
+
+    TwoStates_RestoreOrFrameCameraForTest(false);
+    TEST_CHECK(TwoStates_GetCameraView(clientPos, clientLook));
+    TEST_CHECK_NEAR(clientPos[0], customCam2Pos[0], 0.02f);
+    TEST_CHECK_NEAR(clientLook[2], customCam2Look[2], 0.02f);
+
+    // 3. Pre-resync camera capture and restore takes priority over saved meta camera once
+    const float resyncPos[3]  = { 777.0f, 240.0f, -333.0f };
+    const float resyncLook[3] = { 999.0f,  30.0f, -555.0f };
+    TEST_CHECK(TwoStates_ApplyCameraView(resyncPos, resyncLook));
+    TwoStates_CapturePreResyncCamera();
+    TEST_CHECK(TwoStates_HasCapturedResyncCamera());
+
+    TEST_CHECK(TwoStates_ApplyCameraView(dummyPos, dummyLook));
+    TwoStates_RestoreOrFrameCameraForTest(false);
+    TEST_CHECK(!TwoStates_HasCapturedResyncCamera());
+    TEST_CHECK(TwoStates_GetCameraView(clientPos, clientLook));
+    TEST_CHECK_NEAR(clientPos[0], resyncPos[0], 1e-2f);
+    TEST_CHECK_NEAR(clientLook[2], resyncLook[2], 1e-2f);
+
+    *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = nullptr;
+    TwoStates_OnSessionEnded();
+    std::filesystem::remove_all(camSaveDir, ec);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: Remote Sound Isolation, Warning Banner Restore & Notification Filter
+// ---------------------------------------------------------------------------
+
+static int g_mockPlaySound2DCalls = 0;
+static int g_mockPlaySound3DCalls = 0;
+static int g_mockCreatePopupCalls = 0;
+static int g_mockRebuildNotifCalls = 0;
+
+static bool __fastcall MockOrig_PlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5)
+{
+    (void)mgr; (void)name; (void)loop; (void)vol; (void)p5;
+    ++g_mockPlaySound2DCalls;
+    return true;
+}
+
+static bool __fastcall MockOrig_PlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5)
+{
+    (void)mgr; (void)name; (void)pos; (void)loop; (void)param5;
+    ++g_mockPlaySound3DCalls;
+    return true;
+}
+
+static long long __fastcall MockOrig_CreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
+                                                       int popupType, int stringId, long long p8, long long p9)
+{
+    (void)world; (void)kind; (void)ptr; (void)subkind; (void)p5;
+    (void)popupType; (void)stringId; (void)p8; (void)p9;
+    ++g_mockCreatePopupCalls;
+    return 0x7777;
+}
+
+static void __fastcall MockOrig_RebuildNotificationPopups(long long world)
+{
+    (void)world;
+    ++g_mockRebuildNotifCalls;
+}
+
+static int MockHost_PatchIatForCommands(void*, const char*, const char* fn, void*, void** outOrig, const char*)
+{
+    if (!fn || !outOrig) return 0;
+    if (strstr(fn, "PlaySound2D") != nullptr) {
+        *outOrig = (void*)&MockOrig_PlaySound2D;
+        return 1;
+    }
+    if (strstr(fn, "PlaySound3D") != nullptr) {
+        *outOrig = (void*)&MockOrig_PlaySound3D;
+        return 1;
+    }
+    return 0;
+}
+
+static int MockHost_InstallInlineHookForCommands(void* target, void*, void** outTramp, const unsigned char*, size_t, const char*)
+{
+    if (!target || !outTramp) return 0;
+    if (target == (void*)(g_mockExeBuffer + WARNING_POPUP_CREATE_RVA)) {
+        *outTramp = (void*)&MockOrig_CreatePopupWindow;
+        return 1;
+    }
+    if (target == (void*)(g_mockExeBuffer + NOTIFICATION_REBUILD_POPUPS_RVA)) {
+        *outTramp = (void*)&MockOrig_RebuildNotificationPopups;
+        return 1;
+    }
+    return 0;
+}
+
+static bool SubTest_RemoteReplayScopeAndSnapshots()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    while (Commands_IsApplyingRemote()) {
+        Commands_EndRemoteReplayScope();
+    }
+    TEST_CHECK(!Commands_IsApplyingRemote());
+
+    // Set initial local state before remote command replay
+    *(uint8_t*)(g_mockExeBuffer + SOUND_MUTE_BYTE_RVA) = 0;
+    strcpy_s((char*)(world + WORLD_WARNING_TEXT_OFFSET), WORLD_WARNING_TEXT_BYTES, "Local warning");
+    *(float*)(world + WORLD_WARNING_TIMER_OFFSET) = 2.5f;
+    *(int32_t*)(world + WORLD_PLACEMENT_ERROR_OFFSET) = 0;
+
+    void* dummyWinList[2] = { (void*)0x11110000ULL, (void*)0x22220000ULL };
+    *(void***)(g_mockExeBuffer + WORLD_OPEN_WINDOWS_BEGIN_RVA) = dummyWinList;
+    *(void***)(g_mockExeBuffer + WORLD_OPEN_WINDOWS_END_RVA)   = dummyWinList + 2;
+
+    std::vector<BYTE> brushSoundBuf(2 * BRUSH_SOUND_REC_SIZE, 0);
+    *(float*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET)     = 0.0f;
+    *(uint8_t*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) = 0;
+    *(float*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET)     = 0.35f;
+    *(uint8_t*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) = 1;
+    *(uintptr_t*)(world + WORLD_BRUSH_SOUNDS_BEGIN_OFFSET) = (uintptr_t)brushSoundBuf.data();
+    *(uintptr_t*)(world + WORLD_BRUSH_SOUNDS_END_OFFSET)   = (uintptr_t)(brushSoundBuf.data() + brushSoundBuf.size());
+
+    // Enter outer and nested remote replay scopes
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(Commands_IsApplyingRemote());
+    TEST_CHECK(*(uint8_t*)(g_mockExeBuffer + SOUND_MUTE_BYTE_RVA) == 1);
+    TEST_CHECK(*(void***)(g_mockExeBuffer + WORLD_OPEN_WINDOWS_END_RVA) == dummyWinList);
+
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(Commands_IsApplyingRemote());
+
+    // Simulate remote command overwriting warning banner, error code, and terrain brush loop sounds
+    strcpy_s((char*)(world + WORLD_WARNING_TEXT_OFFSET), WORLD_WARNING_TEXT_BYTES, "> Remote error");
+    *(float*)(world + WORLD_WARNING_TIMER_OFFSET) = 5.0f;
+    *(int32_t*)(world + WORLD_PLACEMENT_ERROR_OFFSET) = 1;
+    *(float*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET)     = 1.0f;
+    *(uint8_t*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) = 1;
+    *(float*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET)     = 1.0f;
+    *(uint8_t*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) = 1;
+
+    // Exit nested scope: still applying remote until outer scope exits
+    Commands_EndRemoteReplayScope();
+    TEST_CHECK(Commands_IsApplyingRemote());
+    TEST_CHECK(*(uint8_t*)(g_mockExeBuffer + SOUND_MUTE_BYTE_RVA) == 1);
+
+    // Exit outer scope: all local state must be restored
+    Commands_EndRemoteReplayScope();
+    TEST_CHECK(!Commands_IsApplyingRemote());
+    TEST_CHECK(*(uint8_t*)(g_mockExeBuffer + SOUND_MUTE_BYTE_RVA) == 0);
+    TEST_CHECK(strcmp((const char*)(world + WORLD_WARNING_TEXT_OFFSET), "Local warning") == 0);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_WARNING_TIMER_OFFSET), 2.5f, 1e-5f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_PLACEMENT_ERROR_OFFSET) == 0);
+    TEST_CHECK(*(void***)(g_mockExeBuffer + WORLD_OPEN_WINDOWS_END_RVA) == dummyWinList + 2);
+    TEST_CHECK_NEAR(*(float*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET), 0.0f, 1e-5f);
+    TEST_CHECK(*(uint8_t*)(brushSoundBuf.data() + 0 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) == 0);
+    TEST_CHECK_NEAR(*(float*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_VOL_OFFSET), 0.35f, 1e-5f);
+    TEST_CHECK(*(uint8_t*)(brushSoundBuf.data() + 1 * BRUSH_SOUND_REC_SIZE + BRUSH_SOUND_ACTIVE_OFFSET) == 1);
+
+    return true;
+}
+
+static bool SubTest_Sound2DAnd3DDistanceHooks()
+{
+    ResetMockWorldMemory();
+    g_mockHost.patchIat          = &MockHost_PatchIatForCommands;
+    g_mockHost.installInlineHook = &MockHost_InstallInlineHookForCommands;
+    Commands_Bind(&g_mockHost);
+    TEST_CHECK(Commands_InstallHooks());
+    g_mockHost.patchIat          = &MockHost_PatchIat;
+    g_mockHost.installInlineHook = &MockHost_InstallInlineHook;
+
+    g_mockPlaySound2DCalls = 0;
+    g_mockPlaySound3DCalls = 0;
+
+    // Set local camera eye at {1000.0f, 50.0f, 1000.0f}
+    float* camEye = (float*)(g_mockExeBuffer + CAMERA_EYE_RVA);
+    camEye[0] = 1000.0f;
+    camEye[1] = 50.0f;
+    camEye[2] = 1000.0f;
+
+    const float nearPos[3] = { 1100.0f, 50.0f, 1000.0f }; // dist = 100m <= 250m
+    const float farPos[3]  = { 2000.0f, 50.0f, 2000.0f }; // dist = 1414m > 250m
+
+    // 1. Outside remote replay scope: 2D and both 3D sounds are forwarded
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "click", 0, 1.0f, 0));
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+    TEST_CHECK(Commands_OnPlaySound3D(nullptr, "build_near", nearPos, 0, 1.0f));
+    TEST_CHECK(g_mockPlaySound3DCalls == 1);
+    TEST_CHECK(Commands_OnPlaySound3D(nullptr, "build_far", farPos, 0, 1.0f));
+    TEST_CHECK(g_mockPlaySound3DCalls == 2);
+
+    // 2. Inside remote replay scope: 2D sound is muted; 3D near (100m <= 250m) is played; 3D far (> 250m) is muted
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(!Commands_OnPlaySound2D(nullptr, "remote_click", 0, 1.0f, 0));
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+
+    TEST_CHECK(Commands_OnPlaySound3D(nullptr, "remote_near", nearPos, 0, 1.0f));
+    TEST_CHECK(g_mockPlaySound3DCalls == 3);
+
+    TEST_CHECK(!Commands_OnPlaySound3D(nullptr, "remote_far", farPos, 0, 1.0f));
+    TEST_CHECK(g_mockPlaySound3DCalls == 3);
+    Commands_EndRemoteReplayScope();
+
+    return true;
+}
+
+static bool SubTest_PopupAndForeignTerritoryNotificationFilter()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+
+    // Create mock notification messages (size 0x4220 to cover NOTIF_MSG_POS_X/Z_OFFSET at +0x4200/+0x4208)
+    std::vector<BYTE> msgWest(0x4220, 0), msgEast(0x4220, 0), msgGlobal(0x4220, 0);
+    *(float*)(msgWest.data() + NOTIF_MSG_POS_X_OFFSET)   = -500.0f;
+    *(float*)(msgWest.data() + NOTIF_MSG_POS_Z_OFFSET)   =  100.0f;
+    *(float*)(msgEast.data() + NOTIF_MSG_POS_X_OFFSET)   = +500.0f;
+    *(float*)(msgEast.data() + NOTIF_MSG_POS_Z_OFFSET)   =  100.0f;
+    *(float*)(msgGlobal.data() + NOTIF_MSG_POS_X_OFFSET) =    0.0f;
+    *(float*)(msgGlobal.data() + NOTIF_MSG_POS_Z_OFFSET) =    0.0f;
+
+    // 1. One-State mode: remote replay scope blocks popups, outside scope all notifications are allowed
+    TwoStates_OnSessionJoined(true, COOP_MODE_ONE_STATE, 250.0f, false, initRub, initUsd);
+    g_mockCreatePopupCalls = 0;
+
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)world, 1, 0, 0, 0, 0, 100, 0, 0) == 0);
+    TEST_CHECK(g_mockCreatePopupCalls == 0);
+    Commands_EndRemoteReplayScope();
+
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)world, 2, (long long)msgEast.data(), 5, 0, 0, 0, 0, 0) == 0x7777);
+    TEST_CHECK(g_mockCreatePopupCalls == 1);
+
+    uintptr_t popupsOneState[3] = { (uintptr_t)msgWest.data(), (uintptr_t)msgEast.data(), (uintptr_t)msgGlobal.data() };
+    *(uintptr_t**)(world + WORLD_NOTIF_POPUPS_BEGIN_OFFSET) = popupsOneState;
+    *(uintptr_t**)(world + WORLD_NOTIF_POPUPS_END_OFFSET)   = popupsOneState + 3;
+    g_mockRebuildNotifCalls = 0;
+    Commands_OnRebuildNotificationPopups((long long)world);
+    TEST_CHECK(g_mockRebuildNotifCalls == 1);
+    TEST_CHECK(*(uintptr_t**)(world + WORLD_NOTIF_POPUPS_END_OFFSET) == popupsOneState + 3);
+
+    // 2. Two-States mode (Host = State 1, West X < 0):
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    g_mockCreatePopupCalls = 0;
+
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)world, 1, 0, 0, 0, 0, 100, 0, 0) == 0);
+    TEST_CHECK(g_mockCreatePopupCalls == 0);
+    Commands_EndRemoteReplayScope();
+
+    // East notification (+500.0f) suppressed; West notification (-500.0f) allowed
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)world, 2, (long long)msgEast.data(), 5, 0, 0, 0, 0, 0) == 0);
+    TEST_CHECK(g_mockCreatePopupCalls == 0);
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)world, 2, (long long)msgWest.data(), 5, 0, 0, 0, 0, 0) == 0x7777);
+    TEST_CHECK(g_mockCreatePopupCalls == 1);
+
+    // RebuildNotificationPopups in Two-States mode removes East (+500.0f) and keeps West (-500.0f) + Global (0.0f)
+    uintptr_t popupsTwoStates[3] = { (uintptr_t)msgEast.data(), (uintptr_t)msgWest.data(), (uintptr_t)msgGlobal.data() };
+    *(uintptr_t**)(world + WORLD_NOTIF_POPUPS_BEGIN_OFFSET) = popupsTwoStates;
+    *(uintptr_t**)(world + WORLD_NOTIF_POPUPS_END_OFFSET)   = popupsTwoStates + 3;
+    Commands_OnRebuildNotificationPopups((long long)world);
+    uintptr_t* newEnd = *(uintptr_t**)(world + WORLD_NOTIF_POPUPS_END_OFFSET);
+    TEST_CHECK((newEnd - popupsTwoStates) == 2);
+    TEST_CHECK(popupsTwoStates[0] == (uintptr_t)msgWest.data());
+    TEST_CHECK(popupsTwoStates[1] == (uintptr_t)msgGlobal.data());
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool SubTest_CommandOwnerTrackingBothModes()
+{
+    ResetMockWorldMemory();
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+
+    // 1. COOP_MODE_ONE_STATE
+    TwoStates_OnSessionJoined(true, COOP_MODE_ONE_STATE, 250.0f, false, initRub, initUsd);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 1);
+    TwoStates_EndCommand(1);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 2);
+    TwoStates_EndCommand(2);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+
+    // 2. COOP_MODE_TWO_STATES
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 1);
+    TwoStates_EndCommand(1);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 2);
+    TwoStates_EndCommand(2);
+    TEST_CHECK(TwoStates_GetCommandOwner() == 0);
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool Test_RemoteSoundAndWarningIsolation()
+{
+    return SubTest_RemoteReplayScopeAndSnapshots() &&
+            SubTest_Sound2DAnd3DDistanceHooks() &&
+            SubTest_PopupAndForeignTerritoryNotificationFilter() &&
+            SubTest_CommandOwnerTrackingBothModes();
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -2544,6 +4095,10 @@ int main()
         { "TwoStates_Loans (Borrow Ceiling, UI Swap, Daily)",    &Test_TwoStates_Loans },
         { "TwoStates_EconomyStats (Ledgers, UI Swap, Rollover)", &Test_TwoStates_EconomyStats },
         { "SingleplayerIsolationAndReset (Dormancy, Reset, SP)", &Test_SingleplayerIsolationAndReset },
+        { "VehicleDlcFilter_ScriptName_DiagLog (DLC, Remap, Diag)", &Test_VehicleDlcFilter_ScriptName_DiagLog },
+        { "VehicleCargoAndScheduleSync (Train/BldSoftSync, Sched)", &Test_VehicleCargoAndScheduleSync },
+        { "CameraPersistenceAndFraming (SaveMeta, Resync, Init)", &Test_CameraPersistenceAndFraming },
+        { "RemoteSoundAndWarningIsolation (Sound2D/3D, Popups)", &Test_RemoteSoundAndWarningIsolation },
     };
 
     for (const auto& tc : kTests) {

@@ -27,7 +27,29 @@ void DiagLog_EndSafeSeh(void);
 
 // Remote client log upload to Host (<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\)
 #include <vector>
+#include <stdint.h>
 bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const char* reason);
 bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size);
 bool DiagLog_HasPrevCrashOrDesyncLog(void);
+
+// Vehicle synchronization & DLC protection telemetry
+struct VehicleSyncDiagStats {
+    uint64_t purchasesAttempted;
+    uint64_t purchasesMade;
+    uint64_t purchasesBlockedDlc;
+    uint64_t purchasesBlockedMod;
+    uint64_t purchasesBlockedMoneyOrDepot;
+    uint64_t scriptNameRemapped;
+    uint64_t scriptNameResolveFails;
+    uint64_t vehiclesSold;
+    uint32_t countRoad;
+    uint32_t countRail;
+    uint32_t countWater;
+    uint32_t countAir;
+    uint32_t countSpecial;
+};
+
+void Purchase_GetDiagStats(VehicleSyncDiagStats* outStats);
+void Purchase_RecordDiagSale(unsigned cat);
+void Purchase_ResetDiagStatsForTest();
 

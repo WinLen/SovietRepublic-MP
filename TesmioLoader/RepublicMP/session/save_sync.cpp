@@ -607,19 +607,132 @@ static char g_sessionHostDlcs[64] = {};
 static char g_sessionPlayerDlcs[64] = {};
 static volatile LONG g_sessionDlcsValid = 0;
 
-bool SaveSync_ExtractBuildingDlcToken(const char* typeName, char* outToken, size_t outSize)
+bool SaveSync_SafeReadAscii(const char* src, char* outBuf, size_t outBufSize)
+{
+    if (!src || !outBuf || outBufSize == 0) return false;
+    outBuf[0] = '\0';
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        size_t i = 0;
+        for (; i < outBufSize - 1; ++i) {
+            char c = src[i];
+            outBuf[i] = c;
+            if (c == '\0') break;
+        }
+        outBuf[i] = '\0';
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        outBuf[0] = '\0';
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+bool SaveSync_ExtractDlcToken(const char* typeName, char* outToken, size_t outSize)
 {
     if (outToken && outSize > 0) outToken[0] = '\0';
     if (!typeName || !outToken || outSize < 6) return false;
-    if (_strnicmp(typeName, "dlc", 3) != 0) return false;
+
+    const char* p = typeName;
+    if (_strnicmp(p, "media_soviet/", 13) == 0 || _strnicmp(p, "media_soviet\\", 13) == 0) {
+        p += 13;
+    }
+
+    if (_strnicmp(p, "dlc", 3) != 0) return false;
     size_t i = 3;
-    while (typeName[i] >= '0' && typeName[i] <= '9') ++i;
-    if (i == 3 || typeName[i] != '_' || i >= outSize) return false;
+    while (p[i] >= '0' && p[i] <= '9') ++i;
+    if (i == 3 || i >= outSize) return false;
+
+    char sep = p[i];
+    if (sep != '_' && sep != '/' && sep != '\\') return false;
+
     for (size_t k = 0; k < i; ++k) {
-        outToken[k] = (char)tolower((unsigned char)typeName[k]);
+        outToken[k] = (char)tolower((unsigned char)p[k]);
     }
     outToken[i] = '\0';
     return true;
+}
+
+uint32_t SaveSync_GetDlcMask(const char* dlcList)
+{
+    if (!dlcList || !dlcList[0]) return 0;
+    uint32_t mask = 0;
+    const char* p = dlcList;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') ++p;
+        if (!*p) break;
+        if (_strnicmp(p, "dlc", 3) == 0) {
+            const char* num = p + 3;
+            int dlcNum = 0;
+            while (*num >= '0' && *num <= '9') {
+                dlcNum = dlcNum * 10 + (*num - '0');
+                ++num;
+            }
+            if (dlcNum >= 1 && dlcNum <= 31) {
+                mask |= (1u << (dlcNum - 1));
+            }
+            p = num;
+        }
+        while (*p && *p != ',' && *p != ' ' && *p != '\t') ++p;
+    }
+    return mask;
+}
+
+void SaveSync_FormatDlcNames(uint32_t mask, char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+    if (mask == 0) {
+        strncpy_s(out, outSize, "none", _TRUNCATE);
+        return;
+    }
+    struct DlcInfo {
+        uint32_t bit;
+        const char* name;
+        const char* tag;
+    };
+    static const DlcInfo kDlcs[] = {
+        { 1u << 0, "Help for Ukraine", "dlc1" },
+        { 1u << 1, "Biomes", "dlc2" },
+        { 1u << 2, "Early Start", "dlc3" },
+        { 1u << 3, "World Maps", "dlc4" }
+    };
+    bool first = true;
+    for (size_t i = 0; i < sizeof(kDlcs) / sizeof(kDlcs[0]); ++i) {
+        if (mask & kDlcs[i].bit) {
+            char item[64];
+            _snprintf_s(item, sizeof(item), _TRUNCATE, "%s%s (%s)", first ? "" : ", ", kDlcs[i].name, kDlcs[i].tag);
+            strncat_s(out, outSize, item, _TRUNCATE);
+            first = false;
+        }
+    }
+    for (int d = 5; d <= 16; ++d) {
+        uint32_t b = (1u << (d - 1));
+        if (mask & b) {
+            char item[32];
+            _snprintf_s(item, sizeof(item), _TRUNCATE, "%sDLC %d (dlc%d)", first ? "" : ", ", d, d);
+            strncat_s(out, outSize, item, _TRUNCATE);
+            first = false;
+        }
+    }
+}
+
+void SaveSync_GetDlcMasks(uint32_t* outHostMask, uint32_t* outClientMask, uint32_t* outCommonMask)
+{
+    char host[sizeof(g_sessionHostDlcs)] = {};
+    char client[sizeof(g_sessionPlayerDlcs)] = {};
+    EnterCriticalSection(&g_lock);
+    strncpy_s(host, g_sessionHostDlcs, _TRUNCATE);
+    strncpy_s(client, g_sessionPlayerDlcs, _TRUNCATE);
+    LeaveCriticalSection(&g_lock);
+
+    uint32_t hMask = SaveSync_GetDlcMask(host);
+    uint32_t cMask = SaveSync_GetDlcMask(client);
+    if (outHostMask) *outHostMask = hMask;
+    if (outClientMask) *outClientMask = cMask;
+    if (outCommonMask) *outCommonMask = hMask & cMask;
 }
 
 bool SaveSync_IsDlcTokenInList(const char* list, const char* dlcToken)
@@ -642,10 +755,10 @@ bool SaveSync_CheckBuildingDlcAllowed(const char* typeName)
 {
     SessionState st = SaveSync_GetState();
     if (st != SESSION_HOST_IN_GAME && st != SESSION_CLIENT_IN_GAME) return true;
-    if (InterlockedCompareExchange(&g_sessionDlcsValid, 0, 0) == 0) return true;
+    if (InterlockedCompareExchange(&g_sessionDlcsValid, 0, 0) == 0 && !IsDualTestbed()) return true;
 
     char dlcToken[16] = {};
-    if (!SaveSync_ExtractBuildingDlcToken(typeName, dlcToken, sizeof(dlcToken))) return true;
+    if (!SaveSync_ExtractDlcToken(typeName, dlcToken, sizeof(dlcToken))) return true;
 
     EnterCriticalSection(&g_lock);
     bool hostHas = SaveSync_IsDlcTokenInList(g_sessionHostDlcs, dlcToken);
@@ -674,6 +787,100 @@ bool SaveSync_CheckBuildingDlcAllowed(const char* typeName)
     return false;
 }
 
+static void SaveSync_NotifyVehicleDlcBlocked(const char* typeName, const char* dlcToken)
+{
+    static ULONGLONG s_lastVehDlcBlockToastMs = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - s_lastVehDlcBlockToastMs >= 1500) {
+        s_lastVehDlcBlockToastMs = now;
+        char upperDlc[16] = {};
+        for (size_t k = 0; dlcToken[k] && k + 1 < sizeof(upperDlc); ++k)
+            upperDlc[k] = (char)toupper((unsigned char)dlcToken[k]);
+
+        Logf("republicmp  PURCHASE_DLC: Vehicle [%s] blocked: unshared %s (host=[%s], player=[%s])",
+             typeName, upperDlc, g_sessionHostDlcs, g_sessionPlayerDlcs);
+        SaveStatus(Tr("[КООП] Техника [%s] заблокирована: у партнёра не установлено %s (вызовет рассинхрон)!",
+                      "[CO-OP] Vehicle [%s] blocked: partner does not have %s installed (would cause desync)!"),
+                   typeName, upperDlc);
+
+        TwoStates_AddToast(Tr("★ ТРАНСПОРТ ИЗ НЕУСТАНОВЛЕННОГО DLC ЗАБЛОКИРОВАН В КООПЕРАТИВЕ ★",
+                              "★ VEHICLE FROM UNINSTALLED DLC BLOCKED IN CO-OP ★"), 3);
+    }
+}
+
+bool SaveSync_CheckVehicleDlcAllowed(const void* vehicleTypePtr)
+{
+    // Single-player mode isolation: unrestricted in single player!
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed()) {
+        return true;
+    }
+    if (InterlockedCompareExchange(&g_sessionDlcsValid, 0, 0) == 0 && !IsDualTestbed()) {
+        return true;
+    }
+    if (!vehicleTypePtr) return true;
+
+    // 1. Check lead vehicle
+    char typeName[64] = {};
+    if (SafeReadAsciiDirect((const char*)vehicleTypePtr + 0x200, typeName, sizeof(typeName)) && typeName[0]) {
+        char dlcToken[16] = {};
+        if (SaveSync_ExtractDlcToken(typeName, dlcToken, sizeof(dlcToken))) {
+            EnterCriticalSection(&g_lock);
+            bool hostHas = SaveSync_IsDlcTokenInList(g_sessionHostDlcs, dlcToken);
+            bool playerHas = SaveSync_IsDlcTokenInList(g_sessionPlayerDlcs, dlcToken);
+            LeaveCriticalSection(&g_lock);
+
+            if (!hostHas || !playerHas) {
+                SaveSync_NotifyVehicleDlcBlocked(typeName, dlcToken);
+                return false;
+            }
+        }
+    }
+
+    // 2. Check coupled trailers / wagons in type + 0x7C08
+    BYTE* v = nullptr;
+    BYTE* e = nullptr;
+    if (SafeReadPod((const char*)vehicleTypePtr + 0x7C08, &v) &&
+        SafeReadPod((const char*)vehicleTypePtr + 0x7C10, &e) &&
+        v && e > v && (e - v) % 0x110 == 0)
+    {
+        constexpr unsigned kMaxTrailersChecked = 64;
+        size_t count = (size_t)(e - v) / 0x110;
+        if (count > kMaxTrailersChecked) count = kMaxTrailersChecked;
+        unsigned n = (unsigned)count;
+        for (unsigned i = 0; i < n; ++i) {
+            BYTE* trType = nullptr;
+            if (SafeReadPod((const char*)(v + i * 0x110 + 0x100), &trType) && trType) {
+                char trTypeName[64] = {};
+                if (SafeReadAsciiDirect((const char*)trType + 0x200, trTypeName, sizeof(trTypeName)) && trTypeName[0]) {
+                    char trDlcTok[16] = {};
+                    if (SaveSync_ExtractDlcToken(trTypeName, trDlcTok, sizeof(trDlcTok))) {
+                        EnterCriticalSection(&g_lock);
+                        bool hostHas = SaveSync_IsDlcTokenInList(g_sessionHostDlcs, trDlcTok);
+                        bool playerHas = SaveSync_IsDlcTokenInList(g_sessionPlayerDlcs, trDlcTok);
+                        LeaveCriticalSection(&g_lock);
+
+                        if (!hostHas || !playerHas) {
+                            SaveSync_NotifyVehicleDlcBlocked(trTypeName, trDlcTok);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+void SaveSync_SetTestDlcLists(const char* hostList, const char* clientList)
+{
+    EnterCriticalSection(&g_lock);
+    strncpy_s(g_sessionHostDlcs, hostList ? hostList : "", _TRUNCATE);
+    strncpy_s(g_sessionPlayerDlcs, clientList ? clientList : "", _TRUNCATE);
+    InterlockedExchange(&g_sessionDlcsValid, (hostList || clientList) ? 1 : 0);
+    LeaveCriticalSection(&g_lock);
+}
+
 // Both sides decide alike: false refuses the join (why says what differs).
 static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool host, char* why, size_t whySize)
 {
@@ -687,6 +894,25 @@ static bool DlcsMatch(const SessionDlcs& mine, const SessionDlcs& theirs, bool h
     InterlockedExchange(&g_sessionDlcsValid, 1);
     LeaveCriticalSection(&g_lock);
     Logf("republicmp  SESSION: DLCs - host [%s], player [%s]", hostList[0] ? hostList : "none", playerList[0] ? playerList : "none");
+
+    uint32_t hostMask = SaveSync_GetDlcMask(hostList);
+    uint32_t playerMask = SaveSync_GetDlcMask(playerList);
+    uint32_t commonMask = hostMask & playerMask;
+    uint32_t disabledMask = (hostMask | playerMask) & ~commonMask;
+    char hostNames[128] = {}, playerNames[128] = {}, commonNames[128] = {}, disabledNames[128] = {};
+    SaveSync_FormatDlcNames(hostMask, hostNames, sizeof(hostNames));
+    SaveSync_FormatDlcNames(playerMask, playerNames, sizeof(playerNames));
+    SaveSync_FormatDlcNames(commonMask, commonNames, sizeof(commonNames));
+    SaveSync_FormatDlcNames(disabledMask, disabledNames, sizeof(disabledNames));
+
+    DiagLog_Printf("DLC", "=================================================================");
+    DiagLog_Printf("DLC", "DLC Handshake Negotiated:");
+    DiagLog_Printf("DLC", "  Host Installed DLCs   : 0x%04X [%s]", hostMask, hostNames);
+    DiagLog_Printf("DLC", "  Client Installed DLCs : 0x%04X [%s]", playerMask, playerNames);
+    DiagLog_Printf("DLC", "  Common Negotiated Mask: 0x%04X [%s]", commonMask, commonNames);
+    DiagLog_Printf("DLC", "  Disabled Unshared DLCs: 0x%04X [%s] -> BLOCKED in co-op", disabledMask, disabledNames);
+    DiagLog_Printf("DLC", "=================================================================");
+
     if (strcmp(mine.list, peer) == 0) return true;
     bool refuse = mine.check && theirs.check;
     _snprintf_s(why, whySize, _TRUNCATE,
@@ -770,10 +996,14 @@ static void SafeSaveHostWorldSaveNames(char* outField, size_t fieldSize, char* o
         const char* curField = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
         if (curField && curField[0] && strstr(curField, "mp_syncsave_") == nullptr) {
             strncpy_s(outField, fieldSize, curField, _TRUNCATE);
+        } else {
+            strncpy_s(outField, fieldSize, "save/coop_last_session", _TRUNCATE);
         }
         const char* curDat = (const char*)((uintptr_t)g_exe + SAVE_NAME_DAT_RVA);
         if (curDat && curDat[0] && strstr(curDat, "mp_syncsave_") == nullptr) {
             strncpy_s(outDat, datSize, curDat, _TRUNCATE);
+        } else {
+            strncpy_s(outDat, datSize, "save\\coop_last_session", _TRUNCATE);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -797,7 +1027,7 @@ static void SafeRestoreHostWorldSaveNames(const char* origField, const char* ori
 // One join, from the accepted connection to the lifted sync screen. The
 // caller's session loop decides what happens next. Returns true when the
 // player is in the game with all channels up.
-static bool RunHostJoin(SOCKET sock)
+static bool RunHostJoin(SOCKET sock, bool rejoin = false)
 {
     g_activeSock = sock;
     SyncBlock_SetActive(true, g_resyncing
@@ -941,6 +1171,9 @@ static bool RunHostJoin(SOCKET sock)
             }
             TwoStates_OnSessionJoined(true, mine.twoStatesMode, mine.borderHalfWidth, mine.expandBorders != 0,
                                       mine.stateRub, mine.stateUsd);
+            if (rejoin) {
+                TwoStates_CapturePreResyncCamera();
+            }
             TriggerLoadSave(liveSaveName);
             if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
                 if (!g_disconnectRequested) {
@@ -1034,9 +1267,13 @@ static bool RunHostJoin(SOCKET sock)
                                   mine.stateRub, mine.stateUsd);
     } while (false);
 
-    // The zip only existed to be sent.
+    // The zip and temporary staging folder only existed to transfer and load the shared world.
     if (madeZip[0]) DeleteFileA(madeZip);
-    if (madeSaveDir[0]) KeepOnlyNewestHostSave(madeSaveDir);
+    if (madeSaveDir[0]) {
+        KeepOnlyNewestHostSave(madeSaveDir);
+        std::error_code rmEc;
+        std::filesystem::remove_all(madeSaveDir, rmEc);
+    }
     SafeRestoreHostWorldSaveNames(origSaveField, origSaveDat);
 
     g_activeSock = INVALID_SOCKET;
@@ -1096,7 +1333,7 @@ static void RunHostSession()
                           : "[HOST] %s is joining - both games are paused until it is loaded", peer);
 
         g_lockstep = g_lockstepChosen;
-        bool joined = RunHostJoin(sock);
+        bool joined = RunHostJoin(sock, rejoin);
         rejoin = false;
         g_resyncing = false;
         if (!joined) {
@@ -1355,6 +1592,9 @@ static bool RunClientJoin(bool rejoin)
             }
             TwoStates_OnSessionJoined(false, theirs.twoStatesMode, theirs.borderHalfWidth, theirs.expandBorders != 0,
                                       theirs.stateRub, theirs.stateUsd);
+        }
+        if (rejoin) {
+            TwoStates_CapturePreResyncCamera();
         }
         TriggerLoadSave(receivedSaveName);
         bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);

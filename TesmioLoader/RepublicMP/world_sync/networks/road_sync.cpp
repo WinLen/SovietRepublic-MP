@@ -3359,6 +3359,7 @@ void RoadSync_Tick()
     // roads (replay_menus.h); the join screen still does.
     if (SyncBlock_IsActive()) return;
     ReplayUiScope replayUi;
+    Commands_BeginRemoteReplayScope();
     for (size_t i = 0; i < g_waitingDemolish.size();) {
         RoadSyncItem& item = g_waitingDemolish[i];
         if (nowMs < item.notBeforeMs || LocalBuilds_IsToolDragActive() || ToolWrapperGuardBusy(thisPtr)) {
@@ -3407,4 +3408,5 @@ void RoadSync_Tick()
         } else
             ApplySegmentAndAck(toApply[i].seg);
     }
+    Commands_EndRemoteReplayScope();
 }

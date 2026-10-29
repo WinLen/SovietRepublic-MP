@@ -23,7 +23,7 @@
 #pragma intrinsic(_ReturnAddress)
 
 #define GAME_TIMER_RVA 0x9D4EE0
-#define FAST_FACTOR_RVA 0x909D5C
+#define FAST_FACTOR_RVA 0x909D64
 // The main loop's other speed-2 factors (105d66 / 105d9f): Hyper (left Ctrl +
 // Numpad1, or turbo) and Plaid (left Ctrl + Numpad2, or the fast button held).
 #define HYPER_FACTOR_RVA 0x909C14   // 0.05
@@ -421,13 +421,15 @@ static int g_tickSpeed = 1, g_requestedSpeed = 1;
 // top of fast, as in the game). The host's boost is its own keys or the player's
 // request (a speed request of 10 + boost); the grant carries the tick speed.
 static int g_remoteBoost = 0, g_sentBoost = 0;
+static volatile LONG g_uiButtonSpeed = -1;
+static volatile LONG g_uiFastHeld = 0;
 
 // This PC's boost from the same inputs the main loop reads: 0 none, 1 Hyper, 2 Plaid.
 static int LocalBoost()
 {
     const BYTE* keys = g_exeBase + KEYS_RVA;
     if (keys[KEY_LCTRL] && keys[KEY_NUMPAD2]) return 2;
-    if (g_exeBase[FAST_HELD_RVA]) return 2;
+    if (g_exeBase[FAST_HELD_RVA] || g_uiFastHeld != 0) return 2;
     if (keys[KEY_LCTRL] && keys[KEY_NUMPAD1]) return 1;
     return 0;
 }
@@ -864,6 +866,8 @@ static void ResetFrames()
     g_holdsLeft = g_menuFrames = 0;
     g_haveStep = false;
     InterlockedExchange(&g_pauseRequests, 0);
+    InterlockedExchange(&g_uiButtonSpeed, -1);
+    InterlockedExchange(&g_uiFastHeld, 0);
     g_tickDebt = 1.0;
     g_subTickAlpha = 0.0;
     g_subTickSpan = 1.0;
@@ -874,10 +878,9 @@ static void ResetFrames()
 
 float Determinism_RenderAlpha()
 {
-    if (!g_active || !g_sessionRunning || g_frameStep) return 0.0f;
-    if (g_exeBase && g_exeBase[GAME_TIMER_RVA + 13] != 0) return 0.0f;
+    if (!g_active || !g_sessionRunning) return 0.0f;
     if (g_subTickAlpha <= 0.0) return 0.0f;
-    if (g_subTickAlpha >= 0.95) return 0.95f;
+    if (g_subTickAlpha >= 0.98) return 0.98f;
     return (float)g_subTickAlpha;
 }
 
@@ -977,19 +980,23 @@ static void TakeSpeedInput()
     if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
         g_paused = true;
         InterlockedExchange(&g_pauseRequests, 0);
+        InterlockedExchange(&g_uiButtonSpeed, -1);
+        InterlockedExchange(&g_uiFastHeld, 0);
         *speed = 0;
         speed[1] = g_requestedSpeed;
         speed[2] = kSpeedSentinel;
         g_buttonsArmed = true;
         return;
     }
-    bool button = g_buttonsArmed && speed[2] != kSpeedSentinel;
+    LONG uiBtn = InterlockedExchange(&g_uiButtonSpeed, -1);
+    bool button = g_buttonsArmed && (uiBtn >= 0 || speed[2] != kSpeedSentinel);
+    int btnVal = (uiBtn >= 0) ? (int)uiBtn : *speed;
     // Esc's timer hold and its remembered-speed restore are not player
     // pacing requests (105a90 / 317db0). (by SoylentGreed)
     if (g_buttonsArmed && !g_menuFrames && (*speed || button)) {
         if (button) {
-            g_paused = *speed == 0;
-            if (*speed > 0) g_requestedSpeed = *speed > 1 ? 2 : 1;
+            g_paused = btnVal == 0;
+            if (btnVal > 0) g_requestedSpeed = btnVal > 1 ? 2 : 1;
         } else g_paused = !g_paused;
     }
     LONG toggles = InterlockedExchange(&g_pauseRequests, 0);
@@ -1021,8 +1028,12 @@ void Determinism_UiSpeedBegin()
 {
     TwoStates_UiBegin();
     if (!g_active || !g_buttonsArmed) return;
-    g_uiShown = g_paused ? 0 : g_requestedSpeed;
-    *(int*)(g_exeBase + 0x9D54B4) = g_uiShown;
+    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    int shownSpeed = (g_tickSpeed > 2) ? 2 : g_requestedSpeed;
+    g_uiShown = g_paused ? 0 : shownSpeed;
+    *speed = g_uiShown;
+    speed[1] = g_requestedSpeed;
+    speed[2] = kSpeedSentinel;
 }
 
 void Determinism_UiSpeedEnd()
@@ -1030,9 +1041,20 @@ void Determinism_UiSpeedEnd()
     TwoStates_UiEnd();
     if (!g_active || !g_buttonsArmed) return;
     int* speed = (int*)(g_exeBase + 0x9D54B4);
-    if (speed[2] != kSpeedSentinel) return;
-    if (*speed != g_uiShown && !g_menuFrames) InterlockedIncrement(&g_pauseRequests);
+    bool fastHeld = g_exeBase[FAST_HELD_RVA] != 0;
+    LONG wasFastHeld = InterlockedExchange(&g_uiFastHeld, fastHeld ? 1 : 0);
+    if (!g_menuFrames) {
+        if (fastHeld) {
+            if (!wasFastHeld) InterlockedExchange(&g_uiButtonSpeed, 2);
+        } else if (speed[2] != kSpeedSentinel) {
+            InterlockedExchange(&g_uiButtonSpeed, *speed);
+        } else if (*speed != g_uiShown) {
+            InterlockedIncrement(&g_pauseRequests);
+        }
+    }
     *speed = 0;
+    speed[1] = g_requestedSpeed;
+    speed[2] = kSpeedSentinel;
 }
 
 // Commands (lockstep/commands) are made at the start of a frame, before its
@@ -1209,7 +1231,8 @@ static void ProbeAdmission(BYTE* timer)
         }
     }
     int nextSpeed = g_probeBusy ? (g_probeFuzz ? 1 + int((g_runStep / 300) & 1) : g_probeSpeed) : g_requestedSpeed;
-    nextSpeed = nextSpeed > 1 ? 2 : 1;
+    int boost = g_probeBusy ? 0 : LocalBoost();
+    nextSpeed = (nextSpeed > 1 || boost > 0) ? 2 + boost : 1;
     if (g_frameStep && nextSpeed != g_tickSpeed && g_probeBusy) ++g_speedChanges[g_probeRun];
     if (g_frameStep) g_tickSpeed = nextSpeed;
 }
@@ -1221,14 +1244,16 @@ static void ProbeAdmission(BYTE* timer)
 // ticks: what it does stays on this PC (Determinism_ToolScopeBegin).
 static void ResetSubTickOnStep()
 {
-    g_subTickAlpha = 0.0;
-    g_subTickSpan = (g_tickDebt > 0.0 && g_tickDebt < 0.85) ? (1.0 - g_tickDebt) : 1.0;
+    if (g_tickDebt <= 0.0) g_subTickAlpha = 0.0;
+    else if (g_tickDebt >= 0.95) g_subTickAlpha = 0.95;
+    else g_subTickAlpha = g_tickDebt;
+    g_subTickSpan = 1.0;
 }
 
 static void AdvanceSubTickOnHold(double step)
 {
     g_subTickAlpha += step / g_subTickSpan;
-    if (g_subTickAlpha > 0.95) g_subTickAlpha = 0.95;
+    if (g_subTickAlpha > 0.98) g_subTickAlpha = 0.98;
 }
 
 static void SessionClientAdmission(BYTE* timer, double elapsed)
@@ -1247,8 +1272,7 @@ static void SessionClientAdmission(BYTE* timer, double elapsed)
     bool hold = menu || g_frameFault || !LockstepNet_IsConnected() || (g_paused && backlog == 0);
     double rate = 1.0;
     if (hold) {
-        g_subTickAlpha = 0.0;
-        if (g_paused && backlog == 0) g_tickDebt = 0.0;
+        if (g_paused && backlog == 0) g_tickDebt = g_subTickAlpha;
     } else {
         if (backlog == 0) rate = 0.85;       // waiting for next packet: advance sub-tick phase smoothly
         else if (backlog == 1) rate = 0.95;  // 1 grant left: stretch slightly to avoid draining to 0
@@ -1265,7 +1289,7 @@ static void SessionClientAdmission(BYTE* timer, double elapsed)
     if (!menu && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_TakeGrant(g_stepCount + 1, &speed)) {
         g_frameStep = true;
         g_tickDebt -= 1.0;
-        if (backlog <= 3 && g_tickDebt > 0.5) g_tickDebt = 0.5;
+        if (backlog <= 3 && g_tickDebt > 0.95) g_tickDebt = 0.95;
         ResetSubTickOnStep();
         g_tickSpeed = speed < 1 ? 1 : speed > 4 ? 4 : speed;
     } else if (!hold) {
@@ -1305,19 +1329,21 @@ static void SessionAdmission(BYTE* timer)
         g_sentSpeed = g_requestedSpeed;
     }
     bool hold = g_paused || waitingLobby || timer[13] != 0 || !LockstepNet_IsConnected();
+    bool mayRun = !hold && !g_frameFault && LockstepNet_MayRun(g_stepCount + 1);
     if (hold) {
-        g_subTickAlpha = 0.0;
-        if (g_paused) g_tickDebt = 0.0;
+        if (g_paused) g_tickDebt = g_subTickAlpha;
     } else {
         g_tickDebt += elapsed * DETERMINISM_FIXED_FPS;
-        if (g_tickDebt > 2.5) g_tickDebt = 2.5; // no burst after waiting for the player
+        if (!mayRun && g_tickDebt > 0.98) g_tickDebt = 0.98;
+        else if (g_tickDebt > 1.25) g_tickDebt = 1.25;
     }
-    if (!hold && !g_frameFault && g_tickDebt >= 1.0 && LockstepNet_MayRun(g_stepCount + 1)) {
+    if (mayRun && g_tickDebt >= 1.0) {
         g_frameStep = true;
         g_tickDebt -= 1.0;
+        if (g_tickDebt > 0.95) g_tickDebt = 0.95;
         ResetSubTickOnStep();
         int boost = LocalBoost() > g_remoteBoost ? LocalBoost() : g_remoteBoost;
-        g_tickSpeed = g_requestedSpeed > 1 ? 2 + boost : 1;
+        g_tickSpeed = (g_requestedSpeed > 1 || boost > 0) ? 2 + boost : 1;
         LockstepNet_Grant(g_stepCount + 1, g_tickSpeed);
     } else if (!hold) {
         AdvanceSubTickOnHold(elapsed * DETERMINISM_FIXED_FPS);
@@ -1362,6 +1388,7 @@ static void HookedSimStep(__int64 world)
     g_inEarly = false;
     TwoStates_AfterStep((BYTE*)world);
     SimPatches_AfterEarly();
+    HeldFrame_UpdateCameraAfterSimStep();
     WriteGameSpeed(0);
     *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
     memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));
@@ -1515,6 +1542,19 @@ void Determinism_SetActive(bool active, unsigned long long seed)
     }
     g_active = active;
     Logf("republicmp  DETERMINISM: %s (seed %016llx)", active ? "on" : "off", seed);
+}
+
+void Determinism_SetActiveForTest(bool active)
+{
+    if (active) {
+        ResetFrames();
+        g_tickDebt = 16.0;
+    } else {
+        *(int*)(g_exeBase + 0x9D54B4) = 0;
+        *(int*)(g_exeBase + 0x9D54BC) = 0;
+        g_buttonsArmed = false;
+    }
+    g_active = active;
 }
 
 bool Determinism_IsActive() { return g_active; }

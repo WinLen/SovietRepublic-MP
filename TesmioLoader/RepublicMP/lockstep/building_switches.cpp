@@ -10,6 +10,7 @@
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
+#include <math.h>
 #include <string.h>
 #include <vector>
 
@@ -32,8 +33,8 @@
 #define NAME_END (0x114 + 0x80)
 #define SAMPLE_EVERY 16
 
-enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2 };
-static const char* const kKindText[3] = { "building", "storage slot", "world setting" };
+enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3 };
+static const char* const kKindText[4] = { "building", "storage slot", "world setting", "manual resource purchase" };
 
 // A slot's regions: 0 its own bytes, 1 the +00 entries, 2 the +18 entries, 3 the +30 words.
 static const unsigned kRegionAt[4] = { 0, 0x00, 0x18, 0x30 };
@@ -205,6 +206,29 @@ bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset)
     return InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
 }
 
+static bool IsLeftOutSlotDynamicOffset(unsigned offset)
+{
+    unsigned region = (offset % SLOT_STRIDE) / REGION_STRIDE;
+    unsigned local = offset % REGION_STRIDE;
+    if (region == 0 && local < 0x48) return true;
+    if (region == 1 && (local % 16) == 8) return true;
+    return false;
+}
+
+bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset)
+{
+    return IsLeftOutSlotDynamicOffset(offset);
+}
+
+static bool IsNeverNoiseWord(const Range& r, unsigned offset)
+{
+    if (r.kind == KIND_BUILDING)
+        return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET;
+    if (r.kind == KIND_SLOT)
+        return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) && ((offset % 16) == 0x0C);
+    return false;
+}
+
 // Words this module leaves alone: the settings sync's own, and the view's.
 static bool LeftOut(const Range& r, unsigned offset)
 {
@@ -212,7 +236,7 @@ static bool LeftOut(const Range& r, unsigned offset)
         return SettingsSync_OwnsBuildingWord((const BYTE*)r.building, offset) ||
                InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
     if (r.kind == KIND_SLOT)
-        return (((offset % SLOT_STRIDE) / REGION_STRIDE == 0) && (offset % REGION_STRIDE) < 0x48) ||
+        return IsLeftOutSlotDynamicOffset(offset) ||
                SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
                                          offset % REGION_STRIDE);
     return false;
@@ -296,8 +320,9 @@ static void Compare(const Range& r, bool click)
             }
             continue;
         }
+        bool neverNoise = IsNeverNoiseWord(r, offset);
         if (!click) {
-            if (word < noise.size() && !noise[word]) {
+            if (!neverNoise && word < noise.size() && !noise[word]) {
                 noise[word] = true;
                 if (g_noiseLogged < 40) {
                     ++g_noiseLogged;
@@ -306,7 +331,7 @@ static void Compare(const Range& r, bool click)
             }
             continue;
         }
-        if (word < noise.size() && noise[word]) continue;
+        if (!neverNoise && word < noise.size() && noise[word]) continue;
         // A heap address in the aligned pair (names are text).
         unsigned pair = q & ~7u;
         bool text = r.kind == KIND_BUILDING && offset >= NAME_AT && offset < NAME_END;
@@ -480,59 +505,188 @@ static U64 WordAddress(U64 building, const SwitchMsg& m, unsigned offset)
     return local + 4 <= elems * kRegionEach[region] ? at + local : 0;
 }
 
+bool BuildingSwitches_CaptureManualBuy(unsigned long long world, unsigned long long building, int currencyMode)
+{
+    if (!world || !building || (currencyMode != 3 && currencyMode != 4)) return false;
+    RouteRef ref = kNoRef;
+    if (!GuardedRef(building, ref)) return false;
+
+    U64 v[2] = {};
+    if (!Copy(v, (const void*)(world + WORLD_UI_RES_SLIDERS_OFFSET), 16) ||
+        !v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES != 0)
+        return false;
+    U64 slotCount = (v[1] - v[0]) / SLOT_BYTES;
+    if (slotCount > MAX_SLOTS) return false;
+
+    SwitchMsg m = {};
+    m.building = ref;
+    m.kind = KIND_MANUAL_BUY;
+    m.shape = (unsigned)currencyMode;
+
+    for (unsigned s = 0; s < (unsigned)slotCount && m.count < MAX_WORDS; s++) {
+        U64 uiSlot = v[0] + (U64)s * SLOT_BYTES;
+        U64 e[2] = {};
+        if (!Copy(e, (const void*)uiSlot, 16) || !e[0] || e[1] < e[0] || (e[1] - e[0]) % 0x10 != 0) continue;
+        U64 entryCount = (e[1] - e[0]) / 0x10;
+        if (entryCount > MAX_ENTRIES) continue;
+        for (unsigned k = 0; k < (unsigned)entryCount && m.count < MAX_WORDS; k++) {
+            float tons = 0.0f;
+            if (!Copy(&tons, (const void*)(e[0] + (U64)k * 0x10 + 0x08), 4)) continue;
+            if (!isfinite(tons) || tons <= 0.0f) continue;
+            unsigned floatBits = 0;
+            memcpy(&floatBits, &tons, 4);
+            unsigned off = s * SLOT_STRIDE + REGION_STRIDE + k * 0x10 + 8;
+            m.words[m.count++] = { off, 0u, floatBits };
+        }
+    }
+    if (m.count == 0) return false;
+    Submit(m);
+    return true;
+}
+
+static void WriteSlidersFromManualBuyMsg(BYTE* uiVecAddr, const SwitchMsg& m)
+{
+    U64 v[2] = {};
+    if (!Copy(v, uiVecAddr, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES != 0) return;
+    U64 slotCount = (v[1] - v[0]) / SLOT_BYTES;
+    for (unsigned i = 0; i < m.count && i < MAX_WORDS; i++) {
+        unsigned off = m.words[i].offset;
+        unsigned s = off / SLOT_STRIDE;
+        unsigned region = (off % SLOT_STRIDE) / REGION_STRIDE;
+        unsigned local = off % REGION_STRIDE;
+        if (region != 1 || s >= slotCount || (local % 0x10) != 8) continue;
+        unsigned k = local / 0x10;
+        U64 e[2] = {};
+        U64 uiSlot = v[0] + (U64)s * SLOT_BYTES;
+        if (!Copy(e, (const void*)uiSlot, 16) || !e[0] || e[1] < e[0] || (e[1] - e[0]) % 0x10 != 0) continue;
+        if (k >= (e[1] - e[0]) / 0x10) continue;
+        *(unsigned*)(e[0] + (U64)k * 0x10 + 0x08) = m.words[i].now;
+    }
+}
+
+static const char* ApplyManualBuyFallback(U64 building, const SwitchMsg& m)
+{
+    U64 slots = 0;
+    unsigned slotCount = SlotCount(building, &slots);
+    if (!slots || !slotCount) return "building has no storage slots";
+    const bool isUsd = (m.shape == 3);
+    double* treasury = (double*)(World() + (isUsd ? WORLD_USD_OFFSET : WORLD_RUB_OFFSET));
+    const unsigned priceOff = isUsd ? RES_PRICE_USD_OFFSET : RES_PRICE_RUB_OFFSET;
+
+    for (unsigned i = 0; i < m.count && i < MAX_WORDS; i++) {
+        unsigned off = m.words[i].offset;
+        unsigned s = off / SLOT_STRIDE;
+        unsigned region = (off % SLOT_STRIDE) / REGION_STRIDE;
+        unsigned local = off % REGION_STRIDE;
+        if (region != 1 || s >= slotCount || (local % 0x10) != 8) continue;
+        unsigned k = local / 0x10;
+        U64 at = 0;
+        unsigned elems = 0;
+        if (!Region(slots + (U64)s * SLOT_BYTES, 1, &at, &elems) || k >= elems) continue;
+        float tons = 0.0f;
+        memcpy(&tons, &m.words[i].now, 4);
+        if (!isfinite(tons) || tons <= 0.0f) continue;
+
+        U64 entryAddr = at + (U64)k * 0x10;
+        const BYTE* resPtr = *(const BYTE* const*)entryAddr;
+        float unitPrice = resPtr ? *(const float*)(resPtr + priceOff) : 0.0f;
+        if (isfinite(unitPrice) && unitPrice > 0.0f) {
+            *treasury -= (double)tons * (double)unitPrice;
+        }
+        *(float*)(entryAddr + 0x08) += tons;
+    }
+    *(int*)(building + BLD_EXPORT_MODE_OFFSET) = 0;
+    return nullptr;
+}
+
+static const char* ApplyManualBuy(U64 building, const SwitchMsg& m)
+{
+    if (!building) return "the building is gone";
+    if (m.shape != 3 && m.shape != 4) return "invalid currency mode";
+    if (g_exeBase[BLD_MANUAL_BUY_RES_RVA] != 0 && g_exeBase[BLD_INIT_RES_SLIDERS_RVA] != 0) {
+        typedef void (*InitSlidersFn)(void* world, void* bld, unsigned char mode);
+        typedef void (*ManualBuyFn)(void* world, void* bld, int currencyMode);
+        typedef void (*ClearVecFn)(void* vec);
+        BYTE* uiVecAddr = World() + WORLD_UI_RES_SLIDERS_OFFSET;
+        BYTE savedUiVec[24] = {};
+        memcpy(savedUiVec, uiVecAddr, 24);
+        memset(uiVecAddr, 0, 24);
+
+        ((InitSlidersFn)(g_exeBase + BLD_INIT_RES_SLIDERS_RVA))(World(), (void*)building, 0);
+        WriteSlidersFromManualBuyMsg(uiVecAddr, m);
+        ((ManualBuyFn)(g_exeBase + BLD_MANUAL_BUY_RES_RVA))(World(), (void*)building, (int)m.shape);
+        if (g_exeBase[BLD_STORAGE_VEC_CLEAR_RVA] != 0) {
+            ((ClearVecFn)(g_exeBase + BLD_STORAGE_VEC_CLEAR_RVA))(uiVecAddr);
+        }
+        memcpy(uiVecAddr, savedUiVec, 24);
+        *(int*)(building + BLD_EXPORT_MODE_OFFSET) = 0;
+        return nullptr;
+    }
+    return ApplyManualBuyFallback(building, m);
+}
+
+static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
+{
+    if (m.kind != KIND_WORLD && !building) return "the building is gone";
+    for (unsigned i = 0; i < m.count; i++) {
+        unsigned off = m.words[i].offset;
+        if (off % 4 || !WordAddress(building, m, off))
+            return "a word is not there (another shape here)";
+        if (m.kind != KIND_WORLD) {
+            Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
+            if (LeftOut(checkR, off))
+                return "a word is in a view/vector range";
+            bool text = m.kind == KIND_BUILDING && off >= NAME_AT && off < NAME_END;
+            U64 pairAddr = WordAddress(building, m, off & ~7u);
+            if (!text && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
+                PointerLike(*(const U64*)pairAddr))
+                return "a word overlaps a heap pointer here";
+        }
+    }
+    return nullptr;
+}
+
+static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differing)
+{
+    for (unsigned i = 0; i < m.count; i++) {
+        unsigned off = m.words[i].offset;
+        if (m.kind == KIND_WORLD && off == 0xB08) {
+            BYTE* pb = (BYTE*)WordAddress(building, m, off);
+            if (!pb) continue;
+            unsigned curVal = *pb;
+            if (curVal != (m.words[i].old & 0xFF) && curVal != (m.words[i].now & 0xFF)) differing++;
+            *pb = (BYTE)(m.words[i].now & 0xFF);
+        } else {
+            unsigned* p = (unsigned*)WordAddress(building, m, off);
+            if (!p) continue;
+            if (*p != m.words[i].old && *p != m.words[i].now) differing++;
+            *p = m.words[i].now;
+        }
+        if (m.kind == KIND_WORLD) // the session's value from now on
+            for (int k = 0; k < g_worldCount; k++)
+                if (g_worldAt[k] == off) {
+                    g_auth[k] = off == 0xB08 ? (m.words[i].now & 0xFF) : m.words[i].now;
+                    g_sentValid[k] = false;
+                }
+    }
+}
+
 bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
 {
     if (size != sizeof(SwitchMsg)) return false;
     SwitchMsg m;
     memcpy(&m, data, sizeof(m));
-    if (m.kind > KIND_WORLD || !m.count || m.count > MAX_WORDS) return false;
+    if (m.kind > KIND_MANUAL_BUY || !m.count || m.count > MAX_WORDS) return false;
     const char* why = nullptr;
     unsigned differing = 0;
     DiagLog_BeginSafeSeh();
     __try {
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
-        if (m.kind != KIND_WORLD && !building) why = "the building is gone";
-        for (unsigned i = 0; i < m.count && !why; i++) {
-            unsigned off = m.words[i].offset;
-            if (off % 4 || !WordAddress(building, m, off)) {
-                why = "a word is not there (another shape here)";
-                break;
-            }
-            if (m.kind != KIND_WORLD) {
-                Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
-                if (LeftOut(checkR, off)) {
-                    why = "a word is in a view/vector range";
-                    break;
-                }
-                bool text = m.kind == KIND_BUILDING && off >= NAME_AT && off < NAME_END;
-                U64 pairAddr = WordAddress(building, m, off & ~7u);
-                if (!text && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
-                    PointerLike(*(const U64*)pairAddr)) {
-                    why = "a word overlaps a heap pointer here";
-                    break;
-                }
-            }
-        }
-        for (unsigned i = 0; i < m.count && !why; i++) {
-            unsigned off = m.words[i].offset;
-            if (m.kind == KIND_WORLD && off == 0xB08) {
-                BYTE* pb = (BYTE*)WordAddress(building, m, off);
-                if (!pb) continue;
-                unsigned curVal = *pb;
-                if (curVal != (m.words[i].old & 0xFF) && curVal != (m.words[i].now & 0xFF)) differing++;
-                *pb = (BYTE)(m.words[i].now & 0xFF);
-            } else {
-                unsigned* p = (unsigned*)WordAddress(building, m, off);
-                if (!p) continue;
-                if (*p != m.words[i].old && *p != m.words[i].now) differing++;
-                *p = m.words[i].now;
-            }
-            if (m.kind == KIND_WORLD) // the session's value from now on
-                for (int k = 0; k < g_worldCount; k++)
-                    if (g_worldAt[k] == off) {
-                        g_auth[k] = off == 0xB08 ? (m.words[i].now & 0xFF) : m.words[i].now;
-                        g_sentValid[k] = false;
-                    }
+        if (m.kind == KIND_MANUAL_BUY) {
+            why = ApplyManualBuy(building, m);
+        } else {
+            why = ValidateSwitchWords(building, m);
+            if (!why) WriteSwitchWords(building, m, differing);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         why = "a fault while writing";

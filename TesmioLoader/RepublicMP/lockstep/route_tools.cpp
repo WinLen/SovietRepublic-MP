@@ -1357,7 +1357,7 @@ static const char* ApplyVehicleSendConstr(const RouteMsg& m)
             memcpy(req, res, 64);
             U64 r14_site = *(U64*)(req + 0);
             U64 r11_veh = *(U64*)(req + 0x10);
-            U64 rbx_host = r11_veh ? Q(r11_veh + 0x4A0) : 0;
+            U64 rbx_host = r11_veh ? Q(r11_veh + VEH_LINK_PTR_OFFSET) : 0;
             bool ok = false;
             if (rbx_host) {
                 if (r14_site && ((unsigned char (*)(U64, U64))(g_exeBase + 0x0F99C0))(r11_veh, rbx_host + 0x488)) {

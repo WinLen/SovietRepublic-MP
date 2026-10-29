@@ -95,12 +95,17 @@ struct PartnerCursorInfo {
     bool valid;
     float x, y, z;
     float camX, camZ;
+    float camPos[3];
+    float camLookAt[3];
     ULONGLONG lastUpdateMs;
     bool hasPing;
     float pingX, pingY, pingZ;
     ULONGLONG pingReceivedMs;
     unsigned pingSeq;
 };
+void LockstepNet_SendCursor(float x, float y, float z,
+                            const float camPos[3], const float camLookAt[3],
+                            bool isPing);
 void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, bool isPing);
 PartnerCursorInfo LockstepNet_GetPartnerCursor();
 

@@ -61,6 +61,28 @@ static bool g_loadedFromCoopSave = false;
 static volatile bool g_importingSpSave = false;
 static char g_savedJoinAddress[64] = "";
 
+static bool  g_hasSavedCam1 = false;
+static float g_savedCam1Pos[3] = { 0.0f, 0.0f, 0.0f };
+static float g_savedCam1Look[3] = { 0.0f, 0.0f, 0.0f };
+
+static bool  g_hasSavedCam2 = false;
+static float g_savedCam2Pos[3] = { 0.0f, 0.0f, 0.0f };
+static float g_savedCam2Look[3] = { 0.0f, 0.0f, 0.0f };
+
+static void ResetSavedCameraState()
+{
+    g_hasSavedCam1 = false;
+    memset(g_savedCam1Pos, 0, sizeof(g_savedCam1Pos));
+    memset(g_savedCam1Look, 0, sizeof(g_savedCam1Look));
+    g_hasSavedCam2 = false;
+    memset(g_savedCam2Pos, 0, sizeof(g_savedCam2Pos));
+    memset(g_savedCam2Look, 0, sizeof(g_savedCam2Look));
+}
+
+static bool  g_hasResyncCam = false;
+static float g_resyncCamPos[3] = { 0.0f, 0.0f, 0.0f };
+static float g_resyncCamLook[3] = { 0.0f, 0.0f, 0.0f };
+
 static constexpr ULONGLONG PING_LIFETIME_MS = 20000;
 static bool      g_localPingActive = false;
 static float     g_localPingX      = 0.0f;
@@ -2427,6 +2449,8 @@ void TwoStates_ResetEconStatsForTest(BYTE* world)
     memset(g_testLedgerPool, 0, sizeof(g_testLedgerPool));
     memset(&g_lastWorldScalars, 0, sizeof(g_lastWorldScalars));
     memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+    g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
+    g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
     g_stateEconInitialized = false;
     if (world) {
         EnsureStateEconInitialized(world);
@@ -2587,10 +2611,13 @@ static void __fastcall H_MasterSave(BYTE* world)
             memcpy(searchPoolBackup, world + 0x14478, sizeof(searchPoolBackup));
             searchPoolSaved = true;
             strncpy_s(saveRel, (const char*)(world + SAVE_NAME_FIELD_OFFSET), _TRUNCATE);
-            if (isCoopSave && _stricmp(saveRel, "saved_last") == 0) {
-                // Redirect engine's automatic save-on-exit ("saved_last") into the Co-op save bank
-                // so exiting a Co-op session never overwrites Singleplayer's saved_last and always
-                // appears in "Continue Co-op" / "Co-op Saves".
+            bool isManualIntoStaging = (strstr(saveRel, "mp_syncsave_") != nullptr) &&
+                                       SaveSync_GetState() != SESSION_HOST_JOINING &&
+                                       SaveSync_GetState() != SESSION_CLIENT_JOINING;
+            if (isCoopSave && (_stricmp(saveRel, "saved_last") == 0 || isManualIntoStaging)) {
+                // Redirect engine's automatic save-on-exit ("saved_last") or manual save overwriting
+                // a staging "mp_syncsave_*" name into "save/coop_last_session" so user saves are never
+                // lost to staging cleanup and always appear in "Continue Co-op" / auto-host.
                 strncpy_s((char*)(world + SAVE_NAME_FIELD_OFFSET), SAVE_NAME_FIELD_MAX_LEN, "save/coop_last_session", _TRUNCATE);
                 strncpy_s(saveRel, "save/coop_last_session", _TRUNCATE);
                 prevFc90 = *(BYTE*)(world + 0xFC90);
@@ -3241,11 +3268,16 @@ void TwoStates_OnSessionEnded()
     }
 
     g_localPingActive = false;
+    g_hasResyncCam = false;
+    ResetSavedCameraState();
 
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
     g_toasts.clear();
     LeaveCriticalSection(&g_ownerLock);
+
+    g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
+    g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
 
     TwoStates_MountSaveBank(false);
     NativeMenu_ClearHostOnNextLoad();
@@ -3326,15 +3358,14 @@ void TwoStates_BeginCommand(int ownerState)
 {
     TwoStates_RestoreUiMoneySwap();
     g_cmdOwner = (ownerState == 2) ? 2 : 1;
+    g_inCommand = true;
     g_cmdBuildingsBefore     = GetWorldBuildingCount();
     g_cmdConstructionsBefore = GetWorldConstructionCount();
     g_cmdVehiclesBefore      = GetWorldVehicleCount();
     g_cmdResSnapshot.active  = false;
     if (!TwoStates_IsActive() || IsUnlimitedMoney()) {
-        g_inCommand = false;
         return;
     }
-    g_inCommand = true;
     __try {
         if (g_exeBase) {
             BYTE* world = g_exeBase + WORLD_RVA;
@@ -3346,6 +3377,11 @@ void TwoStates_BeginCommand(int ownerState)
         *WorldDollars() = g_stateUsd[g_cmdOwner - 1];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+}
+
+int TwoStates_GetCommandOwner()
+{
+    return g_inCommand ? g_cmdOwner : 0;
 }
 
 static void RegisterNewStructuresInVec(size_t beginRva, int countBefore, int countAfter, int owner)
@@ -3498,7 +3534,7 @@ static int FindOwnerLoanGlobalIdx(const SovietLoan* b, int count, bool filterByS
 
 static void NotifyLoanActionToast(int ownerState, const LsLoanCommand& cmd)
 {
-    if (!TwoStates_IsActive()) return;
+    if (!TwoStates_IsActive() || ownerState != TwoStates_LocalState()) return;
     bool isUsd = (cmd.loan.loanType == LOAN_CURRENCY_USD);
     double amount = isUsd ? fabs(cmd.dUsd) : fabs(cmd.dRub);
     if (amount < 1.0) amount = (double)cmd.loan.initialPrincipal;
@@ -3997,6 +4033,11 @@ int TwoStates_GetZoneAt(float x, float z)
     return 0;                             // Shared Border Zone
 }
 
+int TwoStates_GetStateAtWorldPos(float x, float z)
+{
+    return TwoStates_GetBuildingOwner(0, x, z);
+}
+
 bool TwoStates_CanBuildAt(float x, float z, int state)
 {
     if (!TwoStates_IsActive()) return true;
@@ -4109,13 +4150,34 @@ bool TwoStates_GetCursorWorldPos(float* outX, float* outY, float* outZ)
     }
 }
 
+static bool GetCameraVectorByIndex(int idx, float* outX, float* outY, float* outZ)
+{
+    float v[2][3] = {};
+    if (!TwoStates_GetCameraView(v[0], v[1])) return false;
+    if (outX) *outX = v[idx][0];
+    if (outY) *outY = v[idx][1];
+    if (outZ) *outZ = v[idx][2];
+    return true;
+}
+
+bool TwoStates_GetCameraPos(float* outX, float* outY, float* outZ)
+{
+    return GetCameraVectorByIndex(0, outX, outY, outZ);
+}
+
 bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ)
 {
+    return GetCameraVectorByIndex(1, outX, outY, outZ);
+}
+
+bool TwoStates_GetCameraView(float pos[3], float lookAt[3])
+{
+    if (!g_exeBase) return false;
     __try {
-        const float* look = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_LOOKAT_OFFSET);
-        if (outX) *outX = look[0];
-        if (outY) *outY = look[1];
-        if (outZ) *outZ = look[2];
+        const float* p = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_POS_OFFSET);
+        const float* l = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_LOOKAT_OFFSET);
+        if (pos) { pos[0] = p[0]; pos[1] = p[1]; pos[2] = p[2]; }
+        if (lookAt) { lookAt[0] = l[0]; lookAt[1] = l[1]; lookAt[2] = l[2]; }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -4142,28 +4204,165 @@ static float SampleTerrainHeight(float wx, float wz)
     return h;
 }
 
+static bool IsValidCameraPair(const float pos[3], const float look[3])
+{
+    if (!pos || !look) return false;
+    if (!isfinite(pos[0]) || !isfinite(pos[1]) || !isfinite(pos[2]) ||
+        !isfinite(look[0]) || !isfinite(look[1]) || !isfinite(look[2])) {
+        return false;
+    }
+    float dx = look[0] - pos[0];
+    float dy = look[1] - pos[1];
+    float dz = look[2] - pos[2];
+    return (dx * dx + dy * dy + dz * dz) > 0.01f;
+}
+
+bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
+{
+    if (!g_exeBase || !IsValidCameraPair(pos, lookAt)) return false;
+
+    float dx = lookAt[0] - pos[0];
+    float dy = lookAt[1] - pos[1];
+    float dz = lookAt[2] - pos[2];
+    float distXZ = sqrtf(dx * dx + dz * dz);
+    float yaw = atan2f(dx, dz);
+    float pitch = (distXZ > 0.001f) ? atan2f(-dy, distXZ) : 0.0f;
+    float roll = 0.0f;
+
+    DiagLog_BeginSafeSeh();
+    __try {
+        // 1. C3D_CAMERA at CAMERA_RVA
+        BYTE* cam = g_exeBase + CAMERA_RVA;
+        float* cPos    = (float*)(cam + CAMERA_POS_OFFSET);
+        float* cPitch  = (float*)(cam + 0x8C);
+        float* cYaw    = (float*)(cam + 0x90);
+        float* cRoll   = (float*)(cam + 0x94);
+        float* cLookAt = (float*)(cam + CAMERA_LOOKAT_OFFSET);
+
+        cPos[0] = pos[0];
+        cPos[1] = pos[1];
+        cPos[2] = pos[2];
+
+        *cPitch = pitch;
+        *cYaw   = yaw;
+        *cRoll  = roll;
+
+        cLookAt[0] = lookAt[0];
+        cLookAt[1] = lookAt[1];
+        cLookAt[2] = lookAt[2];
+
+        // 2. Camera Manager at world + WORLD_CAMERA_MGR_PTR_OFF
+        BYTE* world = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+        BYTE* camMgr = (world && IsPointerLikeX64(reinterpret_cast<uint64_t>(world))) ? *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) : nullptr;
+        if (camMgr && IsPointerLikeX64(reinterpret_cast<uint64_t>(camMgr))) {
+            float* mPos    = (float*)(camMgr + CAM_MGR_POS_OFFSET);
+            float* mRot    = (float*)(camMgr + CAM_MGR_ANGLES_OFFSET);
+            float* mCurPos = (float*)(camMgr + CAM_MGR_CUR_POS_OFFSET);
+            float* mCurRot = (float*)(camMgr + CAM_MGR_CUR_ANGLES_OFFSET);
+
+            mPos[0] = pos[0];    mPos[1] = pos[1];    mPos[2] = pos[2];
+            mRot[0] = pitch;     mRot[1] = yaw;       mRot[2] = roll;
+            mCurPos[0] = pos[0]; mCurPos[1] = pos[1]; mCurPos[2] = pos[2];
+            mCurRot[0] = pitch;  mCurRot[1] = yaw;    mCurRot[2] = roll;
+
+            // Clear snapback triggers
+            *(uint8_t*)(camMgr + CAM_MGR_FOLLOW_ACTIVE_OFF) = 0;
+            *(void**)(camMgr + CAM_MGR_RIDE_VEH_PTR_OFF) = nullptr;
+            *(void**)(camMgr + CAM_MGR_FOLLOW_WIN_PTR_OFF) = nullptr;
+
+            float* mStep = (float*)(camMgr + CAM_MGR_TRANS_STEP_OFFSET);
+            mStep[0] = 0.0f; mStep[1] = 0.0f; mStep[2] = 0.0f;
+            *(float*)(camMgr + CAM_MGR_TRANS_TIMER_OFFSET) = 0.0f;
+            *(float*)(camMgr + CAM_MGR_TRANS_DUR_OFFSET) = 0.0f;
+        }
+
+        // 3. Engine view matrix updates (0x86C4E0 / 0x86C4D0)
+        typedef void (__fastcall* CalcViewFn)(void* cam, void* m1, void* m2);
+        typedef void (__fastcall* CalcFinalFn)(void* cam);
+
+        CalcViewFn fnView = nullptr;
+        CalcFinalFn fnFinal = nullptr;
+        if (g_engine) {
+            fnView = (CalcViewFn)GetProcAddress(g_engine, "?CalculateView@C3D_CAMERA@@QEAAXPEAVC3DMATRIX@@0@Z");
+            fnFinal = (CalcFinalFn)GetProcAddress(g_engine, "?CalculateFinal@C3D_CAMERA@@QEAAXXZ");
+        }
+        if (!fnView && g_exeBase) {
+            fnView = *(CalcViewFn*)(g_exeBase + 0x86C4E0);
+        }
+        if (!fnFinal && g_exeBase) {
+            fnFinal = *(CalcFinalFn*)(g_exeBase + 0x86C4D0);
+        }
+        if (fnView && IsPointerLikeX64(reinterpret_cast<uint64_t>(fnView))) {
+            fnView(cam, nullptr, nullptr);
+        }
+        if (fnFinal && IsPointerLikeX64(reinterpret_cast<uint64_t>(fnFinal))) {
+            fnFinal(cam);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+    DiagLog_EndSafeSeh();
+    return true;
+}
+
+static bool ApplyInitialCoopCamera(float posX, float posZ, float lookX, float lookZ)
+{
+    float groundPos = SampleTerrainHeight(posX, posZ);
+    float groundLook = SampleTerrainHeight(lookX, lookZ);
+    if (!isfinite(groundPos) || groundPos < 1.0f) groundPos = 20.0f;
+    if (!isfinite(groundLook) || groundLook < 1.0f) groundLook = 20.0f;
+
+    float pos[3] = { posX, groundPos + 160.0f, posZ };
+    float lookAt[3] = { lookX, groundLook + 10.0f, lookZ };
+    return TwoStates_ApplyCameraView(pos, lookAt);
+}
+
+void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates)
+{
+    if (isTwoStates) {
+        float sign = isHost ? -1.0f : 1.0f;
+        ApplyInitialCoopCamera(sign * 80.0f, 0.0f, sign * 450.0f, 0.0f);
+    } else {
+        ApplyInitialCoopCamera(0.0f, 370.0f, 0.0f, 0.0f);
+    }
+}
+
+void TwoStates_CapturePreResyncCamera()
+{
+    float pos[3] = { 0.0f, 0.0f, 0.0f };
+    float look[3] = { 0.0f, 0.0f, 0.0f };
+    if (TwoStates_GetCameraView(pos, look) && IsValidCameraPair(pos, look)) {
+        g_resyncCamPos[0] = pos[0]; g_resyncCamPos[1] = pos[1]; g_resyncCamPos[2] = pos[2];
+        g_resyncCamLook[0] = look[0]; g_resyncCamLook[1] = look[1]; g_resyncCamLook[2] = look[2];
+        g_hasResyncCam = true;
+        Logf("republicmp  CAMERA: captured pre-resync camera (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
+             pos[0], pos[1], pos[2], look[0], look[1], look[2]);
+    }
+}
+
+bool TwoStates_HasCapturedResyncCamera()
+{
+    return g_hasResyncCam;
+}
+
 bool TwoStates_JumpCameraTo(float wx, float wz)
 {
     if (!SaveSync_IsWorldLoaded() || !isfinite(wx) || !isfinite(wz)) return false;
-    __try {
-        float* camPos    = (float*)(g_exeBase + CAMERA_RVA + CAMERA_POS_OFFSET);
-        float* camLookAt = (float*)(g_exeBase + CAMERA_RVA + CAMERA_LOOKAT_OFFSET);
-        float dx = wx - camLookAt[0];
-        float dz = wz - camLookAt[2];
-        float heightOffset = camPos[1] - camLookAt[1];
-        if (heightOffset < 35.0f || heightOffset > 1500.0f || !isfinite(heightOffset))
-            heightOffset = 140.0f;
-        float groundY = SampleTerrainHeight(wx, wz);
-        camLookAt[0] = wx;
-        camLookAt[1] = groundY;
-        camLookAt[2] = wz;
-        camPos[0] += dx;
-        camPos[1]  = groundY + heightOffset;
-        camPos[2] += dz;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
+    float curPos[3] = {};
+    float curLook[3] = {};
+    if (!TwoStates_GetCameraView(curPos, curLook)) return false;
+
+    float dx = wx - curLook[0];
+    float dz = wz - curLook[2];
+    float heightOffset = curPos[1] - curLook[1];
+    if (heightOffset < 35.0f || heightOffset > 1500.0f || !isfinite(heightOffset))
+        heightOffset = 140.0f;
+    float groundY = SampleTerrainHeight(wx, wz);
+
+    float newLook[3] = { wx, groundY, wz };
+    float newPos[3] = { curPos[0] + dx, groundY + heightOffset, curPos[2] + dz };
+    return TwoStates_ApplyCameraView(newPos, newLook);
 }
 
 
@@ -4215,7 +4414,10 @@ void TwoStates_PingAtCursor()
     g_localPingSentMs = GetTickCount64();
 
     if (LockstepNet_IsConnected()) {
-        LockstepNet_SendCursor(cx, cy, cz, lx, lz, true);
+        float cpos[3] = { 0.0f, 0.0f, 0.0f };
+        float clook[3] = { lx, ly, lz };
+        TwoStates_GetCameraPos(&cpos[0], &cpos[1], &cpos[2]);
+        LockstepNet_SendCursor(cx, cy, cz, cpos, clook, true);
     }
     char msg[160];
     _snprintf_s(msg, sizeof(msg), _TRUNCATE,
@@ -4604,7 +4806,10 @@ void TwoStates_DrawOverlay()
         float lx = 0.0f, ly = 0.0f, lz = 0.0f;
         TwoStates_GetCursorWorldPos(&cx, &cy, &cz);
         TwoStates_GetCameraLookAt(&lx, &ly, &lz);
-        LockstepNet_SendCursor(cx, cy, cz, lx, lz, false);
+        float cpos[3] = { 0.0f, 0.0f, 0.0f };
+        float clook[3] = { lx, ly, lz };
+        TwoStates_GetCameraPos(&cpos[0], &cpos[1], &cpos[2]);
+        LockstepNet_SendCursor(cx, cy, cz, cpos, clook, false);
     }
 
     ImVec2 displaySize = ImGui::GetIO().DisplaySize;
@@ -4914,11 +5119,62 @@ bool TwoStates_IsCoopBankMounted()
     return GetFileAttributesA(markerPath) != INVALID_FILE_ATTRIBUTES;
 }
 
+bool TwoStates_PromoteStagingSavesInDir(const char* saveBankDir)
+{
+    if (!saveBankDir || !saveBankDir[0]) return false;
+    std::error_code ec;
+    std::filesystem::path dirPath(saveBankDir);
+    if (!std::filesystem::exists(dirPath, ec)) return false;
+
+    std::filesystem::path bestStaging;
+    std::filesystem::file_time_type bestTime{};
+    bool foundStaging = false;
+
+    for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
+        if (!entry.is_directory(ec)) continue;
+        std::string name = entry.path().filename().string();
+        if (_strnicmp(name.c_str(), "mp_syncsave_", 12) != 0) continue;
+        std::filesystem::path headerBin = entry.path() / "header.bin";
+        std::filesystem::path statsIni  = entry.path() / "stats.ini";
+        std::filesystem::path coopMeta  = entry.path() / COOP_SAVE_META_NAME;
+        if (!std::filesystem::exists(headerBin, ec) ||
+            !std::filesystem::exists(statsIni, ec) ||
+            !std::filesystem::exists(coopMeta, ec)) {
+            continue;
+        }
+        auto mtime = std::filesystem::last_write_time(headerBin, ec);
+        if (!foundStaging || mtime > bestTime) {
+            bestTime = mtime;
+            bestStaging = entry.path();
+            foundStaging = true;
+        }
+    }
+    if (!foundStaging) return false;
+
+    std::filesystem::path dstDir = dirPath / "coop_last_session";
+    std::filesystem::path dstHeader = dstDir / "header.bin";
+    if (std::filesystem::exists(dstHeader, ec)) {
+        auto dstTime = std::filesystem::last_write_time(dstHeader, ec);
+        if (!ec && bestTime <= dstTime) return false;
+    }
+
+    std::filesystem::create_directories(dstDir, ec);
+    std::filesystem::copy(bestStaging, dstDir,
+                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                          ec);
+    if (ec) return false;
+    std::filesystem::last_write_time(dstHeader, bestTime, ec);
+    Logf("republicmp  SAVE_BANK: promoted newer staging save [%s] -> [%s]",
+         bestStaging.string().c_str(), dstDir.string().c_str());
+    return true;
+}
+
 static void CleanStagingFilesInDir(const std::filesystem::path& dirPath)
 {
     if (SaveSync_GetState() != SESSION_IDLE || SaveSync_IsWorldLoaded()) return;
     std::error_code ec;
     if (!std::filesystem::exists(dirPath, ec)) return;
+    TwoStates_PromoteStagingSavesInDir(dirPath.string().c_str());
     for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
         std::string name = entry.path().filename().string();
         if (_strnicmp(name.c_str(), "mp_syncsave_", 12) == 0 ||
@@ -5040,6 +5296,7 @@ bool TwoStates_GetLatestCoopSaveName(char* outName, size_t outSize)
 
     std::error_code ec;
     if (!std::filesystem::exists(coopBank, ec)) return false;
+    TwoStates_PromoteStagingSavesInDir(coopBank.string().c_str());
 
     std::string bestName;
     std::filesystem::file_time_type bestTime{};
@@ -5125,12 +5382,6 @@ static std::string ResourcePtrToToken(const BYTE* world, uintptr_t resPtr)
                         (unsigned long long)((resPtr - resBegin) / WORLD_RESOURCE_STRIDE));
             return buf;
         }
-        uintptr_t wBase = (uintptr_t)world;
-        if (resPtr >= wBase && resPtr < wBase + 0x1000000ULL) {
-            char buf[32];
-            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "W%llu", (unsigned long long)(resPtr - wBase));
-            return buf;
-        }
         for (size_t off = WORLD_RES_PTR_SLOTS_BEGIN_OFF; off <= WORLD_RES_PTR_SLOTS_END_OFF; off += sizeof(uintptr_t)) {
             uintptr_t slotVal = 0;
             if (SafeReadPod((const uintptr_t*)(world + off), &slotVal) && slotVal == resPtr) {
@@ -5138,6 +5389,12 @@ static std::string ResourcePtrToToken(const BYTE* world, uintptr_t resPtr)
                 _snprintf_s(buf, sizeof(buf), _TRUNCATE, "P%llu", (unsigned long long)off);
                 return buf;
             }
+        }
+        uintptr_t wBase = (uintptr_t)world;
+        if (resPtr >= wBase && resPtr < wBase + 0x20000ULL) {
+            char buf[32];
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "W%llu", (unsigned long long)(resPtr - wBase));
+            return buf;
         }
     }
     char buf[32];
@@ -5159,7 +5416,7 @@ static uintptr_t ResourceTokenToPtr(const BYTE* world, const std::string& tok)
             if (ptr >= resBegin && ptr < resEnd) return ptr;
         }
     } else if (prefix == 'W' && world) {
-        if (num < 0x1000000ULL) {
+        if (num < 0x20000ULL) {
             return (uintptr_t)world + (uintptr_t)num;
         }
     } else if (prefix == 'P' && world) {
@@ -5422,6 +5679,14 @@ static bool ParseCoopMetaEconKey(const BYTE* world, const std::string& key, cons
     return false;
 }
 
+static void WriteCoopMetaVec3Cm(std::ostringstream& out, const char* key, const float v[3])
+{
+    out << key << "="
+        << (long long)llround((double)v[0] * 100.0) << ","
+        << (long long)llround((double)v[1] * 100.0) << ","
+        << (long long)llround((double)v[2] * 100.0) << "\r\n";
+}
+
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 {
     if (!fullSaveDir || !fullSaveDir[0]) return;
@@ -5466,6 +5731,35 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "net_trade2_rub_cents=" << (long long)llround(g_netTradeRub[1] * 100.0) << "\r\n";
     out << "net_trade1_usd_cents=" << (long long)llround(g_netTradeUsd[0] * 100.0) << "\r\n";
     out << "net_trade2_usd_cents=" << (long long)llround(g_netTradeUsd[1] * 100.0) << "\r\n";
+
+    float c1_pos[3] = {}, c1_look[3] = {};
+    bool haveC1 = TwoStates_GetCameraView(c1_pos, c1_look) && IsValidCameraPair(c1_pos, c1_look);
+    if (!haveC1 && g_hasSavedCam1) {
+        memcpy(c1_pos, g_savedCam1Pos, sizeof(c1_pos));
+        memcpy(c1_look, g_savedCam1Look, sizeof(c1_look));
+        haveC1 = true;
+    }
+    if (haveC1) {
+        WriteCoopMetaVec3Cm(out, "cam1_pos_cm", c1_pos);
+        WriteCoopMetaVec3Cm(out, "cam1_look_cm", c1_look);
+    }
+
+    float c2_pos[3] = {}, c2_look[3] = {};
+    bool haveC2 = false;
+    PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
+    if (pc.valid && IsValidCameraPair(pc.camPos, pc.camLookAt)) {
+        c2_pos[0] = pc.camPos[0]; c2_pos[1] = pc.camPos[1]; c2_pos[2] = pc.camPos[2];
+        c2_look[0] = pc.camLookAt[0]; c2_look[1] = pc.camLookAt[1]; c2_look[2] = pc.camLookAt[2];
+        haveC2 = true;
+    } else if (g_hasSavedCam2) {
+        memcpy(c2_pos, g_savedCam2Pos, sizeof(c2_pos));
+        memcpy(c2_look, g_savedCam2Look, sizeof(c2_look));
+        haveC2 = true;
+    }
+    if (haveC2) {
+        WriteCoopMetaVec3Cm(out, "cam2_pos_cm", c2_pos);
+        WriteCoopMetaVec3Cm(out, "cam2_look_cm", c2_look);
+    }
 
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
@@ -5561,17 +5855,19 @@ static void HealLoadedCoopMetaTradeStats(bool hadPoisonedZero, const long long r
                                          const long long tradeRubCents[2], const long long tradeUsdCents[2])
 {
     if (!g_stateEconInitialized) return;
-    for (int s = 0; s < 2; ++s) {
-        int other = 1 - s;
-        bool sZeroTrade = (tradeRubCents[s] == 0 && tradeUsdCents[s] == 0);
-        bool otherHasTrade = (tradeRubCents[other] != 0 || tradeUsdCents[other] != 0);
-        if (sZeroTrade && otherHasTrade) {
-            MergePeriodTradeResVecsIntoState(&g_stateCurEcon[other], &g_stateCurEcon[s]);
-            size_t n = std::min(g_stateHistEcon[s].size(), g_stateHistEcon[other].size());
-            for (size_t i = 0; i < n; ++i) {
-                MergePeriodTradeResVecsIntoState(&g_stateHistEcon[other][i], &g_stateHistEcon[s][i]);
+    if (hadPoisonedZero) {
+        for (int s = 0; s < 2; ++s) {
+            int other = 1 - s;
+            bool sZeroTrade = (tradeRubCents[s] == 0 && tradeUsdCents[s] == 0);
+            bool otherHasTrade = (tradeRubCents[other] != 0 || tradeUsdCents[other] != 0);
+            if (sZeroTrade && otherHasTrade) {
+                MergePeriodTradeResVecsIntoState(&g_stateCurEcon[other], &g_stateCurEcon[s]);
+                size_t n = std::min(g_stateHistEcon[s].size(), g_stateHistEcon[other].size());
+                for (size_t i = 0; i < n; ++i) {
+                    MergePeriodTradeResVecsIntoState(&g_stateHistEcon[other][i], &g_stateHistEcon[s][i]);
+                }
+                return;
             }
-            return;
         }
     }
     if (tradeRubCents[0] == 0 && tradeRubCents[1] == 0 && tradeUsdCents[0] == 0 && tradeUsdCents[1] == 0 &&
@@ -5585,8 +5881,124 @@ static void HealLoadedCoopMetaTradeStats(bool hadPoisonedZero, const long long r
     }
 }
 
+static bool ParseCmVector3(const std::string& val, float out[3])
+{
+    if (val.empty() || !out) return false;
+    const char* p = val.c_str();
+    char* endp = nullptr;
+
+    while (*p == ' ' || *p == '\t') ++p;
+    long long cx = _strtoi64(p, &endp, 10);
+    if (!endp || endp == p || *endp != ',') return false;
+
+    p = endp + 1;
+    while (*p == ' ' || *p == '\t') ++p;
+    long long cy = _strtoi64(p, &endp, 10);
+    if (!endp || endp == p || *endp != ',') return false;
+
+    p = endp + 1;
+    while (*p == ' ' || *p == '\t') ++p;
+    long long cz = _strtoi64(p, &endp, 10);
+    if (!endp || endp == p) return false;
+
+    while (*endp == ' ' || *endp == '\t' || *endp == '\r' || *endp == '\n') {
+        ++endp;
+    }
+    if (*endp != '\0') return false;
+
+    out[0] = (float)((double)cx / 100.0);
+    out[1] = (float)((double)cy / 100.0);
+    out[2] = (float)((double)cz / 100.0);
+    return true;
+}
+
+struct CoopCamParseState {
+    float pos1[3]  = { 0.0f, 0.0f, 0.0f };
+    float look1[3] = { 0.0f, 0.0f, 0.0f };
+    float pos2[3]  = { 0.0f, 0.0f, 0.0f };
+    float look2[3] = { 0.0f, 0.0f, 0.0f };
+    bool havePos1  = false;
+    bool haveLook1 = false;
+    bool havePos2  = false;
+    bool haveLook2 = false;
+};
+
+static bool ParseCoopMetaCameraKey(const std::string& key, const std::string& val, CoopCamParseState& st)
+{
+    if (key == "cam1_pos_cm") {
+        st.havePos1 = ParseCmVector3(val, st.pos1);
+        return true;
+    }
+    if (key == "cam1_look_cm") {
+        st.haveLook1 = ParseCmVector3(val, st.look1);
+        return true;
+    }
+    if (key == "cam2_pos_cm") {
+        st.havePos2 = ParseCmVector3(val, st.pos2);
+        return true;
+    }
+    if (key == "cam2_look_cm") {
+        st.haveLook2 = ParseCmVector3(val, st.look2);
+        return true;
+    }
+    return false;
+}
+
+static void FinalizeSavedCameraMeta(const CoopCamParseState& st)
+{
+    if (st.havePos1 && st.haveLook1 && IsValidCameraPair(st.pos1, st.look1)) {
+        g_hasSavedCam1 = true;
+        memcpy(g_savedCam1Pos, st.pos1, sizeof(g_savedCam1Pos));
+        memcpy(g_savedCam1Look, st.look1, sizeof(g_savedCam1Look));
+    } else {
+        g_hasSavedCam1 = false;
+        memset(g_savedCam1Pos, 0, sizeof(g_savedCam1Pos));
+        memset(g_savedCam1Look, 0, sizeof(g_savedCam1Look));
+    }
+
+    if (st.havePos2 && st.haveLook2 && IsValidCameraPair(st.pos2, st.look2)) {
+        g_hasSavedCam2 = true;
+        memcpy(g_savedCam2Pos, st.pos2, sizeof(g_savedCam2Pos));
+        memcpy(g_savedCam2Look, st.look2, sizeof(g_savedCam2Look));
+    } else {
+        g_hasSavedCam2 = false;
+        memset(g_savedCam2Pos, 0, sizeof(g_savedCam2Pos));
+        memset(g_savedCam2Look, 0, sizeof(g_savedCam2Look));
+    }
+}
+
+bool TwoStates_GetSavedCameraForTest(int state, float outPos[3], float outLook[3])
+{
+    if (state == 1 && g_hasSavedCam1) {
+        if (outPos) memcpy(outPos, g_savedCam1Pos, sizeof(g_savedCam1Pos));
+        if (outLook) memcpy(outLook, g_savedCam1Look, sizeof(g_savedCam1Look));
+        return true;
+    }
+    if (state == 2 && g_hasSavedCam2) {
+        if (outPos) memcpy(outPos, g_savedCam2Pos, sizeof(g_savedCam2Pos));
+        if (outLook) memcpy(outLook, g_savedCam2Look, sizeof(g_savedCam2Look));
+        return true;
+    }
+    return false;
+}
+
+void TwoStates_SetSavedCameraForTest(int state, const float pos[3], const float look[3])
+{
+    if (!IsValidCameraPair(pos, look)) return;
+    if (state == 1) {
+        g_hasSavedCam1 = true;
+        memcpy(g_savedCam1Pos, pos, sizeof(g_savedCam1Pos));
+        memcpy(g_savedCam1Look, look, sizeof(g_savedCam1Look));
+    } else if (state == 2) {
+        g_hasSavedCam2 = true;
+        memcpy(g_savedCam2Pos, pos, sizeof(g_savedCam2Pos));
+        memcpy(g_savedCam2Look, look, sizeof(g_savedCam2Look));
+    }
+}
+
 static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgetsAndMode)
 {
+    ResetSavedCameraState();
     if (!fullSaveDir || !fullSaveDir[0]) return false;
     char metaPath[MAX_PATH] = {};
     _snprintf_s(metaPath, sizeof(metaPath), _TRUNCATE, "%s\\%s", fullSaveDir, COOP_SAVE_META_NAME);
@@ -5621,6 +6033,8 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     g_stateHistEcon[0].clear();
     g_stateHistEcon[1].clear();
 
+    CoopCamParseState camState;
+
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
     g_buildingOwners.clear();
@@ -5649,11 +6063,14 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
         else if (key == "net_trade2_usd_cents") tradeUsdCents[1] = _strtoi64(val.c_str(), nullptr, 10);
         else if (key == "building_owners") ParseOwnersList(val, g_buildingOwners, 1, &hadPoisonedZero);
         else if (key == "vehicle_owners")  ParseOwnersList(val, g_vehicleOwners, 0, nullptr);
+        else if (ParseCoopMetaCameraKey(key, val, camState)) { /* parsed camera key */ }
         else ParseCoopMetaEconKey(world, key, val, haveEconCur);
     }
     size_t bldCount = g_buildingOwners.size();
     size_t vehCount = g_vehicleOwners.size();
     LeaveCriticalSection(&g_ownerLock);
+
+    FinalizeSavedCameraMeta(camState);
 
     g_stateEconInitialized = (haveEconCur[0] && haveEconCur[1]);
     HealLoadedCoopMetaTradeStats(hadPoisonedZero, rubCents, tradeRubCents, tradeUsdCents);
@@ -5795,6 +6212,37 @@ void TwoStates_BeforeAnyWorldLoad()
     ModSync_BeforeWorldLoad(true, hasFullDir ? fullDir : nullptr);
 }
 
+static void RestoreOrFrameCoopCamera(bool isHost)
+{
+    bool twoStates = (g_inSession ? g_sessionMode : g_chosenMode) == COOP_MODE_TWO_STATES;
+    if (g_hasResyncCam) {
+        TwoStates_ApplyCameraView(g_resyncCamPos, g_resyncCamLook);
+        g_hasResyncCam = false;
+        Logf("republicmp  CAMERA: restored pre-resync view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
+             g_resyncCamPos[0], g_resyncCamPos[1], g_resyncCamPos[2],
+             g_resyncCamLook[0], g_resyncCamLook[1], g_resyncCamLook[2]);
+    } else if (isHost && g_hasSavedCam1) {
+        TwoStates_ApplyCameraView(g_savedCam1Pos, g_savedCam1Look);
+        Logf("republicmp  CAMERA: restored saved Host view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
+             g_savedCam1Pos[0], g_savedCam1Pos[1], g_savedCam1Pos[2],
+             g_savedCam1Look[0], g_savedCam1Look[1], g_savedCam1Look[2]);
+    } else if (!isHost && g_hasSavedCam2) {
+        TwoStates_ApplyCameraView(g_savedCam2Pos, g_savedCam2Look);
+        Logf("republicmp  CAMERA: restored saved Client view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
+             g_savedCam2Pos[0], g_savedCam2Pos[1], g_savedCam2Pos[2],
+             g_savedCam2Look[0], g_savedCam2Look[1], g_savedCam2Look[2]);
+    } else {
+        TwoStates_ApplyInitialFraming(isHost, twoStates);
+        Logf("republicmp  CAMERA: applied initial %s framing (mode=%s)",
+             isHost ? "Host (West)" : "Client (East)", twoStates ? "TwoStates" : "OneState");
+    }
+}
+
+void TwoStates_RestoreOrFrameCameraForTest(bool isHost)
+{
+    RestoreOrFrameCoopCamera(isHost);
+}
+
 void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
 {
     g_beforeLoadPrepared = false;
@@ -5814,6 +6262,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
             ReadCoopSaveMetaInternal(fullSaveDir, false);
         }
         TwoStates_OnWorldLoaded();
+        RestoreOrFrameCoopCamera(g_isHost);
         return;
     }
 
@@ -5832,6 +6281,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
             TwoStates_AddToast(Tr("Загружен кооп-сейв «Одно государство»",
                                   "Loaded 'One State' Co-op save"), 1);
         }
+        RestoreOrFrameCoopCamera(true);
     } else {
         g_loadedFromCoopSave = false;
         g_treasuryInitialized = false;
@@ -5858,6 +6308,9 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
         g_stateHistEcon[0].clear();
         g_stateHistEcon[1].clear();
+        if (inCoop) {
+            RestoreOrFrameCoopCamera(true);
+        }
     }
 }
 

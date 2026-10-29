@@ -25,6 +25,7 @@
 #include "source_slots.h"
 #include "rename.h"
 #include "../session/two_states.h"
+#include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include <vector>
 #include <string.h>
@@ -294,8 +295,11 @@ static void Apply(const Command& c)
     InputBlock_BeginNeutral();
     if (CancelsLocalDrag(c.kind))
         RoadSync_CancelLocalDrag();
+    bool isRemote = (c.owner != 0 && (int)c.owner != TwoStates_LocalState());
     ReplayUiScope menus;
+    if (isRemote) Commands_BeginRemoteReplayScope();
     bool ok = DispatchCommandPayload(c.kind, p, n);
+    if (isRemote) Commands_EndRemoteReplayScope();
     InputBlock_EndNeutral();
     InterlockedDecrement(&g_applying);
     g_madeThisFrame = true;
@@ -664,6 +668,9 @@ void Commands_SetSession(int role)
     g_session = role;
     g_capturing = role != COMMANDS_OFF;
     Unlock();
+    if (role == COMMANDS_OFF) {
+        while (Commands_IsApplyingRemote()) Commands_EndRemoteReplayScope();
+    }
     Logf("republicmp  LOCKSTEP: commands %s", role == COMMANDS_HOST ? "ordered here (host)"
                                               : role == COMMANDS_PLAYER ? "ordered by the host" : "off");
 }
@@ -732,4 +739,250 @@ void Commands_ProbeEnd(size_t* recorded, size_t* replayed)
     std::vector<Command>().swap(g_record);
     g_replayAt = g_replayed = 0;
     Unlock();
+}
+
+// ---------------------------------------------------------------------------
+// Remote Command Sound, Warning Banner & Notification Popup Isolation
+// ---------------------------------------------------------------------------
+
+typedef bool (__fastcall* PlaySound2DFn)(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5);
+typedef bool (__fastcall* PlaySound3DFn)(void* mgr, const char* name, const float* pos, unsigned char loop, float param5);
+typedef long long (__fastcall* CreatePopupWindowFn)(long long world, int kind, long long ptr, int subkind, long long p5,
+                                                    int popupType, int stringId, long long p8, long long p9);
+typedef void (__fastcall* RebuildNotificationPopupsFn)(long long world);
+
+static PlaySound2DFn               o_playSound2D = nullptr;
+static PlaySound3DFn               o_playSound3D = nullptr;
+static CreatePopupWindowFn         o_createPopupWindow = nullptr;
+static RebuildNotificationPopupsFn o_rebuildNotificationPopups = nullptr;
+
+static const BYTE kCreatePopupWindowExpect[16] = {
+    0x48, 0x8B, 0xC4, 0x44, 0x89, 0x48, 0x20, 0x89,
+    0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x56
+};
+
+static const BYTE kRebuildNotificationPopupsExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x6C,
+    0x24, 0x20, 0x56, 0x48, 0x83, 0xEC, 0x20
+};
+
+struct BrushSoundSnapshotItem {
+    uintptr_t recAddr;
+    float     vol;
+    uint8_t   active;
+};
+
+static constexpr int MAX_BRUSH_SOUND_SNAPSHOT = 32;
+
+struct RemoteReplaySnapshot {
+    bool                   valid;
+    uint8_t                savedMuteByte;
+    bool                   hasWarningText;
+    BYTE                   savedWarningText[WORLD_WARNING_TEXT_BYTES];
+    float                  savedWarningTimer;
+    int32_t                savedPlacementError;
+    bool                   hasOpenWindows;
+    void*                  savedOpenWinBegin;
+    void*                  savedOpenWinEnd;
+    int                    brushSoundCount;
+    BrushSoundSnapshotItem brushSounds[MAX_BRUSH_SOUND_SNAPSHOT];
+};
+
+static volatile LONG        g_remoteReplayDepth = 0;
+static RemoteReplaySnapshot g_remoteReplaySnap = {};
+
+static void SaveRemoteReplaySnapshot()
+{
+    if (!g_exeBase) {
+        g_remoteReplaySnap.valid = false;
+        return;
+    }
+    BYTE* world = g_exeBase + WORLD_RVA;
+    g_remoteReplaySnap.savedMuteByte = 0;
+    SafeReadPod(g_exeBase + SOUND_MUTE_BYTE_RVA, &g_remoteReplaySnap.savedMuteByte);
+    uint8_t muteVal = 1;
+    SafeWritePod(g_exeBase + SOUND_MUTE_BYTE_RVA, muteVal);
+
+    g_remoteReplaySnap.hasWarningText =
+        SafeMemcpyPod(g_remoteReplaySnap.savedWarningText, world + WORLD_WARNING_TEXT_OFFSET, WORLD_WARNING_TEXT_BYTES);
+    g_remoteReplaySnap.savedWarningTimer = 0.0f;
+    g_remoteReplaySnap.savedPlacementError = 0;
+    SafeReadPod(world + WORLD_WARNING_TIMER_OFFSET, &g_remoteReplaySnap.savedWarningTimer);
+    SafeReadPod(world + WORLD_PLACEMENT_ERROR_OFFSET, &g_remoteReplaySnap.savedPlacementError);
+
+    g_remoteReplaySnap.brushSoundCount = 0;
+    uintptr_t bsBegin = 0, bsEnd = 0;
+    if (SafeReadPod(world + WORLD_BRUSH_SOUNDS_BEGIN_OFFSET, &bsBegin) &&
+        SafeReadPod(world + WORLD_BRUSH_SOUNDS_END_OFFSET, &bsEnd) &&
+        bsBegin != 0 && bsEnd > bsBegin && ((bsEnd - bsBegin) % BRUSH_SOUND_REC_SIZE) == 0) {
+        for (uintptr_t p = bsBegin; p < bsEnd && g_remoteReplaySnap.brushSoundCount < MAX_BRUSH_SOUND_SNAPSHOT; p += BRUSH_SOUND_REC_SIZE) {
+            float vol = 0.0f;
+            uint8_t act = 0;
+            if (SafeReadPod((const void*)(p + BRUSH_SOUND_VOL_OFFSET), &vol) &&
+                SafeReadPod((const void*)(p + BRUSH_SOUND_ACTIVE_OFFSET), &act)) {
+                BrushSoundSnapshotItem& item = g_remoteReplaySnap.brushSounds[g_remoteReplaySnap.brushSoundCount++];
+                item.recAddr = p;
+                item.vol     = vol;
+                item.active  = act;
+            }
+        }
+    }
+
+    g_remoteReplaySnap.hasOpenWindows =
+        SafeReadPod(g_exeBase + WORLD_OPEN_WINDOWS_BEGIN_RVA, &g_remoteReplaySnap.savedOpenWinBegin) &&
+        SafeReadPod(g_exeBase + WORLD_OPEN_WINDOWS_END_RVA, &g_remoteReplaySnap.savedOpenWinEnd);
+    if (g_remoteReplaySnap.hasOpenWindows) {
+        SafeWritePod(g_exeBase + WORLD_OPEN_WINDOWS_END_RVA, g_remoteReplaySnap.savedOpenWinBegin);
+    }
+    g_remoteReplaySnap.valid = true;
+}
+
+static void RestoreRemoteReplaySnapshot()
+{
+    if (!g_remoteReplaySnap.valid || !g_exeBase) return;
+    BYTE* world = g_exeBase + WORLD_RVA;
+
+    if (g_remoteReplaySnap.hasOpenWindows) {
+        SafeWritePod(g_exeBase + WORLD_OPEN_WINDOWS_BEGIN_RVA, g_remoteReplaySnap.savedOpenWinBegin);
+        SafeWritePod(g_exeBase + WORLD_OPEN_WINDOWS_END_RVA, g_remoteReplaySnap.savedOpenWinEnd);
+    }
+
+    uintptr_t bsBegin = 0, bsEnd = 0;
+    if (SafeReadPod(world + WORLD_BRUSH_SOUNDS_BEGIN_OFFSET, &bsBegin) &&
+        SafeReadPod(world + WORLD_BRUSH_SOUNDS_END_OFFSET, &bsEnd) &&
+        bsBegin != 0 && bsEnd > bsBegin) {
+        for (int i = 0; i < g_remoteReplaySnap.brushSoundCount; ++i) {
+            const BrushSoundSnapshotItem& item = g_remoteReplaySnap.brushSounds[i];
+            if (item.recAddr >= bsBegin && item.recAddr + BRUSH_SOUND_REC_SIZE <= bsEnd) {
+                SafeWritePod((void*)(item.recAddr + BRUSH_SOUND_VOL_OFFSET), item.vol);
+                SafeWritePod((void*)(item.recAddr + BRUSH_SOUND_ACTIVE_OFFSET), item.active);
+            }
+        }
+    }
+
+    if (g_remoteReplaySnap.hasWarningText) {
+        SafeMemcpyPod(world + WORLD_WARNING_TEXT_OFFSET, g_remoteReplaySnap.savedWarningText, WORLD_WARNING_TEXT_BYTES);
+        SafeWritePod(world + WORLD_WARNING_TIMER_OFFSET, g_remoteReplaySnap.savedWarningTimer);
+        SafeWritePod(world + WORLD_PLACEMENT_ERROR_OFFSET, g_remoteReplaySnap.savedPlacementError);
+    }
+
+    SafeWritePod(g_exeBase + SOUND_MUTE_BYTE_RVA, g_remoteReplaySnap.savedMuteByte);
+    g_remoteReplaySnap.valid = false;
+}
+
+bool Commands_IsApplyingRemote()
+{
+    return InterlockedCompareExchange(&g_remoteReplayDepth, 0, 0) > 0;
+}
+
+void Commands_BeginRemoteReplayScope()
+{
+    if (InterlockedIncrement(&g_remoteReplayDepth) == 1) {
+        SaveRemoteReplaySnapshot();
+    }
+}
+
+void Commands_EndRemoteReplayScope()
+{
+    LONG cur = InterlockedCompareExchange(&g_remoteReplayDepth, 0, 0);
+    if (cur <= 0) return;
+    if (InterlockedDecrement(&g_remoteReplayDepth) == 0) {
+        RestoreRemoteReplaySnapshot();
+    }
+}
+
+bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5)
+{
+    if (Commands_IsApplyingRemote()) return false;
+    return o_playSound2D ? o_playSound2D(mgr, name, loop, vol, p5) : true;
+}
+
+bool Commands_OnPlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5)
+{
+    if (Commands_IsApplyingRemote()) {
+        if (!pos || !g_exeBase) return false;
+        float src[3] = {};
+        float eye[3] = {};
+        if (!SafeMemcpyPod(src, pos, sizeof(src)) ||
+            !SafeMemcpyPod(eye, g_exeBase + CAMERA_EYE_RVA, sizeof(eye))) {
+            return false;
+        }
+        float dx = src[0] - eye[0];
+        float dy = src[1] - eye[1];
+        float dz = src[2] - eye[2];
+        float distSq = dx * dx + dy * dy + dz * dz;
+        if (!isfinite(distSq) || distSq > (REMOTE_3D_SOUND_MAX_DIST * REMOTE_3D_SOUND_MAX_DIST)) {
+            return false;
+        }
+    }
+    return o_playSound3D ? o_playSound3D(mgr, name, pos, loop, param5) : true;
+}
+
+static bool IsForeignTerritoryNotification(uintptr_t msgPtr)
+{
+    if (!msgPtr || !TwoStates_IsActive()) return false;
+    float x = 0.0f, z = 0.0f;
+    if (!SafeReadPod((const void*)(msgPtr + NOTIF_MSG_POS_X_OFFSET), &x) ||
+        !SafeReadPod((const void*)(msgPtr + NOTIF_MSG_POS_Z_OFFSET), &z)) {
+        return false;
+    }
+    if (!isfinite(x) || !isfinite(z)) return false;
+    if (fabsf(x) <= 1.0f && fabsf(z) <= 1.0f) return false;
+    return TwoStates_GetStateAtWorldPos(x, z) != TwoStates_LocalState();
+}
+
+long long Commands_OnCreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
+                                       int popupType, int stringId, long long p8, long long p9)
+{
+    if (Commands_IsApplyingRemote()) return 0;
+    if (kind == 2 && subkind == 5 && IsForeignTerritoryNotification((uintptr_t)ptr)) {
+        return 0;
+    }
+    return o_createPopupWindow ? o_createPopupWindow(world, kind, ptr, subkind, p5, popupType, stringId, p8, p9) : 1;
+}
+
+void Commands_OnRebuildNotificationPopups(long long world)
+{
+    if (o_rebuildNotificationPopups) {
+        o_rebuildNotificationPopups(world);
+    }
+    if (!world || !TwoStates_IsActive()) return;
+    uintptr_t* begin = nullptr;
+    uintptr_t* end = nullptr;
+    if (!SafeReadPod((const void*)((uintptr_t)world + WORLD_NOTIF_POPUPS_BEGIN_OFFSET), &begin) ||
+        !SafeReadPod((const void*)((uintptr_t)world + WORLD_NOTIF_POPUPS_END_OFFSET), &end) ||
+        !begin || end <= begin || (end - begin) > 4096) {
+        return;
+    }
+    uintptr_t* writeIt = begin;
+    for (uintptr_t* readIt = begin; readIt < end; ++readIt) {
+        uintptr_t msgPtr = 0;
+        if (!SafeReadPod(readIt, &msgPtr)) continue;
+        if (IsForeignTerritoryNotification(msgPtr)) continue;
+        if (writeIt != readIt) {
+            SafeWritePod(writeIt, msgPtr);
+        }
+        ++writeIt;
+    }
+    if (writeIt != end) {
+        SafeWritePod((void*)((uintptr_t)world + WORLD_NOTIF_POPUPS_END_OFFSET), writeIt);
+    }
+}
+
+bool Commands_InstallHooks()
+{
+    if (!H || !g_exe || !g_exeBase) return false;
+    bool snd2d = PatchIat(g_exe, DLL_ENGINE, "?PlaySound2D@C3D_SOUNDMANAGER@@QEAA_NPEAD_NM0@Z",
+                          (void*)&Commands_OnPlaySound2D, (void**)&o_playSound2D, "republicmp play sound 2d");
+    bool snd3d = PatchIat(g_exe, DLL_ENGINE, "?PlaySound3D@C3D_SOUNDMANAGER@@QEAA_NPEADVC3DVECTOR3@@_NM@Z",
+                          (void*)&Commands_OnPlaySound3D, (void**)&o_playSound3D, "republicmp play sound 3d");
+    bool popup = InstallInlineHook(g_exeBase + WARNING_POPUP_CREATE_RVA, (void*)&Commands_OnCreatePopupWindow,
+                                   (void**)&o_createPopupWindow, kCreatePopupWindowExpect,
+                                   sizeof(kCreatePopupWindowExpect), "republicmp warning popup create");
+    bool notif = InstallInlineHook(g_exeBase + NOTIFICATION_REBUILD_POPUPS_RVA, (void*)&Commands_OnRebuildNotificationPopups,
+                                   (void**)&o_rebuildNotificationPopups, kRebuildNotificationPopupsExpect,
+                                   sizeof(kRebuildNotificationPopupsExpect), "republicmp notification rebuild popups");
+    Logf("republicmp  COMMANDS: hooks installed (sound2D=%d, sound3D=%d, warningPopup=%d, notifPopups=%d)",
+         snd2d ? 1 : 0, snd3d ? 1 : 0, popup ? 1 : 0, notif ? 1 : 0);
+    return snd2d && snd3d && popup && notif;
 }

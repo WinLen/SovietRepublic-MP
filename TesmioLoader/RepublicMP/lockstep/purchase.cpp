@@ -9,12 +9,63 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../core/safe_mem.h"
+#include "../core/diag_log.h"
+#include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../session/mod_sync.h"
 #include "../ui/lang.h"
 #include <math.h>
 #include <string.h>
 #include <vector>
+
+static VehicleSyncDiagStats g_vehDiag = {};
+
+void Purchase_GetDiagStats(VehicleSyncDiagStats* outStats)
+{
+    if (outStats) {
+        *outStats = g_vehDiag;
+    }
+}
+
+void Purchase_RecordDiagSale(unsigned cat)
+{
+    InterlockedIncrement64((volatile LONG64*)&g_vehDiag.vehiclesSold);
+    if (cat == 1 || cat == 2) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRoad);
+    else if (cat >= 3 && cat <= 5) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRail);
+    else if (cat == 6) InterlockedIncrement((volatile LONG*)&g_vehDiag.countWater);
+    else if (cat == 8 || cat == 10) InterlockedIncrement((volatile LONG*)&g_vehDiag.countAir);
+    else InterlockedIncrement((volatile LONG*)&g_vehDiag.countSpecial);
+}
+
+void Purchase_ResetDiagStatsForTest()
+{
+    memset(&g_vehDiag, 0, sizeof(g_vehDiag));
+}
+
+static const char* VehicleCategoryName(unsigned cat)
+{
+    static const char* const kCats[] = {
+        "NOTSPECIFIED", "ROAD", "ROAD_SERVICE", "RAIL_VAGON", "RAIL_LOCOMOTIVE",
+        "RAIL_SERVICE", "SHIP", "CABIN", "AIRPLANE", "CONTAINER", "HELICOPTER"
+    };
+    return (cat < sizeof(kCats)/sizeof(kCats[0])) ? kCats[cat] : "UNKNOWN";
+}
+
+static const char* DetectVehicleOrigin(const char* scriptName, char* outBuf, size_t outSize)
+{
+    char dlcTok[16] = {};
+    if (SaveSync_ExtractDlcToken(scriptName, dlcTok, sizeof(dlcTok))) {
+        _snprintf_s(outBuf, outSize, _TRUNCATE, "DLC(%s)", dlcTok);
+        return outBuf;
+    }
+    uint64_t wsId = ModSync_ParseWorkshopIdFromTypeName(scriptName);
+    if (wsId != 0) {
+        _snprintf_s(outBuf, outSize, _TRUNCATE, "Workshop(%llu)", (unsigned long long)wsId);
+        return outBuf;
+    }
+    strncpy_s(outBuf, outSize, "Vanilla", _TRUNCATE);
+    return outBuf;
+}
 
 void Purchase_Bind(const TsmHost* host)
 {
@@ -123,12 +174,67 @@ static BYTE* BuildingAt(BYTE* world, const BuildingRef& r)
     return b && *(int*)b == r.id ? b : nullptr;
 }
 
+void NormalizeVehicleScriptName(const char* src, char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+    if (!src) return;
+
+    if (_strnicmp(src, "media_soviet/", 13) == 0 || _strnicmp(src, "media_soviet\\", 13) == 0) {
+        src += 13;
+    }
+
+    size_t i = 0;
+    while (src[i] && i + 1 < outSize) {
+        char c = src[i];
+        if (c == '\\') {
+            c = '/';
+        } else if (c >= 'A' && c <= 'Z') {
+            c = (char)(c + ('a' - 'A'));
+        }
+        out[i] = c;
+        ++i;
+    }
+    out[i] = '\0';
+}
+
+BYTE* Purchase_FindVehicleTypeByScriptName(BYTE* world, const char* scriptName)
+{
+    if (!world || !scriptName) return nullptr;
+    char targetName[64] = {};
+    if (!SafeReadAsciiDirect(scriptName, targetName, sizeof(targetName)) || !targetName[0]) {
+        return nullptr;
+    }
+    BYTE* begin = nullptr;
+    BYTE* end = nullptr;
+    if (!SafeReadPod(world + TYPES_OFFSET, &begin) ||
+        !SafeReadPod(world + TYPES_OFFSET + 8, &end) ||
+        !begin || end <= begin || (end - begin) % TYPE_STRIDE != 0)
+    {
+        return nullptr;
+    }
+
+    char normTarget[64] = {};
+    NormalizeVehicleScriptName(targetName, normTarget, sizeof(normTarget));
+    if (!normTarget[0]) return nullptr;
+
+    for (BYTE* t = begin; t + TYPE_STRIDE <= end; t += TYPE_STRIDE) {
+        char name[64] = {};
+        if (SafeReadAsciiDirect((const char*)t + 0x200, name, sizeof(name)) && name[0]) {
+            char normCand[64] = {};
+            NormalizeVehicleScriptName(name, normCand, sizeof(normCand));
+            if (_stricmp(normCand, normTarget) == 0) return t;
+        }
+    }
+    return nullptr;
+}
+
 static BYTE* TypeAt(BYTE* world, unsigned index)
 {
-    BYTE* begin = *(BYTE**)(world + TYPES_OFFSET);
-    BYTE* end = *(BYTE**)(world + TYPES_OFFSET + 8);
-    if (!begin || end < begin || (unsigned __int64)(end - begin) / TYPE_STRIDE <= index) return nullptr;
-    return begin + (unsigned __int64)index * TYPE_STRIDE;
+    (void)world;
+    U64 p = 0;
+    if (!Ref_DefPtrAt(2, index, p)) return nullptr;
+    return (BYTE*)p;
 }
 
 // FNV of the type's name (+0x200) up to its end: the buffer after the name
@@ -144,14 +250,23 @@ static unsigned TypeCheck(BYTE* type)
 }
 
 // The type at the index, or the one with the same name elsewhere in this PC's list.
-static BYTE* TypeFor(BYTE* world, unsigned index, unsigned check)
+static BYTE* TypeFor(BYTE* world, unsigned index, unsigned check, const char* scriptName = nullptr)
 {
+    if (scriptName && scriptName[0]) {
+        BYTE* match = Purchase_FindVehicleTypeByScriptName(world, scriptName);
+        if (match) return match;
+    }
     BYTE* type = TypeAt(world, index);
     if (type && TypeCheck(type) == check) return type;
-    BYTE* begin = *(BYTE**)(world + TYPES_OFFSET);
-    BYTE* end = *(BYTE**)(world + TYPES_OFFSET + 8);
-    for (BYTE* t = begin; t && t + TYPE_STRIDE <= end; t += TYPE_STRIDE)
+    BYTE* begin = nullptr;
+    BYTE* end = nullptr;
+    if (!SafeReadPod(world + TYPES_OFFSET, &begin) ||
+        !SafeReadPod(world + TYPES_OFFSET + 8, &end) ||
+        !begin || end <= begin) return nullptr;
+
+    for (BYTE* t = begin; t + TYPE_STRIDE <= end; t += TYPE_STRIDE) {
         if (TypeCheck(t) == check) return t;
+    }
     return nullptr;
 }
 
@@ -215,6 +330,7 @@ struct PurchaseMsg {
     unsigned trailers;
     int trailerVariant[MAX_TRAILERS];
     double usedAge, usedAge2;
+    char scriptName[64];
 };
 #pragma pack(pop)
 
@@ -314,6 +430,7 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         m.kind = kind;
         m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
         m.typeCheck = TypeCheck(type);
+        SafeReadAsciiDirect((const char*)type + 0x200, m.scriptName, sizeof(m.scriptName));
         m.refill = window[0x2B8] ? 1 : 0;
         m.depot = RefOf(world, depot);
         m.customsRub = RefOf(world, *(BYTE**)(root + 0x2C0));
@@ -365,14 +482,38 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
         why = "game routines differ";
     }
     if (o == PRESS_TAKE) {
-        if (!ModSync_CheckVehicleTypeAllowed(caller ? (const void*)caller->R13 : nullptr))
+        InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesAttempted);
+        const void* vehType = caller ? (const void*)caller->R13 : nullptr;
+        if (!SaveSync_CheckVehicleDlcAllowed(vehType)) {
+            static ULONGLONG s_lastVehToastMs = 0;
+            ULONGLONG now = GetTickCount64();
+            if (now - s_lastVehToastMs >= 1500) {
+                s_lastVehToastMs = now;
+                TwoStates_AddToast(Tr("★ ТРАНСПОРТ ИЗ НЕУСТАНОВЛЕННОГО DLC ЗАБЛОКИРОВАН В КООПЕРАТИВЕ ★",
+                                      "★ VEHICLE FROM UNINSTALLED DLC BLOCKED IN CO-OP ★"), 3);
+            }
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedDlc);
             return false;
+        }
+        if (!ModSync_CheckVehicleTypeAllowed(vehType)) {
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMod);
+            return false;
+        }
         __try {
             BYTE* depot = BuildingAt(g_exeBase + WORLD_RVA, m.depot);
             if (depot) {
                 float x = *(float*)(depot + 0x350), z = *(float*)(depot + 0x358);
                 if (!TwoStates_CheckBuildingControlAllowed(m.depot.id, x, z, Tr("покупка техники/лицензии в чужом здании", "buying vehicle/licence in a foreign building")))
                     return false;
+
+                unsigned cat = vehType ? *(const unsigned*)((const char*)vehType + 0x294) : 0;
+                char originBuf[32] = {};
+                int stateOwner = TwoStates_GetBuildingOwner(m.depot.id, x, z);
+                DiagLog_Printf("VEH_BUY", "Purchase Submitted: Category=%s | Script='%s' | Origin=%s | LocalIdx=%u (Check=0x%08X) | Depot=#%d(id=%d, x=%.1f, z=%.1f) | Cost=%.0f %s | Owner=State%d | Status=ALLOWED",
+                               VehicleCategoryName(cat), m.scriptName, DetectVehicleOrigin(m.scriptName, originBuf, sizeof(originBuf)),
+                               m.typeIndex, m.typeCheck, m.depot.place, m.depot.id, x, z,
+                               (m.kind == 2) ? m.dollars : m.rubles, (m.kind == 2) ? "USD" : "RUB",
+                               stateOwner);
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
@@ -543,7 +684,7 @@ static void PlaceRealisticVehicleAtBorder(BYTE* world, const PurchaseMsg& m, BYT
     Vec3 depotPos = {}, borderPos = {};
     (*(GetBldPosFn*)(g_exeBase + 0x86C7B8))(depot + 0x320, &depotPos);
     ((FindBorderFn)(g_exeBase + 0x42B9B0))(world, &borderPos, &depotPos, 0xA, m.kind == 2 ? 1 : 0);
-    if (vcat == 7 || vcat == 8 || vcat == 10) *(int*)(v + 0x1A04) = 2;
+    if (vcat == 8 || vcat == 10) *(int*)(v + 0x1A04) = 2;
     Vec2 pos2 = {};
     (*(Vec3To2Fn*)(g_exeBase + 0x86C010))(&pos2, &borderPos);
     ((PlaceAtBorderFn)(g_exeBase + 0x6AD960))(v, &pos2, 0.0f, 0, borderPos.y, 0.0f);
@@ -580,7 +721,7 @@ static void RouteRealisticVehicleDelivery(BYTE* world, const PurchaseMsg& m, BYT
         *(BYTE**)(v + 0x600) = depot;
         BYTE* customsSlotList = *(BYTE**)(*(BYTE**)(customs + 0x970) + (__int64)slot * 0xE0 + 0xC0);
         addToSlot(customsSlotList, v);
-    } else if (vcat == 6 || vcat == 7 || vcat == 8 || vcat == 10) {
+    } else if (vcat == 6 || vcat == 8 || vcat == 10) {
         PlaceRealisticVehicleAtBorder(world, m, depot, v, vcat);
     }
 }
@@ -607,6 +748,7 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
         }
     }
     if (!CanPay(world, m.rubles, m.dollars) && !fail) fail = "refused (money)";
+    if (!SaveSync_CheckVehicleDlcAllowed(type)) return "refused (DLC not allowed in session)";
     if (!ModSync_CheckVehicleTypeAllowed(type)) return "refused (mod not allowed in session)";
     if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x627E80))(world, depot, type + 0x200) ? "refused (campaign)" : nullptr;
     if (fail) return fail;
@@ -693,15 +835,45 @@ static const char* Replay(const PurchaseMsg& m)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     __try {
-        BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck);
-        if (!type) return "the vehicle type is not in this PC's list";
+        BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
+        BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
+        if (!type) {
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameResolveFails);
+            DiagLog_Printf("VEH_REP", "FAILED to resolve vehicle type: NetIdx=%u, Check=0x%08X, Script='%s'",
+                           m.typeIndex, m.typeCheck, m.scriptName);
+            return "the vehicle type is not in this PC's list";
+        }
+        unsigned localIdx = types ? (unsigned)((type - types) / TYPE_STRIDE) : m.typeIndex;
+        if (localIdx != m.typeIndex) {
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameRemapped);
+            DiagLog_Printf("VEH_REP", "Remapped vehicle type: NetIdx=%u -> LocalIdx=%u (Script='%s')",
+                           m.typeIndex, localIdx, m.scriptName);
+        }
         BYTE* depot = BuildingAt(world, m.depot);
         if (!depot) return "the depot differs";
         if (!WriteVariants(type, m)) return "the trailers differ";
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
-        if (m.kind >= 5) return ReplayBlueprint(world, m, type, depot, campaign);
-        return ReplayVehicle(world, m, type, depot, BuildingAt(world, m.customsRub), BuildingAt(world, m.customsUsd),
-                             campaign);
+        const char* res = nullptr;
+        if (m.kind >= 5) {
+            res = ReplayBlueprint(world, m, type, depot, campaign);
+        } else {
+            res = ReplayVehicle(world, m, type, depot, BuildingAt(world, m.customsRub), BuildingAt(world, m.customsUsd),
+                                campaign);
+        }
+        unsigned cat = *(unsigned*)(type + 0x294);
+        if (!res) {
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesMade);
+            if (cat == 1 || cat == 2) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRoad);
+            else if (cat >= 3 && cat <= 5) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRail);
+            else if (cat == 6) InterlockedIncrement((volatile LONG*)&g_vehDiag.countWater);
+            else if (cat == 8 || cat == 10) InterlockedIncrement((volatile LONG*)&g_vehDiag.countAir);
+            else InterlockedIncrement((volatile LONG*)&g_vehDiag.countSpecial);
+        } else {
+            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMoneyOrDepot);
+        }
+        DiagLog_Printf("VEH_REP", "Replay Result: Script='%s' | NetIdx=%u -> LocalIdx=%u | Category=%s | Depot=#%d | Status=%s",
+                       m.scriptName, m.typeIndex, localIdx, VehicleCategoryName(cat), m.depot.place, res ? res : "MADE");
+        return res;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "fault";
     }
@@ -709,9 +881,10 @@ static const char* Replay(const PurchaseMsg& m)
 
 bool Purchase_ApplyCommand(const void* data, size_t size)
 {
-    if (size != sizeof(PurchaseMsg)) return false;
-    PurchaseMsg m;
-    memcpy(&m, data, sizeof(m));
+    if (size != sizeof(PurchaseMsg) && size != 152) return false;
+    PurchaseMsg m = {};
+    memcpy(&m, data, (size < sizeof(m)) ? size : sizeof(m));
+    m.scriptName[sizeof(m.scriptName) - 1] = '\0';
     if (!RoutinesOk()) {
         Logf("republicmp  PURCHASE: not made - this PC's game routines differ");
         return false;

@@ -107,8 +107,10 @@ static void FormatAddressModule(uintptr_t addr, char* out, size_t outSize)
                            (LPCSTR)addr, &hMod) && hMod) {
         char modPath[MAX_PATH] = {};
         GetModuleFileNameA(hMod, modPath, MAX_PATH);
-        const char* baseName = strrchr(modPath, '\\');
-        baseName = baseName ? (baseName + 1) : modPath;
+        const char* s1 = strrchr(modPath, '\\');
+        const char* s2 = strrchr(modPath, '/');
+        const char* lastSep = (!s1) ? s2 : (!s2 ? s1 : (s1 > s2 ? s1 : s2));
+        const char* baseName = lastSep ? (lastSep + 1) : modPath;
         uintptr_t rva = addr - (uintptr_t)hMod;
         _snprintf_s(out, outSize, _TRUNCATE, "%s+0x%llX (0x%p)",
                     baseName, (unsigned long long)rva, (void*)addr);
@@ -179,9 +181,9 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
     DiagLog_Printf("CRASH", "HeldFrameCtx: InHeldDraw=%d | Drawn=%llu | TrackedVeh=%u | LastTargets=%u | LastInterp=%u | LastAlpha=%.3f | Fallbacks=%llu | RestoreRefusals=%llu",
                    (int)hf.inHeldDraw, hf.heldFramesDrawn, hf.trackedVehicles, hf.lastTargetsCount,
                    hf.lastInterpolatedCount, hf.lastAlpha, hf.guardFallbacks, hf.restoreRefusals);
-    DiagLog_Printf("CRASH", "SoftSyncCtx : Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | MaxDrift=%.2fm/%.2fm",
+    DiagLog_Printf("CRASH", "SoftSyncCtx : Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | BldStorageFixed=%llu | MaxDrift=%.2fm/%.2fm",
                    vss.batchesSent, vss.batchesApplied, vss.immediateSweeps, vss.vehiclesSynced,
-                   vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
+                   vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.bldStorageUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
     DiagLog_Printf("CRASH", "RAX=%016llX RBX=%016llX RCX=%016llX RDX=%016llX",
                    c->Rax, c->Rbx, c->Rcx, c->Rdx);
     DiagLog_Printf("CRASH", "RSI=%016llX RDI=%016llX RBP=%016llX RSP=%016llX",
@@ -362,6 +364,25 @@ static void DumpLiveSnapshot(const char* tag)
                    (int)ModSync_GetPackMode(), ModSync_GetModCount(),
                    ModSync_GetActiveServerModCount());
 
+    // DLC status
+    uint32_t hostMask = 0, clientMask = 0, commonMask = 0;
+    SaveSync_GetDlcMasks(&hostMask, &clientMask, &commonMask);
+    char commonNames[128] = {};
+    SaveSync_FormatDlcNames(commonMask, commonNames, sizeof(commonNames));
+    uint32_t disabledMask = (hostMask | clientMask) & ~commonMask;
+    DiagLog_Printf(tag, "DlcSync: Host=0x%04X | Client=0x%04X | Common=0x%04X | Disabled=0x%04X | Active='%s'",
+                   hostMask, clientMask, commonMask, disabledMask, commonNames[0] ? commonNames : "None");
+
+    // Vehicle Sync telemetry
+    VehicleSyncDiagStats vs = {};
+    Purchase_GetDiagStats(&vs);
+    DiagLog_Printf(tag, "VehSync: Attempt=%llu | Made=%llu | BlockDlc=%llu | BlockMod=%llu | Remapped=%llu | Fails=%llu | Sold=%llu | [Road=%u Rail=%u Water=%u Air=%u Spec=%u]",
+                   (unsigned long long)vs.purchasesAttempted, (unsigned long long)vs.purchasesMade,
+                   (unsigned long long)vs.purchasesBlockedDlc, (unsigned long long)vs.purchasesBlockedMod,
+                   (unsigned long long)vs.scriptNameRemapped, (unsigned long long)vs.scriptNameResolveFails,
+                   (unsigned long long)vs.vehiclesSold,
+                   vs.countRoad, vs.countRail, vs.countWater, vs.countAir, vs.countSpecial);
+
     // Lockstep metrics if active
     if (lockstep || st == SESSION_HOST_IN_GAME || st == SESSION_CLIENT_IN_GAME) {
         bool paused = true;
@@ -387,9 +408,9 @@ static void DumpLiveSnapshot(const char* tag)
                        dinfo.frameBeats, dinfo.framePhase, FramePhaseName(dinfo.framePhase), dinfo.tickDebt, dinfo.subTickAlpha,
                        hf.heldFramesDrawn, hf.trackedVehicles, hf.lastTargetsCount, hf.lastInterpolatedCount,
                        hf.guardFallbacks, hf.restoreRefusals);
-        DiagLog_Printf(tag, "SoftSync: Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | MaxDrift=%.2fm (AllTime=%.2fm)",
+        DiagLog_Printf(tag, "SoftSync: Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | BldStorageFixed=%llu | MaxDrift=%.2fm (AllTime=%.2fm)",
                        vss.batchesSent, vss.batchesApplied, vss.immediateSweeps, vss.vehiclesSynced,
-                       vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
+                       vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.bldStorageUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
     }
 }
 
@@ -662,9 +683,10 @@ bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size)
         if (pos + entry.size > rawBuf.size()) break;
 
         // Sanitize filename (strip any path separators)
-        const char* baseName = strrchr(entry.fileName, '\\');
-        if (!baseName) baseName = strrchr(entry.fileName, '/');
-        baseName = baseName ? (baseName + 1) : entry.fileName;
+        const char* s1 = strrchr(entry.fileName, '\\');
+        const char* s2 = strrchr(entry.fileName, '/');
+        const char* lastSep = (!s1) ? s2 : (!s2 ? s1 : (s1 > s2 ? s1 : s2));
+        const char* baseName = lastSep ? (lastSep + 1) : entry.fileName;
         if (baseName[0] && strstr(baseName, "..") == nullptr) {
             char outPath[MAX_PATH] = {};
             _snprintf_s(outPath, sizeof(outPath), _TRUNCATE, "%s\\%s", sessionDir, baseName);

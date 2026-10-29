@@ -58,6 +58,7 @@ bool Determinism_Install();
 // Turns the fixed timer and the call-site generator on/off. Turning it on
 // (or calling Determinism_Restart) starts a new generator epoch.
 void Determinism_SetActive(bool active, unsigned long long seed);
+void Determinism_SetActiveForTest(bool active);
 bool Determinism_IsActive();
 void Determinism_Restart();
 

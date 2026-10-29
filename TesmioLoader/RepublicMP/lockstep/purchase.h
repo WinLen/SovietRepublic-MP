@@ -24,3 +24,12 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller);
 
 // The command (lockstep/commands): every PC buys.
 bool Purchase_ApplyCommand(const void* data, size_t size);
+
+// Canonical scriptName resolution: scans WORLD_VEHICLE_TYPES_OFFSET (+0x12840)
+// and returns pointer to the VehicleType whose scriptName (+0x200) matches `scriptName`.
+// Handles paths with or without "media_soviet/" prefix and case insensitivity.
+BYTE* Purchase_FindVehicleTypeByScriptName(BYTE* world, const char* scriptName);
+
+// Normalizes path separators to '/', converts ASCII to lowercase, and strips leading "media_soviet/".
+void NormalizeVehicleScriptName(const char* src, char* out, size_t outSize);
+

@@ -1066,10 +1066,12 @@ static void DetPrepare(__int64 world)
     *(float*)(timer + 4) = fps;
     *(int*)(timer + 8) = (int)fps;
     timer[12] = 0;
+    HeldFrame_BeginCameraPrepare(fps);
     {
         Determinism_PrivateScope privateRng;
         original(world);
     }
+    HeldFrame_EndCameraPrepare();
     memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
@@ -1269,19 +1271,32 @@ static void DetCheatKeys(void* world)
     ((void (*)(void*))(g_exeBase + CHEAT_KEYS_STEP_RVA))(world);
 }
 
-#define STEP_CALL_COUNT 29
+static void DetVehHighlightMain(void* vehicle, unsigned char a2, unsigned char a3, const float* colorRgba, unsigned char flag)
+{
+    HeldFrame_SubmitVehicleHighlight(vehicle, a2, a3, colorRgba, flag, false);
+}
+
+static void DetVehHighlightExtra(void* vehicle, unsigned char a2, unsigned char a3, const float* colorRgba, unsigned char flag)
+{
+    HeldFrame_SubmitVehicleHighlight(vehicle, a2, a3, colorRgba, flag, true);
+}
+
+#define STEP_CALL_COUNT 38
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790,
                                                       0x2B6ECA, 0x2B9263, 0x2B2152, 0x2B445F, 0x2B45CB, 0x2B49DF, 0x1D8EA6, 0x1D9188,
-                                                      CHEAT_KEYS_CALL_RVA };
+                                                      CHEAT_KEYS_CALL_RVA, 0x2595B5,
+                                                      0x40C4D4, 0x40C4ED, 0x40CD74, 0x40CD8B, 0x40D953, 0x40D96B, 0x40E4E9, 0x40E4FE };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60,
                                                         0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60,
-                                                        CHEAT_KEYS_STEP_RVA };
+                                                        CHEAT_KEYS_STEP_RVA, 0x3FA850,
+                                                        0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0 };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18,
-                                                 17, 18, 18, 18, 18, 18, 18, 18, 20 }; // relay slot of each site
+                                                 17, 18, 18, 18, 18, 18, 18, 18, 20, 21,
+                                                 22, 23, 22, 23, 22, 23, 22, 23 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1299,7 +1314,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 21
+#define RELAY_SLOTS 24
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1334,7 +1349,8 @@ bool SimPatches_Install()
                               (void*)&DetUiRoutine, (void*)&DetPrepare, (void*)&DetPieceSpeed, (void*)&DetWeather, (void*)&DetRoadWeather,
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
-                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetCheatKeys };
+                              (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetCheatKeys,
+                              (void*)&HeldFrame_DrawStepVehicles, (void*)&DetVehHighlightMain, (void*)&DetVehHighlightExtra };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
@@ -1378,6 +1394,7 @@ bool SimPatches_Install()
     bool tools = relays && InstallToolStubs();
     GameCalls_Install(); // window buttons; a site that differs is only left alone
     BrushTools_Install(); // the terrain brush's press reads; without them the terrain brushes stay as before
+    Commands_InstallHooks(); // remote command sound/popup isolation & 2-SSR notification filter
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;

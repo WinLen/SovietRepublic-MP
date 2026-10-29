@@ -88,6 +88,7 @@ void TwoStates_SyncBalancesFromHost(double r1, double r2, double u1, double u2);
 //   - Around Apply(const Command& c) in commands.cpp
 void TwoStates_BeginCommand(int ownerState);
 void TwoStates_EndCommand(int ownerState);
+int  TwoStates_GetCommandOwner();
 bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t);
 void TwoStates_RequestTransfer(double rubles, double dollars);
 bool TwoStates_ApplyLoanCommand(const LsLoanCommand& cmd);
@@ -113,6 +114,7 @@ int  TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr);
 
 // Zone at world X: 1 = West territory, 0 = Shared Border Zone, 2 = East territory.
 int TwoStates_GetZoneAt(float x, float z);
+int TwoStates_GetStateAtWorldPos(float x, float z);
 bool TwoStates_CanBuildAt(float x, float z, int state = 0);
 bool TwoStates_CanDemolishAt(float x, float z, int state = 0);
 bool TwoStates_CanControlBuilding(int buildingId, float x, float z, int state = 0);
@@ -127,7 +129,13 @@ bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* ac
 
 // Current cursor & camera position in the world (for HUD & partner sync).
 bool TwoStates_GetCursorWorldPos(float* outX, float* outY, float* outZ);
+bool TwoStates_GetCameraPos(float* outX, float* outY, float* outZ);
 bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ);
+bool TwoStates_GetCameraView(float pos[3], float lookAt[3]);
+bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3]);
+void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates);
+void TwoStates_CapturePreResyncCamera();
+bool TwoStates_HasCapturedResyncCamera();
 bool TwoStates_JumpCameraTo(float wx, float wz);
 bool TwoStates_JumpCameraToPartner();
 
@@ -155,6 +163,7 @@ void TwoStates_SetSendClientLogs(bool send);
 bool TwoStates_MountSaveBank(bool wantCoop);
 bool TwoStates_IsCoopBankMounted();
 bool TwoStates_GetLatestCoopSaveName(char* outName, size_t outSize);
+bool TwoStates_PromoteStagingSavesInDir(const char* saveBankDir);
 void TwoStates_SetImportingSpSave(bool importing);
 bool TwoStates_IsImportingSpSave();
 
@@ -181,6 +190,9 @@ bool   TwoStates_GetStateEconResEntry(int state, int vecIdx, uintptr_t resourceP
 void   TwoStates_GetStateEconFloat4ForTest(int state, bool loansSlice, float outVals[4]);
 int    TwoStates_GetStateEconHistoryCount(int state);
 void   TwoStates_CalcStoredResourcesForTest(BYTE* world, int* outBuildingCount, int* outVehicleCount);
+bool   TwoStates_GetSavedCameraForTest(int state, float outPos[3], float outLook[3]);
+void   TwoStates_SetSavedCameraForTest(int state, const float pos[3], const float look[3]);
+void   TwoStates_RestoreOrFrameCameraForTest(bool isHost);
 void*  TwoStates_BuildRegPreservingRelayStub(void* targetCppFn, bool keepXmm0Result, bool zeroRcxOnExit);
 
 

@@ -87,6 +87,7 @@ bool ModSync_IsDownloadActive();
 bool ModSync_IsModIdAllowedInSession(uint64_t modId);
 bool ModSync_CheckBuildingTypeAllowed(const char* typeName);
 bool ModSync_CheckVehicleTypeAllowed(const void* vehicleTypePtr);
+uint64_t ModSync_ParseWorkshopIdFromTypeName(const char* typeName);
 
 // Called when a Co-op session ends or returns to the main menu:
 // clears the session mod filter and restores singleplayer mods & plugins.

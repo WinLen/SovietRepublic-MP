@@ -63,6 +63,54 @@
 #ifndef WORLD_DEV_MODE_OFFSET
 #define WORLD_DEV_MODE_OFFSET       0x000A
 #endif
+#ifndef WORLD_CAMERA_MGR_PTR_OFF
+#define WORLD_CAMERA_MGR_PTR_OFF    0x0018
+#endif
+#ifndef CAM_MGR_STRUCT_BYTES
+#define CAM_MGR_STRUCT_BYTES        0x168
+#endif
+#ifndef CAM_MGR_POS_OFFSET
+#define CAM_MGR_POS_OFFSET          0x08
+#endif
+#ifndef CAM_MGR_ANGLES_OFFSET
+#define CAM_MGR_ANGLES_OFFSET       0x14
+#endif
+#ifndef CAM_MGR_CUR_POS_OFFSET
+#define CAM_MGR_CUR_POS_OFFSET      0x20
+#endif
+#ifndef CAM_MGR_CUR_ANGLES_OFFSET
+#define CAM_MGR_CUR_ANGLES_OFFSET   0x2C
+#endif
+#ifndef CAM_MGR_FOLLOW_ACTIVE_OFF
+#define CAM_MGR_FOLLOW_ACTIVE_OFF   0x05B
+#endif
+#ifndef CAM_MGR_RIDE_VEH_PTR_OFF
+#define CAM_MGR_RIDE_VEH_PTR_OFF    0x070
+#endif
+#ifndef CAM_MGR_FOLLOW_WIN_PTR_OFF
+#define CAM_MGR_FOLLOW_WIN_PTR_OFF  0x078
+#endif
+#ifndef CAM_MGR_TRANS_STEP_OFFSET
+#define CAM_MGR_TRANS_STEP_OFFSET   0x14C
+#endif
+#ifndef CAM_MGR_TRANS_TIMER_OFFSET
+#define CAM_MGR_TRANS_TIMER_OFFSET  0x15C
+#endif
+#ifndef CAM_MGR_TRANS_DUR_OFFSET
+#define CAM_MGR_TRANS_DUR_OFFSET    0x160
+#endif
+#ifndef FOLLOW_WIN_CITIZEN_PTR_OFF
+#define FOLLOW_WIN_CITIZEN_PTR_OFF  0x058
+#endif
+#ifndef FOLLOW_WIN_VEHICLE_PTR_OFF
+#define FOLLOW_WIN_VEHICLE_PTR_OFF  0x060
+#endif
+#ifndef CIT_RIDING_VEHICLE_PTR_OFF
+#define CIT_RIDING_VEHICLE_PTR_OFF  0x660
+#endif
+#ifndef RVA_CAMERA_MGR_UPDATE
+#define RVA_CAMERA_MGR_UPDATE       0x14250
+#endif
 #ifndef WORLD_UNLIMITED_MONEY_OFFSET
 #define WORLD_UNLIMITED_MONEY_OFFSET 0x578
 #endif
@@ -443,6 +491,9 @@ struct SovietStatResEntry {
 // Object & Manager Offsets
 // ---------------------------------------------------------------------------
 
+#ifndef BLD_TYPE_OFFSET
+#define BLD_TYPE_OFFSET             0x318
+#endif
 #ifndef OBJ_POS_OFFSET
 #define OBJ_POS_OFFSET              0x350
 #endif
@@ -495,8 +546,107 @@ struct SovietStatResEntry {
 #ifndef VEH_SIXTH_NODE_OFFSET
 #define VEH_SIXTH_NODE_OFFSET       0x1318
 #endif
-#ifndef VEH_LINKED_TRAILER_OFFSET
-#define VEH_LINKED_TRAILER_OFFSET   0x1A68
+#ifndef VEH_PARENT_PTR_OFFSET
+#define VEH_PARENT_PTR_OFFSET       0x398
+#endif
+#ifndef VEH_CHILDREN_BEGIN_OFFSET
+#define VEH_CHILDREN_BEGIN_OFFSET   0x3A0
+#endif
+#ifndef VEH_CHILDREN_END_OFFSET
+#define VEH_CHILDREN_END_OFFSET     0x3A8
+#endif
+#ifndef VEH_LINK_PTR_OFFSET
+#define VEH_LINK_PTR_OFFSET         0x4A0
+#endif
+#ifndef VEH_CUR_BLD_OFFSET
+#define VEH_CUR_BLD_OFFSET          0x4F0
+#endif
+#ifndef VEH_STOPPED_BLD_OFFSET
+#define VEH_STOPPED_BLD_OFFSET      0x530
+#endif
+#ifndef VEH_CUSTOM_LINE_FLAG_OFF
+#define VEH_CUSTOM_LINE_FLAG_OFF    0x5FD
+#endif
+#ifndef VEH_TARGET_STOP_BLD_OFF
+#define VEH_TARGET_STOP_BLD_OFF     0x610
+#endif
+#ifndef VEH_STOPS_LIST_OFFSET
+#define VEH_STOPS_LIST_OFFSET       0x638
+#endif
+#ifndef VEH_STOP_RECORD_STRIDE
+#define VEH_STOP_RECORD_STRIDE      0x198
+#endif
+#ifndef VEH_STOP_HALF_STRIDE
+#define VEH_STOP_HALF_STRIDE        0x0C8
+#endif
+#ifndef VEH_STOP_BLD_PTR_VEC_OFF
+#define VEH_STOP_BLD_PTR_VEC_OFF    0x680
+#endif
+#ifndef VEH_TYPE_PTR_OFFSET
+#define VEH_TYPE_PTR_OFFSET         0x1708
+#endif
+#ifndef VEH_CABLEWAY_START_FLAG_OFF
+#define VEH_CABLEWAY_START_FLAG_OFF 0x198C
+#endif
+#ifndef VEH_HELI_FLIGHT_STATE_OFF
+#define VEH_HELI_FLIGHT_STATE_OFF   0x1A04
+#endif
+#ifndef VEH_TYPE_PASSENGER_CAP_OFF
+#define VEH_TYPE_PASSENGER_CAP_OFF  0x148
+#endif
+#ifndef VEH_TYPE_CATEGORY_OFFSET
+#define VEH_TYPE_CATEGORY_OFFSET    0x294
+#endif
+#ifndef WORLD_WESTERN_BORDER_BLD_OFF
+#define WORLD_WESTERN_BORDER_BLD_OFF 0x11AF8
+#endif
+#ifndef WORLD_SOVIET_BORDER_BLD_OFF
+#define WORLD_SOVIET_BORDER_BLD_OFF  0x11B00
+#endif
+#ifndef RVA_LINES_NOTIFY_VEH
+#define RVA_LINES_NOTIFY_VEH        0x499790
+#endif
+#ifndef RVA_VEH_INVERT_STOPS
+#define RVA_VEH_INVERT_STOPS        0x6644A0
+#endif
+#ifndef RVA_VEH_ADD_STOP
+#define RVA_VEH_ADD_STOP            0x67D5D0
+#endif
+#ifndef RVA_VEH_DEL_STOP
+#define RVA_VEH_DEL_STOP            0x67D910
+#endif
+#ifndef RVA_VEH_REBUILD_CARGO_SUM
+#define RVA_VEH_REBUILD_CARGO_SUM   0x6BF1D0
+#endif
+#ifndef RVA_VEH_ADD_STOP_CARGO_RES
+#define RVA_VEH_ADD_STOP_CARGO_RES  0x6BF710
+#endif
+#ifndef RVA_VEH_RELEASE
+#define RVA_VEH_RELEASE             0x6C52C0
+#endif
+#ifndef RVA_HELI_REROUTE
+#define RVA_HELI_REROUTE            0x6DE260
+#endif
+#ifndef VEH_WORKER_SIM_FLAG_OFFSET
+#define VEH_WORKER_SIM_FLAG_OFFSET  0xD41
+#endif
+#ifndef VEH_STEER_CURRENT_OFFSET
+#define VEH_STEER_CURRENT_OFFSET    0x115C
+#endif
+#ifndef VEH_STEER_TARGET_OFFSET
+#define VEH_STEER_TARGET_OFFSET     0x1160
+#endif
+#ifndef VEH_RENDER_VISIBLE_OFFSET
+#define VEH_RENDER_VISIBLE_OFFSET   0x13D8
+#endif
+#ifndef VEH_WHEELS_BEGIN_OFFSET
+#define VEH_WHEELS_BEGIN_OFFSET     0x1438
+#endif
+#ifndef VEH_WHEELS_END_OFFSET
+#define VEH_WHEELS_END_OFFSET       0x1440
+#endif
+#ifndef VEH_WHEEL_STRUCT_STRIDE
+#define VEH_WHEEL_STRUCT_STRIDE     24
 #endif
 #ifndef C3D_NODE_BYTE_SIZE
 #define C3D_NODE_BYTE_SIZE          0xBC
@@ -557,6 +707,71 @@ struct SovietStatResEntry {
 #define ITEM_ID_STR_OFF             0x4500
 #endif
 
+// Residential building invite citizens (0x6F8CC0: 0x6FEE1E / 0x6FF31A / 0x6FF52D / 0x6FFA4E -> 0x823470)
+#ifndef RVA_SPAWN_CITIZEN
+#define RVA_SPAWN_CITIZEN                   0x823470
+#endif
+#ifndef RVA_IAT_RAND
+#define RVA_IAT_RAND                        0x86E0A0
+#endif
+#ifndef RVA_IAT_RAND_FLOAT
+#define RVA_IAT_RAND_FLOAT                  0x86CA78
+#endif
+#ifndef RVA_INVITE_EXPERT_EDU_MIN_FLOAT
+#define RVA_INVITE_EXPERT_EDU_MIN_FLOAT     0x90A2A8
+#endif
+#ifndef RVA_INVITE_EXPERT_EDU_MAX_FLOAT
+#define RVA_INVITE_EXPERT_EDU_MAX_FLOAT     0x90A310
+#endif
+#ifndef RVA_INVITE_EXPERT_MULT_FLOAT
+#define RVA_INVITE_EXPERT_MULT_FLOAT        0x90A364
+#endif
+#ifndef WORLD_PRICE_IMMIGRANT_USD_OFF
+#define WORLD_PRICE_IMMIGRANT_USD_OFF       0x0E7C
+#endif
+#ifndef WORLD_PRICE_IMMIGRANT_RUB_OFF
+#define WORLD_PRICE_IMMIGRANT_RUB_OFF       0x0E80
+#endif
+#ifndef WORLD_IMMIGRANT_BASE_SPEND_USD_OFF
+#define WORLD_IMMIGRANT_BASE_SPEND_USD_OFF  0x11560
+#endif
+#ifndef WORLD_IMMIGRANT_BASE_SPEND_RUB_OFF
+#define WORLD_IMMIGRANT_BASE_SPEND_RUB_OFF  0x11564
+#endif
+#ifndef WORLD_IMMIGRANT_RATE_MULT_RUB_OFF
+#define WORLD_IMMIGRANT_RATE_MULT_RUB_OFF   0x13694
+#endif
+#ifndef WORLD_IMMIGRANT_RATE_MULT_USD_OFF
+#define WORLD_IMMIGRANT_RATE_MULT_USD_OFF   0x1369C
+#endif
+#ifndef BLD_AREA_PTR_OFF
+#define BLD_AREA_PTR_OFF                    0x108
+#endif
+#ifndef AREA_CITY_STAT_PTR_OFF
+#define AREA_CITY_STAT_PTR_OFF              0x1B8
+#endif
+#ifndef BLD_CITIZENS_BEGIN_OFF
+#define BLD_CITIZENS_BEGIN_OFF              0xBC0
+#endif
+#ifndef BLD_CITIZENS_END_OFF
+#define BLD_CITIZENS_END_OFF                0xBC8
+#endif
+#ifndef BLD_TYPE_RES_SPEC_PTR_OFF
+#define BLD_TYPE_RES_SPEC_PTR_OFF           0x3A0
+#endif
+#ifndef RES_SPEC_MAX_FLATS_FLOAT_OFF
+#define RES_SPEC_MAX_FLATS_FLOAT_OFF        0x08C
+#endif
+#ifndef CIT_EDUCATION_FLOAT_OFF
+#define CIT_EDUCATION_FLOAT_OFF             0x0A8
+#endif
+#ifndef CIT_CHILD_PTR_OFF
+#define CIT_CHILD_PTR_OFF                   0x0B0
+#endif
+#ifndef CIT_PARENT_PTR_OFF
+#define CIT_PARENT_PTR_OFF                  0x0C8
+#endif
+
 // ---------------------------------------------------------------------------
 // Compile-Time Invariant Assertions (AGENTS.md Section 3 & 4)
 // ---------------------------------------------------------------------------
@@ -589,3 +804,157 @@ static_assert(WORLD_CHEAT_MODE_OFFSET == 0x9 && WORLD_DEV_MODE_OFFSET == 0xA &&
               "Cheat/dev mode byte offsets (0x9, 0xA) and systab subpage offset (0xC65C) must match 0x309D80 / 0x329390");
 static_assert(VEH_SIXTH_NODE_OFFSET == VEH_SIXTH_NODE_ACTIVE_OFFSET + 4 && C3D_NODE_BYTE_SIZE == 0xBC,
               "Vehicle 6th C3D_NODE (+0x1318, 0xBC bytes) must follow active index (+0x1314) per 0x66EDD0");
+static_assert(VEH_CHILDREN_END_OFFSET == VEH_CHILDREN_BEGIN_OFFSET + 8,
+              "VEH_CHILDREN_END_OFFSET must be 8 bytes after VEH_CHILDREN_BEGIN_OFFSET");
+static_assert(VEH_STEER_TARGET_OFFSET == VEH_STEER_CURRENT_OFFSET + 4 &&
+              VEH_WHEELS_END_OFFSET == VEH_WHEELS_BEGIN_OFFSET + 8 &&
+              VEH_WHEEL_STRUCT_STRIDE == 24,
+              "Vehicle steering (+0x115C/+0x1160) and wheel vector (+0x1438, stride 24) must match 0x6712B0");
+static_assert(CAM_MGR_FOLLOW_WIN_PTR_OFF == CAM_MGR_RIDE_VEH_PTR_OFF + 8 &&
+              FOLLOW_WIN_VEHICLE_PTR_OFF == FOLLOW_WIN_CITIZEN_PTR_OFF + 8,
+              "Camera manager follow/ride offsets must match 0x10D30 / 0x14250");
+static_assert(CAM_MGR_POS_OFFSET == 0x08 && CAM_MGR_ANGLES_OFFSET == 0x14 &&
+              CAM_MGR_CUR_POS_OFFSET == 0x20 && CAM_MGR_CUR_ANGLES_OFFSET == 0x2C &&
+              CAM_MGR_TRANS_STEP_OFFSET == 0x14C && CAM_MGR_TRANS_TIMER_OFFSET == 0x15C &&
+              CAM_MGR_TRANS_DUR_OFFSET == 0x160,
+              "Camera manager position and transition offsets must match 0x14250 layout");
+static_assert(RVA_SPAWN_CITIZEN == 0x823470 &&
+              BLD_CITIZENS_END_OFF == BLD_CITIZENS_BEGIN_OFF + 8 &&
+              WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF == 0x11568 &&
+              WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12 == 0x1157C,
+              "Invite citizens (0x6F8CC0 -> 0x823470) offsets must match 1.1.1.9 layout");
+static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
+              VEH_STOP_RECORD_STRIDE == 0x198 &&
+              VEH_STOP_HALF_STRIDE * 2 + 8 == VEH_STOP_RECORD_STRIDE,
+              "Vehicle window border stop & stop record offsets must match 0x7D6B00 layout");
+
+// ---------------------------------------------------------------------------
+// Remote Command Sound, Warning Banner & Notification Popup Isolation Constants
+// ---------------------------------------------------------------------------
+
+#ifndef IMPORT_PLAY_SOUND_RVA
+#define IMPORT_PLAY_SOUND_RVA           0x86D2A8
+#endif
+#ifndef IMPORT_PLAY_SOUND_3D_RVA
+#define IMPORT_PLAY_SOUND_3D_RVA        0x86CBD8u
+#endif
+#ifndef SOUND_MUTE_BYTE_RVA
+#define SOUND_MUTE_BYTE_RVA             0x9D4F24
+#endif
+#ifndef CAMERA_EYE_RVA
+#define CAMERA_EYE_RVA                  0x9E9D10u
+#endif
+#ifndef WORLD_OPEN_WINDOWS_BEGIN_OFFSET
+#define WORLD_OPEN_WINDOWS_BEGIN_OFFSET 0xCAC0u
+#endif
+#ifndef WORLD_OPEN_WINDOWS_END_OFFSET
+#define WORLD_OPEN_WINDOWS_END_OFFSET   0xCAC8u
+#endif
+#ifndef WORLD_OPEN_WINDOWS_BEGIN_RVA
+#define WORLD_OPEN_WINDOWS_BEGIN_RVA    (WORLD_RVA + WORLD_OPEN_WINDOWS_BEGIN_OFFSET)
+#endif
+#ifndef WORLD_OPEN_WINDOWS_END_RVA
+#define WORLD_OPEN_WINDOWS_END_RVA      (WORLD_RVA + WORLD_OPEN_WINDOWS_END_OFFSET)
+#endif
+#ifndef WORLD_NOTIF_POPUPS_BEGIN_OFFSET
+#define WORLD_NOTIF_POPUPS_BEGIN_OFFSET 0xD208u
+#endif
+#ifndef WORLD_NOTIF_POPUPS_END_OFFSET
+#define WORLD_NOTIF_POPUPS_END_OFFSET   0xD210u
+#endif
+#ifndef WORLD_BRUSH_SOUNDS_BEGIN_OFFSET
+#define WORLD_BRUSH_SOUNDS_BEGIN_OFFSET 0xD488u
+#endif
+#ifndef WORLD_BRUSH_SOUNDS_END_OFFSET
+#define WORLD_BRUSH_SOUNDS_END_OFFSET   0xD490u
+#endif
+#ifndef BRUSH_SOUND_REC_SIZE
+#define BRUSH_SOUND_REC_SIZE            0x110u
+#endif
+#ifndef BRUSH_SOUND_VOL_OFFSET
+#define BRUSH_SOUND_VOL_OFFSET          0x108u
+#endif
+#ifndef BRUSH_SOUND_ACTIVE_OFFSET
+#define BRUSH_SOUND_ACTIVE_OFFSET       0x10Cu
+#endif
+#ifndef WORLD_WARNING_TEXT_OFFSET
+#define WORLD_WARNING_TEXT_OFFSET       0xD5A0u
+#endif
+#ifndef WORLD_WARNING_TEXT_BYTES
+#define WORLD_WARNING_TEXT_BYTES        0x2000u
+#endif
+#ifndef WORLD_WARNING_TIMER_OFFSET
+#define WORLD_WARNING_TIMER_OFFSET      0xF5A0u
+#endif
+#ifndef WORLD_PLACEMENT_ERROR_OFFSET
+#define WORLD_PLACEMENT_ERROR_OFFSET    0x11A10u
+#endif
+#ifndef NOTIF_MSG_POS_X_OFFSET
+#define NOTIF_MSG_POS_X_OFFSET          0x4200u
+#endif
+#ifndef NOTIF_MSG_POS_Z_OFFSET
+#define NOTIF_MSG_POS_Z_OFFSET          0x4208u
+#endif
+#ifndef NOTIFICATION_REBUILD_POPUPS_RVA
+#define NOTIFICATION_REBUILD_POPUPS_RVA 0x4C4A40u
+#endif
+#ifndef WARNING_POPUP_CREATE_RVA
+#define WARNING_POPUP_CREATE_RVA        0x6EE2A0u
+#endif
+#ifndef REMOTE_3D_SOUND_MAX_DIST
+#define REMOTE_3D_SOUND_MAX_DIST        250.0f
+#endif
+
+static_assert(CAMERA_EYE_RVA == CAMERA_RVA + CAMERA_POS_OFFSET,
+              "CAMERA_EYE_RVA (0x9E9D10) must equal CAMERA_RVA (0x9E9C90) + CAMERA_POS_OFFSET (0x80)");
+static_assert(WORLD_OPEN_WINDOWS_BEGIN_RVA == WORLD_RVA + WORLD_OPEN_WINDOWS_BEGIN_OFFSET &&
+              WORLD_OPEN_WINDOWS_END_RVA == WORLD_OPEN_WINDOWS_BEGIN_RVA + 8,
+              "WORLD_OPEN_WINDOWS_BEGIN/END_RVA (0x9E19D0/0x9E19D8) must match WORLD_RVA + 0xCAC0/0xCAC8");
+static_assert(WORLD_NOTIF_POPUPS_END_OFFSET == WORLD_NOTIF_POPUPS_BEGIN_OFFSET + 8 &&
+              WORLD_BRUSH_SOUNDS_END_OFFSET == WORLD_BRUSH_SOUNDS_BEGIN_OFFSET + 8 &&
+              BRUSH_SOUND_ACTIVE_OFFSET == BRUSH_SOUND_VOL_OFFSET + 4 &&
+              BRUSH_SOUND_REC_SIZE == 0x110u,
+              "Notification popups (+0xD208..+0xD210) and brush loop sound records (+0xD488..+0xD490, 0x110 stride) must match 1.1.1.9 layout");
+static_assert(WORLD_WARNING_TIMER_OFFSET == WORLD_WARNING_TEXT_OFFSET + WORLD_WARNING_TEXT_BYTES &&
+              NOTIF_MSG_POS_Z_OFFSET == NOTIF_MSG_POS_X_OFFSET + 8,
+              "Warning banner timer (+0xF5A0) must follow 0x2000-byte warning text (+0xD5A0), and notification pos Z (+0x4208) must be 8 bytes after pos X (+0x4200)");
+
+// ---------------------------------------------------------------------------
+// Building Resource Purchase (Manual One-Time Buy & Auto-Purchase) Constants
+// ---------------------------------------------------------------------------
+
+#ifndef WORLD_UI_RES_SLIDERS_OFFSET
+#define WORLD_UI_RES_SLIDERS_OFFSET     0x11F28u
+#endif
+#ifndef BLD_STORAGE_VEC_CLEAR_RVA
+#define BLD_STORAGE_VEC_CLEAR_RVA       0x0B11F0u
+#endif
+#ifndef BLD_INIT_RES_SLIDERS_RVA
+#define BLD_INIT_RES_SLIDERS_RVA        0x174B30u
+#endif
+#ifndef BLD_APPLY_AUTO_BUY_RVA
+#define BLD_APPLY_AUTO_BUY_RVA          0x174D40u
+#endif
+#ifndef BLD_MANUAL_BUY_RES_RVA
+#define BLD_MANUAL_BUY_RES_RVA          0x174E40u
+#endif
+#ifndef SITE_BLD_MANUAL_BUY_RES_RVA
+#define SITE_BLD_MANUAL_BUY_RES_RVA     0x711A4Bu
+#endif
+#ifndef BLD_AUTO_BUY_MODE_OFFSET
+#define BLD_AUTO_BUY_MODE_OFFSET        0x9E8u
+#endif
+#ifndef BLD_EXPORT_MODE_OFFSET
+#define BLD_EXPORT_MODE_OFFSET          0x9ECu
+#endif
+#ifndef RES_PRICE_USD_OFFSET
+#define RES_PRICE_USD_OFFSET            0x58u
+#endif
+#ifndef RES_PRICE_RUB_OFFSET
+#define RES_PRICE_RUB_OFFSET            0x5Cu
+#endif
+
+static_assert(BLD_EXPORT_MODE_OFFSET == BLD_AUTO_BUY_MODE_OFFSET + 4 &&
+              RES_PRICE_RUB_OFFSET == RES_PRICE_USD_OFFSET + 4 &&
+              BLD_MANUAL_BUY_RES_RVA == BLD_APPLY_AUTO_BUY_RVA + 0x100u,
+              "Building resource purchase offsets (+0x9E8/+0x9EC, +0x58/+0x5C, 0x174D40/0x174E40) must match 1.1.1.9 layout");

@@ -134,3 +134,15 @@ void Commands_SetSession(int role);
 void Commands_SubmitRemote(int kind, const void* data, size_t size);
 // Player, game thread: a command the host made after `afterTick`.
 void Commands_Receive(int kind, unsigned long long afterTick, const void* data, size_t size);
+
+// Remote command sound, warning banner, and notification popup isolation hooks & scopes.
+bool Commands_InstallHooks();
+bool Commands_IsApplyingRemote();
+void Commands_BeginRemoteReplayScope();
+void Commands_EndRemoteReplayScope();
+
+bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5);
+bool Commands_OnPlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5);
+long long Commands_OnCreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
+                                      int popupType, int stringId, long long p8, long long p9);
+void Commands_OnRebuildNotificationPopups(long long world);

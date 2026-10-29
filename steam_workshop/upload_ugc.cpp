@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Full singleplayer isolation: disable minimap zone overlay, ImGui mouse/keyboard capture, window patches, input blocks, and simulation hooks outside co-op sessions; clean state reset on return to main menu",
+                "v%s (Protocol %d) - Remote sound/warning isolation, full multi-resource warehouse & construction storage sync, manual resource purchase lockstep sync, and co-op game speed scaling fix ([>], [>>], [>>>] Plaid, Hyper)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

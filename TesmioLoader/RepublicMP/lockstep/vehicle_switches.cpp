@@ -177,12 +177,14 @@ static bool ListWord(int kind, unsigned offset)
                (offset >= 0x4F0 && offset < 0x500) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
-               (offset >= 0x680 && offset < 0x6B8) ||
+               (offset >= 0x680 && offset < 0x698) ||
+               (offset >= 0x6A0 && offset < 0x6B8) ||
                (offset >= 0x738 && offset < 0x750) ||
                (offset >= 0x770 && offset < 0x774) ||
                (offset >= 0xD24 && offset < 0xD28) ||
                (offset >= 0xD60 && offset < 0x1140) ||
                (offset >= 0x1708 && offset < 0x1710) ||
+               (offset >= 0x1720 && offset < 0x1768) ||
                (offset >= 0x17E8 && offset < 0x17F0) ||
                (offset >= 0x1A54 && offset < 0x1A5C) ||
                (offset >= 0x1A7C && offset < 0x1A84) ||
