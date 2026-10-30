@@ -1,0 +1,42 @@
+[h1]☭ RepublicMP v1.3.1 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
+
+Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P connection[/b] (no VPN/Hamachi or port forwarding required), seamless integration into the [b]native game UI[/b], the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
+
+[h2]🔥 Key Features:[/h2]
+[list]
+[*] [b]Native In-Game Menus & Soviet Waiting Lobby:[/b]
+  The [b]"CO-OP"[/b] menu is built directly into the main menu and the left-side [b]"☭ -> Co-op"[/b] system tab. While waiting for a partner to join or reconnect, the [b]"GOSPLAN USSR — CO-OP HEADQUARTERS"[/b] lobby safely holds the game on pause until both players reach 100% sync, with a [b]"Map Inspect [Tab]"[/b] mode to freely look around. Singleplayer remains 100% isolated and untouched.
+[*] [b]Two Co-op Game Modes:[/b]
+  1. [b]One State (Shared Republic)[/b] — classic co-op where both players share one treasury and build a single republic together.
+  2. [b]Two States on One Map (Western SSR & Eastern SSR)[/b] — splits the map into Western SSR (Host, [i]X < 0[/i]) and Eastern SSR (Client, [i]X > 0[/i]) with a configurable [b]Shared Border Zone[/b] ([i]150 / 250 / 500 / 1000 m[/i]) to connect roads, railways, power lines, and pipes:
+     • [b]Separate Treasuries:[/b] independent Ruble and Dollar balances (choose 100% starting capital for each player or a 50/50 split) and instant inter-state wire transfers ([b]50,000 RUB / $[/b]).
+     • [b]Isolated Economy, Warehouses, Demographics & HUD Stats:[/b] the top-bar HUD population counter, "Economy & Trade", "Population Statistics", and "Stored Resources" windows display exclusively your own republic's data. Full multi-resource warehouse/construction storage sync, auto-purchase sliders, and one-shot manual resource purchases.
+     • [b]Separate Banking & Loans:[/b] each state borrows and repays its own RUB/USD loans with an individual credit limit (scaled by your own state's adult population) and separate daily installments.
+[*] [b]Smooth 60–144+ FPS Interpolation & Per-Player Camera Persistence:[/b]
+  • [b]Sub-tick Visual Interpolation:[/b] jitter-free movement for road vehicles, trains, coupled wagons, wheel rotation/steering, follow/cabin cameras, and 3D vehicle selection/hover outlines at any refresh rate.
+  • [b]Saved 3D Cameras:[/b] each player's exact 3D camera position and look-at angle are saved in co-op saves and preserved across resyncs. On first load of a new map, cameras are cleanly framed at the center border looking over each player's own republic.
+  • [b]Remote Sound & Notification Isolation:[/b] your partner's 2D UI clicks and foreign territory warnings are muted on your screen (remote 3D construction/demolition sounds play only within 250 m of your camera).
+  • [b]Full Co-op Game Speed Support:[/b] pause, normal ([b]>[/b]), fast ([b]>>[/b]), and ultra-fast ([b]>>>[/b] / [b]LCtrl+Numpad 1/2[/b]).
+[*] [b]Host-Authoritative Steam Workshop Mod Sync & DLC Guard:[/b]
+  • Choose between [b]"Mods: Host Only (Auto)"[/b] (all Host mods + save mods) and [b]"Mods: From Save Only"[/b].
+  • Pre-save mod handshake checks mods [b]before[/b] packing the save: if the Client is missing Workshop mods, an in-game Gosplan downloader automatically subscribes and downloads them with a 1-click game restart button. Extra Client-only mods are temporarily hidden for the session, and unowned DLC buildings/vehicles are safely guarded.
+[*] [b]Dedicated Co-op Save Bank & Team Tools:[/b]
+  • Co-op saves are stored in an isolated bank ([i]save_coop[/i]) so your singleplayer saves ([i]save_sp[/i]) are never overwritten. Supports [b]"Continue Co-op"[/b], quick in-game saving via [b]"☭ -> Co-op"[/b], and safe 1-click [b]"Import Singleplayer Save"[/b].
+  • Team tools: real-time 3D partner cursor, minimap territory overlay, camera jump to partner ([b]F6[/b]), 3D border toggle ([b]F7[/b]), and 20-second 3D map pings ([b]Alt + LMB[/b]).
+[/list]
+
+[h2]🚀 Installation & Launch Rules:[/h2]
+[b]Important:[/b] Both players must run the same game version and [b]RepublicMP v1.3.1[/b].
+
+[b]Method 1 — Via Steam Workshop (Recommended):[/b]
+1. Subscribe to this mod on Steam Workshop (both players).
+2. Open the Workshop mod folder: [i]Steam\steamapps\workshop\content\784150\3823543010\[/i] and run [b]START-COOP.bat[/b] [b]once[/b] (it automatically copies the [i]dinput8.dll[/i] proxy loader and menu icons into your [i]SovietRepublic\[/i] game directory next to [i]SOVIET64.exe[/i]).
+3. [b]Done![/b] From now on, simply launch the game normally via the [b]"Play"[/b] button in Steam (select the standard 64-bit version). All future Workshop updates will load automatically!
+
+[b]Method 2 — Friend Pack Archive (RepublicMP_Friend_Pack.zip / Manual Install):[/b]
+1. Extract the archive into your [i]SovietRepublic\[/i] game folder (where [i]SOVIET64.exe[/i] is located) or run [b]START-COOP.bat[/b] from the extracted folder.
+2. Launch the game via Steam or [i]SOVIET64.exe[/i].
+
+[b]How to Start a Co-op Session:[/b]
+• [b]HOST:[/b] In the main menu, click [b]"CO-OP" -> "Host Server"[/b]. Optionally adjust [b]"Co-op Settings"[/b] ([i]1 or 2 States[/i], [i]Treasury 100% / 50-50[/i], [i]Border Zone[/i], [i]Map Borders[/i], [i]Mod Sync Mode[/i]), then select [b]"Continue Co-op"[/b], [b]"Co-op Saves"[/b], [b]"Import Singleplayer"[/b], or [b]"New Custom Game"[/b].
+• [b]CLIENT (Player 2):[/b] Wait until the Host loads the map (and enters the Co-op Waiting Lobby), open [b]"CO-OP" -> "Join Server"[/b], and click [b]"Host: <Friend's Name>"[/b] in the online Steam friends list (or paste their IP / [i]steam:<SteamID64>[/i]).

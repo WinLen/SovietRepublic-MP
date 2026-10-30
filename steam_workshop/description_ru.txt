@@ -1,25 +1,59 @@
-[h1]☭ RepublicMP — Кооперативный мультиплеер для Workers & Resources: Soviet Republic[/h1]
+[h1]☭ RepublicMP v1.3.1 — Кооперативный мультиплеер (RU / EN)[/h1]
 
-Полноценный кооперативный мод с детерминированной синхронизацией ([b]Lockstep[/b]), подключением через [b]Steam P2P в 1 клик[/b] (без Radmin/Hamachi и проброса портов), полной интеграцией в [b]нативное меню игры[/b], режимом [b]«Два государства на одной карте»[/b] и [b]автоматической двусторонней синхронизацией модов Мастерской Steam[/b]!
+Кооперативный мод с синхронизацией [b]Lockstep[/b], входом через [b]Steam P2P в 1 клик[/b] (без VPN и портов), интеграцией в [b]нативное меню игры[/b], режимом [b]«Два государства на одной карте»[/b], [b]авто-синхронизацией модов Мастерской Steam[/b] и плавной [b]60–144+ FPS интерполяцией транспорта и камер[/b]!
 
-[h2]🔥 Основные возможности:[/h2]
+[h2]🔥 Основные возможности (RU):[/h2]
 [list]
-[*] [b]Нативный интерфейс в стиле игры:[/b]
-  Раздел [b]«КООПЕРАТИВ»[/b] встроен прямо в главное меню игры и в левую системную боковую панель [b]«☭ -> Кооператив»[/b] со стилизованными советскими иконками. Никаких лишних оверлейных окон!
+[*] [b]Нативное меню и штаб ожидания:[/b] раздел [b]«КООПЕРАТИВ»[/b] встроен в главное меню и панель [b]«☭ -> Кооператив»[/b]. Штаб «ГОСПЛАН СССР» удерживает паузу до 100% загрузки обоих игроков (с осмотром карты по [b]Tab[/b]). Одиночная игра на 100% изолирована.
 [*] [b]Два режима кооператива:[/b]
-  1. [b]Одно государство[/b] — классический кооп с общим бюджетом и совместным строительством всей республики.
-  2. [b]Два государства на одной карте (Западная ССР и Восточная ССР)[/b] — раздельные бюджеты в рублях и долларах (100% стартового капитала каждому или 50/50), собственная территория каждого игрока (`X < 0` и `X > 0`), общая пограничная зона для стыковки дорог/ЖД/ЛЭП/труб, автоматический учёт доходов/расходов зданий, таможен и техники по владельцу и межгосударственные переводы средств (`50 000 РУБ / $`).
-[*] [b]100% автоматическая синхронизация модов Мастерской Steam:[/b]
-  Все установленные моды включены автоматически — ничего прокликивать вручную не нужно! При подключении друга (режим по умолчанию [b]«Моды: Общие (Авто)»[/b]) недостающие моды из Steam Workshop автоматически подписываются и докачиваются в обе стороны (и у Клиента, и у Хоста, а также из загружаемого сейва), формируя единый синхронизированный пул зданий и техники.
-[*] [b]Отдельный банк кооп-сохранений:[/b]
-  Одиночные и кооперативные сохранения полностью разделены (`save_sp` и `save_coop`). Поддерживаются кнопка [b]«Продолжить кооп»[/b], быстрое сохранение кооп-игры прямо из боковой панели [b]«☭ -> Кооператив»[/b] и безопасный [b]импорт одиночного сохранения[/b] в кооператив.
-[*] [b]Подключение через Steam P2P в 1 клик:[/b]
-  Список друзей Steam онлайн прямо в меню «Подключиться» — вход без белого IP, VPN и проброса портов.
-[*] [b]Командные инструменты в игре:[/b]
-  3D-маркер курсора партнёра, быстрый прыжок камеры к другу ([b]F6[/b]), 3D-маяки на местности ([b]Alt + ЛКМ[/b]), переключение 3D-границы государств ([b]F7[/b]) и выбор стандартной карты 20×20 км с границами либо всей карты без пограничного отступа.
+  1. [b]Одно государство[/b] — общий бюджет и совместное строительство всей республики.
+  2. [b]Два государства на одной карте (Западная и Восточная ССР)[/b] — деление карты ([i]X < 0[/i] и [i]X > 0[/i]) с общей погранзоной ([i]150 / 250 / 500 / 1000 м[/i]) для стыковки дорог, ЖД, ЛЭП и труб:
+     • [b]Раздельная казна и банк:[/b] свои рубли/доллары (100% капитала каждому или 50/50), переводы ([b]50 000 РУБ / $[/b]) и раздельные кредиты.
+     • [b]Раздельная экономика, склады и демография:[/b] счётчик жителей HUD, окна «Экономика и торговля», «Статистика населения» и «Хранящиеся ресурсы» показывают данные только вашей ССР. Полная синхронизация складов и ручной/авто-закупки ресурсов.
+[*] [b]Плавность 60–144+ FPS и сохранение 3D-камер:[/b]
+  • Плавное движение авто, поездов, вагонов, колёс, камеры следования/кабины и 3D-контуров выделения техники.
+  • 3D-камеры обоих игроков сохраняются в кооп-сейве и при ре-синке, а на новой карте выставляются в центре с видом на свою ССР.
+  • Изоляция чужих 2D-звуков и уведомлений + все скорости игры ([b]>[/b], [b]>>[/b], [b]>>>[/b]).
+[*] [b]Авто-синхронизация модов Steam Workshop и DLC:[/b]
+  • Режимы [b]«Моды: Только Хоста (Авто)»[/b] и [b]«Моды: Из сейва»[/b]. Сверка модов [b]до[/b] упаковки сейва с авто-докачкой из Workshop и перезапуском в 1 клик.
+[*] [b]Отдельный банк кооп-сохранений ([i]save_coop[/i]) и командные инструменты:[/b]
+  • [b]«Продолжить кооп»[/b], быстрое сохранение из панели [b]«☭»[/b], [b]«Импорт одиночного»[/b], 3D-курсор друга, прыжок к другу ([b]F6[/b]), 3D-граница ([b]F7[/b]) и 3D-маяки ([b]Alt + ЛКМ[/b]).
 [/list]
 
-[h2]🚀 Как запустить после подписки в Steam Workshop:[/h2]
-1. Откройте папку мода (`steamapps\workshop\content\784150\3823543010\`) и один раз запустите [b]START-COOP.bat[/b] (он автоматически скопирует прокси `dinput8.dll` в папку игры и запустит `SOVIET64.exe`).
-2. После этого мод запускается и обновляется полностью автоматически при обычном нажатии кнопки [b]«Играть»[/b] в Steam!
-3. В главном меню игры откройте раздел [b]«КООПЕРАТИВ»[/b], а во время игры — вкладку [b]«☭ -> Кооператив»[/b] на левой панели!
+[h2]🚀 Правила установки и запуска (RU):[/h2]
+1. Подпишитесь на мод в Steam Workshop (оба игрока, [b]v1.3.1[/b]).
+2. Откройте папку мода (`Steam\steamapps\workshop\content\784150\3823543010\`) и [b]один раз[/b] запустите [b]START-COOP.bat[/b] (скопирует `dinput8.dll` и иконки в папку игры `SovietRepublic\`).
+3. Далее всегда запускайте игру кнопкой [b]«Играть»[/b] в Steam — мод и обновления подхватываются автоматически!
+4. [b]Хост:[/b] `КООПЕРАТИВ` -> `Создать сервер` -> `Продолжить кооп` / `Кооп-сохранения` / `Импорт одиночного` / `Новая своя игра`.
+5. [b]Клиент:[/b] Когда Хост загрузил карту, откройте `КООПЕРАТИВ` -> `Подключиться` -> нажмите [b]«Хост: <Имя друга>»[/b] в списке Steam.
+
+[hr][/hr]
+
+[h1]🇬🇧 RepublicMP v1.3.1 — Co-op Multiplayer for Workers & Resources[/h1]
+
+Deterministic ([b]Lockstep[/b]) co-op multiplayer mod with [b]1-click Steam P2P connection[/b] (no VPN or port forwarding), native in-game menus, [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod sync[/b], and smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
+
+[h2]🔥 Key Features (EN):[/h2]
+[list]
+[*] [b]Native UI & Waiting Lobby:[/b] built into the main menu ([b]"CO-OP"[/b]) and left sidebar ([b]"☭ -> Co-op"[/b]). The Gosplan lobby holds pause until 100% sync and supports [b]"Map Inspect [Tab]"[/b]. Singleplayer is 100% isolated.
+[*] [b]Two Co-op Modes:[/b]
+  1. [b]One State[/b] — shared treasury and joint construction across the whole republic.
+  2. [b]Two States on One Map (Western & Eastern SSR)[/b] — splits the map ([i]X < 0[/i] and [i]X > 0[/i]) with a Shared Border Zone ([i]150 / 250 / 500 / 1000 m[/i]) to connect roads, rails, power lines, and pipes:
+     • [b]Separate Treasuries & Loans:[/b] independent RUB/USD balances (100% capital each or 50/50 split), wire transfers ([b]50,000 RUB / $[/b]), and separate bank loans per state.
+     • [b]Isolated Economy, Warehouses & HUD Stats:[/b] HUD population counter, "Economy & Trade", "Population Statistics", and "Stored Resources" show exclusively your own republic's data. Full warehouse & manual/auto-purchase sync.
+[*] [b]Smooth 60–144+ FPS Interpolation & Saved 3D Cameras:[/b]
+  • Smooth vehicles, trains, wagons, wheels, follow/cabin cameras, and 3D vehicle selection outlines.
+  • Both players' 3D cameras are saved in co-op saves and restored on resync (and cleanly framed at the center border on first load).
+  • Remote 2D sound & warning isolation + full co-op game speeds ([b]>[/b], [b]>>[/b], [b]>>>[/b]).
+[*] [b]Host-Authoritative Steam Workshop Mod Sync & DLC Guard:[/b]
+  • Choose [b]"Mods: Host Only (Auto)"[/b] or [b]"Mods: From Save"[/b]. Pre-save check automatically downloads missing Workshop mods with a 1-click restart button.
+[*] [b]Dedicated Co-op Save Bank ([i]save_coop[/i]) & Team Tools:[/b]
+  • [b]"Continue Co-op"[/b], quick save via [b]"☭"[/b], [b]"Import Singleplayer"[/b], 3D partner cursor, jump to partner ([b]F6[/b]), 3D border toggle ([b]F7[/b]), and 3D map pings ([b]Alt + LMB[/b]).
+[/list]
+
+[h2]🚀 Installation & Launch Rules (EN):[/h2]
+1. Subscribe to this mod on Steam Workshop (both players, [b]v1.3.1[/b]).
+2. Open the mod folder (`Steam\steamapps\workshop\content\784150\3823543010\`) and run [b]START-COOP.bat[/b] [b]once[/b] (copies `dinput8.dll` and menu icons into your `SovietRepublic\` game folder).
+3. Launch the game normally via [b]"Play"[/b] in Steam — the mod and all updates load automatically!
+4. [b]Host:[/b] `CO-OP` -> `Host Server` -> `Continue Co-op` / `Co-op Saves` / `Import Singleplayer` / `New Custom Game`.
+5. [b]Client:[/b] Once the Host loads the map, open `CO-OP` -> `Join Server` -> click [b]"Host: <Friend's Name>"[/b] in the Steam list.

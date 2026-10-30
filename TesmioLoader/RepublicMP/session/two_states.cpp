@@ -3242,6 +3242,7 @@ void TwoStates_OnSessionEnded()
         g_stateRub[0] = g_stateRub[1] = 0.0;
         g_stateUsd[0] = g_stateUsd[1] = 0.0;
         g_loadedFromCoopSave = false;
+        ResetSavedCameraState();
         EnsureOwnerLock();
         EnterCriticalSection(&g_ownerLock);
         g_buildingOwners.clear();
@@ -3258,6 +3259,7 @@ void TwoStates_OnSessionEnded()
         g_stateRub[0] = g_stateRub[1] = 0.0;
         g_stateUsd[0] = g_stateUsd[1] = 0.0;
         g_loadedFromCoopSave = false;
+        ResetSavedCameraState();
         EnsureOwnerLock();
         EnterCriticalSection(&g_ownerLock);
         g_buildingOwners.clear();
@@ -3269,7 +3271,6 @@ void TwoStates_OnSessionEnded()
 
     g_localPingActive = false;
     g_hasResyncCam = false;
-    ResetSavedCameraState();
 
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
@@ -4699,6 +4700,9 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
     PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
     if (!pc.valid) return;
 
+    int partnerState = (TwoStates_LocalState() == 1) ? 2 : 1;
+    TwoStates_SetSavedCameraForTest(partnerState, pc.camPos, pc.camLookAt);
+
     static unsigned s_lastPingSeq = 0;
     if (pc.hasPing && pc.pingSeq != s_lastPingSeq) {
         s_lastPingSeq = pc.pingSeq;
@@ -4710,7 +4714,6 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
         TwoStates_AddToast(toast, 2);
     }
 
-    int partnerState = (TwoStates_LocalState() == 1) ? 2 : 1;
     const char* partnerLabel = TwoStates_IsActive()
         ? (partnerState == 1 ? Tr("Курсор: Западная ССР (Хост)", "Cursor: West SSR (Host)")
                              : Tr("Курсор: Восточная ССР (Игрок 2)", "Cursor: East SSR (Player 2)"))
@@ -5732,9 +5735,23 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "net_trade1_usd_cents=" << (long long)llround(g_netTradeUsd[0] * 100.0) << "\r\n";
     out << "net_trade2_usd_cents=" << (long long)llround(g_netTradeUsd[1] * 100.0) << "\r\n";
 
+    float localPos[3] = {}, localLook[3] = {};
+    bool haveLocal = TwoStates_GetCameraView(localPos, localLook) && IsValidCameraPair(localPos, localLook);
+    PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
+    const bool havePartnerLive = pc.valid && IsValidCameraPair(pc.camPos, pc.camLookAt);
+    const bool localIsState2 = (TwoStates_LocalState() == 2);
+
     float c1_pos[3] = {}, c1_look[3] = {};
-    bool haveC1 = TwoStates_GetCameraView(c1_pos, c1_look) && IsValidCameraPair(c1_pos, c1_look);
-    if (!haveC1 && g_hasSavedCam1) {
+    bool haveC1 = false;
+    if (!localIsState2 && haveLocal) {
+        memcpy(c1_pos, localPos, sizeof(c1_pos));
+        memcpy(c1_look, localLook, sizeof(c1_look));
+        haveC1 = true;
+    } else if (localIsState2 && havePartnerLive) {
+        memcpy(c1_pos, pc.camPos, sizeof(c1_pos));
+        memcpy(c1_look, pc.camLookAt, sizeof(c1_look));
+        haveC1 = true;
+    } else if (g_hasSavedCam1) {
         memcpy(c1_pos, g_savedCam1Pos, sizeof(c1_pos));
         memcpy(c1_look, g_savedCam1Look, sizeof(c1_look));
         haveC1 = true;
@@ -5746,10 +5763,13 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 
     float c2_pos[3] = {}, c2_look[3] = {};
     bool haveC2 = false;
-    PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
-    if (pc.valid && IsValidCameraPair(pc.camPos, pc.camLookAt)) {
-        c2_pos[0] = pc.camPos[0]; c2_pos[1] = pc.camPos[1]; c2_pos[2] = pc.camPos[2];
-        c2_look[0] = pc.camLookAt[0]; c2_look[1] = pc.camLookAt[1]; c2_look[2] = pc.camLookAt[2];
+    if (localIsState2 && haveLocal) {
+        memcpy(c2_pos, localPos, sizeof(c2_pos));
+        memcpy(c2_look, localLook, sizeof(c2_look));
+        haveC2 = true;
+    } else if (!localIsState2 && havePartnerLive) {
+        memcpy(c2_pos, pc.camPos, sizeof(c2_pos));
+        memcpy(c2_look, pc.camLookAt, sizeof(c2_look));
         haveC2 = true;
     } else if (g_hasSavedCam2) {
         memcpy(c2_pos, g_savedCam2Pos, sizeof(c2_pos));
