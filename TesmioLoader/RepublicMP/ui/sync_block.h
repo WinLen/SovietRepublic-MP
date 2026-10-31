@@ -13,6 +13,8 @@ void SyncBlock_SetStep(int step, int totalSteps, const char* text, int percent =
 
 // Updates only the progress bar of the current step. Any thread.
 void SyncBlock_SetPercent(int percent);
+void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec);
+void SyncBlock_GetTransferStats(int* outPercent, int* outQueuedBytes, int* outTotalBytes, float* outSpeedMbSec);
 
 bool SyncBlock_IsActive();
 

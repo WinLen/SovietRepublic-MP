@@ -25,6 +25,9 @@
 #include <string.h>
 #include <math.h>
 
+bool SaveSync_ExtractDlcToken(const char* typeName, char* outToken, size_t outSize);
+bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName = nullptr);
+
 #pragma comment(lib, "User32.lib")
 
 // Set to 1 to log every transmitted/received point at full precision.
@@ -702,6 +705,8 @@ static void ResetManagerDragState(__int64 manager)
         *(unsigned char*)(manager + MGR_END_ATTACHED_OFFSET) = 0;
         *(unsigned char*)(manager + 0x74A) = 0;
         *(unsigned char*)(manager + 0x74B) = 0;
+        *(__int64*)(manager + MGR_START_NODE_OFFSET) = 0;
+        *(__int64*)(manager + MGR_END_NODE_OFFSET) = 0;
         ((ManagerResetFn)((uintptr_t)g_exe + MANAGER_RESET_RVA))(manager, manager + MANAGER_RESET_STATE_OFFSET);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -718,6 +723,31 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
     bool ok = ApplySegmentImplInner(seg, outEngineAccepted);
     if (scoped) ViewListScope_End();
     return ok;
+}
+
+static RoadSyncPoint* SnapshotManagerRoute(__int64 manager, int* outCount)
+{
+    if (outCount) *outCount = 0;
+    if (!manager) return nullptr;
+    char* rBeg = *(char**)(manager + MGR_ROUTE_BEGIN_OFFSET);
+    char* rEnd = *(char**)(manager + MGR_ROUTE_END_OFFSET);
+    if (!rBeg || !rEnd || rEnd <= rBeg) return nullptr;
+    size_t bytes = (size_t)(rEnd - rBeg);
+    if (bytes % sizeof(RoadSyncPoint) != 0) return nullptr;
+    int count = (int)(bytes / sizeof(RoadSyncPoint));
+    if (count <= 0 || count > ROAD_SYNC_MAX_POINTS) return nullptr;
+    RoadSyncPoint* pts = (RoadSyncPoint*)malloc(count * sizeof(RoadSyncPoint));
+    if (!pts) return nullptr;
+    memcpy(pts, rBeg, count * sizeof(RoadSyncPoint));
+    if (outCount) *outCount = count;
+    return pts;
+}
+
+static void RestoreManagerRoute(__int64 manager, const RoadSyncPoint* pts, int count)
+{
+    if (!manager || !pts || count <= 0) return;
+    RawVectorHeader route = { pts, pts + count, pts + count };
+    ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + MGR_ROUTE_BEGIN_OFFSET), &route);
 }
 
 static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAccepted)
@@ -758,6 +788,12 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
     float savedCursor[3] = { 0.0f, 0.0f, 0.0f };
     int savedPresetCurveMode = -1;
     bool threw = false;
+    unsigned char savedDragActive = 0;
+    void* savedPreviewA = nullptr;
+    void* savedPreviewB = nullptr;
+    __int64 savedStartNode = 0;
+    RoadSyncPoint* savedRoutePts = nullptr;
+    int savedRouteCount = 0;
 
     __try {
         __try {
@@ -777,6 +813,15 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             savedCursor[0] = *(float*)(thisPtr + CURSOR_X_OFFSET);
             savedCursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
             savedCursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
+            savedDragActive = *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET);
+            if (savedDragActive != 0) {
+                savedPreviewA = *(void**)(manager + 0x5F8);
+                savedPreviewB = *(void**)(manager + 0x600);
+                *(void**)(manager + 0x5F8) = nullptr;
+                *(void**)(manager + 0x600) = nullptr;
+                savedStartNode = *(__int64*)(manager + MGR_START_NODE_OFFSET);
+                savedRoutePts = SnapshotManagerRoute(manager, &savedRouteCount);
+            }
             ResetManagerDragState(manager);
             *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = 0;
             savedCurve = *(float*)(manager + MGR_CURVE_OFFSET);
@@ -1002,6 +1047,17 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 *presetCurveMode = savedPresetCurveMode;
                 *(float*)(manager + MGR_CURVE_OFFSET) = savedCurve;
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
+                if (savedDragActive != 0) {
+                    *(unsigned char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) = savedDragActive;
+                    *(void**)(manager + 0x5F8) = savedPreviewA;
+                    *(void**)(manager + 0x600) = savedPreviewB;
+                    if (savedStartNode) *(__int64*)(manager + MGR_START_NODE_OFFSET) = savedStartNode;
+                    RestoreManagerRoute(manager, savedRoutePts, savedRouteCount);
+                }
+                if (savedRoutePts) {
+                    free(savedRoutePts);
+                    savedRoutePts = nullptr;
+                }
             }
             *(unsigned char*)((uintptr_t)g_exe + 0x9E4578) = 0;
             ClearHoveredPort();
@@ -1069,6 +1125,48 @@ static __int64 FindLocalSegment(__int64 manager, const RoadSyncUpgradePiece& pie
         if (NodeNear(n0, piece.segEnd) && NodeNear(n1, piece.segStart)) { *outReversed = true; return seg; }
     }
     return 0;
+}
+
+static bool NodeHasPedestrianAttachment(__int64 pedMgr, __int64 node)
+{
+    if (!pedMgr || !node) return false;
+    __try {
+        __int64* it = *(__int64**)(pedMgr + MGR_SEGMENTS_BEGIN_OFFSET);
+        __int64* end = *(__int64**)(pedMgr + MGR_SEGMENTS_END_OFFSET);
+        const float* np = (const float*)(node + NODE_POS_OFFSET);
+        for (; it && it < end; ++it) {
+            __int64 seg = *it;
+            if (!seg) continue;
+            __int64 pn0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+            __int64 pn1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+            if (pn0 == node || pn1 == node) return true;
+            if (pn0 && np && NodeNear(pn0, np)) return true;
+            if (pn1 && np && NodeNear(pn1, np)) return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+static __int64 ResolvePedestrianAnchorNode(__int64 pedMgr, __int64 seg, int rs, int re, int totalPoints)
+{
+    __int64 n0 = 0, n1 = 0;
+    __try {
+        n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+        n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+    if (!pedMgr) return n0;
+    bool has0 = NodeHasPedestrianAttachment(pedMgr, n0);
+    bool has1 = NodeHasPedestrianAttachment(pedMgr, n1);
+    if (has1 && !has0) return n1;
+    if (has0 && !has1) return n0;
+    if (has1 && has0) {
+        if (rs >= 0 && re >= totalPoints) return n1;
+        return n0;
+    }
+    return n0 ? n0 : n1;
 }
 
 // Re-types one segment range: resets the manager with fc040, fills in the
@@ -1147,6 +1245,19 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         *(int*)(manager + MGR_VARIANT_OFFSET) = msg.newVariant;
         *(int*)(manager + MGR_FLAG_5C4_OFFSET) = msg.flag5c4;
 
+        __int64 thisPtr = GetWorldThisPtr();
+        __int64 pedMgr = 0;
+        if (category == ROAD_SYNC_CATEGORY_ROAD) {
+            pedMgr = *(__int64*)(thisPtr + 0xF968);
+            __int64 anchorNode = ResolvePedestrianAnchorNode(pedMgr, seg, rs, re, count);
+            *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = seg;
+            *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = anchorNode;
+            if (pedMgr) {
+                *(long long*)(pedMgr + MGR_ROAD_LINK_OFFSET) = seg;
+                *(long long*)(pedMgr + MGR_ROAD_LINK_EXTRA_OFFSET) = anchorNode;
+            }
+        }
+
         Logf("republicmp  ROAD_SYNC: %s %s%s range=(%d,%d)/%d type %d/%d -> %d/%d type394=%d dir=%d",
              piece.oldType == 0x65 ? "DEMOLISH" : "upgrade",
              info->name, reversed ? " (reversed)" : "", rs, re, count,
@@ -1154,7 +1265,14 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
              piece.oldType, dir);
 
         RoadCommitFn commit = g_origRoadCommit ? g_origRoadCommit : (RoadCommitFn)((uintptr_t)g_exe + COMMIT_RVA);
-        commit(manager, 0, 0, 0, 0, 0, 0);
+        __try {
+            commit(manager, 0, 0, 0, 0, 0, 0);
+        } __finally {
+            if (pedMgr) {
+                *(long long*)(pedMgr + MGR_ROAD_LINK_OFFSET) = 0;
+                *(long long*)(pedMgr + MGR_ROAD_LINK_EXTRA_OFFSET) = 0;
+            }
+        }
         ResetManagerDragState(manager);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1823,6 +1941,8 @@ static volatile bool g_connecting = false;
 static volatile bool g_cancelConnect = false;
 static volatile bool g_isHost = false;
 static SOCKET g_sock = INVALID_SOCKET;
+static HANDLE g_recvThread = nullptr;
+static HANDLE g_workerThread = nullptr;
 static char g_targetIp[64] = ROAD_SYNC_TEST_HOST_IP;
 static std::vector<RoadSyncItem> g_incoming;          // receive thread -> game thread
 static std::vector<RoadSyncAckMsg> g_incomingAcks;    // receive thread -> game thread
@@ -1832,6 +1952,7 @@ static void CloseConnection()
     g_connected = false;
     NetworkCloseSocket(g_sock);
     g_sock = INVALID_SOCKET;
+    NetworkJoinAndCloseThread(&g_recvThread);
 }
 
 static bool SendEnvelope(int tag, const void* payload, size_t payloadSize)
@@ -1987,7 +2108,7 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
 
 static void StartConnection(SOCKET sock)
 {
-    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread);
+    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread, &g_recvThread);
     RoadSyncStatus("[ROAD_SYNC] connection established");
 }
 
@@ -2045,14 +2166,14 @@ void RoadSync_StartHost()
 {
     NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               HostAcceptWorkerThread);
+                               HostAcceptWorkerThread, &g_workerThread);
 }
 
 void RoadSync_StartClient(const char* hostIp)
 {
     NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               ClientConnectWorkerThread);
+                               ClientConnectWorkerThread, &g_workerThread);
 }
 
 void RoadSync_Reset()
@@ -2062,6 +2183,7 @@ void RoadSync_Reset()
         RoadSyncStatus("[ROAD_SYNC] connection reset by user");
         CloseConnection();
     }
+    NetworkJoinAndCloseThread(&g_workerThread);
 }
 
 bool RoadSync_IsConnected()  { return g_connected; }
@@ -2387,10 +2509,84 @@ void RoadSync_CancelLocalDrag()
     }
 }
 
+bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName)
+{
+    if (!SaveSync_GetDlcCheck())
+        return true;
+
+    SessionState st = SaveSync_GetState();
+    if (st == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+        return true;
+
+    uint32_t hostMask = 0, clientMask = 0, commonMask = 0;
+    SaveSync_GetDlcMasks(&hostMask, &clientMask, &commonMask);
+    if (hostMask == 0 && clientMask == 0 && !IsDualTestbed())
+        return true;
+
+    uint32_t requiredDlcMask = 0;
+    char dlcBuf[32] = {};
+
+    if (toolName && toolName[0]) {
+        char tok[16] = {};
+        if (SaveSync_ExtractDlcToken(toolName, tok, sizeof(tok))) {
+            requiredDlcMask = SaveSync_GetDlcMask(tok);
+            strncpy_s(dlcBuf, tok, _TRUNCATE);
+        } else if (strstr(toolName, "dlc2") || strstr(toolName, "mud") || strstr(toolName, "biome")) {
+            requiredDlcMask = (1u << 1);
+            strncpy_s(dlcBuf, "DLC2", _TRUNCATE);
+        } else if (strstr(toolName, "dlc3") || strstr(toolName, "cobble") || strstr(toolName, "early")) {
+            requiredDlcMask = (1u << 2);
+            strncpy_s(dlcBuf, "DLC3", _TRUNCATE);
+        } else if (strstr(toolName, "dlc4") || strstr(toolName, "world_map")) {
+            requiredDlcMask = (1u << 3);
+            strncpy_s(dlcBuf, "DLC4", _TRUNCATE);
+        }
+    }
+
+    if (typeId >= 200 && typeId < 300) {
+        requiredDlcMask |= (1u << 1);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC2", _TRUNCATE);
+    } else if (typeId >= 300 && typeId < 400) {
+        requiredDlcMask |= (1u << 2);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC3", _TRUNCATE);
+    } else if (typeId >= 400 && typeId < 500) {
+        requiredDlcMask |= (1u << 3);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC4", _TRUNCATE);
+    } else if (typeId == 20 || typeId == 21) {
+        requiredDlcMask |= (1u << 1);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC2", _TRUNCATE);
+    } else if (typeId == 30 || typeId == 31) {
+        requiredDlcMask |= (1u << 2);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC3", _TRUNCATE);
+    }
+
+    if (requiredDlcMask != 0 && (commonMask & requiredDlcMask) != requiredDlcMask) {
+        static ULONGLONG s_lastRoadDlcToast = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastRoadDlcToast >= 1500) {
+            s_lastRoadDlcToast = now;
+            char toast[220];
+            _snprintf_s(toast, sizeof(toast), _TRUNCATE,
+                        Tr("⛔ Тип дороги из %s недоступен: у партнёра нет этого DLC!",
+                           "⛔ Road type from %s is blocked: partner lacks this DLC!"),
+                        dlcBuf[0] ? dlcBuf : "DLC");
+            TwoStates_AddToast(toast, 3);
+            Logf("republicmp  ROAD_SYNC: Road category=%d typeId=%d tool=[%s] blocked by DLC filter (common=0x%02X, req=0x%02X)",
+                 category, typeId, toolName ? toolName : "", commonMask, requiredDlcMask);
+        }
+        return false;
+    }
+    return true;
+}
+
 bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)
 {
     const RoadSyncSegment& seg = msg.seg;
     ClearCommandPreview(seg.category);
+    if (!SaveSync_CheckRoadDlcAllowed(seg.category, seg.typeId, nullptr)) {
+        Logf("republicmp  ROAD_SYNC: command %s type=%d blocked: unshared DLC in session", CategoryName(seg.category), seg.typeId);
+        return false;
+    }
     if (SegmentBetweenNodesExists(seg)) {
         Logf("republicmp  ROAD_SYNC: command %s already exists between these nodes - skipped", CategoryName(seg.category));
         return false;
@@ -2406,6 +2602,10 @@ bool RoadSync_ApplyCommandSegment(const RoadSyncMsg& msg)
 bool RoadSync_ApplyCommandUpgrade(const RoadSyncUpgradeMsg& msg)
 {
     ClearCommandPreview(msg.category);
+    if (!SaveSync_CheckRoadDlcAllowed(msg.category, msg.newType, nullptr)) {
+        Logf("republicmp  ROAD_SYNC: command upgrade %s type=%d blocked: unshared DLC in session", CategoryName(msg.category), msg.newType);
+        return false;
+    }
     BuildMode mine = BuildMode_Read();
     BuildMode_Write(msg.mode);
     int applied = ApplyUpgrade(msg);

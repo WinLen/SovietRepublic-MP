@@ -13,6 +13,8 @@
 #include "../replay_menus.h"
 #include "../../ui/debug_log.h"
 #include "../../ui/sync_block.h"
+#include "../../ui/lang.h"
+#include "../../session/two_states.h"
 #include "../../core/safe_mem.h"
 #include <vector>
 #include <memory>
@@ -28,11 +30,17 @@
 // Engine addresses and offsets
 // ---------------------------------------------------------------------------
 
+#ifndef UNIVERSAL_THIS_RVA
 #define UNIVERSAL_THIS_RVA 0x9D4F10      // placement god-object (thisPtr)
+#endif
+#ifndef VEC_BUILDINGS_BEGIN_RVA
 #define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18 // city buildings vector
 #define VEC_BUILDINGS_END_RVA 0x9E6A20
+#endif
+#ifndef VEC_CONSTRUCTIONS_BEGIN_RVA
 #define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38 // unfinished / demolition sites vector (thisPtr+0x11c28)
 #define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
+#endif
 #define OBJ_TYPE_OFFSET 0x318            // building type record
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
@@ -47,16 +55,24 @@
 #define TYPE_CATEGORY_OFFSET 0x360       // int category in the type record
 
 // thisPtr placement inputs.
+#ifndef CURSOR_X_OFFSET
 #define CURSOR_X_OFFSET 0xf6c
+#endif
+#ifndef CURSOR_Y_OFFSET
 #define CURSOR_Y_OFFSET 0xf70
+#endif
+#ifndef CURSOR_Z_OFFSET
 #define CURSOR_Z_OFFSET 0xf74
+#endif
 #define CURSOR_COPY_OFFSET 0xf78         // mirrors the cursor x/y/z
 #define CURSOR_YAW_OFFSET 0xf94          // yaw in radians
 #define MIRROR_TOGGLE_OFFSET 0x11db0     // byte: player's mirror toggle
 #define PLACEMENT_RESULT_OFFSET 0x11a10  // 3 ints: validation result of the last call
+#ifndef TOOL_GUARD1_OFFSET
 #define TOOL_GUARD1_OFFSET 0xfbc         // any nonzero -> placement function returns at once
 #define TOOL_GUARD2_OFFSET 0xfbe
 #define TOOL_GUARD3_OFFSET 0xfc3
+#endif
 // Pointer to the menu entry the local player has selected (name string
 // first, e.g. "road_onelane"; +0x2b5 a flag, +0x48 the type record), 0 when
 // nothing is selected. FUN_1403c4850 (the road routing a building's access
@@ -126,6 +142,8 @@ static volatile bool g_connecting = false;
 static volatile bool g_cancelConnect = false;
 static volatile bool g_isHost = false;
 static SOCKET g_sock = INVALID_SOCKET;
+static HANDLE g_recvThread = nullptr;
+static HANDLE g_workerThread = nullptr;
 static char g_targetIp[64] = BUILD_SYNC_TEST_HOST_IP;
 // One message plus, for BUILD_SYNC_KIND_ACCESS_ROAD, the segment after it.
 struct BuildWireItem {
@@ -139,6 +157,7 @@ static void CloseConnection()
     g_connected = false;
     NetworkCloseSocket(g_sock);
     g_sock = INVALID_SOCKET;
+    NetworkJoinAndCloseThread(&g_recvThread);
 }
 
 static DWORD WINAPI ReceiveLoopThread(LPVOID)
@@ -205,7 +224,7 @@ static DWORD WINAPI ReceiveLoopThread(LPVOID)
 
 static void StartConnection(SOCKET sock)
 {
-    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread);
+    NetworkActivateChannelSocket(&g_sock, sock, &g_connected, ReceiveLoopThread, &g_recvThread);
     BuildSyncStatus("[BUILD_SYNC] connection established - build away");
 }
 
@@ -263,14 +282,14 @@ void BuildSync_StartHost()
 {
     NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               HostAcceptWorkerThread);
+                               HostAcceptWorkerThread, &g_workerThread);
 }
 
 void BuildSync_StartClient(const char* hostIp)
 {
     NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               ClientConnectWorkerThread);
+                               ClientConnectWorkerThread, &g_workerThread);
 }
 
 void BuildSync_Reset()
@@ -280,6 +299,7 @@ void BuildSync_Reset()
         BuildSyncStatus("[BUILD_SYNC] connection reset by user");
         CloseConnection();
     }
+    NetworkJoinAndCloseThread(&g_workerThread);
 }
 
 bool BuildSync_IsConnected()  { return g_connected; }
@@ -832,6 +852,16 @@ static bool IsConstructionDone(__int64 b)
 // player's stop / cancel (issue #17), which left the other side's copy
 // stuck unfinished. A window's building is remembered for the click window,
 // so closing the window right after the click still sends.
+static bool CanLocalPlayerConfigureBuilding(__int64 b)
+{
+    if (!TwoStates_IsActive() || !b) return true;
+    float pos[3];
+    int cat = -1;
+    if (!ReadBuildingInfo(b, pos, &cat)) return true;
+    int owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(pos[0], pos[2]), pos[0], pos[2]);
+    return (owner == 0 || owner == TwoStates_LocalState());
+}
+
 static void ScanPayFlags()
 {
     static std::unordered_map<__int64, ULONGLONG> s_windowSeenMs; // building -> last seen in an open window
@@ -856,14 +886,20 @@ static void ScanPayFlags()
         auto old = g_payFlags.find(b);
         if (old != g_payFlags.end() && flags != old->second && byPlayer) {
             char was[48], now[48];
-            if (!s_windowSeenMs.count(b))
+            if (!CanLocalPlayerConfigureBuilding(b)) {
+                Logf("republicmp  BUILD_SYNC: pay flags %s -> %s on foreign building - blocked",
+                     PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
+                TwoStates_AddToast(Tr("⛔ Настройки финансирования чужой стройки недоступны!",
+                                      "⛔ Construction financing settings of foreign building are restricted!"), 2);
+            } else if (!s_windowSeenMs.count(b)) {
                 Logf("republicmp  BUILD_SYNC: pay flags %s -> %s of a building whose window is not open - not sent",
                      PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
-            else if (IsConstructionDone(b) && (flags & ~old->second) == 0)
+            } else if (IsConstructionDone(b) && (flags & ~old->second) == 0) {
                 Logf("republicmp  BUILD_SYNC: pay flags %s -> %s of a finished building (the game's cleanup) - not sent",
                      PayName(old->second, was, sizeof(was)), PayName(flags, now, sizeof(now)));
-            else
+            } else {
                 SendPay(b, flags);
+            }
         }
         next[b] = (unsigned char)flags;
     }
@@ -971,6 +1007,20 @@ static void LogNearestOfCategory(const float want[3], int category)
              bestP[i][0], bestP[i][1], bestP[i][2], bestD[i]);
 }
 
+static int ResolveBuildingOwnerFast(const BYTE* b)
+{
+    if (!b) return 1;
+    int owner = 1;
+    __try {
+        float x = *(const float*)(b + OBJ_POS_OFFSET);
+        float z = *(const float*)(b + OBJ_POS_OFFSET + 8);
+        owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(x, z), x, z);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        owner = 1;
+    }
+    return (owner == 2) ? 2 : 1;
+}
+
 static void ApplyOneRemotePay(__int64 thisPtr, const BuildSyncMsg& msg)
 {
     int flags = (msg.speed ? PAY_RUB : 0) | (msg.speedSaved ? PAY_USD : 0) | (msg.speedTurbo ? PAY_STOPPED : 0);
@@ -982,6 +1032,8 @@ static void ApplyOneRemotePay(__int64 thisPtr, const BuildSyncMsg& msg)
         LogNearestOfCategory(want, msg.demolishCategory);
         return;
     }
+    int owner = ResolveBuildingOwnerFast((const BYTE*)b);
+    TwoStates_BeginCommand(owner);
     int before = ReadPayFlags(b);
     bool ok = true;
     if (before != flags) {
@@ -996,6 +1048,7 @@ static void ApplyOneRemotePay(__int64 thisPtr, const BuildSyncMsg& msg)
         InterlockedDecrement(&g_applyingRemote);
         TerrainSync_EndForeignReplay();
     }
+    TwoStates_EndCommand(owner);
     int after = ReadPayFlags(b);
     if (after >= 0) g_payFlags[b] = (unsigned char)after; // not a local change - do not send it back
     char want[48], was[48], got[48];
@@ -1103,7 +1156,10 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
             *pressed = 0;
             *pickModes[0] = (msg.pickModes & 1) ? 1 : 0;
             *pickModes[1] = (msg.pickModes & 2) ? 1 : 0;
-            BuildMode_Write(msg.mode);
+            BuildMode mode = msg.mode;
+            if (mode.rub == 0 && mode.usd == 0 && mode.b00 > 0)
+                mode.b00 = -mode.b00;
+            BuildMode_Write(mode);
             memset(g_replayEntry, 0, sizeof(g_replayEntry));
             memcpy(g_replayEntry, typeName, strnlen(typeName, 63));
             *selected = (__int64)g_replayEntry;
@@ -1130,6 +1186,13 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
                 if (!placed) {
                     SnapshotBeforePlacement();
                     g_origUniversal(thisPtr, typeName, 0, 1, msg.param5, 0xffffffff, 0, 1);
+                    placed = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta) != nullptr;
+                }
+                if (!placed && result[0] == 10) {
+                    SnapshotBeforePlacement();
+                    *pressed = 1;
+                    g_origUniversal(thisPtr, typeName, 1, 1, msg.param5, 0xffffffff, 1, 1);
+                    *pressed = 0;
                     placed = PickMainNewObject(msg.cursorX, msg.cursorZ, &newCount, &delta) != nullptr;
                 }
             } __finally {

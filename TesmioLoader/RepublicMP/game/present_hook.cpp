@@ -15,11 +15,18 @@
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
 #include "../session/save_sync.h"
+#include "../session/two_states.h"
 #include "../session/sync_check.h"
 #include "../session/settings_sync.h"
 #include "../session/game_speed.h"
 #include "../session/weather.h"
 #include "../session/money.h"
+#include "../core/engine_rva.h"
+#include "imgui.h"
+#include <math.h>
+#include <stdio.h>
+
+extern bool SimPatches_GetActivePlacementInfo(char* outName, size_t maxLen, float* outX, float* outY, float* outZ);
 
 
 #include <d3d11.h>
@@ -57,6 +64,87 @@ static HRESULT PresentBypassingChain(IDXGISwapChain* pSwapChain, UINT SyncInterv
     HRESULT hr = sc1->Present1(SyncInterval, Flags, &params);
     sc1->Release();
     return hr;
+}
+
+struct CamVec4 {
+    float x;
+    float y;
+    float w;
+};
+
+CamVec4 ProjectPlacementPoint(float wx, float wy, float wz)
+{
+    CamVec4 pt = { 0.0f, 0.0f, 0.0f };
+    if (!g_exeBase) return pt;
+    __try {
+        const float* mat = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_VIEWPROJ_OFFSET);
+        pt.x = wx * mat[0] + wy * mat[4] + wz * mat[8]  + mat[12];
+        pt.y = wx * mat[1] + wy * mat[5] + wz * mat[9]  + mat[13];
+        pt.w = wx * mat[3] + wy * mat[7] + wz * mat[11] + mat[15];
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        pt.w = 0.0f;
+    }
+    return pt;
+}
+
+void CleanBuildingName(const char* raw, char* out, size_t maxLen)
+{
+    if (!raw || !out || maxLen == 0) return;
+    const char* p = raw;
+    for (const char* s = raw; *s; s++) {
+        if (*s == '/' || *s == '\\') {
+            p = s + 1;
+        }
+    }
+    strncpy_s(out, maxLen, p, _TRUNCATE);
+    size_t len = strlen(out);
+    if (len > 4 && _stricmp(out + len - 4, ".ini") == 0) {
+        out[len - 4] = '\0';
+    }
+}
+
+static void DrawPlacementTextBadge(ImDrawList* dl, const ImVec2& pos, const char* text)
+{
+    if (!dl || !text || text[0] == '\0') return;
+    char label[160] = {};
+    snprintf(label, sizeof(label), "★ %s", text);
+    ImVec2 sz = ImGui::CalcTextSize(label);
+    ImVec2 pMin(pos.x - sz.x * 0.5f - 8.0f, pos.y - sz.y - 14.0f);
+    ImVec2 pMax(pos.x + sz.x * 0.5f + 8.0f, pos.y - 2.0f);
+    dl->AddRectFilled(pMin, pMax, IM_COL32(20, 24, 30, 225), 4.0f);
+    dl->AddRect(pMin, pMax, IM_COL32(235, 185, 45, 255), 4.0f, 0, 1.5f);
+    dl->AddText(ImVec2(pos.x - sz.x * 0.5f, pMin.y + 4.0f), IM_COL32(255, 235, 175, 255), label);
+}
+
+void PresentHook_DrawPlacementBadgeForeground()
+{
+    char rawName[128] = {};
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    if (!SimPatches_GetActivePlacementInfo(rawName, sizeof(rawName), &x, &y, &z) || rawName[0] == '\0') {
+        return;
+    }
+
+    if (!ImGui::GetCurrentContext()) return;
+    ImVec2 dispSize = ImGui::GetIO().DisplaySize;
+    if (dispSize.x <= 0.0f || dispSize.y <= 0.0f) return;
+
+    CamVec4 proj = ProjectPlacementPoint(x, y + 2.5f, z);
+    if (proj.w > 0.5f && isfinite(proj.w)) {
+        float rcpW = 1.0f / proj.w;
+        float nx = proj.x * rcpW;
+        float ny = proj.y * rcpW;
+        if (nx >= -1.5f && nx <= 1.5f && ny >= -1.5f && ny <= 1.5f) {
+            ImVec2 screenPos((nx * 0.5f + 0.5f) * dispSize.x, (0.5f - ny * 0.5f) * dispSize.y);
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            if (dl) {
+                char cleanName[128] = {};
+                CleanBuildingName(rawName, cleanName, sizeof(cleanName));
+                DrawPlacementTextBadge(dl, screenPos, cleanName);
+            }
+        }
+    }
 }
 
 static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);

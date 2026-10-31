@@ -21,6 +21,9 @@ static char g_text[160] = "Syncing...";
 static int g_step = 0;
 static int g_totalSteps = 0;
 static int g_percent = -1;
+static int g_queuedBytes = 0;
+static int g_totalBytes = 0;
+static float g_speedMbSec = 0.0f;
 
 void SyncBlock_SetActive(bool active, const char* reason)
 {
@@ -34,6 +37,9 @@ void SyncBlock_SetActive(bool active, const char* reason)
     } else {
         g_step = g_totalSteps = 0;
         g_percent = -1;
+        g_queuedBytes = 0;
+        g_totalBytes = 0;
+        g_speedMbSec = 0.0f;
     }
 }
 
@@ -52,6 +58,27 @@ void SyncBlock_SetPercent(int percent)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_percent = percent;
+    if (percent >= 100) {
+        g_queuedBytes = 0;
+    }
+}
+
+void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_percent = percent;
+    g_queuedBytes = queuedBytes;
+    g_totalBytes = totalBytes;
+    g_speedMbSec = speedMbSec;
+}
+
+void SyncBlock_GetTransferStats(int* outPercent, int* outQueuedBytes, int* outTotalBytes, float* outSpeedMbSec)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (outPercent) *outPercent = g_percent;
+    if (outQueuedBytes) *outQueuedBytes = g_queuedBytes;
+    if (outTotalBytes) *outTotalBytes = g_totalBytes;
+    if (outSpeedMbSec) *outSpeedMbSec = g_speedMbSec;
 }
 
 bool SyncBlock_IsActive()
@@ -279,7 +306,9 @@ static void DrawLobbyPlayersBox(SessionState st, bool isReconnect, float winW)
     ImGui::PopStyleColor();
 }
 
-static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent, const char* text, float winW)
+static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent,
+                                     int queuedBytes, int totalBytes, float speedMbSec,
+                                     const char* text, float winW)
 {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.10f, 0.08f, 0.95f));
     ImGui::BeginChild("##lobby_sync_progress", ImVec2(winW - 40.0f, 138.0f), true);
@@ -327,10 +356,30 @@ static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent, cons
         ImGui::PopStyleColor();
 
         float barFraction = 0.0f;
-        char barOverlay[64];
+        char barOverlay[96];
         if (percent >= 0) {
             barFraction = (float)percent / 100.0f;
-            _snprintf_s(barOverlay, sizeof(barOverlay), _TRUNCATE, "%d%%", percent);
+            if (barFraction > 1.0f) barFraction = 1.0f;
+            if (barFraction < 0.0f) barFraction = 0.0f;
+            if (totalBytes > 0) {
+                int sentBytes = totalBytes - queuedBytes;
+                if (sentBytes < 0) sentBytes = 0;
+                if (sentBytes > totalBytes) sentBytes = totalBytes;
+                double mbSent = (double)sentBytes / (1024.0 * 1024.0);
+                double mbTot = (double)totalBytes / (1024.0 * 1024.0);
+                if (speedMbSec > 0.05f) {
+                    _snprintf_s(barOverlay, sizeof(barOverlay), _TRUNCATE,
+                                "%.1f / %.1f %s (%d%%) — %.1f %s",
+                                mbSent, mbTot, Tr("МБ", "MB"), percent,
+                                speedMbSec, Tr("МБ/с", "MB/s"));
+                } else {
+                    _snprintf_s(barOverlay, sizeof(barOverlay), _TRUNCATE,
+                                "%.1f / %.1f %s (%d%%)",
+                                mbSent, mbTot, Tr("МБ", "MB"), percent);
+                }
+            } else {
+                _snprintf_s(barOverlay, sizeof(barOverlay), _TRUNCATE, "%d%%", percent);
+            }
         } else {
             float base = (totalSteps > 0 && step > 0) ? ((float)(step - 1) / (float)totalSteps) : 0.15f;
             float wave = 0.12f * (0.5f + 0.5f * sinf((float)GetTickCount64() * 0.006f));
@@ -661,6 +710,12 @@ void SyncBlock_Draw()
     bool waitingLobby = SaveSync_IsWaitingLobbyActive();
     SyncBlock_UpdateMapInspectState((int)st, syncActive);
 
+    bool inActiveGameplay = (st == SESSION_CLIENT_IN_GAME || st == SESSION_HOST_IN_GAME ||
+                             (!waitingLobby && !syncActive && SaveSync_IsWorldLoaded()));
+    if (inActiveGameplay && ModSync_IsDownloadActive()) {
+        ModSync_CancelDownloadModal();
+    }
+
     if (waitingLobby) {
         SaveSync_EnforceWaitingLobbyHold();
     } else if (syncActive || ModSync_IsDownloadActive()) {
@@ -669,6 +724,12 @@ void SyncBlock_Draw()
 
     if (ModSync_IsDownloadActive()) {
         ModSync_TickDownloadProgress();
+        ModDownloadProgress prog = {};
+        if (ModSync_GetDownloadProgress(&prog) && prog.allCompleted &&
+            (st == SESSION_HOST_JOINING || st == SESSION_CLIENT_JOINING || inActiveGameplay)) {
+            ModSync_CancelDownloadModal();
+            return;
+        }
         ImGuiIO& io = ImGui::GetIO();
         DrawWorkshopDownloadModal(io);
         return;
@@ -686,13 +747,17 @@ void SyncBlock_Draw()
     }
 
     char text[160];
-    int step, totalSteps, percent;
+    int step, totalSteps, percent, queuedBytes, totalBytes;
+    float speedMbSec;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         _snprintf_s(text, sizeof(text), _TRUNCATE, "%s", g_text);
         step = g_step;
         totalSteps = g_totalSteps;
         percent = g_percent;
+        queuedBytes = g_queuedBytes;
+        totalBytes = g_totalBytes;
+        speedMbSec = g_speedMbSec;
     }
 
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
@@ -776,7 +841,7 @@ void SyncBlock_Draw()
         DrawLobbyPlayersBox(st, isReconnect, winW);
 
         if (syncActive || st == SESSION_HOST_JOINING || st == SESSION_CLIENT_JOINING) {
-            DrawLobbySyncProgressBox(step, totalSteps, percent, text, winW);
+            DrawLobbySyncProgressBox(step, totalSteps, percent, queuedBytes, totalBytes, speedMbSec, text, winW);
         } else {
             DrawLobbyHostSettingsBox(isReconnect, winW);
         }

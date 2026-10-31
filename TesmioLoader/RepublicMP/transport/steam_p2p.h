@@ -77,3 +77,6 @@ void SteamP2P_GetPeerName(SOCKET s, char* out, size_t outSize);
 
 // Called once per frame on the main thread to run Steam callbacks and pump packets.
 void SteamP2P_FrameTick();
+
+// Unregisters Steam P2P callbacks (1202, 1203, 337) during session teardown.
+void SteamP2P_UnregisterCallbacks();

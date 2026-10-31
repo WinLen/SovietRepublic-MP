@@ -756,6 +756,49 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
     return nullptr;
 }
 
+#define IMPORT_HAS_SOUND_RVA    0x86CD10
+#define IMPORT_GET_SOUND_RVA    0x86CD18
+#define IMPORT_PLAY_SOUND_RVA   0x86D2A8
+#define SND_CLICK_NAME_RVA      0x88F920
+#define SOUND_MUTE_BYTE_RVA     0x9D4F24
+#define SOUND_ENGINE_PTR_RVA    0x9E4C18
+#define SOUND_MGR_RVA           0x9E4C20
+
+static void PlayPurchaseSoundSafe()
+{
+    if (!g_exeBase) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (*(BYTE*)(g_exeBase + SOUND_MUTE_BYTE_RVA) == 0 && *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA) != nullptr) {
+            uintptr_t hasSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_HAS_SOUND_RVA);
+            uintptr_t getSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_GET_SOUND_RVA);
+            uintptr_t playSndAddr = *(uintptr_t*)(g_exeBase + IMPORT_PLAY_SOUND_RVA);
+            void* soundEngine = *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA);
+            void* soundCfg = (void*)(g_exeBase + SOUND_MGR_RVA);
+            if (soundEngine && playSndAddr) {
+                typedef bool (*FnHasSound)(void*, const char*);
+                typedef const char* (*FnGetSound)(void*, const char*);
+                typedef void (*FnPlaySound2D)(void*, const char*, bool, float, void*);
+                const char* sndPath = nullptr;
+                if (hasSndAddr && getSndAddr && ((FnHasSound)hasSndAddr)(soundCfg, "gui_click")) {
+                    sndPath = ((FnGetSound)getSndAddr)(soundCfg, "gui_click");
+                }
+                if ((!sndPath || !sndPath[0]) && hasSndAddr && getSndAddr) {
+                    const char* clickName = (const char*)(g_exeBase + SND_CLICK_NAME_RVA);
+                    if (clickName && ((FnHasSound)hasSndAddr)(soundCfg, clickName)) {
+                        sndPath = ((FnGetSound)getSndAddr)(soundCfg, clickName);
+                    }
+                }
+                if (sndPath && sndPath[0]) {
+                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, true, 1.0f, nullptr);
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
 // Kinds 1/2: a vehicle into a depot (810951..812f46).
 static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, BYTE* depot, BYTE* customsRub,
                                  BYTE* customsUsd, int campaign)
@@ -801,6 +844,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
                 }
             }
             slotDone(world, depot, *(BYTE**)(depot + 0x970) + (__int64)slot * 0xE0);
+            PlayPurchaseSoundSafe();
             return nullptr;
         }
         BYTE* v = create(world, type, depot, 1, trailers ? 0 : minusOne, 0, 0, (unsigned)slot, 0, 1, 0);
@@ -810,6 +854,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
         SpawnTrailersInSlot(world, type, depot, v, trailers, (unsigned)slot);
         if (customsDepot && m.used && v) ApplyUsedMarketStep(market, type, m, v);
         slotDone(world, depot, *(BYTE**)(depot + 0x970) + (__int64)slot * 0xE0);
+        PlayPurchaseSoundSafe();
         return nullptr;
     }
     if (realistic && (cat == 1 || cat - 4 <= 1) && slot < 0) return "refused (no slot)";
@@ -828,6 +873,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     }
     if (m.used && v) ApplyUsedMarketStep(market, type, m, v);
     if (realistic && v) RouteRealisticVehicleDelivery(world, m, depot, customs, slot, v);
+    PlayPurchaseSoundSafe();
     return nullptr;
 }
 

@@ -26,14 +26,16 @@ static bool Unfocused()
 
 static bool Blocked()
 {
-    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() &&
+        !IsDualTestbed() && !SaveSync_IsWorldLoadInProgress())
         return false;
     return SyncBlock_BlocksWorldInput() || Unfocused();
 }
 
 static bool WorldActionBlocked()
 {
-    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() &&
+        !IsDualTestbed() && !SaveSync_IsWorldLoadInProgress())
         return false;
     return Blocked() || SaveSync_IsWaitingLobbyActive();
 }

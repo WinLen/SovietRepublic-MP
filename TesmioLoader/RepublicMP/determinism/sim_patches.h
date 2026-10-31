@@ -75,3 +75,14 @@ int SimPatches_LastPopulation();
 void SimPatches_WaitRender();
 // After loading: retain private vector storage, discard entries from the previous city.
 void SimPatches_ResetSearches();
+
+struct VisibleKept {
+    BYTE* building;
+    BYTE  visible;
+    float distance;
+};
+void RestoreVisibleKeptSafe(VisibleKept* kept, size_t keptCount);
+
+void SimPatches_TestC3dSaveOriginalValues(void* material);
+void SimPatches_TestC3dChangeValuesTo(void* material, const float color[4]);
+void SimPatches_TestC3dRestoreOriginalValues(void* material);

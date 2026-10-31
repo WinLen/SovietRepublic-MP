@@ -32,8 +32,17 @@
 #include <algorithm>
 #include <filesystem>
 #include <system_error>
+#include <atomic>
 
 #pragma comment(lib, "User32.lib")
+
+static std::atomic<bool> g_inSaveTransfer{false};
+static std::atomic<bool> g_testWorldLoadInProgress{false};
+
+struct SaveTransferGuard {
+    SaveTransferGuard() { g_inSaveTransfer.store(true, std::memory_order_relaxed); }
+    ~SaveTransferGuard() { g_inSaveTransfer.store(false, std::memory_order_relaxed); }
+};
 
 // Fixed local name for the downloaded zip and its extraction folder on the client.
 #define SAVE_SYNC_CLIENT_STAGING_NAME "mp_syncsave_incoming"
@@ -47,9 +56,12 @@
 
 #define JOIN_STEPS 7
 
+bool SaveSync_InstallHooks();
+
 void SaveSync_Bind(const TsmHost* host)
 {
     TsmBind(host);
+    SaveSync_InstallHooks();
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +513,111 @@ static const char* MonitorLiveSession(bool client)
 }
 
 // ---------------------------------------------------------------------------
+// Telemetry & SteamP2P_FlushSend Hooks (R7)
+// ---------------------------------------------------------------------------
+
+extern void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec);
+
+typedef bool (*FnSteamP2P_FlushSend)(SOCKET s, DWORD timeoutMs);
+static FnSteamP2P_FlushSend o_steamP2P_FlushSend = nullptr;
+
+#pragma pack(push, 8)
+struct P2PSessionState_t {
+    uint8_t m_bConnectionActive;
+    uint8_t m_bConnecting;
+    uint8_t m_eP2PSessionError;
+    uint8_t m_bUsingRelay;
+    int32_t m_nBytesQueuedForSend;
+    int32_t m_nPacketsQueuedForSend;
+    uint32_t m_nRemoteIP;
+    uint16_t m_nRemotePort;
+};
+#pragma pack(pop)
+
+typedef bool (*FnGetP2PSessionState)(void* pSteamNetworking, uint64_t steamIDRemote, P2PSessionState_t* pConnectionState);
+static FnGetP2PSessionState o_getP2PSessionState = nullptr;
+
+static uint64_t g_transferTotalBytes = 0;
+static uint64_t g_transferStartTime = 0;
+static uint64_t g_transferLastTick = 0;
+static uint64_t g_transferLastDone = 0;
+static float g_transferSpeedEma = 0.0f;
+
+static uint64_t GetFileSize64(const char* path)
+{
+    if (!path || !path[0]) return 0;
+    WIN32_FILE_ATTRIBUTE_DATA fad = {};
+    if (GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) {
+        LARGE_INTEGER size;
+        size.LowPart = fad.nFileSizeLow;
+        size.HighPart = (LONG)fad.nFileSizeHigh;
+        return (uint64_t)size.QuadPart;
+    }
+    return 0;
+}
+
+static void UpdateTransferSpeed(uint64_t done)
+{
+    ULONGLONG now = GetTickCount64();
+    if (g_transferLastTick == 0) g_transferLastTick = now;
+    ULONGLONG dt = now - g_transferLastTick;
+    if (dt >= 150) {
+        double bytesDelta = (double)(done > g_transferLastDone ? done - g_transferLastDone : 0);
+        double curSpeed = (bytesDelta / (1024.0 * 1024.0)) / ((double)dt / 1000.0);
+        if (g_transferSpeedEma <= 0.001f) {
+            g_transferSpeedEma = (float)curSpeed;
+        } else {
+            g_transferSpeedEma = 0.7f * g_transferSpeedEma + 0.3f * (float)curSpeed;
+        }
+        g_transferLastTick = now;
+        g_transferLastDone = done;
+    }
+}
+
+static bool Hook_GetP2PSessionState(void* pSteamNetworking, uint64_t steamIDRemote, P2PSessionState_t* pConnectionState)
+{
+    bool res = o_getP2PSessionState ? o_getP2PSessionState(pSteamNetworking, steamIDRemote, pConnectionState) : false;
+    if (res && pConnectionState && g_inSaveTransfer.load() && g_transferTotalBytes > 0) {
+        int queued = pConnectionState->m_nBytesQueuedForSend;
+        if (queued < 0) queued = 0;
+        uint64_t done = (g_transferTotalBytes > (uint64_t)queued) ? (g_transferTotalBytes - (uint64_t)queued) : 0;
+        int percent = (int)((done * 100) / g_transferTotalBytes);
+        if (percent > 100) percent = 100;
+        UpdateTransferSpeed(done);
+        SyncBlock_SetPercentEx(percent, queued, (int)g_transferTotalBytes, g_transferSpeedEma);
+    }
+    return res;
+}
+
+static bool Hook_SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
+{
+    if (!o_steamP2P_FlushSend) return false;
+    g_inSaveTransfer = true;
+    bool ok = o_steamP2P_FlushSend(s, timeoutMs);
+    g_inSaveTransfer = false;
+    if (ok && g_transferTotalBytes > 0) {
+        SyncBlock_SetPercentEx(100, 0, (int)g_transferTotalBytes, g_transferSpeedEma);
+    }
+    return ok;
+}
+
+bool SaveSync_InstallHooks()
+{
+    InstallInlineHook((void*)&SteamP2P_FlushSend, (void*)&Hook_SteamP2P_FlushSend,
+                      (void**)&o_steamP2P_FlushSend, nullptr, 0, "republicmp flush_send");
+
+    HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
+    if (hSteam) {
+        void* pFn = (void*)GetProcAddress(hSteam, "SteamAPI_ISteamNetworking_GetP2PSessionState");
+        if (pFn) {
+            InstallInlineHook(pFn, (void*)&Hook_GetP2PSessionState,
+                              (void**)&o_getP2PSessionState, nullptr, 0, "republicmp p2p_session_state");
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Progress
 // ---------------------------------------------------------------------------
 
@@ -517,7 +634,12 @@ static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long 
 {
     if (total == 0) return;
     int percent = (int)((done * 100) / total);
-    SyncBlock_SetPercent(percent);
+    if (percent > 100) percent = 100;
+
+    UpdateTransferSpeed(done);
+    int queued = (int)(total > done ? total - done : 0);
+    SyncBlock_SetPercentEx(percent, queued, (int)total, g_transferSpeedEma);
+
     if (ctx && ctx->relaySock != INVALID_SOCKET && percent / 10 != ctx->lastRelayed / 10) {
         ctx->lastRelayed = percent;
         SendMsg(ctx->relaySock, MSG_STEP, ctx->step, percent, ctx->text);
@@ -1156,7 +1278,15 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
         HostStep(sock, 4, Tr("Передача мира второму игроку", "Sending the world to the player"), 0);
         SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
         ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
-        if (!NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx)) {
+        g_transferTotalBytes = GetFileSize64(zipPath);
+        g_transferStartTime = GetTickCount64();
+        g_transferLastTick = g_transferStartTime;
+        g_transferLastDone = 0;
+        g_transferSpeedEma = 0.0f;
+        g_inSaveTransfer = true;
+        bool sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
+        g_inSaveTransfer = false;
+        if (!sendOk) {
             SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
             break;
         }
@@ -1540,8 +1670,13 @@ static bool RunClientJoin(bool rejoin)
         if (!fileFollows) break;
 
         // 4. Receive.
+        SaveTransferGuard transferGuard;
         ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
-        ProgressCtx recvCtx = { INVALID_SOCKET, 4, nullptr, 0 };
+        ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
+        g_transferStartTime = GetTickCount64();
+        g_transferLastTick = g_transferStartTime;
+        g_transferLastDone = 0;
+        g_transferSpeedEma = 0.0f;
         if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
             SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
             break;
@@ -1598,6 +1733,9 @@ static bool RunClientJoin(bool rejoin)
         }
         TriggerLoadSave(receivedSaveName);
         bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
+        while (SaveSync_IsWorldLoadInProgress()) {
+            Sleep(50);
+        }
         {
             std::error_code rmEc;
             std::filesystem::remove_all(destDir, rmEc);
@@ -1704,6 +1842,9 @@ static void RunClientSession()
 static DWORD WINAPI HostSessionThread(LPVOID)
 {
     RunHostSession();
+    while (SaveSync_IsWorldLoadInProgress()) {
+        Sleep(50);
+    }
     SetState(SESSION_IDLE);
     return 0;
 }
@@ -1712,6 +1853,9 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 {
     RunClientSession();
     SetPeerIp("");
+    while (SaveSync_IsWorldLoadInProgress()) {
+        Sleep(50);
+    }
     SetState(SESSION_IDLE);
     return 0;
 }
@@ -1737,6 +1881,22 @@ bool SaveSync_IsWorldLoaded()
     }
     DiagLog_EndSafeSeh();
     return loaded;
+}
+
+bool SaveSync_IsWorldLoadInProgress()
+{
+    if (g_testWorldLoadInProgress.load(std::memory_order_relaxed)) return true;
+    char trigger = 0;
+    bool triggerPending = false;
+    if (g_exe && SafeReadPod((const unsigned char*)g_exe + LOAD_TRIGGER_DAT_RVA, &trigger) && trigger != 0) {
+        triggerPending = true;
+    }
+    return triggerPending || Determinism_WorldLoading() || g_inSaveTransfer.load(std::memory_order_relaxed);
+}
+
+void SaveSync_SetTestWorldLoadInProgress(bool inProgress)
+{
+    g_testWorldLoadInProgress.store(inProgress, std::memory_order_relaxed);
 }
 
 static bool SafeGetCurrentWorldSaveRel(char* outRel, size_t outSize)

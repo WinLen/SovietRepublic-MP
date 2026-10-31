@@ -39,3 +39,4 @@ void SessionPatches_Restore();
 
 // Test helper for unit tests in tests/test_main.cpp.
 void SessionPatches_SetAppliedForTest(bool applied);
+void SessionPatches_TestSafeInvokeWidgetMethod98(void* widget);

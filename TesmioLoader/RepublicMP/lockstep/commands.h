@@ -24,6 +24,7 @@
 // run 2 after the same ticks, with no input; both runs must stay identical.
 #pragma once
 
+#include <stdint.h>
 #include "tesmio_plugin.h"
 
 enum LockstepCommandKind {
@@ -51,10 +52,13 @@ enum LockstepCommandKind {
     LS_CMD_CARGO_SETTINGS = 22, // cargo_settings.cpp: a stop's or link's loading or unloading half
     LS_CMD_SOURCE_SLOTS = 23,   // source_slots.cpp: a building's specific sources (add-source tool, windows)
     LS_CMD_RENAME = 24,         // rename.cpp: a city's or a crossroad's new name
+    LS_CMD_CITY_RENAME = LS_CMD_RENAME,
     LS_CMD_LEDGER = 25,         // brush_tools.cpp: the construction ledger row a terrain stroke wrote
     LS_CMD_STATE_TRANSFER = 26, // two_states.cpp: inter-state money transfer between West and East Republics
     LS_CMD_VEHICLE_SOFT_SYNC = 27, // vehicle_soft_sync.cpp: authoritative soft vehicle sync (Host -> Client)
     LS_CMD_LOAN = 28,           // two_states.cpp: bank loan borrow / partial repay / full repay
+    LS_CMD_CITY_DELETE = 29,    // rename.cpp: city deletion
+    LS_CMD_RESEARCH = 30,       // two_states.cpp: independent state research program selection
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain
@@ -146,3 +150,34 @@ bool Commands_OnPlaySound3D(void* mgr, const char* name, const float* pos, unsig
 long long Commands_OnCreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
                                       int popupType, int stringId, long long p8, long long p9);
 void Commands_OnRebuildNotificationPopups(long long world);
+
+#pragma pack(push, 1)
+struct StateResearchTree {
+    uint32_t unlockedMask;       // bitmask of completed tech IDs (0..31)
+    int32_t  activeTechId;       // currently researched tech ID (0 = none, 1..31)
+    float    activeTechProgress; // progress of active tech (0.0f .. 1.0f)
+    float    techProgress[32];   // independent progress per tech ID (0.0f .. 1.0f)
+    int32_t  researchedCount;    // count of completed technologies
+};
+
+struct LsResearchCommand {
+    int32_t stateOwner;          // 1 = State 1 (West SSR), 2 = State 2 (East SSR)
+    int32_t techId;              // tech ID (0 = cancel/idle, 1..31)
+    float   progressDelta;       // incremental progress delta from research tick (0.0f for select/cancel)
+};
+#pragma pack(pop)
+static_assert(sizeof(StateResearchTree) == 144, "StateResearchTree size must be 144 bytes");
+static_assert(sizeof(LsResearchCommand) == 12, "LsResearchCommand wire size must be 12 bytes");
+
+// Independent State Research Trees (R14 & R15)
+bool  TwoStates_IsTechUnlocked(int stateOwner, int techId);
+void  TwoStates_UnlockTech(int stateOwner, int techId);
+void  TwoStates_SetActiveTech(int stateOwner, int techId);
+int   TwoStates_GetActiveTech(int stateOwner);
+void  TwoStates_AddResearchProgress(int stateOwner, int techId, float delta);
+float TwoStates_GetTechProgress(int stateOwner, int techId);
+bool  TwoStates_GetStateResearch(int stateOwner, StateResearchTree* outTree);
+bool  TwoStates_SetStateResearch(int stateOwner, const StateResearchTree* inTree);
+const StateResearchTree* TwoStates_GetLocalResearchTree();
+bool  TwoStates_ApplyResearchCommand(const LsResearchCommand& cmd);
+void  TwoStates_ResetResearch();

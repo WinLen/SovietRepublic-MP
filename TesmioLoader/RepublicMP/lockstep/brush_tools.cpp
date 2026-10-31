@@ -352,6 +352,8 @@ static void ReadSample(BYTE* world, BrushSample& s)
     s.setting374 = *(float*)(world + SETTING374_OFFSET);
     s.setting338 = *(int*)(world + SETTING338_OFFSET);
     memcpy(s.timer, g_exeBase + TIMER_RVA, 16);
+    float fixedDt = 1.0f / 30.0f;
+    memcpy(s.timer, &fixedDt, sizeof(float));
     ReadState(world, s.state);
 }
 
@@ -397,6 +399,35 @@ struct Stroke {
 };
 static Stroke g_stroke = {};
 static unsigned g_serials = 0;
+static ULONGLONG g_lastSampleTime = 0;
+static float g_lastSamplePos[2] = { -1e9f, -1e9f };
+static ULONGLONG g_testCurrentTimeMs = 0;
+
+void BrushTools_SetTestTimeMs(unsigned long long t)
+{
+    g_testCurrentTimeMs = t;
+}
+
+bool BrushTools_IsActive()
+{
+    return g_stroke.active;
+}
+
+static ULONGLONG BrushCurrentTimeMs()
+{
+    return g_testCurrentTimeMs != 0 ? g_testCurrentTimeMs : GetTickCount64();
+}
+
+static bool BrushShouldThrottle(bool first, BYTE keptPress, const BrushMsg& m, ULONGLONG nowMs)
+{
+    if (first || keptPress) return false;
+    float dx = m.sample.cursor[0] - g_lastSamplePos[0];
+    float dz = m.sample.cursor[2] - g_lastSamplePos[1];
+    float distSq = dx * dx + dz * dz;
+    bool timeGate = (nowMs >= g_lastSampleTime && (nowMs - g_lastSampleTime >= 33));
+    bool spaceGate = (distSq >= 0.25f);
+    return !timeGate || (!spaceGate && (nowMs - g_lastSampleTime < 100));
+}
 
 static bool Sample(int kind, U64 world, int mode, BrushMsg& m, BYTE down, BYTE press)
 {
@@ -441,7 +472,12 @@ static U64 Run(int kind, U64 world, U64 a2)
         return r;
     }
     if (!acting || menus || !Commands_TakeLocal() || !BrushTools_Ready(kind)) {
-        if (!acting) g_stroke.active = false; // the stroke ends with the button
+        if (!acting) {
+            g_stroke.active = false; // the stroke ends with the button
+            g_lastSampleTime = 0;
+            g_lastSamplePos[0] = -1e9f;
+            g_lastSamplePos[1] = -1e9f;
+        }
         return tool(world, a2);
     }
     int mode = kind == 0 ? (int)(unsigned)a2 : 0;
@@ -460,11 +496,18 @@ static U64 Run(int kind, U64 world, U64 a2)
     }
     if (!TwoStates_CheckBuildAllowed(m.sample.cursor[0], m.sample.cursor[2], Tr("изменение рельефа/деревьев", "terraforming/planting trees"))) {
         g_stroke.active = false;
+        g_lastSampleTime = 0;
+        g_lastSamplePos[0] = -1e9f;
+        g_lastSamplePos[1] = -1e9f;
         return r;
     }
     // Another tool or mode: a new stroke.
     if (g_stroke.active && (g_stroke.kind != kind || g_stroke.mode != mode || g_stroke.record != m.record)) g_stroke.active = false;
     bool first = !g_stroke.active;
+    ULONGLONG nowMs = BrushCurrentTimeMs();
+    if (BrushShouldThrottle(first, keptPress, m, nowMs)) {
+        return r;
+    }
     // The level height: taken at the stroke's press (the hidden run computed it from the cursor), then kept.
     float now = *(float*)(w + TARGET_OFFSET);
     if (first || keptPress) g_stroke.target = now;
@@ -483,6 +526,9 @@ static U64 Run(int kind, U64 world, U64 a2)
     m.sequence = g_stroke.sequence++;
     m.kind = kind;
     m.mode = mode;
+    g_lastSampleTime = nowMs;
+    g_lastSamplePos[0] = m.sample.cursor[0];
+    g_lastSamplePos[1] = m.sample.cursor[2];
     Commands_Submit(LS_CMD_BRUSH, &m, sizeof(m));
     return r;
 }
@@ -577,8 +623,9 @@ bool BrushTools_ApplyCommand(const void* data, size_t size)
     }
     // The tool's state: carried at the stroke's first sample, then as the replays left it.
     StrokeIn& in = InFor(m.origin);
-    bool chained = m.sequence > 0 && in.serial == m.serial && in.next == m.sequence;
-    BrushState state = chained ? in.state : m.sample.state;
+    bool sameStroke = m.sequence > 0 && in.serial == m.serial;
+    bool chained = sameStroke && in.next == m.sequence;
+    BrushState state = (chained || (sameStroke && in.state.held > 0.0f)) ? in.state : m.sample.state;
     bool ok = Replay(m, record, state);
     in.serial = m.serial;
     in.next = m.sequence + 1;

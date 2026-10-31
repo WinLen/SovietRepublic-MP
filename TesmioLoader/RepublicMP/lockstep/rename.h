@@ -24,3 +24,4 @@ bool Rename_Capture(unsigned __int64 field, unsigned __int64 length, unsigned __
 
 // The command (lockstep/commands).
 bool Rename_ApplyCommand(const void* data, size_t size);
+bool Rename_ApplyDeleteCommand(const void* data, size_t size);

@@ -958,3 +958,21 @@ static_assert(BLD_EXPORT_MODE_OFFSET == BLD_AUTO_BUY_MODE_OFFSET + 4 &&
               RES_PRICE_RUB_OFFSET == RES_PRICE_USD_OFFSET + 4 &&
               BLD_MANUAL_BUY_RES_RVA == BLD_APPLY_AUTO_BUY_RVA + 0x100u,
               "Building resource purchase offsets (+0x9E8/+0x9EC, +0x58/+0x5C, 0x174D40/0x174E40) must match 1.1.1.9 layout");
+
+// ---------------------------------------------------------------------------
+// C3D Material IAT RVAs (SOVIET64.exe Import Address Table for C3DDLL64.dll)
+// ---------------------------------------------------------------------------
+
+#ifndef RVA_IAT_SAVE_ORIGINAL_VALUES
+#define RVA_IAT_SAVE_ORIGINAL_VALUES        0x86D578
+#endif
+#ifndef RVA_IAT_CHANGE_VALUES_TO
+#define RVA_IAT_CHANGE_VALUES_TO            0x86D568
+#endif
+#ifndef RVA_IAT_RESTORE_ORIGINAL_VALUES
+#define RVA_IAT_RESTORE_ORIGINAL_VALUES     0x86D570
+#endif
+
+static_assert(RVA_IAT_SAVE_ORIGINAL_VALUES == 0x86D578, "RVA_IAT_SAVE_ORIGINAL_VALUES mismatch");
+static_assert(RVA_IAT_CHANGE_VALUES_TO == 0x86D568, "RVA_IAT_CHANGE_VALUES_TO mismatch");
+static_assert(RVA_IAT_RESTORE_ORIGINAL_VALUES == 0x86D570, "RVA_IAT_RESTORE_ORIGINAL_VALUES mismatch");

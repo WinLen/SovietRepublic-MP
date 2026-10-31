@@ -50,7 +50,8 @@ void NetworkGetPeerName(SOCKET sock, char* out, size_t outSize);
 
 // Shared channel worker & socket activation helpers for BuildSync / RoadSync / TerrainSync.
 inline void NetworkActivateChannelSocket(SOCKET* dstSock, SOCKET sock,
-                                         volatile bool* connected, LPTHREAD_START_ROUTINE recvProc)
+                                         volatile bool* connected, LPTHREAD_START_ROUTINE recvProc,
+                                         HANDLE* outThread = nullptr)
 {
     *dstSock = sock;
     DWORD sendTimeoutMs = 5000;
@@ -58,14 +59,17 @@ inline void NetworkActivateChannelSocket(SOCKET* dstSock, SOCKET sock,
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sendTimeoutMs, sizeof(sendTimeoutMs));
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recvTimeoutMs, sizeof(recvTimeoutMs));
     *connected = true;
-    CreateThread(nullptr, 0, recvProc, nullptr, 0, nullptr);
+    HANDLE h = CreateThread(nullptr, 0, recvProc, nullptr, 0, nullptr);
+    if (outThread) *outThread = h;
+    else if (h) CloseHandle(h);
 }
 
 inline void NetworkLaunchChannelWorker(bool isHostRole, const char* hostIp,
                                        char* targetIpBuf, size_t targetIpCap,
                                        volatile bool* connected, volatile bool* connecting,
                                        volatile bool* isHostOut, volatile bool* cancelConnect,
-                                       LPTHREAD_START_ROUTINE workerProc)
+                                       LPTHREAD_START_ROUTINE workerProc,
+                                       HANDLE* outThread = nullptr)
 {
     if (*connected || *connecting) return;
     if (!isHostRole && hostIp && hostIp[0] && targetIpBuf && targetIpCap > 0) {
@@ -74,5 +78,18 @@ inline void NetworkLaunchChannelWorker(bool isHostRole, const char* hostIp,
     *isHostOut = isHostRole;
     *cancelConnect = false;
     *connecting = true;
-    CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
+    HANDLE h = CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
+    if (outThread) *outThread = h;
+    else if (h) CloseHandle(h);
+}
+
+inline void NetworkJoinAndCloseThread(HANDLE* hThread, DWORD timeoutMs = 2000)
+{
+    if (!hThread || !*hThread) return;
+    HANDLE h = *hThread;
+    *hThread = nullptr;
+    if (h != GetCurrentThread()) {
+        WaitForSingleObject(h, timeoutMs);
+    }
+    CloseHandle(h);
 }

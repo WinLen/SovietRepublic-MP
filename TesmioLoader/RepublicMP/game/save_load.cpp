@@ -48,33 +48,26 @@ void TriggerLoadSave(const char* saveName)
 bool WaitForLoadToFinish(DWORD timeoutMs, volatile bool* cancelFlag, bool (*abortCheck)(void*), void* abortCtx)
 {
     volatile char* trigger = GetLoadTriggerPtr();
-    const DWORD stepMs = 100;
+    const DWORD stepMs = 50;
+    bool aborted = false;
 
     if (timeoutMs == 0) {
-        // No cap - just wait however long the load actually takes.
+        // No cap - wait until load completes or abort check triggered and engine load finishes.
         for (;;) {
-            if (*trigger == 0 && !Determinism_WorldLoading()) return true; // game's dispatcher (FUN_140105700) cleared it - load is done
-            if (cancelFlag && *cancelFlag) {
-                Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
-                return false;
-            }
-            if (abortCheck && abortCheck(abortCtx)) {
-                Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted");
-                return false;
+            if (*trigger == 0 && !Determinism_WorldLoading()) return !aborted;
+            if (!aborted && ((cancelFlag && *cancelFlag) || (abortCheck && abortCheck(abortCtx)))) {
+                Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted/cancelled; waiting for engine load cycle to safely complete...");
+                aborted = true;
             }
             Sleep(stepMs);
         }
     }
 
     for (DWORD waited = 0; waited < timeoutMs; waited += stepMs) {
-        if (*trigger == 0 && !Determinism_WorldLoading()) return true;
-        if (cancelFlag && *cancelFlag) {
-            Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish cancelled");
-            return false;
-        }
-        if (abortCheck && abortCheck(abortCtx)) {
-            Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted");
-            return false;
+        if (*trigger == 0 && !Determinism_WorldLoading()) return !aborted;
+        if (!aborted && ((cancelFlag && *cancelFlag) || (abortCheck && abortCheck(abortCtx)))) {
+            Logf("republicmp  SAVE_LOAD: WaitForLoadToFinish aborted/cancelled; waiting for engine load cycle to safely complete...");
+            aborted = true;
         }
         Sleep(stepMs);
     }

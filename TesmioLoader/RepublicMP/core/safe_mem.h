@@ -161,3 +161,34 @@ inline bool IsPointerLikeX64(uint64_t v)
     }
     return false;
 }
+
+// Validates a C3D_MATERIAL pointer before SaveOriginalValues/ChangeValuesTo/RestoreOriginalValues.
+inline bool SafeIsValidMaterial(const void* mat)
+{
+    if (!mat) return false;
+    if (((uintptr_t)mat & 7u) != 0u) return false;
+    uintptr_t addr = (uintptr_t)mat;
+    if (!IsPointerLikeX64((uint64_t)addr)) return false;
+
+    // std::vector<C3D_SUBMATERIAL> header at offset 0: { begin, end, cap }
+    uintptr_t ptrs[2] = { 0, 0 };
+    if (!SafeMemcpyPod(ptrs, mat, sizeof(ptrs))) return false;
+    uintptr_t b = ptrs[0];
+    uintptr_t e = ptrs[1];
+
+    if (b == 0 && e == 0) return true;
+    if (b == e) return IsPointerLikeX64((uint64_t)b);
+    if (b > e) return false;
+
+    uintptr_t diff = e - b;
+    // sizeof(C3D_SUBMATERIAL) is 552 (0x228) bytes
+    if ((diff % 552u) != 0) return false;
+    uintptr_t count = diff / 552u;
+    if (count > 1024u) return false;
+
+    if (!IsPointerLikeX64((uint64_t)b) || !IsPointerLikeX64((uint64_t)e)) return false;
+
+    // Probe first submaterial structure to verify readable memory
+    uint8_t probe[16];
+    return SafeMemcpyPod(probe, (const void*)b, sizeof(probe));
+}

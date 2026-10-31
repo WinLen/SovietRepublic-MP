@@ -7,6 +7,7 @@
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../core/version.h"
+#include "present_hook.h"
 
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -334,6 +335,7 @@ void ImGuiHook_NewFrameAndRender()
     TwoStates_DrawOverlay();
     NativeMenu_DrawOverlay();
     SyncBlock_Draw();
+    PresentHook_DrawPlacementBadgeForeground();
 
     ImGui::Render();
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);

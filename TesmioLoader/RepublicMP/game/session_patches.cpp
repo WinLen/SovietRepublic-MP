@@ -11,15 +11,15 @@
 struct SessionPatch {
     unsigned int rva;
     unsigned char size;
-    unsigned char original[8];
-    unsigned char patch[8];
+    unsigned char original[10];
+    unsigned char patch[10];
     const char* what;
 };
 
 #define CITIZEN_INIT_RVA 0x8244f0    // FUN_1408244f0(owner, citizen): sets a citizen's +18 if not above 0
 #define CITIZEN_INIT_GATED_CALL 0x2fd517 // its call in FUN_1402fd2e0 (Late body and interface)
 
-// The last entry's patch (a call to the gate's relay) is filled in at Apply.
+// The last entries' patches (relays) are filled in at Apply.
 static SessionPatch kPatches[] = {
     // jne +15 -> 2-byte nop: always slow the timer by MultiplyFPS(1/3)
     { 0x13cb5b, 2, { 0x75, 0x15 }, { 0x66, 0x90 }, "building pass: frame-rate test, timer slowdown" },
@@ -55,6 +55,9 @@ static SessionPatch kPatches[] = {
       "vehicle window: ship launch routes through 0x7DA2F1" },
     // The call shared by Late and the interface -> the gate's relay (simulation thread only)
     { CITIZEN_INIT_GATED_CALL, 5, { 0xe8, 0xd4, 0x6f, 0x52, 0x00 }, { 0 }, "citizen init: Late / interface" },
+    // World load HUD widget null guards (prevent AV read at 0x6563 / 0x657A)
+    { 0x6563, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #1 null guard" },
+    { 0x657a, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #2 null guard" },
 };
 #define PATCH_COUNT (sizeof(kPatches) / sizeof(kPatches[0]))
 
@@ -114,6 +117,30 @@ static const unsigned char kRelayTail[] = {
     0x41, 0x5b, 0x41, 0x5a, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59, 0x58, // pop r11 r10 r9 r8 rdx rcx rax
     0xc3 };                                                           // ret
 
+static void SafeInvokeWidgetMethod98(void* widget)
+{
+    if (!widget || !IsPointerLikeX64((uint64_t)widget)) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        void** vtable = *(void***)widget;
+        if (vtable && IsPointerLikeX64((uint64_t)vtable)) {
+            typedef void (__fastcall* WidgetMethodFn)(void*);
+            WidgetMethodFn fn = (WidgetMethodFn)vtable[0x98 / 8];
+            if (fn && IsPointerLikeX64((uint64_t)fn)) {
+                fn(widget);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Logf("republicmp  SESSION_PATCHES: caught exception invoking widget method 98h on %p", widget);
+    }
+    DiagLog_EndSafeSeh();
+}
+
+void SessionPatches_TestSafeInvokeWidgetMethod98(void* widget)
+{
+    SafeInvokeWidgetMethod98(widget);
+}
+
 static bool PrepareGate()
 {
     if (g_gateRelay) return true;
@@ -126,19 +153,50 @@ static bool PrepareGate()
     if (!relay) return false;
     long long rel = (long long)relay - (long long)(g_exeBase + CITIZEN_INIT_GATED_CALL + 5);
     if (rel < INT_MIN || rel > INT_MAX) return false;
+
+    long long relWidget1 = (long long)(relay + 64) - (long long)(g_exeBase + 0x6563 + 5);
+    long long relWidget2 = (long long)(relay + 64) - (long long)(g_exeBase + 0x657A + 5);
+    if (relWidget1 < INT_MIN || relWidget1 > INT_MAX || relWidget2 < INT_MIN || relWidget2 > INT_MAX) return false;
+
     DWORD old;
-    const size_t size = sizeof(kRelayHead) + 8 + sizeof(kRelayTail);
+    const size_t size = 128;
     if (!VirtualProtect(relay, size, PAGE_EXECUTE_READWRITE, &old)) return false;
+
+    // 1. Citizen init gate at relay + 0
     unsigned long long to = (unsigned long long)&CitizenInitGate;
     memcpy(relay, kRelayHead, sizeof(kRelayHead));
     memcpy(relay + sizeof(kRelayHead), &to, 8);
     memcpy(relay + sizeof(kRelayHead) + 8, kRelayTail, sizeof(kRelayTail));
+
+    // 2. Widget null guard relay at relay + 64
+    // sub rsp, 28h; mov rax, &SafeInvokeWidgetMethod98; call rax; add rsp, 28h; ret
+    const unsigned char kWidgetHead[] = { 0x48, 0x83, 0xec, 0x28, 0x48, 0xb8 };
+    const unsigned char kWidgetTail[] = { 0xff, 0xd0, 0x48, 0x83, 0xc4, 0x28, 0xc3 };
+    unsigned long long toWidget = (unsigned long long)&SafeInvokeWidgetMethod98;
+    memcpy(relay + 64, kWidgetHead, sizeof(kWidgetHead));
+    memcpy(relay + 64 + sizeof(kWidgetHead), &toWidget, 8);
+    memcpy(relay + 64 + sizeof(kWidgetHead) + 8, kWidgetTail, sizeof(kWidgetTail));
+
     VirtualProtect(relay, size, PAGE_EXECUTE_READ, &old);
     FlushInstructionCache(GetCurrentProcess(), relay, size);
-    SessionPatch& p = kPatches[sizeof(kPatches) / sizeof(kPatches[0]) - 1];
-    int rel32 = (int)rel;
-    p.patch[0] = 0xe8;
-    memcpy(p.patch + 1, &rel32, 4);
+
+    for (size_t i = 0; i < PATCH_COUNT; i++) {
+        if (kPatches[i].rva == CITIZEN_INIT_GATED_CALL) {
+            int rel32 = (int)rel;
+            kPatches[i].patch[0] = 0xe8;
+            memcpy(kPatches[i].patch + 1, &rel32, 4);
+        } else if (kPatches[i].rva == 0x6563) {
+            int rel32 = (int)relWidget1;
+            kPatches[i].patch[0] = 0xe8;
+            memcpy(kPatches[i].patch + 1, &rel32, 4);
+            kPatches[i].patch[5] = 0x0f; kPatches[i].patch[6] = 0x1f; kPatches[i].patch[7] = 0x40; kPatches[i].patch[8] = 0x00;
+        } else if (kPatches[i].rva == 0x657A) {
+            int rel32 = (int)relWidget2;
+            kPatches[i].patch[0] = 0xe8;
+            memcpy(kPatches[i].patch + 1, &rel32, 4);
+            kPatches[i].patch[5] = 0x0f; kPatches[i].patch[6] = 0x1f; kPatches[i].patch[7] = 0x40; kPatches[i].patch[8] = 0x00;
+        }
+    }
     g_gateRelay = relay;
     return true;
 }
@@ -200,7 +258,8 @@ void SessionPatches_SetAppliedForTest(bool applied)
 
 void SessionPatches_Tick()
 {
-    bool want = IsDualTestbed() || SaveSync_IsBusy() || BuildSync_IsConnected() || Determinism_IsActive();
+    bool want = IsDualTestbed() || SaveSync_IsBusy() || BuildSync_IsConnected() ||
+                Determinism_IsActive() || SaveSync_IsWorldLoadInProgress();
     if (want && !g_applied && !g_refused) Apply();
     else if (!want && g_applied) SessionPatches_Restore();
 }

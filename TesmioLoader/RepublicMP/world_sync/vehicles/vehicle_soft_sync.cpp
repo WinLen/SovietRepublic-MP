@@ -43,6 +43,7 @@ struct VehicleSoftSyncEntry {
     unsigned short flags;
     unsigned cargoResHash[2];
     float cargoAmount[2];
+    float passengers;
 };
 
 struct VehicleSoftSyncTreasury {
@@ -189,6 +190,37 @@ static void TranslateVehicleNodes(BYTE* v, float dx, float dy, float dz)
     }
 }
 
+static float ReadVehiclePassengers(const BYTE* v)
+{
+    const BYTE* cBeg = *(const BYTE**)(v + 0x458);
+    const BYTE* cEnd = *(const BYTE**)(v + 0x460);
+    if (!cBeg || cEnd < cBeg || (cEnd - cBeg) % 16 != 0) return 0.0f;
+    for (const BYTE* p = cBeg; p + 16 <= cEnd; p += 16) {
+        const char* name = *(const char**)p;
+        if (name && (strcmp(name, "passengers") == 0 || strcmp(name, "workers") == 0 ||
+                     strcmp(name, "students") == 0 || strcmp(name, "tourists") == 0)) {
+            float amt = *(const float*)(p + 8);
+            if (isfinite(amt) && amt >= 0.0f) return amt;
+        }
+    }
+    return 0.0f;
+}
+
+static void WriteVehiclePassengers(BYTE* v, float passengers)
+{
+    BYTE* cBeg = *(BYTE**)(v + 0x458);
+    BYTE* cEnd = *(BYTE**)(v + 0x460);
+    if (!cBeg || cEnd < cBeg || (cEnd - cBeg) % 16 != 0) return;
+    for (BYTE* p = cBeg; p + 16 <= cEnd; p += 16) {
+        const char* name = *(const char**)p;
+        if (name && (strcmp(name, "passengers") == 0 || strcmp(name, "workers") == 0 ||
+                     strcmp(name, "students") == 0 || strcmp(name, "tourists") == 0)) {
+            *(float*)(p + 8) = passengers;
+            return;
+        }
+    }
+}
+
 static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
 {
     bool ok = false;
@@ -205,6 +237,7 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
         out.wear[1] = *(float*)(v + VEH_WEAR1_OFFSET);
         out.wear[2] = *(float*)(v + VEH_WEAR2_OFFSET);
         memcpy(out.pos, v + VEH_POS_OFFSET, 12);
+        out.passengers = ReadVehiclePassengers(v);
 
         BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
         BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
@@ -615,6 +648,10 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
     bool stoppedAtBld = (effBld != nullptr || e.currentBldId >= 0);
     SyncVehicleCargo(v, e, stoppedAtBld);
 
+    if (isfinite(e.passengers) && e.passengers >= 0.0f) {
+        WriteVehiclePassengers(v, e.passengers);
+    }
+
     if (*(int*)(v + VEH_SCHED_IDX_OFFSET) != e.scheduleIdx) return;
 
     float* pos = (float*)(v + VEH_POS_OFFSET);
@@ -633,11 +670,17 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
         }
         return;
     }
-    if (e.currentBldId < 0 && localBldId < 0 && distSq >= 64.0f && distSq < 2500.0f) {
-        TranslateVehicleNodes(v, dx, dy, dz);
-        HeldFrame_OnVehicleSoftSynced(v);
-        HeldFrame_AddVehicleSmoothOffset(v, -dx, -dy, -dz);
-        g_vssDiag.posSnapped++;
+    if (e.currentBldId < 0 && localBldId < 0) {
+        if (distSq > 1e-4f && distSq < 2500.0f) {
+            TranslateVehicleNodes(v, dx, dy, dz);
+            HeldFrame_OnVehicleSoftSynced(v);
+            HeldFrame_AddVehicleSmoothOffset(v, -dx, -dy, -dz);
+            g_vssDiag.posBlended++;
+        } else if (distSq >= 2500.0f) {
+            TranslateVehicleNodes(v, dx, dy, dz);
+            HeldFrame_OnVehicleSoftSynced(v);
+            g_vssDiag.posSnapped++;
+        }
     }
 }
 

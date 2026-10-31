@@ -19,6 +19,7 @@
 #include "determinism.h"
 #include "held_frame.h"
 #include "../core/safe_mem.h"
+#include "../core/engine_rva.h"
 #include <string.h>
 #include <intrin.h>
 #include <limits.h>
@@ -394,11 +395,6 @@ struct VisibleDistance {
     BYTE* building;
     float distance;
 };
-struct VisibleKept {
-    BYTE* building;
-    BYTE visible;
-    float distance;
-};
 static std::vector<VisibleDistance> g_visibleDistance;
 static std::vector<VisibleKept> g_visibleKept;
 
@@ -698,8 +694,16 @@ static BYTE g_toolSaved[96] = {};
 static bool g_toolActed = false;
 static PrivateView g_toolKept;
 
+void SimPatches_ClearPlacementActive();
+static void SimPatches_BuildingPlacementTool(__int64 param_1, char* param_2, char param_3, char param_4,
+                                             unsigned __int64 param_5, unsigned int param_6,
+                                             char param_7, char param_8);
+
 static void ToolEnter()
 {
+    if (g_toolTarget != (unsigned __int64)&SimPatches_BuildingPlacementTool) {
+        SimPatches_ClearPlacementActive();
+    }
     g_toolActed = g_on && Determinism_IsStepFrame();
     if (!g_toolActed) return;
     Determinism_ToolScopeBegin();
@@ -781,6 +785,130 @@ static BYTE* EmitCommon(BYTE* p)
     return Emit(p, jmpMemR10, sizeof(jmpMemR10));
 }
 
+typedef void (*UniversalFn)(__int64 param_1, char* param_2, char param_3, char param_4,
+                             unsigned __int64 param_5, unsigned int param_6,
+                             char param_7, char param_8);
+static char g_lastPlacementName[128] = {};
+static float g_lastPlacementX = 0.0f;
+static float g_lastPlacementY = 0.0f;
+static float g_lastPlacementZ = 0.0f;
+static ULONGLONG g_lastPlacementTick = 0;
+static bool g_placementActive = false;
+static INIT_ONCE g_placementInitOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_placementCs;
+
+void SafeCopyPlacementName(const char* src, char* dst, size_t maxLen)
+{
+    if (!dst || maxLen == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+    size_t i = 0;
+    while (i < maxLen - 1) {
+        char c = src[i];
+        if (c == '\0') break;
+        if ((unsigned char)c < 0x20 || (unsigned char)c == 0x7F) {
+            dst[0] = '\0';
+            return;
+        }
+        dst[i++] = c;
+    }
+    dst[i] = '\0';
+}
+
+static bool ReadPlacementCursorSafe(__int64 param_1, float* ox, float* oy, float* oz)
+{
+    if (!param_1) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (ox) *ox = *(float*)(param_1 + CURSOR_X_OFFSET);
+        if (oy) *oy = *(float*)(param_1 + CURSOR_Y_OFFSET);
+        if (oz) *oz = *(float*)(param_1 + CURSOR_Z_OFFSET);
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+void SimPatches_ClearPlacementActive()
+{
+    TsmScopedCsLock lock(&g_placementInitOnce, &g_placementCs);
+    g_placementActive = false;
+    g_lastPlacementName[0] = '\0';
+}
+
+void SimPatches_RecordPlacementForTest(const char* name, float x, float y, float z)
+{
+    char tempName[128] = {};
+    SafeCopyPlacementName(name, tempName, sizeof(tempName));
+    TsmScopedCsLock lock(&g_placementInitOnce, &g_placementCs);
+    strncpy_s(g_lastPlacementName, sizeof(g_lastPlacementName), tempName, _TRUNCATE);
+    g_lastPlacementX = x;
+    g_lastPlacementY = y;
+    g_lastPlacementZ = z;
+    g_lastPlacementTick = GetTickCount64();
+    g_placementActive = (tempName[0] != '\0');
+}
+
+static void SimPatches_BuildingPlacementTool(__int64 param_1, char* param_2, char param_3, char param_4,
+                                             unsigned __int64 param_5, unsigned int param_6,
+                                             char param_7, char param_8)
+{
+    if (param_1 && param_2) {
+        char tempName[128] = {};
+        SafeCopyPlacementName(param_2, tempName, sizeof(tempName));
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        if (ReadPlacementCursorSafe(param_1, &cx, &cy, &cz) && tempName[0] != '\0') {
+            TsmScopedCsLock lock(&g_placementInitOnce, &g_placementCs);
+            strncpy_s(g_lastPlacementName, sizeof(g_lastPlacementName), tempName, _TRUNCATE);
+            g_lastPlacementX = cx;
+            g_lastPlacementY = cy;
+            g_lastPlacementZ = cz;
+            g_lastPlacementTick = GetTickCount64();
+            g_placementActive = true;
+        } else {
+            SimPatches_ClearPlacementActive();
+        }
+    } else {
+        SimPatches_ClearPlacementActive();
+    }
+
+    ((UniversalFn)(g_exeBase + 0x2BADE0))(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+}
+
+bool SimPatches_GetActivePlacementInfo(char* outName, size_t maxLen, float* outX, float* outY, float* outZ)
+{
+    if (!outName || maxLen == 0) return false;
+    TsmScopedCsLock lock(&g_placementInitOnce, &g_placementCs);
+    if (!g_placementActive) return false;
+
+    if (g_exeBase) {
+        BYTE* world = g_exeBase + WORLD_RVA;
+        if (world) {
+            uintptr_t toolPtr = 0;
+            if (SafeReadPod<uintptr_t>(world + WORLD_SELECTED_TOOL_PTR_OFF, &toolPtr) && toolPtr == 0) {
+                g_placementActive = false;
+                g_lastPlacementName[0] = '\0';
+                return false;
+            }
+        }
+    }
+
+    if (GetTickCount64() - g_lastPlacementTick > 200) {
+        g_placementActive = false;
+        g_lastPlacementName[0] = '\0';
+        return false;
+    }
+
+    strncpy_s(outName, maxLen, g_lastPlacementName, _TRUNCATE);
+    if (outX) *outX = g_lastPlacementX;
+    if (outY) *outY = g_lastPlacementY;
+    if (outZ) *outZ = g_lastPlacementZ;
+    return true;
+}
+
 static bool InstallToolStubs()
 {
     for (size_t i = 0; i < TOOL_CALL_COUNT; i++) {
@@ -830,6 +958,7 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x214530 ? (unsigned __int64)&RoadSync_CtrlRectUpgradeTool
                                   : kToolCalls[i][1] == 0x213870 ? (unsigned __int64)&RoadSync_CtrlRectDemolishTool
                                   : kToolCalls[i][1] == 0x214220 ? (unsigned __int64)&RoadSync_ShiftCancelTool
+                                  : kToolCalls[i][1] == 0x2BADE0 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common
@@ -1326,10 +1455,160 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
     return true;
 }
 
+#define BUILDING_RENDER_PASS_RVA 0x2DC470
+static const unsigned char kBuildingRenderExpect[18] = {
+    0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xC0, 0xCE, 0xFF, 0xFF
+};
+typedef void* (*BuildingRenderPassFn)(void* rcx, void* rdx, void* r8, void* r9);
+static BuildingRenderPassFn o_buildingRenderPass = nullptr;
+
+void RestoreVisibleKeptSafe(VisibleKept* kept, size_t keptCount)
+{
+    if (!kept || keptCount == 0) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (size_t i = 0; i < keptCount; i++) {
+            kept[i].building[0x115A] = kept[i].visible;
+            *(float*)(kept[i].building + 0x115C) = kept[i].distance;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
+{
+    if (Determinism_WorldLoading() || !SafeIsWorldLoaded(g_exeBase) || !o_buildingRenderPass) {
+        return o_buildingRenderPass ? o_buildingRenderPass(rcx, rdx, r8, r9) : nullptr;
+    }
+
+    VisibleKept* kept = nullptr;
+    size_t keptCount = 0;
+
+    DiagLog_BeginSafeSeh();
+    __try {
+        typedef void* (*PositionFn)(void* node, float* out);
+        typedef float (*ZDistanceFn)(void* camera, float* position);
+        PositionFn position = *(PositionFn*)(g_exeBase + NODE_POSITION_IMPORT);
+        ZDistanceFn zDistance = *(ZDistanceFn*)(g_exeBase + CAMERA_ZDISTANCE_IMPORT);
+        BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+        if (it && end > it && position && zDistance) {
+            size_t total = (size_t)(end - it);
+            if (total > 0 && total < 100000) {
+                kept = (VisibleKept*)malloc(total * sizeof(VisibleKept));
+                if (kept) {
+                    for (; it < end; ++it) {
+                        BYTE* b = *it;
+                        if (!b) continue;
+                        BYTE* type = *(BYTE**)(b + 0x318);
+                        if (type) {
+                            float at[4] = {};
+                            position(b + 0x320, at);
+                            float dist = zDistance(g_exeBase + CAMERA_RVA, at);
+                            if (dist < 4000.0f && isfinite(dist)) {
+                                kept[keptCount].building = b;
+                                kept[keptCount].visible = b[0x115A];
+                                kept[keptCount].distance = *(float*)(b + 0x115C);
+                                keptCount++;
+                                b[0x115A] = 1;
+                                *(float*)(b + 0x115C) = dist;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+
+    void* res = nullptr;
+    __try {
+        res = o_buildingRenderPass(rcx, rdx, r8, r9);
+    }
+    __finally {
+        RestoreVisibleKeptSafe(kept, keptCount);
+        if (kept) {
+            free(kept);
+        }
+    }
+
+    return res;
+}
+
+typedef void (__fastcall* C3dSaveOriginalValuesFn)(void* material);
+typedef void (__fastcall* C3dChangeValuesToFn)(void* material, const float color[4]);
+typedef void (__fastcall* C3dRestoreOriginalValuesFn)(void* material);
+
+static C3dSaveOriginalValuesFn    o_c3dSaveOriginalValues    = nullptr;
+static C3dChangeValuesToFn        o_c3dChangeValuesTo        = nullptr;
+static C3dRestoreOriginalValuesFn o_c3dRestoreOriginalValues = nullptr;
+
+static void __fastcall H_C3dSaveOriginalValues(void* material)
+{
+    if (!SafeIsValidMaterial(material)) {
+        static unsigned s_blockedCount = 0;
+        if (H && H->log && ((++s_blockedCount <= 10) || (s_blockedCount % 1000 == 0))) {
+            Logf("republicmp  STABILITY: intercepted invalid C3D_MATERIAL (%p) in SaveOriginalValues (count=%u)", material, s_blockedCount);
+        }
+        return;
+    }
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (o_c3dSaveOriginalValues) o_c3dSaveOriginalValues(material);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (H && H->log) Logf("republicmp  STABILITY: SEH caught exception in SaveOriginalValues for material %p", material);
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void __fastcall H_C3dChangeValuesTo(void* material, const float color[4])
+{
+    if (!SafeIsValidMaterial(material)) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (o_c3dChangeValuesTo) o_c3dChangeValuesTo(material, color);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (H && H->log) Logf("republicmp  STABILITY: SEH caught exception in ChangeValuesTo for material %p", material);
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void __fastcall H_C3dRestoreOriginalValues(void* material)
+{
+    if (!SafeIsValidMaterial(material)) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (o_c3dRestoreOriginalValues) o_c3dRestoreOriginalValues(material);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (H && H->log) Logf("republicmp  STABILITY: SEH caught exception in RestoreOriginalValues for material %p", material);
+    }
+    DiagLog_EndSafeSeh();
+}
+
+void SimPatches_TestC3dSaveOriginalValues(void* material)
+{
+    H_C3dSaveOriginalValues(material);
+}
+
+void SimPatches_TestC3dChangeValuesTo(void* material, const float color[4])
+{
+    H_C3dChangeValuesTo(material, color);
+}
+
+void SimPatches_TestC3dRestoreOriginalValues(void* material)
+{
+    H_C3dRestoreOriginalValues(material);
+}
+
 bool SimPatches_Install()
 {
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
                                   kLateExpect, sizeof(kLateExpect), "republicmp late body");
+    InstallInlineHook(g_exeBase + BUILDING_RENDER_PASS_RVA, (void*)&HookedBuildingRenderPass,
+                      (void**)&o_buildingRenderPass, kBuildingRenderExpect,
+                      sizeof(kBuildingRenderExpect), "republicmp building render pass");
 
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&
@@ -1395,6 +1674,14 @@ bool SimPatches_Install()
     GameCalls_Install(); // window buttons; a site that differs is only left alone
     BrushTools_Install(); // the terrain brush's press reads; without them the terrain brushes stay as before
     Commands_InstallHooks(); // remote command sound/popup isolation & 2-SSR notification filter
+
+    PatchIat(g_exe, DLL_ENGINE, "?SaveOriginalValues@C3D_MATERIAL@@QEAAXXZ",
+             (void*)&H_C3dSaveOriginalValues, (void**)&o_c3dSaveOriginalValues, "c3d mat save");
+    PatchIat(g_exe, DLL_ENGINE, "?ChangeValuesTo@C3D_MATERIAL@@QEAAXVC3DVECTOR4@@@Z",
+             (void*)&H_C3dChangeValuesTo, (void**)&o_c3dChangeValuesTo, "c3d mat change");
+    PatchIat(g_exe, DLL_ENGINE, "?RestoreOriginalValues@C3D_MATERIAL@@QEAAXXZ",
+             (void*)&H_C3dRestoreOriginalValues, (void**)&o_c3dRestoreOriginalValues, "c3d mat restore");
+
     Logf("republicmp  SIM_PATCHES: late hook %d, relays %d (building visibility, saplings, render before Early, interface searches, Prepare at speed 0, window cost display, placing press, buy press, route tools, pick ray), tool stubs %d (%d calls)%s",
          late, relays, tools, (int)TOOL_CALL_COUNT, sitesOk ? "" : " - unexpected bytes at a relay site");
     return late && relays && tools;

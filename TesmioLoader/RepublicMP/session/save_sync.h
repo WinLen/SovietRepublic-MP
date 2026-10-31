@@ -56,6 +56,10 @@ void SaveStatus(const char* fmt, ...);
 // True while a world is loaded (not the main menu, not mid-load).
 bool SaveSync_IsWorldLoaded();
 
+// True while the engine is loading a world save (load trigger pending, HookedLoadWorld executing, or save transfer unpacking).
+bool SaveSync_IsWorldLoadInProgress();
+void SaveSync_SetTestWorldLoadInProgress(bool inProgress);
+
 // Refused (no-op) while a session is active. Hosting needs a loaded world;
 // leaving the world ends the session (SaveSync_Tick).
 void SaveSync_StartHost();

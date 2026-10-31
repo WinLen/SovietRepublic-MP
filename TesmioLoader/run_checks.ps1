@@ -33,6 +33,20 @@ Write-Host "================================================================" -F
 Remove-Item -Path (Join-Path $repDir "obj\Release\x64\debug_window.obj") -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path $repDir "obj\Release\x64\main_menu.obj") -Force -ErrorAction SilentlyContinue
 
+for ($retry = 0; $retry -lt 5; $retry++) {
+    try {
+        if (Test-Path (Join-Path $buildDir "republicmp_tests.exe")) {
+            Remove-Item -Path (Join-Path $buildDir "republicmp_tests.exe") -Force -ErrorAction Stop
+        }
+        if (Test-Path (Join-Path $buildDir "test_main.obj")) {
+            Remove-Item -Path (Join-Path $buildDir "test_main.obj") -Force -ErrorAction Stop
+        }
+        break
+    } catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+
 $testCompileCmd = @"
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1

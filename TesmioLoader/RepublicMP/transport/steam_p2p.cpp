@@ -88,10 +88,13 @@ static bool s_initAttempted = false;
 static bool s_available = false;
 static volatile bool s_shuttingDown = false;
 
+void SteamP2P_UnregisterCallbacks();
+
 struct SteamExitGuard {
     ~SteamExitGuard() {
         s_shuttingDown = true;
         s_available = false;
+        SteamP2P_UnregisterCallbacks();
     }
 };
 static SteamExitGuard s_steamExitGuard;
@@ -229,6 +232,31 @@ static void OnRichPresenceJoinRequested(void* pvParam)
     }
 }
 
+void SteamP2P_UnregisterCallbacks()
+{
+    if (s_callbacksRegistered && pSteamAPI_UnregisterCallback) {
+        pSteamAPI_UnregisterCallback(&s_cbP2PRequest);
+        pSteamAPI_UnregisterCallback(&s_cbP2PFail);
+        pSteamAPI_UnregisterCallback(&s_cbRichPresenceJoin);
+        s_callbacksRegistered = false;
+        Logf("republicmp  STEAM_P2P: unmounted callbacks 1202, 1203, 337");
+    }
+}
+
+static void EnsureCallbacksRegistered()
+{
+    if (!s_callbacksRegistered && pSteamAPI_RegisterCallback) {
+        s_cbP2PRequest = { s_callbackVtable, 0, {0,0,0}, 1202, (int)sizeof(P2PSessionRequest_t), &OnP2PSessionRequest };
+        s_cbP2PFail = { s_callbackVtable, 0, {0,0,0}, 1203, (int)sizeof(P2PSessionConnectFail_t), &OnP2PSessionConnectFail };
+        s_cbRichPresenceJoin = { s_callbackVtable, 0, {0,0,0}, 337, (int)sizeof(GameRichPresenceJoinRequested_t), &OnRichPresenceJoinRequested };
+        pSteamAPI_RegisterCallback(&s_cbP2PRequest, 1202);
+        pSteamAPI_RegisterCallback(&s_cbP2PFail, 1203);
+        pSteamAPI_RegisterCallback(&s_cbRichPresenceJoin, 337);
+        s_callbacksRegistered = true;
+        Logf("republicmp  STEAM_P2P: mounted callbacks 1202, 1203, 337");
+    }
+}
+
 static void* FindInterface(HSteamUser hUser, const char* const* versions, int count)
 {
     if (!pSteamInternal_FindOrCreateUserInterface) return nullptr;
@@ -324,15 +352,7 @@ bool SteamP2P_Init()
 
     pISteamNetworking_AllowP2PPacketRelay(s_pSteamNetworking, true);
 
-    if (!s_callbacksRegistered) {
-        s_cbP2PRequest = { s_callbackVtable, 0, {0,0,0}, 1202, (int)sizeof(P2PSessionRequest_t), &OnP2PSessionRequest };
-        s_cbP2PFail = { s_callbackVtable, 0, {0,0,0}, 1203, (int)sizeof(P2PSessionConnectFail_t), &OnP2PSessionConnectFail };
-        s_cbRichPresenceJoin = { s_callbackVtable, 0, {0,0,0}, 337, (int)sizeof(GameRichPresenceJoinRequested_t), &OnRichPresenceJoinRequested };
-        pSteamAPI_RegisterCallback(&s_cbP2PRequest, 1202);
-        pSteamAPI_RegisterCallback(&s_cbP2PFail, 1203);
-        pSteamAPI_RegisterCallback(&s_cbRichPresenceJoin, 337);
-        s_callbacksRegistered = true;
-    }
+    EnsureCallbacksRegistered();
 
     s_available = true;
     if (pISteamFriends_ClearRichPresence) {

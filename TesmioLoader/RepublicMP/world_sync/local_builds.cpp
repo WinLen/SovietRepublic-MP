@@ -21,6 +21,8 @@
 #include <string.h>
 #include <math.h>
 
+bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName = nullptr);
+
 #pragma comment(lib, "User32.lib")
 
 void LocalBuilds_Bind(const TsmHost* host)
@@ -863,6 +865,11 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
         if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
             RoadSyncUpgradeMsg m = {};
             if (FillUpgrade(manager, category, m)) {
+                const char* tool = *(const char**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET);
+                if (!SaveSync_CheckRoadDlcAllowed(m.category, m.newType, tool)) {
+                    RoadSync_ClearCategoryPreview(category);
+                    return true;
+                }
                 const char* upgDesc = Tr("модернизация дороги/сети", "road/network upgrade");
                 if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], upgDesc) ||
                     !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], upgDesc)) {
@@ -878,6 +885,11 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
         }
         memset(&g_commandSegment, 0, sizeof(g_commandSegment));
         if (FillSegment(manager, category, g_commandSegment.seg)) {
+            const char* tool = *(const char**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET);
+            if (!SaveSync_CheckRoadDlcAllowed(g_commandSegment.seg.category, g_commandSegment.seg.typeId, tool)) {
+                RoadSync_ClearCategoryPreview(category);
+                return true;
+            }
             const char* segDesc = Tr("строительство дороги/сети", "road/network construction");
             if (!TwoStates_CheckBuildAllowed(g_commandSegment.seg.startNode[0], g_commandSegment.seg.startNode[2], segDesc) ||
                 !TwoStates_CheckBuildAllowed(g_commandSegment.seg.endNode[0], g_commandSegment.seg.endNode[2], segDesc)) {
@@ -949,13 +961,21 @@ void HookedRoadCommit(__int64 manager,
                     __int64 thisPtr = GetPlacementManagerThisPtr();
                     float cx = *(float*)(thisPtr + CURSOR_X_OFFSET);
                     float cz = *(float*)(thisPtr + CURSOR_Z_OFFSET);
-                    if (IsDemolishToolActive(manager))
+                    int typeId = *(int*)(manager + MGR_TYPE_OFFSET);
+                    const char* tool = *(const char**)(thisPtr + ACTIVE_TOOL_OFFSET);
+                    if (IsDemolishToolActive(manager)) {
                         allowed = TwoStates_CheckDemolishAllowed(cx, cz, Tr("снос инфраструктуры", "infrastructure demolition"));
-                    else
+                    } else if (!SaveSync_CheckRoadDlcAllowed(category, typeId, tool)) {
+                        allowed = false;
+                    } else {
                         allowed = TwoStates_CheckBuildAllowed(cx, cz, Tr("строительство дороги/сети", "road/network construction"));
+                    }
                 } __except (EXCEPTION_EXECUTE_HANDLER) {
                 }
-                if (!allowed) return;
+                if (!allowed) {
+                    RoadSync_ClearCategoryPreview(category);
+                    return;
+                }
             }
             bool demolish = false;
             __try {
@@ -1192,6 +1212,8 @@ bool LocalBuilds_PlacementPress()
         if (!LooksLikeValidType(typeName)) return false;
         msg.kind = BUILD_SYNC_KIND_PLACE;
         msg.mode = BuildMode_Read();
+        if (msg.mode.rub == 0 && msg.mode.usd == 0 && msg.mode.b00 > 0)
+            msg.mode.b00 = -msg.mode.b00;
         msg.cursorX = msg.x = *(float*)(world + CURSOR_X_OFFSET);
         msg.cursorY = msg.y = *(float*)(world + CURSOR_Y_OFFSET);
         msg.cursorZ = msg.z = *(float*)(world + CURSOR_Z_OFFSET);

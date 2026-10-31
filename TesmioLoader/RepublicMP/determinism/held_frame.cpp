@@ -385,7 +385,7 @@ void HeldFrame_OnVehicleSoftSynced(BYTE* vehicle)
             float sy = pos[1] - it->second.currNode[k][33];
             float sz = pos[2] - it->second.currNode[k][34];
             float shiftSq = sx * sx + sy * sy + sz * sz;
-            if (shiftSq < 16.0f && isfinite(shiftSq)) {
+            if (shiftSq < 2500.0f && isfinite(shiftSq)) {
                 it->second.prevNode[k][32] += sx;
                 it->second.prevNode[k][33] += sy;
                 it->second.prevNode[k][34] += sz;
@@ -596,7 +596,8 @@ static bool ApplySubTickVisualInterp(BYTE* p, float alpha, bool decaySmooth = tr
             float ex0 = cur0[0] - rec.currNode[0][32];
             float ey0 = cur0[1] - rec.currNode[0][33];
             float ez0 = cur0[2] - rec.currNode[0][34];
-            if (ex0 * ex0 + ey0 * ey0 + ez0 * ez0 < 1e-4f) {
+            float devSq0 = ex0 * ex0 + ey0 * ey0 + ez0 * ez0;
+            if (devSq0 < 2500.0f && isfinite(devSq0)) {
                 float dx0 = rec.currNode[0][32] - rec.prevNode[0][32];
                 float dy0 = rec.currNode[0][33] - rec.prevNode[0][33];
                 float dz0 = rec.currNode[0][34] - rec.prevNode[0][34];
@@ -1113,7 +1114,7 @@ bool HeldFrame_Verify()
         { 0x67C2AE, { 0x48,0x8b,0xb1,0xa0,0x04,00,00,0x49,0x8b,0xd8,0x44,0x0f,0xb6,0xe2,0x4c,0x8b,0xf1,0x80,0xbe,0xd8,0x13,0x00,0x00,0x00 }, 24 },
     };
     for (const auto& s : sites) {
-        if (memcmp(g_exeBase + s.rva, s.bytes, s.size)) {
+        if (memcmp(g_exeBase + s.rva, s.bytes, s.size) != 0) {
             Logf("republicmp  HELD FRAME: unexpected bytes at exe+0x%X", s.rva);
             return false;
         }

@@ -134,6 +134,8 @@ static const char* const kCmdKindNames[] = {
     "inter-state money transfer",     // LS_CMD_STATE_TRANSFER (26)
     "vehicle soft sync",              // LS_CMD_VEHICLE_SOFT_SYNC (27)
     "bank loan",                      // LS_CMD_LOAN (28)
+    "city deletion",                  // LS_CMD_CITY_DELETE (29)
+    "research program",               // LS_CMD_RESEARCH (30)
 };
 
 static const char* KindName(int kind)
@@ -215,6 +217,11 @@ struct RawCmdHandlerEntry {
     RawCmdHandlerFn fn;
 };
 
+static bool ApplyResearchCommand(const void* p, size_t n)
+{
+    return n == sizeof(LsResearchCommand) && TwoStates_ApplyResearchCommand(*(const LsResearchCommand*)p);
+}
+
 static const RawCmdHandlerEntry kRawCmdHandlers[] = {
     { LS_CMD_SEGMENT, ApplySegmentCommand },
     { LS_CMD_NET_DEMOLISH, ApplyNetDemolishCommand },
@@ -234,6 +241,8 @@ static const RawCmdHandlerEntry kRawCmdHandlers[] = {
     { LS_CMD_RENAME, Rename_ApplyCommand },
     { LS_CMD_LEDGER, BrushTools_ApplyLedger },
     { LS_CMD_VEHICLE_SOFT_SYNC, VehicleSoftSync_ApplyCommand },
+    { LS_CMD_CITY_DELETE, Rename_ApplyDeleteCommand },
+    { LS_CMD_RESEARCH, ApplyResearchCommand },
 };
 
 static bool DispatchCommandPayload(int kind, const void* p, size_t n)
@@ -262,6 +271,10 @@ static bool DispatchCommandPayload(int kind, const void* p, size_t n)
         return n == sizeof(LsStateTransfer) && TwoStates_ApplyTransferCommand(*(const LsStateTransfer*)p);
     case LS_CMD_LOAN:
         return n == sizeof(LsLoanCommand) && TwoStates_ApplyLoanCommand(*(const LsLoanCommand*)p);
+    case LS_CMD_CITY_DELETE:
+        return Rename_ApplyDeleteCommand(p, n);
+    case LS_CMD_RESEARCH:
+        return n == sizeof(LsResearchCommand) && TwoStates_ApplyResearchCommand(*(const LsResearchCommand*)p);
     default:
         return false;
     }
@@ -292,10 +305,10 @@ static void Apply(const Command& c)
     InterlockedIncrement64(&g_applyEpoch);
     TwoStates_BeginCommand(owner);
     double rubBefore = *Rubles(), usdBefore = *Dollars();
-    InputBlock_BeginNeutral();
-    if (CancelsLocalDrag(c.kind))
-        RoadSync_CancelLocalDrag();
     bool isRemote = (c.owner != 0 && (int)c.owner != TwoStates_LocalState());
+    InputBlock_BeginNeutral();
+    if (CancelsLocalDrag(c.kind) && !isRemote)
+        RoadSync_CancelLocalDrag();
     ReplayUiScope menus;
     if (isRemote) Commands_BeginRemoteReplayScope();
     bool ok = DispatchCommandPayload(c.kind, p, n);
@@ -648,7 +661,9 @@ void Commands_LateEnd()
     g_inLateRecord = false;
     SettingsSync_LockstepDetect();
     RoadSync_LockstepDirectionsDetect();
-    TakeMoney(g_lateRubles, g_lateDollars, "a held frame's Late (tools)");
+    if (!BrushTools_IsActive()) {
+        TakeMoney(g_lateRubles, g_lateDollars, "a held frame's Late (tools)");
+    }
     TwoStates_ToolMoneyEnd(g_lateSimRubles, g_lateSimDollars);
 }
 

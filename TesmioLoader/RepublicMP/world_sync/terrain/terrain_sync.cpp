@@ -78,6 +78,9 @@ static volatile bool g_connecting = false;
 static volatile bool g_cancelConnect = false;
 static volatile bool g_isHost = false;
 static SOCKET g_sock = INVALID_SOCKET;
+static HANDLE g_workerThread = nullptr;
+static HANDLE g_recvThread = nullptr;
+static HANDLE g_sendThread = nullptr;
 static char g_targetIp[64] = REPUBLICMP_HOST_IP;
 
 struct ReceivedBatch {
@@ -393,6 +396,8 @@ static void CloseConnection()
     NetworkCloseSocket(g_sock);
     g_sock = INVALID_SOCKET;
     if (g_sendEvent) SetEvent(g_sendEvent);
+    NetworkJoinAndCloseThread(&g_recvThread);
+    NetworkJoinAndCloseThread(&g_sendThread);
 }
 
 static DWORD WINAPI SendLoopThread(LPVOID)
@@ -501,8 +506,8 @@ static void StartConnection(SOCKET sock)
     g_lastAppliedSeq = 0;
 
     g_connected = true;
-    CreateThread(nullptr, 0, ReceiveLoopThread, nullptr, 0, nullptr);
-    CreateThread(nullptr, 0, SendLoopThread, nullptr, 0, nullptr);
+    g_recvThread = CreateThread(nullptr, 0, ReceiveLoopThread, nullptr, 0, nullptr);
+    g_sendThread = CreateThread(nullptr, 0, SendLoopThread, nullptr, 0, nullptr);
     TerrainSyncStatus("[TERRAIN_SYNC] connection established");
 }
 
@@ -560,14 +565,14 @@ void TerrainSync_StartHost()
 {
     NetworkLaunchChannelWorker(true, nullptr, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               HostAcceptWorkerThread);
+                               HostAcceptWorkerThread, &g_workerThread);
 }
 
 void TerrainSync_StartClient(const char* hostIp)
 {
     NetworkLaunchChannelWorker(false, hostIp, g_targetIp, sizeof(g_targetIp),
                                &g_connected, &g_connecting, &g_isHost, &g_cancelConnect,
-                               ClientConnectWorkerThread);
+                               ClientConnectWorkerThread, &g_workerThread);
 }
 
 void TerrainSync_Reset()
@@ -577,6 +582,7 @@ void TerrainSync_Reset()
         TerrainSyncStatus("[TERRAIN_SYNC] connection reset by user");
         CloseConnection();
     }
+    NetworkJoinAndCloseThread(&g_workerThread);
 }
 
 bool TerrainSync_IsConnected()  { return g_connected; }

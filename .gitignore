@@ -24,6 +24,10 @@ TesmioLoader/RepublicMP/.vs/
 .metrics/
 __pycache__/
 logs_steam/
+.agents/teamwork/
+imgui.ini
+TesmioLoader/imgui.ini
+TesmioLoader/RepublicMP/imgui.ini
 
 # Staged workshop content & local secrets
 steam_workshop/content/

@@ -15,6 +15,7 @@
 #include "../ui/native_menu.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../core/safe_mem.h"
+#include "../core/diag_log.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
@@ -771,6 +772,17 @@ static void EmptySearchPool()
 
 static volatile bool g_inLoadWorldCall = false;
 
+static void SafeCallLoadWorld()
+{
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (o_loadWorld) o_loadWorld();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Logf("republicmp  LOCKSTEP: exception caught in o_loadWorld during load/teardown - recovered cleanly");
+    }
+    DiagLog_EndSafeSeh();
+}
+
 static void HookedLoadWorld(void)
 {
     // A probe run starts its generator epoch exactly at the load, so the
@@ -786,7 +798,7 @@ static void HookedLoadWorld(void)
             } else {
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
-            o_loadWorld();
+            SafeCallLoadWorld();
             g_inLoadWorldCall = false;
             TwoStates_OnAnyWorldLoaded(false);
             return;
@@ -801,7 +813,7 @@ static void HookedLoadWorld(void)
             *(int*)(g_exeBase + rva) = 0;
         }
     }
-    o_loadWorld();
+    SafeCallLoadWorld();
     g_inLoadWorldCall = false;
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
