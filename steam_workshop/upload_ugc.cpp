@@ -266,7 +266,7 @@ int main(int argc, char** argv)
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
     bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (One State & Two States)") : true;
     bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, desc.c_str()) : true;
-    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */) : true;
+    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 0 /* k_ERemoteStoragePublishedFileVisibilityPublic */) : true;
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
     bool bPreview = updatePreview ? pSetPreview(pUGC, hUpdate, previewFile.c_str()) : true;
     printf("[UGC] SetItem: title=%d desc=%d vis=%d content=%d preview=%d (uploadPreview=%d)\n",
