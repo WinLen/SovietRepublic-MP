@@ -28,7 +28,13 @@ typedef unsigned __int64 U64;
 
 enum { KIND_CITY = 3, KIND_CROSSROAD = 0xA, KIND_CITY_DELETE = 0xD, KIND_RESEARCH = 0xE };
 
-#define CITY_DELETE_RVA 0x5BF670
+#define CITY_DELETE_RVA 0x32F5C0
+
+static const BYTE kCityDeleteExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08,
+    0x48, 0x89, 0x6C, 0x24, 0x10,
+    0x48, 0x89, 0x74, 0x24, 0x18
+};
 
 #pragma pack(push, 1)
 struct RenameMsg {
@@ -50,7 +56,7 @@ bool Rename_InstallHooks()
 {
     if (!g_exeBase) return false;
     int ok = InstallInlineHook(g_exeBase + CITY_DELETE_RVA, (void*)&H_CityDelete,
-                               (void**)&o_cityDelete, nullptr, 0, "republicmp city_delete");
+                               (void**)&o_cityDelete, kCityDeleteExpect, sizeof(kCityDeleteExpect), "republicmp city_delete");
     Logf("republicmp  CITY: city delete hook installed: %d", ok);
     return ok != 0;
 }
@@ -272,7 +278,7 @@ static bool ApplyCityDelete(const RenameMsg& m)
     if (o_cityDelete) {
         g_inReplayDelete = true;
         __try {
-            o_cityDelete((void*)city, nullptr, nullptr, nullptr);
+            o_cityDelete((void*)world, (void*)city, nullptr, nullptr);
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
         g_inReplayDelete = false;
     }

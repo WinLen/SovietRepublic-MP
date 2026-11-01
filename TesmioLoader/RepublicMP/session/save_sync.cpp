@@ -513,29 +513,10 @@ static const char* MonitorLiveSession(bool client)
 }
 
 // ---------------------------------------------------------------------------
-// Telemetry & SteamP2P_FlushSend Hooks (R7)
+// Telemetry & SteamP2P_FlushSend Progress (R7)
 // ---------------------------------------------------------------------------
 
 extern void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec);
-
-typedef bool (*FnSteamP2P_FlushSend)(SOCKET s, DWORD timeoutMs);
-static FnSteamP2P_FlushSend o_steamP2P_FlushSend = nullptr;
-
-#pragma pack(push, 8)
-struct P2PSessionState_t {
-    uint8_t m_bConnectionActive;
-    uint8_t m_bConnecting;
-    uint8_t m_eP2PSessionError;
-    uint8_t m_bUsingRelay;
-    int32_t m_nBytesQueuedForSend;
-    int32_t m_nPacketsQueuedForSend;
-    uint32_t m_nRemoteIP;
-    uint16_t m_nRemotePort;
-};
-#pragma pack(pop)
-
-typedef bool (*FnGetP2PSessionState)(void* pSteamNetworking, uint64_t steamIDRemote, P2PSessionState_t* pConnectionState);
-static FnGetP2PSessionState o_getP2PSessionState = nullptr;
 
 static uint64_t g_transferTotalBytes = 0;
 static uint64_t g_transferStartTime = 0;
@@ -574,46 +555,25 @@ static void UpdateTransferSpeed(uint64_t done)
     }
 }
 
-static bool Hook_GetP2PSessionState(void* pSteamNetworking, uint64_t steamIDRemote, P2PSessionState_t* pConnectionState)
+void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished)
 {
-    bool res = o_getP2PSessionState ? o_getP2PSessionState(pSteamNetworking, steamIDRemote, pConnectionState) : false;
-    if (res && pConnectionState && g_inSaveTransfer.load() && g_transferTotalBytes > 0) {
-        int queued = pConnectionState->m_nBytesQueuedForSend;
-        if (queued < 0) queued = 0;
-        uint64_t done = (g_transferTotalBytes > (uint64_t)queued) ? (g_transferTotalBytes - (uint64_t)queued) : 0;
-        int percent = (int)((done * 100) / g_transferTotalBytes);
-        if (percent > 100) percent = 100;
-        UpdateTransferSpeed(done);
-        SyncBlock_SetPercentEx(percent, queued, (int)g_transferTotalBytes, g_transferSpeedEma);
-    }
-    return res;
-}
-
-static bool Hook_SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
-{
-    if (!o_steamP2P_FlushSend) return false;
-    g_inSaveTransfer = true;
-    bool ok = o_steamP2P_FlushSend(s, timeoutMs);
-    g_inSaveTransfer = false;
-    if (ok && g_transferTotalBytes > 0) {
+    if (!g_inSaveTransfer.load(std::memory_order_relaxed) || g_transferTotalBytes == 0) return;
+    if (finished || queuedBytes <= 0) {
+        UpdateTransferSpeed(g_transferTotalBytes);
         SyncBlock_SetPercentEx(100, 0, (int)g_transferTotalBytes, g_transferSpeedEma);
+        return;
     }
-    return ok;
+    uint64_t done = (g_transferTotalBytes > (uint64_t)queuedBytes)
+        ? (g_transferTotalBytes - (uint64_t)queuedBytes)
+        : 0;
+    int percent = (int)((done * 100) / g_transferTotalBytes);
+    if (percent > 99) percent = 99;
+    UpdateTransferSpeed(done);
+    SyncBlock_SetPercentEx(percent, queuedBytes, (int)g_transferTotalBytes, g_transferSpeedEma);
 }
 
 bool SaveSync_InstallHooks()
 {
-    InstallInlineHook((void*)&SteamP2P_FlushSend, (void*)&Hook_SteamP2P_FlushSend,
-                      (void**)&o_steamP2P_FlushSend, nullptr, 0, "republicmp flush_send");
-
-    HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
-    if (hSteam) {
-        void* pFn = (void*)GetProcAddress(hSteam, "SteamAPI_ISteamNetworking_GetP2PSessionState");
-        if (pFn) {
-            InstallInlineHook(pFn, (void*)&Hook_GetP2PSessionState,
-                              (void**)&o_getP2PSessionState, nullptr, 0, "republicmp p2p_session_state");
-        }
-    }
     return true;
 }
 
@@ -1283,9 +1243,11 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
         g_transferLastTick = g_transferStartTime;
         g_transferLastDone = 0;
         g_transferSpeedEma = 0.0f;
-        g_inSaveTransfer = true;
-        bool sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
-        g_inSaveTransfer = false;
+        bool sendOk = false;
+        {
+            SaveTransferGuard transferGuard;
+            sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
+        }
         if (!sendOk) {
             SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
             break;
@@ -1585,6 +1547,14 @@ static bool ClientPerformHandshake(SOCKET sock, SessionHello* outHostHello)
     return true;
 }
 
+static void WaitForWorldLoadToClear(DWORD timeoutMs = 30000)
+{
+    ULONGLONG start = GetTickCount64();
+    while (SaveSync_IsWorldLoadInProgress() && (GetTickCount64() - start) < timeoutMs) {
+        Sleep(50);
+    }
+}
+
 // Returns true when the player is in the host's game with all channels up.
 // rejoin: coming back for a re-sync - the host may need a moment to listen
 // again, so refused connects are retried.
@@ -1670,16 +1640,18 @@ static bool RunClientJoin(bool rejoin)
         if (!fileFollows) break;
 
         // 4. Receive.
-        SaveTransferGuard transferGuard;
-        ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
-        ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
-        g_transferStartTime = GetTickCount64();
-        g_transferLastTick = g_transferStartTime;
-        g_transferLastDone = 0;
-        g_transferSpeedEma = 0.0f;
-        if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
-            SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
-            break;
+        {
+            SaveTransferGuard transferGuard;
+            ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
+            ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
+            g_transferStartTime = GetTickCount64();
+            g_transferLastTick = g_transferStartTime;
+            g_transferLastDone = 0;
+            g_transferSpeedEma = 0.0f;
+            if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
+                SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
+                break;
+            }
         }
 
         // 5. Unpack (relayed to the host).
@@ -1733,9 +1705,7 @@ static bool RunClientJoin(bool rejoin)
         }
         TriggerLoadSave(receivedSaveName);
         bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
-        while (SaveSync_IsWorldLoadInProgress()) {
-            Sleep(50);
-        }
+        WaitForWorldLoadToClear();
         {
             std::error_code rmEc;
             std::filesystem::remove_all(destDir, rmEc);
@@ -1842,9 +1812,7 @@ static void RunClientSession()
 static DWORD WINAPI HostSessionThread(LPVOID)
 {
     RunHostSession();
-    while (SaveSync_IsWorldLoadInProgress()) {
-        Sleep(50);
-    }
+    WaitForWorldLoadToClear();
     SetState(SESSION_IDLE);
     return 0;
 }
@@ -1853,9 +1821,7 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 {
     RunClientSession();
     SetPeerIp("");
-    while (SaveSync_IsWorldLoadInProgress()) {
-        Sleep(50);
-    }
+    WaitForWorldLoadToClear();
     SetState(SESSION_IDLE);
     return 0;
 }

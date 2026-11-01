@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See steam_p2p.h.
 #include "steam_p2p.h"
+#include "../session/save_sync.h"
 #include <deque>
 #include <vector>
 #include <algorithm>
@@ -1103,6 +1104,7 @@ bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
                  (unsigned)sessionErr, (unsigned)port);
             return false;
         }
+        SaveSync_OnP2PFlushProgress((int)queuedBytes, queuedBytes <= 0);
         if (queuedBytes <= 0) {
             return true;
         }
