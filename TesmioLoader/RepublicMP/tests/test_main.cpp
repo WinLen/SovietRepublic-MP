@@ -1482,6 +1482,71 @@ static bool SubTest_UnivResearchTwoStatesIsolation()
     return true;
 }
 
+static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    TwoStates_OnSessionEnded();
+
+    std::vector<BYTE> officeWest(0x1000, 0), officeEast(0x1000, 0);
+    std::vector<BYTE> siteWest(0x1000, 0), siteEast(0x1000, 0);
+    *(int*)officeWest.data() = 601;
+    *(float*)(officeWest.data() + OBJ_POS_OFFSET) = -900.0f;
+    *(int*)officeEast.data() = 602;
+    *(float*)(officeEast.data() + OBJ_POS_OFFSET) = 900.0f;
+    *(int*)siteWest.data() = 603;
+    *(float*)(siteWest.data() + OBJ_POS_OFFSET) = -600.0f;
+    *(int*)siteEast.data() = 604;
+    *(float*)(siteEast.data() + OBJ_POS_OFFSET) = 600.0f;
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    // 1. Auto-search (checkFilters = 1) must ONLY attach same-SSR targets and block cross-SSR targets
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 1, 0));
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteEast.data(), 3000.0f, 1, 0));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 1, 0));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteWest.data(), 3000.0f, 1, 0));
+
+    // 2. Periodic road/rail scan at RVA_CALLER_OFFICE_ROAD_SCAN (0x14119B, checkFilters = 0) must ALSO block cross-SSR targets
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 0, 0, RVA_CALLER_OFFICE_ROAD_SCAN));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 0, RVA_CALLER_OFFICE_ROAD_SCAN));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteWest.data(), 3000.0f, 0, 0, RVA_CALLER_OFFICE_ROAD_SCAN));
+
+    // 3. Manual assignment (checkFilters = 0, isDemolish = 0):
+    //    Local player (West SSR / State 1) CAN manually assign own officeWest to help build neighbor's siteEast!
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 0, 0));
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 0));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteWest.data(), 0));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
+
+    //    Local player (State 1) CANNOT manually assign foreign officeEast to any site
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteWest.data(), 3000.0f, 0, 0));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteEast.data(), 3000.0f, 0, 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteWest.data(), 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteEast.data(), 0));
+
+    // 4. Demolition office (isDemolish = 1) CANNOT demolish a foreign SSR's building even manually
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 0, 1));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 1));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteWest.data(), 1));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 1));
+
+    // 5. Unassignment (0x162360): allowed if local player owns EITHER the office OR the target construction site
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_UNASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_UNASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteWest.data(), 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_UNASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteEast.data(), 0));
+
+    // 6. Starting planned road construction via Construction Office pointer tool (0x1A8D70)
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_START_PLANNED_CONSTRUCTION, officeWest.data(), siteEast.data(), 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_START_PLANNED_CONSTRUCTION, officeEast.data(), siteWest.data(), 0));
+
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -1782,6 +1847,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     }
 
     TEST_CHECK(SubTest_UnivResearchTwoStatesIsolation());
+    TEST_CHECK(SubTest_ConstructionOfficeTwoStatesAutoAndManual());
     return true;
 }
 

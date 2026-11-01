@@ -182,6 +182,11 @@ static const GameCallSite kSites[] = {
     { 0x7DA088, RVA_HELI_REROUTE, "vehicle window: change current stop", "VI", 0, 0, false, CALL_CHANGE_STOP },
     { 0x7DA779, RVA_VEH_INVERT_STOPS, "vehicle window: invert stop order", "V", 0, 0, false },
     { SITE_BLD_MANUAL_BUY_RES_RVA, BLD_MANUAL_BUY_RES_RVA, "building window: manual buy resources", "WBI", 0, 0, false, CALL_MANUAL_BUY_RES },
+    { SITE_COPY_OFFICE_ASSIGN_NET_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "copy office tool: assign office to network building", "WOOFbb", 0, 0, false },
+    { SITE_COPY_OFFICE_ASSIGN_BLD_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "copy office tool: assign office to building", "WOOFbb", 0, 0, false },
+    { SITE_CONSTRUCT_TOOL_START_PLAN_RVA, RVA_START_PLANNED_CONSTRUCTION, "construction tool: start planned network construction", "WObx", 0, 0, false },
+    { SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "construction tool: assign office to network building", "WOOFbb", 0, 0, false },
+    { SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "construction tool: assign office to building", "WOOFbb", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -623,9 +628,57 @@ static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U
     }
 }
 
+static bool CheckTwoStatesOfficeCallAllowed(unsigned targetRva, const BYTE* officeBld,
+                                            const BYTE* targetBld, unsigned char isDemolishOffice)
+{
+    if (!TwoStates_IsActive()) return true;
+    if (targetRva == RVA_ASSIGN_CONSTRUCTION_OFFICE) {
+        if (!officeBld || !TwoStates_CheckBuildingControlAllowed(officeBld,
+                Tr("назначение чужой стройконторы", "assigning a foreign construction office"))) {
+            return false;
+        }
+        if (isDemolishOffice != 0 && targetBld &&
+            !TwoStates_CheckBuildingControlAllowed(targetBld,
+                Tr("снос чужого здания", "demolishing a foreign building"))) {
+            return false;
+        }
+        return true;
+    }
+    if (targetRva == RVA_UNASSIGN_CONSTRUCTION_OFFICE) {
+        int localSt = TwoStates_LocalState();
+        if ((officeBld && TwoStates_GetBuildingOwnerSlot(officeBld) == localSt) ||
+            (targetBld && TwoStates_GetBuildingOwnerSlot(targetBld) == localSt)) {
+            return true;
+        }
+        return TwoStates_CheckBuildingControlAllowed(officeBld ? officeBld : targetBld,
+            Tr("управление чужим зданием", "controlling a foreign building"));
+    }
+    if (targetRva == RVA_START_PLANNED_CONSTRUCTION) {
+        const BYTE* checkBld = officeBld ? officeBld : targetBld;
+        return checkBld && TwoStates_CheckBuildingControlAllowed(checkBld,
+            Tr("назначение чужой стройконторы", "assigning a foreign construction office"));
+    }
+    return false;
+}
+
+bool GameCalls_CheckOfficeCallAllowedForTest(unsigned targetRva, const BYTE* officeBld,
+                                             const BYTE* targetBld, unsigned char isDemolishOffice)
+{
+    return CheckTwoStatesOfficeCallAllowed(targetRva, officeBld, targetBld, isDemolishOffice);
+}
+
 static bool CheckTwoStatesArgsAllowed(const GameCallMsg& m, const U64* args)
 {
     if (!TwoStates_IsActive()) return true;
+    if (m.target == RVA_ASSIGN_CONSTRUCTION_OFFICE || m.target == RVA_UNASSIGN_CONSTRUCTION_OFFICE) {
+        return CheckTwoStatesOfficeCallAllowed(m.target, (const BYTE*)args[1], (const BYTE*)args[2],
+                                               (unsigned char)(m.values[5] & 0xFF));
+    }
+    if (m.target == RVA_START_PLANNED_CONSTRUCTION) {
+        const BYTE* activeOffice = nullptr;
+        SafeReadPod((const BYTE* const*)(World() + WORLD_ACTIVE_WINDOW_BLD_OFF), &activeOffice);
+        return CheckTwoStatesOfficeCallAllowed(m.target, activeOffice, (const BYTE*)args[1], 0);
+    }
     for (int j = 0; j < MAX_ARGS; j++) {
         if (m.kinds[j] == OBJ_VEHICLE && args[j]) {
             if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)args[j],

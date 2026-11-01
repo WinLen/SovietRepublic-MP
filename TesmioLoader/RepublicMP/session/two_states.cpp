@@ -28,6 +28,8 @@
 #include <filesystem>
 #include <system_error>
 #include <algorithm>
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
 
 #define DLL_C3D "C3DDLL64.dll"
 
@@ -1265,6 +1267,10 @@ static const BYTE kUnivResearchPanelExpect[15] = {
     0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57,
     0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
 };
+static const BYTE kAssignConstructionOfficeExpect[16] = {
+    0x48, 0x8B, 0xC4, 0xF3, 0x0F, 0x11, 0x58, 0x20,
+    0x4C, 0x89, 0x40, 0x18, 0x48, 0x89, 0x50, 0x10
+};
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
 typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1273,6 +1279,8 @@ typedef void (__fastcall* EconomyWindowFn)(BYTE* world, uintptr_t a2, uintptr_t 
 typedef void (__fastcall* ResearchDailyUpdateFn)(BYTE* world);
 typedef void (__fastcall* ResearchRecomputeFn)(BYTE* world);
 typedef BYTE* (__fastcall* UnivResearchPanelFn)(BYTE* world, BYTE* building, BYTE* window, float* xPtr, float* yPtr, void* a6);
+typedef void (__fastcall* AssignConstructionOfficeFn)(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
+                                                      unsigned char checkFilters, unsigned char isDemolishOffice);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef float (__fastcall* BldProductivityStepFn)(BYTE* world, BYTE* building, float a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1339,6 +1347,7 @@ static EconomyWindowFn o_economyWindow = nullptr;
 static BldEconFn o_bldUnivStep = nullptr;
 static ResearchDailyUpdateFn o_researchDailyUpdate = nullptr;
 static UnivResearchPanelFn o_univResearchPanel = nullptr;
+static AssignConstructionOfficeFn o_assignConstructionOffice = nullptr;
 static volatile ULONGLONG g_economyWindowLastTick = 0;
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
@@ -2341,9 +2350,61 @@ void TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building)
     H_BldUnivStep(world, building, 0, 0, 0, 0);
 }
 
+int TwoStates_GetBuildingOwnerSlot(const BYTE* buildingPtr)
+{
+    return ResolveBuildingOwnerFast(buildingPtr);
+}
+
 void TwoStates_ResearchDailyUpdateForTest(BYTE* world)
 {
     H_ResearchDailyUpdate(world);
+}
+
+static bool ShouldAllowConstructionOfficeAssignment(const BYTE* officeBld, const BYTE* targetBld,
+                                                    unsigned char checkFilters, unsigned char isDemolishOffice,
+                                                    uintptr_t callerRva)
+{
+    if (!TwoStates_IsActive() || !officeBld || !targetBld) return true;
+    int officeOwner = ResolveBuildingOwnerFast(officeBld);
+    int targetOwner = ResolveBuildingOwnerFast(targetBld);
+    bool isAutoSearch = (checkFilters != 0) || (callerRva == RVA_CALLER_OFFICE_ROAD_SCAN);
+    if (isAutoSearch || isDemolishOffice != 0) {
+        return officeOwner == targetOwner;
+    }
+    if (g_inCommand && (g_cmdOwner == 1 || g_cmdOwner == 2)) {
+        return officeOwner == g_cmdOwner;
+    }
+    if (!g_inSimStep) {
+        return officeOwner == TwoStates_LocalState();
+    }
+    return true;
+}
+
+static void __fastcall H_AssignConstructionOffice(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
+                                                  unsigned char checkFilters, unsigned char isDemolishOffice)
+{
+    uintptr_t retAddr = (uintptr_t)_ReturnAddress();
+    uintptr_t exeBase = (uintptr_t)g_exeBase;
+    uintptr_t callerRva = (exeBase && retAddr >= exeBase) ? (retAddr - exeBase) : 0;
+    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, isDemolishOffice, callerRva)) {
+        return;
+    }
+    if (o_assignConstructionOffice) {
+        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, isDemolishOffice);
+    }
+}
+
+bool TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
+                                               unsigned char checkFilters, unsigned char isDemolishOffice,
+                                               uintptr_t callerRvaOverride)
+{
+    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, isDemolishOffice, callerRvaOverride)) {
+        return false;
+    }
+    if (o_assignConstructionOffice) {
+        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, isDemolishOffice);
+    }
+    return true;
 }
 
 static void __fastcall H_CalcStoredResources(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
@@ -3947,11 +4008,14 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_UNIV_RESEARCH_PANEL, (void*)&H_UnivResearchPanel,
                                 (void**)&o_univResearchPanel, kUnivResearchPanelExpect,
                                 sizeof(kUnivResearchPanelExpect), "republicmp two_states univ_research_panel");
+    econOk += InstallInlineHook(g_exeBase + RVA_ASSIGN_CONSTRUCTION_OFFICE, (void*)&H_AssignConstructionOffice,
+                                (void**)&o_assignConstructionOffice, kAssignConstructionOfficeExpect,
+                                sizeof(kAssignConstructionOfficeExpect), "republicmp two_states assign_construction_office");
     econOk += InstallBldSimLoopHooks();
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/42), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/43), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }

@@ -109,6 +109,7 @@ void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd);
 int  TwoStates_BuildingPosKey(float x, float z);
 void TwoStates_RegisterBuildingOwner(int buildingId, int ownerState);
 int  TwoStates_GetBuildingOwner(int buildingId, float x, float z);
+int  TwoStates_GetBuildingOwnerSlot(const BYTE* buildingPtr);
 void TwoStates_RegisterVehicleOwner(int vehicleId, int ownerState);
 int  TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr);
 
@@ -203,9 +204,7 @@ uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner,
 void   TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio);
 void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
 void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
-
-
-
-
-
+bool   TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
+                                                 unsigned char checkFilters, unsigned char isDemolishOffice,
+                                                 uintptr_t callerRvaOverride = 0);
 

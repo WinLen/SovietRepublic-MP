@@ -1046,3 +1046,44 @@ static_assert(WORLD_RESEARCH_VEC_END_OFFSET == WORLD_RESEARCH_VEC_BEGIN_OFFSET +
               RESEARCH_ITEM_TIMER_E0_OFFSET == RESEARCH_ITEM_BUILDING_PTR_OFFSET + 8,
               "ResearchItem layout (+0x11778, stride 0xE8, +0xCC/+0xD0/+0xD8/+0xE0) must match 0x2F6C90 / 0x2F7ED0");
 
+// ---------------------------------------------------------------------------
+// Construction & Demolition Office Assignment RVAs (SOVIET64.exe PE 6A3EB6AD)
+// ---------------------------------------------------------------------------
+
+#ifndef WORLD_ACTIVE_WINDOW_BLD_OFF
+#define WORLD_ACTIVE_WINDOW_BLD_OFF         0xD298u
+#endif
+#ifndef RVA_CALLER_OFFICE_ROAD_SCAN
+#define RVA_CALLER_OFFICE_ROAD_SCAN         0x14119Bu
+#endif
+#ifndef RVA_ASSIGN_CONSTRUCTION_OFFICE
+#define RVA_ASSIGN_CONSTRUCTION_OFFICE      0x161C90u
+#endif
+#ifndef RVA_UNASSIGN_CONSTRUCTION_OFFICE
+#define RVA_UNASSIGN_CONSTRUCTION_OFFICE    0x162360u
+#endif
+#ifndef RVA_START_PLANNED_CONSTRUCTION
+#define RVA_START_PLANNED_CONSTRUCTION      0x1A8D70u
+#endif
+#ifndef SITE_COPY_OFFICE_ASSIGN_NET_RVA
+#define SITE_COPY_OFFICE_ASSIGN_NET_RVA     0x1D70EEu
+#endif
+#ifndef SITE_COPY_OFFICE_ASSIGN_BLD_RVA
+#define SITE_COPY_OFFICE_ASSIGN_BLD_RVA     0x1D83C2u
+#endif
+#ifndef SITE_CONSTRUCT_TOOL_START_PLAN_RVA
+#define SITE_CONSTRUCT_TOOL_START_PLAN_RVA  0x1D9FFDu
+#endif
+#ifndef SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA
+#define SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA  0x1DA02Au
+#endif
+#ifndef SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA
+#define SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA  0x1DA48Du
+#endif
+
+static_assert(RVA_UNASSIGN_CONSTRUCTION_OFFICE == RVA_ASSIGN_CONSTRUCTION_OFFICE + 0x6D0u &&
+              RVA_CALLER_OFFICE_ROAD_SCAN < RVA_ASSIGN_CONSTRUCTION_OFFICE &&
+              SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA == SITE_CONSTRUCT_TOOL_START_PLAN_RVA + 0x2Du,
+              "Construction Office assignment RVAs (0x161C90, 0x162360, 0x14119B, 0x1D9FFD/0x1DA02A) must match 1.1.1.9 layout");
+
+

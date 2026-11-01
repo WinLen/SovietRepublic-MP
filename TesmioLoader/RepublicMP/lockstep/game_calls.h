@@ -34,3 +34,6 @@ void GameCalls_AddBorderStopForTest(unsigned long long world, unsigned long long
 void GameCalls_DeleteStopForTest(unsigned long long world, unsigned long long vehicle, int stopIdx);
 void GameCalls_ChangeCurrentStopForTest(unsigned long long vehicle, int stopIdx);
 void GameCalls_ReleaseVehicleForTest(unsigned long long vehicle);
+bool GameCalls_CheckOfficeCallAllowedForTest(unsigned targetRva, const BYTE* officeBld,
+                                             const BYTE* targetBld, unsigned char isDemolishOffice);
+

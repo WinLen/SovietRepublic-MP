@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - 18 co-op fixes (R1-R18): independent Two-States research trees, road/cable drag continuity, vehicle-owner customs trade, per-site financing, DLC road filter, civic/health split, C3D material & teardown crash guards",
+                "v%s (Protocol %d) - Two-States construction office isolation & mutual aid: auto-search attaches only to same-SSR sites/roads, while manual assignment allows assigning own construction offices to help build neighbor's buildings/roads",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
