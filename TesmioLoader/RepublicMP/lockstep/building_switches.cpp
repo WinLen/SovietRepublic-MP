@@ -33,8 +33,10 @@
 #define NAME_END (0x114 + 0x80)
 #define SAMPLE_EVERY 16
 
-enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3 };
-static const char* const kKindText[4] = { "building", "storage slot", "world setting", "manual resource purchase" };
+enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3, KIND_UNIV_RESEARCH = 4 };
+static const char* const kKindText[5] = {
+    "building", "storage slot", "world setting", "manual resource purchase", "university research"
+};
 
 // A slot's regions: 0 its own bytes, 1 the +00 entries, 2 the +18 entries, 3 the +30 words.
 static const unsigned kRegionAt[4] = { 0, 0x00, 0x18, 0x30 };
@@ -223,7 +225,8 @@ bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset)
 static bool IsNeverNoiseWord(const Range& r, unsigned offset)
 {
     if (r.kind == KIND_BUILDING)
-        return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET;
+        return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET ||
+               offset == BLD_UNIV_STAFF_RATIO_OFFSET;
     if (r.kind == KIND_SLOT)
         return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) && ((offset % 16) == 0x0C);
     return false;
@@ -644,6 +647,40 @@ static const char* ApplyManualBuy(U64 building, const SwitchMsg& m)
     return ApplyManualBuyFallback(building, m);
 }
 
+bool BuildingSwitches_CaptureUnivResearch(unsigned long long building, int ownerState,
+                                          int oldTechIdx, int newTechIdx,
+                                          unsigned oldRatioBits, unsigned newRatioBits)
+{
+    if (!building || (ownerState != 1 && ownerState != 2)) return false;
+    RouteRef ref = kNoRef;
+    if (!GuardedRef(building, ref)) return false;
+
+    SwitchMsg m = {};
+    m.building = ref;
+    m.kind = KIND_UNIV_RESEARCH;
+    m.shape = (unsigned)ownerState;
+    m.count = 2;
+    m.words[0] = { 0u, (unsigned)(oldTechIdx + 1), (unsigned)(newTechIdx + 1) };
+    m.words[1] = { BLD_UNIV_STAFF_RATIO_OFFSET, oldRatioBits, newRatioBits };
+    if (Commands_Capturing()) {
+        Submit(m);
+        return true;
+    }
+    return BuildingSwitches_ApplyCommand(&m, sizeof(m));
+}
+
+static const char* ApplyUnivResearch(U64 building, const SwitchMsg& m)
+{
+    if (!building) return "the building is gone";
+    if (m.count < 2 || (m.shape != 1 && m.shape != 2)) return "invalid university research payload";
+    int newTechIdx = (int)m.words[0].now - 1;
+    *(unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET) = m.words[1].now;
+    if (!TwoStates_ApplyUnivResearchSelection(World(), (BYTE*)building, (int)m.shape, newTechIdx)) {
+        return "university research target invalid";
+    }
+    return nullptr;
+}
+
 static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
 {
     if (m.kind != KIND_WORLD && !building) return "the building is gone";
@@ -697,7 +734,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     if (size != sizeof(SwitchMsg)) return false;
     SwitchMsg m;
     memcpy(&m, data, sizeof(m));
-    if (m.kind > KIND_MANUAL_BUY || !m.count || m.count > MAX_WORDS) return false;
+    if (m.kind > KIND_UNIV_RESEARCH || !m.count || m.count > MAX_WORDS) return false;
     const char* why = nullptr;
     unsigned differing = 0;
     DiagLog_BeginSafeSeh();
@@ -705,6 +742,8 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
         if (m.kind == KIND_MANUAL_BUY) {
             why = ApplyManualBuy(building, m);
+        } else if (m.kind == KIND_UNIV_RESEARCH) {
+            why = ApplyUnivResearch(building, m);
         } else {
             why = ValidateSwitchWords(building, m);
             if (!why) WriteSwitchWords(building, m, differing);

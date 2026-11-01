@@ -1388,6 +1388,100 @@ static bool SubTest_WorldSettingMultiToggleAndPerStateBuildMode()
     return true;
 }
 
+static bool SubTest_UnivResearchTwoStatesIsolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    TwoStates_OnSessionEnded();
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_HOST);
+
+    std::vector<BYTE> resBuf(4 * RESEARCH_ITEM_STRIDE, 0);
+    for (int i = 0; i < 4; ++i) {
+        BYTE* it = resBuf.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        it[RESEARCH_ITEM_INITIAL_OFFSET]   = 1;
+        it[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        *(int32_t*)(it + RESEARCH_ITEM_REQ_WORK_OFFSET) = 20;
+    }
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    std::vector<BYTE> univWest(0x1420, 0), univEast(0x1420, 0);
+    *(int*)univWest.data() = 501;
+    *(float*)(univWest.data() + OBJ_POS_OFFSET) = -800.0f;
+    *(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+    *(int*)univEast.data() = 502;
+    *(float*)(univEast.data() + OBJ_POS_OFFSET) = 800.0f;
+    *(float*)(univEast.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+
+    std::vector<BYTE*> bldVec = { univWest.data(), univEast.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    // East SSR (State 2) starts researching tech #2 in univEast
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univEast.data(), 2, 2));
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 1) == -1);
+
+    // 1. Local player (West SSR / State 1) tries to change or cancel research in foreign univEast (State 2) -> BLOCKED!
+    TwoStates_UnivResearchPanelForTest(world, univEast.data(), 0, 0.90f);
+    TEST_CHECK(!Commands_Due(50));
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+    TEST_CHECK_NEAR(*(float*)(univEast.data() + BLD_UNIV_STAFF_RATIO_OFFSET), 0.50f, 1e-5f);
+
+    TwoStates_UnivResearchPanelForTest(world, univEast.data(), -1, 0.10f);
+    TEST_CHECK(!Commands_Due(51));
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+    TEST_CHECK_NEAR(*(float*)(univEast.data() + BLD_UNIV_STAFF_RATIO_OFFSET), 0.50f, 1e-5f);
+
+    // 2. Local player (State 1) selects tech #1 with ratio 0.75 in own univWest -> synchronized via KIND_UNIV_RESEARCH
+    TwoStates_UnivResearchPanelForTest(world, univWest.data(), 1, 0.75f);
+    TEST_CHECK(Commands_Due(52));
+    Commands_Boundary(52);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 1);
+    TEST_CHECK_NEAR(*(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET), 0.75f, 1e-5f);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+
+    // 3. Step univWest twice -> State 1 unlocks tech #1 (progress 1.0), State 2 remains at 0.0 on tech #1
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 1), 0.50f, 1e-4f);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 1), 0.00f, 1e-4f);
+
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 1), 1.00f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0);
+
+    // Step univEast once -> State 2 advances tech #2 to 0.50, State 1 remains at 0.0 on tech #2
+    TwoStates_BldUnivStepForTest(world, univEast.data());
+    TwoStates_ResearchDailyUpdateForTest(world);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 2), 0.50f, 1e-4f);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 2), 0.00f, 1e-4f);
+
+    // 4. Persistence round-trip via republicmp_coop.ini
+    std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_univ_res";
+    std::error_code ec;
+    std::filesystem::create_directories(saveDir, ec);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(saveDir.string().c_str()));
+    TwoStates_ResetResearch();
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir.string().c_str(), true));
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 1), 1.00f, 1e-4f);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 2), 0.50f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+    std::filesystem::remove_all(saveDir, ec);
+
+    Commands_SetSession(COMMANDS_OFF);
+    BuildingSwitches_Reset();
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -1687,6 +1781,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         TEST_CHECK_NEAR(*(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF), 1050.0f, 1e-1f);
     }
 
+    TEST_CHECK(SubTest_UnivResearchTwoStatesIsolation());
     return true;
 }
 

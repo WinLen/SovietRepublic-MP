@@ -976,3 +976,73 @@ static_assert(BLD_EXPORT_MODE_OFFSET == BLD_AUTO_BUY_MODE_OFFSET + 4 &&
 static_assert(RVA_IAT_SAVE_ORIGINAL_VALUES == 0x86D578, "RVA_IAT_SAVE_ORIGINAL_VALUES mismatch");
 static_assert(RVA_IAT_CHANGE_VALUES_TO == 0x86D568, "RVA_IAT_CHANGE_VALUES_TO mismatch");
 static_assert(RVA_IAT_RESTORE_ORIGINAL_VALUES == 0x86D570, "RVA_IAT_RESTORE_ORIGINAL_VALUES mismatch");
+
+// ---------------------------------------------------------------------------
+// University & Research Tree Constants (SOVIET64.exe PE 6A3EB6AD)
+// ---------------------------------------------------------------------------
+
+#ifndef WORLD_RESEARCH_UNLOCKS_OFFSET
+#define WORLD_RESEARCH_UNLOCKS_OFFSET       0x1175Cu
+#endif
+#ifndef WORLD_RESEARCH_UNLOCKS_BYTES
+#define WORLD_RESEARCH_UNLOCKS_BYTES        0x16u
+#endif
+#ifndef WORLD_RESEARCH_VEC_BEGIN_OFFSET
+#define WORLD_RESEARCH_VEC_BEGIN_OFFSET     0x11778u
+#endif
+#ifndef WORLD_RESEARCH_VEC_END_OFFSET
+#define WORLD_RESEARCH_VEC_END_OFFSET       0x11780u
+#endif
+#ifndef RESEARCH_ITEM_STRIDE
+#define RESEARCH_ITEM_STRIDE                0xE8u
+#endif
+#ifndef RESEARCH_ITEM_NAME_OFFSET
+#define RESEARCH_ITEM_NAME_OFFSET           0x00u
+#endif
+#ifndef RESEARCH_ITEM_SUBTYPE_OFFSET
+#define RESEARCH_ITEM_SUBTYPE_OFFSET        0x40u
+#endif
+#ifndef RESEARCH_ITEM_INITIAL_OFFSET
+#define RESEARCH_ITEM_INITIAL_OFFSET        0x50u
+#endif
+#ifndef RESEARCH_ITEM_REQ_WORK_OFFSET
+#define RESEARCH_ITEM_REQ_WORK_OFFSET       0x54u
+#endif
+#ifndef RESEARCH_ITEM_AVAILABLE_OFFSET
+#define RESEARCH_ITEM_AVAILABLE_OFFSET      0xCCu
+#endif
+#ifndef RESEARCH_ITEM_PROGRESS_OFFSET
+#define RESEARCH_ITEM_PROGRESS_OFFSET       0xD0u
+#endif
+#ifndef RESEARCH_ITEM_BUILDING_PTR_OFFSET
+#define RESEARCH_ITEM_BUILDING_PTR_OFFSET   0xD8u
+#endif
+#ifndef RESEARCH_ITEM_TIMER_E0_OFFSET
+#define RESEARCH_ITEM_TIMER_E0_OFFSET       0xE0u
+#endif
+#ifndef BLD_UNIV_STAFF_RATIO_OFFSET
+#define BLD_UNIV_STAFF_RATIO_OFFSET         0x11A8u
+#endif
+#ifndef RVA_BLD_UNIV_STEP
+#define RVA_BLD_UNIV_STEP                   0x17DCF0u
+#endif
+#ifndef RVA_RESEARCH_DAILY_UPDATE
+#define RVA_RESEARCH_DAILY_UPDATE           0x2F6BD0u
+#endif
+#ifndef RVA_RESEARCH_RECOMPUTE
+#define RVA_RESEARCH_RECOMPUTE              0x2F6C90u
+#endif
+#ifndef RVA_RESEARCH_FIND_BY_BLD
+#define RVA_RESEARCH_FIND_BY_BLD            0x2F7B10u
+#endif
+#ifndef RVA_UNIV_RESEARCH_PANEL
+#define RVA_UNIV_RESEARCH_PANEL             0x2F7ED0u
+#endif
+
+static_assert(WORLD_RESEARCH_VEC_END_OFFSET == WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8 &&
+              RESEARCH_ITEM_STRIDE == 0xE8u &&
+              RESEARCH_ITEM_PROGRESS_OFFSET == RESEARCH_ITEM_AVAILABLE_OFFSET + 4 &&
+              RESEARCH_ITEM_BUILDING_PTR_OFFSET == RESEARCH_ITEM_PROGRESS_OFFSET + 8 &&
+              RESEARCH_ITEM_TIMER_E0_OFFSET == RESEARCH_ITEM_BUILDING_PTR_OFFSET + 8,
+              "ResearchItem layout (+0x11778, stride 0xE8, +0xCC/+0xD0/+0xD8/+0xE0) must match 0x2F6C90 / 0x2F7ED0");
+

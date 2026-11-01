@@ -8,6 +8,7 @@
 #include "../core/safe_mem.h"
 #include "../game/save_load.h"
 #include "../game/window_focus.h"
+#include "../lockstep/building_switches.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../determinism/determinism.h"
@@ -64,6 +65,26 @@ static char g_savedJoinAddress[64] = "";
 // R14 & R15: Fully Independent State Research Trees
 // g_stateResearch[0] = State 1 (West SSR / Host), g_stateResearch[1] = State 2 (East SSR / Client)
 static StateResearchTree g_stateResearch[2] = {};
+
+struct EngineResearchItemSlice {
+    uint8_t available = 0;            // +0xCC
+    float   progress = 0.0f;          // +0xD0
+    BYTE*   researchingBld = nullptr; // +0xD8
+    int32_t bldPosKey = 0;            // deterministic TwoStates_BuildingPosKey(x, z) of researchingBld
+    int32_t timerE0 = 0;              // +0xE0
+};
+
+struct StateEngineResearch {
+    uint8_t unlocks[WORLD_RESEARCH_UNLOCKS_BYTES] = {};
+    std::vector<EngineResearchItemSlice> items;
+    bool initialized = false;
+    bool loadedFromMeta = false;
+};
+
+static StateEngineResearch g_engineResearch[2];
+static bool  g_testUnivClickActive = false;
+static int   g_testUnivClickTechIdx = -1;
+static float g_testUnivClickRatio = 0.5f;
 
 static bool  g_hasSavedCam1 = false;
 static float g_savedCam1Pos[3] = { 0.0f, 0.0f, 0.0f };
@@ -1225,11 +1246,33 @@ static const BYTE kEconomyWindowExpect[16] = {
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
     0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC
 };
+static const BYTE kBldUnivStepExpect[16] = {
+    0x48, 0x8B, 0xC4, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+    0x48, 0x81, 0xEC, 0x38, 0x01, 0x00, 0x00
+};
+static const BYTE kResearchDailyUpdateExpect[19] = {
+    0x40, 0x53,
+    0x48, 0x8B, 0x91, 0x80, 0x17, 0x01, 0x00,
+    0x45, 0x33, 0xDB,
+    0x48, 0x2B, 0x91, 0x78, 0x17, 0x01, 0x00
+};
+static const BYTE kResearchRecomputeExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x10,
+    0x48, 0x89, 0x6C, 0x24, 0x18,
+    0x48, 0x89, 0x74, 0x24, 0x20
+};
+static const BYTE kUnivResearchPanelExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57,
+    0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
+};
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
 typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef bool (__fastcall* OrphanageAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4);
 typedef void (__fastcall* EconomyWindowFn)(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4);
+typedef void (__fastcall* ResearchDailyUpdateFn)(BYTE* world);
+typedef void (__fastcall* ResearchRecomputeFn)(BYTE* world);
+typedef BYTE* (__fastcall* UnivResearchPanelFn)(BYTE* world, BYTE* building, BYTE* window, float* xPtr, float* yPtr, void* a6);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef float (__fastcall* BldProductivityStepFn)(BYTE* world, BYTE* building, float a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1293,6 +1336,9 @@ static BldEconFn o_livingTick = nullptr;
 static BldEconFn o_waterHealthStep = nullptr;
 static BldEconFn o_heatingStep = nullptr;
 static EconomyWindowFn o_economyWindow = nullptr;
+static BldEconFn o_bldUnivStep = nullptr;
+static ResearchDailyUpdateFn o_researchDailyUpdate = nullptr;
+static UnivResearchPanelFn o_univResearchPanel = nullptr;
 static volatile ULONGLONG g_economyWindowLastTick = 0;
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
@@ -1779,6 +1825,525 @@ static void __fastcall H_EconomyWindow(BYTE* world, uintptr_t a2, uintptr_t a3, 
 {
     g_economyWindowLastTick = GetTickCount64();
     if (o_economyWindow) o_economyWindow(world, a2, a3, a4);
+}
+
+// ---------------------------------------------------------------------------
+// University & Engine Research Vector Isolation (world + 0x1175C..0x11780)
+// ---------------------------------------------------------------------------
+
+static bool SafeReadResearchVecHeader(const BYTE* world, BYTE** outBegin, int* outCount)
+{
+    if (!world || !outBegin || !outCount) return false;
+    *outBegin = nullptr;
+    *outCount = 0;
+    uintptr_t ptrs[2] = {};
+    if (!SafeMemcpyPod(ptrs, world + WORLD_RESEARCH_VEC_BEGIN_OFFSET, sizeof(ptrs))) return false;
+    BYTE* b = (BYTE*)ptrs[0];
+    BYTE* e = (BYTE*)ptrs[1];
+    if (!b || e < b) return false;
+    ptrdiff_t bytes = e - b;
+    if (bytes < 0 || (bytes % (ptrdiff_t)RESEARCH_ITEM_STRIDE) != 0) return false;
+    int count = (int)(bytes / (ptrdiff_t)RESEARCH_ITEM_STRIDE);
+    if (count <= 0 || count > 256) return false;
+    *outBegin = b;
+    *outCount = count;
+    return true;
+}
+
+static int ComputeBuildingPosKeySafe(const BYTE* bld)
+{
+    if (!bld) return 0;
+    float x = 0.0f, z = 0.0f;
+    if (!SafeReadPod((const float*)(bld + OBJ_POS_OFFSET), &x) ||
+        !SafeReadPod((const float*)(bld + OBJ_POS_OFFSET + 8), &z)) {
+        return 0;
+    }
+    return TwoStates_BuildingPosKey(x, z);
+}
+
+static BYTE* FindWorldBuildingByPosKey(const BYTE* world, int posKey)
+{
+    if (!world || posKey <= 0) return nullptr;
+    BYTE* found = nullptr;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE* const* b = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        BYTE* const* e = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (b && e > b && (e - b) <= 200000) {
+            for (BYTE* const* it = b; it < e; ++it) {
+                BYTE* bld = *it;
+                if (!bld) continue;
+                float x = *(const float*)(bld + OBJ_POS_OFFSET);
+                float z = *(const float*)(bld + OBJ_POS_OFFSET + 8);
+                if (TwoStates_BuildingPosKey(x, z) == posKey) {
+                    found = bld;
+                    break;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = nullptr;
+    }
+    DiagLog_EndSafeSeh();
+    return found;
+}
+
+static bool IsBuildingInWorldList(const BYTE* world, const BYTE* target)
+{
+    if (!world || !target) return false;
+    bool present = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* const* b = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        const BYTE* const* e = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (!b || e <= b) {
+            present = true; // standalone test world without populated building vector
+        } else if ((e - b) <= 200000) {
+            for (const BYTE* const* it = b; it < e; ++it) {
+                if (*it == target) {
+                    present = true;
+                    break;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        present = false;
+    }
+    DiagLog_EndSafeSeh();
+    return present;
+}
+
+static int FindEngineResearchIdxForBuilding(const BYTE* world, const BYTE* building)
+{
+    if (!world || !building) return -1;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return -1;
+    for (int i = 0; i < count; ++i) {
+        const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        const BYTE* curBld = nullptr;
+        if (SafeReadPod((const BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld) &&
+            curBld == building) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool SetEngineResearchBuildingAt(BYTE* world, BYTE* building, int techIdx)
+{
+    if (!world || !building) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return false;
+    if (techIdx >= count) return false;
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        BYTE* curBld = nullptr;
+        if (SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld) &&
+            curBld == building) {
+            BYTE* zero = nullptr;
+            SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
+        }
+    }
+    if (techIdx >= 0) {
+        BYTE* targetItem = begin + (size_t)techIdx * RESEARCH_ITEM_STRIDE;
+        SafeWritePod((BYTE**)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), building);
+    }
+    return true;
+}
+
+static void RecomputeEngineResearchFallback(BYTE* world)
+{
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    uint8_t unlocks[WORLD_RESEARCH_UNLOCKS_BYTES] = {};
+    SafeMemcpyPod(unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        float prog = 0.0f;
+        uint8_t initTech = 0;
+        SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &prog);
+        SafeReadPod(item + RESEARCH_ITEM_INITIAL_OFFSET, &initTech);
+        if (prog >= 1.0f) {
+            uint8_t zeroAvail = 0;
+            SafeWritePod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, zeroAvail);
+            unlocks[(unsigned)i % WORLD_RESEARCH_UNLOCKS_BYTES] = 1;
+        } else if (initTech != 0) {
+            uint8_t oneAvail = 1;
+            SafeWritePod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, oneAvail);
+        }
+    }
+    SafeMemcpyPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET, unlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+}
+
+static void RecomputeEngineResearch(BYTE* world)
+{
+    if (!world) return;
+    if (g_exeBase && SafeBytesMatch(g_exeBase + RVA_RESEARCH_RECOMPUTE,
+                                    kResearchRecomputeExpect, sizeof(kResearchRecomputeExpect))) {
+        DiagLog_BeginSafeSeh();
+        __try {
+            ResearchRecomputeFn fn = (ResearchRecomputeFn)(g_exeBase + RVA_RESEARCH_RECOMPUTE);
+            fn(world);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        DiagLog_EndSafeSeh();
+        return;
+    }
+    RecomputeEngineResearchFallback(world);
+}
+
+static void SyncSummaryResearchFromSlice(int stateOwner, const StateEngineResearch& src)
+{
+    if (stateOwner != 1 && stateOwner != 2) return;
+    StateResearchTree& tree = g_stateResearch[stateOwner - 1];
+    int n = (int)std::min(src.items.size(), (size_t)32);
+    for (int i = 0; i < n; ++i) {
+        const EngineResearchItemSlice& s = src.items[(size_t)i];
+        tree.techProgress[i] = s.progress;
+        uint32_t bit = (1u << i);
+        if (s.progress >= 1.0f) {
+            if ((tree.unlockedMask & bit) == 0) {
+                tree.unlockedMask |= bit;
+                tree.researchedCount++;
+            }
+        }
+        if (s.researchingBld != nullptr) {
+            tree.activeTechId = i;
+            tree.activeTechProgress = s.progress;
+        }
+    }
+}
+
+static void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* dst, int filterOwnerState)
+{
+    if (!world || !dst) return;
+    SafeMemcpyPod(dst->unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    dst->items.resize((size_t)count);
+    for (int i = 0; i < count; ++i) {
+        const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        EngineResearchItemSlice s = {};
+        SafeReadPod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, &s.available);
+        SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &s.progress);
+        SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &s.researchingBld);
+        SafeReadPod((const int32_t*)(item + RESEARCH_ITEM_TIMER_E0_OFFSET), &s.timerE0);
+        if (s.researchingBld && (filterOwnerState == 1 || filterOwnerState == 2)) {
+            if (ResolveBuildingOwnerFast(s.researchingBld) != filterOwnerState) {
+                s.researchingBld = nullptr;
+            }
+        }
+        s.bldPosKey = ComputeBuildingPosKeySafe(s.researchingBld);
+        dst->items[(size_t)i] = s;
+    }
+    dst->initialized = true;
+    dst->loadedFromMeta = false;
+    if (filterOwnerState == 1 || filterOwnerState == 2) {
+        SyncSummaryResearchFromSlice(filterOwnerState, *dst);
+    }
+}
+
+static void WriteSliceToWorldResearch(BYTE* world, StateEngineResearch* src)
+{
+    if (!world || !src || !src->initialized) return;
+    SafeMemcpyPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET, src->unlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    int n = (int)std::min((size_t)count, src->items.size());
+    for (int i = 0; i < n; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        EngineResearchItemSlice& s = src->items[(size_t)i];
+        if (!s.researchingBld && s.bldPosKey > 0) {
+            s.researchingBld = FindWorldBuildingByPosKey(world, s.bldPosKey);
+        }
+        SafeWritePod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, s.available);
+        SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), s.progress);
+        SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), s.researchingBld);
+        SafeWritePod((int32_t*)(item + RESEARCH_ITEM_TIMER_E0_OFFSET), s.timerE0);
+    }
+}
+
+static void ResetEngineResearchSlices()
+{
+    for (int s = 0; s < 2; ++s) {
+        memset(g_engineResearch[s].unlocks, 0, sizeof(g_engineResearch[s].unlocks));
+        g_engineResearch[s].items.clear();
+        g_engineResearch[s].initialized = false;
+        g_engineResearch[s].loadedFromMeta = false;
+    }
+}
+
+static void EnsureEngineResearchInitialized(BYTE* world)
+{
+    if (!world) return;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    for (int s = 0; s < 2; ++s) {
+        int stateOwner = s + 1;
+        if (!g_engineResearch[s].initialized) {
+            CaptureWorldResearchToSlice(world, &g_engineResearch[s], stateOwner);
+        } else if (g_engineResearch[s].loadedFromMeta) {
+            for (size_t i = 0; i < g_engineResearch[s].items.size(); ++i) {
+                EngineResearchItemSlice& it = g_engineResearch[s].items[i];
+                if (!it.researchingBld && it.bldPosKey > 0) {
+                    it.researchingBld = FindWorldBuildingByPosKey(world, it.bldPosKey);
+                }
+            }
+            g_engineResearch[s].loadedFromMeta = false;
+            SyncSummaryResearchFromSlice(stateOwner, g_engineResearch[s]);
+        }
+    }
+    int activeState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    if (activeState != 1 && activeState != 2) activeState = 1;
+    WriteSliceToWorldResearch(world, &g_engineResearch[activeState - 1]);
+}
+
+static void BldUnivStepFallback(BYTE* world, BYTE* building)
+{
+    int idx = FindEngineResearchIdxForBuilding(world, building);
+    if (idx < 0) return;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count) || idx >= count) return;
+    BYTE* item = begin + (size_t)idx * RESEARCH_ITEM_STRIDE;
+    float prog = 0.0f;
+    int32_t reqWork = 100;
+    SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &prog);
+    SafeReadPod((const int32_t*)(item + RESEARCH_ITEM_REQ_WORK_OFFSET), &reqWork);
+    float delta = (reqWork > 0) ? (10.0f / (float)reqWork) : 0.25f;
+    prog += delta;
+    if (prog >= 1.0f) {
+        prog = 1.0f;
+        BYTE* nullBld = nullptr;
+        SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), prog);
+        SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), nullBld);
+        RecomputeEngineResearch(world);
+    } else {
+        SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), prog);
+    }
+}
+
+static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
+                                        uintptr_t a5, uintptr_t a6)
+{
+    bool twoStates = TwoStates_IsActive() && world && building;
+    int owner = twoStates ? ResolveBuildingOwnerFast(building) : 1;
+    if (owner != 1 && owner != 2) owner = 1;
+    if (twoStates) {
+        EnsureEngineResearchInitialized(world);
+        WriteSliceToWorldResearch(world, &g_engineResearch[owner - 1]);
+    }
+    bool econActive = (g_inSimStep && !t_inEconHook && twoStates) ? BeginEconAttribution(world, owner) : false;
+    __int64 r = 0;
+    if (o_bldUnivStep) {
+        r = o_bldUnivStep(world, building, a3, a4, a5, a6);
+    } else {
+        BldUnivStepFallback(world, building);
+    }
+    if (econActive) {
+        EndEconAttribution(owner);
+    }
+    if (twoStates) {
+        CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
+        int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+        if (restoreState != 1 && restoreState != 2) restoreState = 1;
+        WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+    }
+    return r;
+}
+
+static void ResearchDailyUpdateFallback(BYTE* world)
+{
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        int32_t timer = 0;
+        if (SafeReadPod((const int32_t*)(item + RESEARCH_ITEM_TIMER_E0_OFFSET), &timer) && timer > 0) {
+            timer--;
+            SafeWritePod((int32_t*)(item + RESEARCH_ITEM_TIMER_E0_OFFSET), timer);
+        }
+        BYTE* bld = nullptr;
+        if (SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &bld) && bld) {
+            if (!IsBuildingInWorldList(world, bld)) {
+                BYTE* nullBld = nullptr;
+                SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), nullBld);
+            }
+        }
+    }
+}
+
+static void __fastcall H_ResearchDailyUpdate(BYTE* world)
+{
+    if (!TwoStates_IsActive() || !world) {
+        if (o_researchDailyUpdate) o_researchDailyUpdate(world);
+        else ResearchDailyUpdateFallback(world);
+        return;
+    }
+    EnsureEngineResearchInitialized(world);
+    for (int s = 1; s <= 2; ++s) {
+        WriteSliceToWorldResearch(world, &g_engineResearch[s - 1]);
+        if (o_researchDailyUpdate) o_researchDailyUpdate(world);
+        else ResearchDailyUpdateFallback(world);
+        CaptureWorldResearchToSlice(world, &g_engineResearch[s - 1], s);
+    }
+    int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    if (restoreState != 1 && restoreState != 2) restoreState = 1;
+    WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+}
+
+static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* window,
+                                            float* xPtr, float* yPtr, void* a6)
+{
+    if (!world || !building) {
+        return o_univResearchPanel ? o_univResearchPanel(world, building, window, xPtr, yPtr, a6) : nullptr;
+    }
+    bool twoStates = TwoStates_IsActive();
+    int bldOwner = twoStates ? ResolveBuildingOwnerFast(building) : 1;
+    if (bldOwner != 1 && bldOwner != 2) bldOwner = 1;
+    int localState = TwoStates_LocalState();
+
+    if (twoStates) {
+        EnsureEngineResearchInitialized(world);
+        WriteSliceToWorldResearch(world, &g_engineResearch[bldOwner - 1]);
+    }
+
+    int oldTechIdx = FindEngineResearchIdxForBuilding(world, building);
+    unsigned oldRatioBits = 0;
+    SafeReadPod((const unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), &oldRatioBits);
+
+    BYTE* ret = nullptr;
+    if (o_univResearchPanel) {
+        ret = o_univResearchPanel(world, building, window, xPtr, yPtr, a6);
+    } else if (g_testUnivClickActive) {
+        SetEngineResearchBuildingAt(world, building, g_testUnivClickTechIdx);
+        unsigned clickBits = 0;
+        memcpy(&clickBits, &g_testUnivClickRatio, sizeof(clickBits));
+        SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), clickBits);
+    }
+
+    int newTechIdx = FindEngineResearchIdxForBuilding(world, building);
+    unsigned newRatioBits = oldRatioBits;
+    SafeReadPod((const unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), &newRatioBits);
+
+    if (newTechIdx != oldTechIdx || newRatioBits != oldRatioBits) {
+        if (twoStates && bldOwner != localState) {
+            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
+            TwoStates_CheckBuildingControlAllowed(building,
+                Tr("управление исследованиями чужого ВУЗа", "controlling foreign university research"));
+        } else if (SaveSync_IsWaitingLobbyActive()) {
+            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
+        } else if (Commands_Capturing()) {
+            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
+            BuildingSwitches_CaptureUnivResearch((unsigned long long)building, bldOwner,
+                                                 oldTechIdx, newTechIdx, oldRatioBits, newRatioBits);
+        } else {
+            if (!BuildingSwitches_CaptureUnivResearch((unsigned long long)building, bldOwner,
+                                                      oldTechIdx, newTechIdx, oldRatioBits, newRatioBits)) {
+                SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), newRatioBits);
+                TwoStates_ApplyUnivResearchSelection(world, building, bldOwner, newTechIdx);
+            }
+        }
+    }
+
+    if (twoStates) {
+        WriteSliceToWorldResearch(world, &g_engineResearch[localState - 1]);
+    }
+    return ret;
+}
+
+bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int ownerState, int techIdx)
+{
+    if (!world || !building) return false;
+    int state = (ownerState == 2) ? 2 : 1;
+    bool twoStates = TwoStates_IsActive();
+    if (twoStates) {
+        EnsureEngineResearchInitialized(world);
+        WriteSliceToWorldResearch(world, &g_engineResearch[state - 1]);
+    }
+    bool ok = SetEngineResearchBuildingAt(world, building, techIdx);
+    if (twoStates && ok) {
+        CaptureWorldResearchToSlice(world, &g_engineResearch[state - 1], state);
+        int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+        if (restoreState != 1 && restoreState != 2) restoreState = 1;
+        WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+    }
+    return ok;
+}
+
+int TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* building, int stateOwner)
+{
+    if (!world || !building) return -1;
+    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+        g_engineResearch[stateOwner - 1].initialized) {
+        const std::vector<EngineResearchItemSlice>& items = g_engineResearch[stateOwner - 1].items;
+        int targetKey = ComputeBuildingPosKeySafe(building);
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].researchingBld == building ||
+                (targetKey > 0 && items[i].bldPosKey == targetKey)) {
+                return (int)i;
+            }
+        }
+        return -1;
+    }
+    return FindEngineResearchIdxForBuilding(world, building);
+}
+
+float TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int techIdx)
+{
+    if (techIdx < 0) return 0.0f;
+    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+        g_engineResearch[stateOwner - 1].initialized) {
+        const std::vector<EngineResearchItemSlice>& items = g_engineResearch[stateOwner - 1].items;
+        return ((size_t)techIdx < items.size()) ? items[(size_t)techIdx].progress : 0.0f;
+    }
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count) || techIdx >= count) return 0.0f;
+    float prog = 0.0f;
+    SafeReadPod((const float*)(begin + (size_t)techIdx * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET), &prog);
+    return prog;
+}
+
+uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner, unsigned byteIdx)
+{
+    if (byteIdx >= WORLD_RESEARCH_UNLOCKS_BYTES) return 0;
+    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+        g_engineResearch[stateOwner - 1].initialized) {
+        return g_engineResearch[stateOwner - 1].unlocks[byteIdx];
+    }
+    uint8_t val = 0;
+    if (world) SafeReadPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET + byteIdx, &val);
+    return val;
+}
+
+void TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio)
+{
+    g_testUnivClickActive = true;
+    g_testUnivClickTechIdx = clickTechIdx;
+    g_testUnivClickRatio = clickRatio;
+    H_UnivResearchPanel(world, building, nullptr, nullptr, nullptr, nullptr);
+    g_testUnivClickActive = false;
+}
+
+void TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building)
+{
+    H_BldUnivStep(world, building, 0, 0, 0, 0);
+}
+
+void TwoStates_ResearchDailyUpdateForTest(BYTE* world)
+{
+    H_ResearchDailyUpdate(world);
 }
 
 static void __fastcall H_CalcStoredResources(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
@@ -3373,11 +3938,20 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_ECONOMY_TRADE_WINDOW, (void*)&H_EconomyWindow,
                                 (void**)&o_economyWindow, kEconomyWindowExpect,
                                 sizeof(kEconomyWindowExpect), "republicmp two_states economy_trade_window");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_UNIV_STEP, (void*)&H_BldUnivStep,
+                                (void**)&o_bldUnivStep, kBldUnivStepExpect,
+                                sizeof(kBldUnivStepExpect), "republicmp two_states bld_univ_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_RESEARCH_DAILY_UPDATE, (void*)&H_ResearchDailyUpdate,
+                                (void**)&o_researchDailyUpdate, kResearchDailyUpdateExpect,
+                                sizeof(kResearchDailyUpdateExpect), "republicmp two_states research_daily_update");
+    econOk += InstallInlineHook(g_exeBase + RVA_UNIV_RESEARCH_PANEL, (void*)&H_UnivResearchPanel,
+                                (void**)&o_univResearchPanel, kUnivResearchPanelExpect,
+                                sizeof(kUnivResearchPanelExpect), "republicmp two_states univ_research_panel");
     econOk += InstallBldSimLoopHooks();
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats attribution hooks (%d/32), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/42), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -3589,6 +4163,7 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
             if (g_exeBase && !g_beforeLoadPrepared && !Determinism_WorldLoading() &&
                 (!o_statRecordClear || SaveSync_IsWorldLoaded())) {
                 EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+                EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
             }
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3631,6 +4206,7 @@ void TwoStates_OnWorldLoaded()
         }
         if (g_exeBase) {
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+            EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
         }
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3778,6 +4354,11 @@ void TwoStates_BeginCommand(int ownerState)
     g_cmdConstructionsBefore = GetWorldConstructionCount();
     g_cmdVehiclesBefore      = GetWorldVehicleCount();
     g_cmdResSnapshot.active  = false;
+    if (TwoStates_IsActive() && g_exeBase) {
+        BYTE* world = g_exeBase + WORLD_RVA;
+        EnsureEngineResearchInitialized(world);
+        WriteSliceToWorldResearch(world, &g_engineResearch[g_cmdOwner - 1]);
+    }
     if (!TwoStates_IsActive() || IsUnlimitedMoney()) {
         return;
     }
@@ -3833,6 +4414,13 @@ void TwoStates_EndCommand(int ownerState)
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+    }
+    if (g_inCommand && TwoStates_IsActive() && g_exeBase) {
+        BYTE* world = g_exeBase + WORLD_RVA;
+        CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
+        int localSt = TwoStates_LocalState();
+        if (localSt != 1 && localSt != 2) localSt = 1;
+        WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
     }
     if (!g_inCommand || !TwoStates_IsActive() || IsUnlimitedMoney()) {
         if (g_cmdResSnapshot.active && g_exeBase) {
@@ -3931,6 +4519,7 @@ void TwoStates_RequestTransfer(double rubles, double dollars)
 void TwoStates_ResetResearch()
 {
     memset(g_stateResearch, 0, sizeof(g_stateResearch));
+    ResetEngineResearchSlices();
 }
 
 bool TwoStates_IsTechUnlocked(int stateOwner, int techId)
@@ -6326,6 +6915,79 @@ static void WriteCoopMetaVec3Cm(std::ostringstream& out, const char* key, const 
         << (long long)llround((double)v[2] * 100.0) << "\r\n";
 }
 
+static std::string SerializeEngineResearchUnlocks(const StateEngineResearch& src)
+{
+    std::ostringstream ss;
+    for (size_t i = 0; i < WORLD_RESEARCH_UNLOCKS_BYTES; ++i) {
+        if (i > 0) ss << ",";
+        ss << (unsigned)src.unlocks[i];
+    }
+    return ss.str();
+}
+
+static std::string SerializeEngineResearchItems(const StateEngineResearch& src)
+{
+    std::ostringstream ss;
+    for (size_t i = 0; i < src.items.size(); ++i) {
+        if (i > 0) ss << ";";
+        const EngineResearchItemSlice& it = src.items[i];
+        long long progBp = (long long)llround((double)it.progress * 1000000.0);
+        int posKey = it.researchingBld ? ComputeBuildingPosKeySafe(it.researchingBld) : it.bldPosKey;
+        ss << (unsigned)it.available << ":" << progBp << ":" << posKey << ":" << it.timerE0;
+    }
+    return ss.str();
+}
+
+static void ParseEngineResearchUnlocks(const std::string& val, StateEngineResearch* dst)
+{
+    if (!dst) return;
+    memset(dst->unlocks, 0, sizeof(dst->unlocks));
+    size_t pos = 0;
+    size_t idx = 0;
+    while (pos < val.size() && idx < WORLD_RESEARCH_UNLOCKS_BYTES) {
+        size_t comma = val.find(',', pos);
+        if (comma == std::string::npos) comma = val.size();
+        dst->unlocks[idx++] = (uint8_t)atoi(val.substr(pos, comma - pos).c_str());
+        pos = comma + 1;
+    }
+    dst->initialized = true;
+    dst->loadedFromMeta = true;
+}
+
+static void ParseEngineResearchItems(const std::string& val, int stateOwner, StateEngineResearch* dst)
+{
+    if (!dst) return;
+    dst->items.clear();
+    size_t pos = 0;
+    while (pos < val.size()) {
+        size_t semi = val.find(';', pos);
+        if (semi == std::string::npos) semi = val.size();
+        std::string tok = val.substr(pos, semi - pos);
+        if (!tok.empty()) {
+            EngineResearchItemSlice s = {};
+            size_t c1 = tok.find(':');
+            size_t c2 = (c1 != std::string::npos) ? tok.find(':', c1 + 1) : std::string::npos;
+            size_t c3 = (c2 != std::string::npos) ? tok.find(':', c2 + 1) : std::string::npos;
+            if (c1 != std::string::npos && c2 != std::string::npos) {
+                s.available = (uint8_t)atoi(tok.substr(0, c1).c_str());
+                long long progBp = _strtoi64(tok.substr(c1 + 1, c2 - (c1 + 1)).c_str(), nullptr, 10);
+                s.progress = (float)((double)progBp / 1000000.0);
+                if (c3 != std::string::npos) {
+                    s.bldPosKey = atoi(tok.substr(c2 + 1, c3 - (c2 + 1)).c_str());
+                    s.timerE0   = (int32_t)atoi(tok.substr(c3 + 1).c_str());
+                } else {
+                    s.bldPosKey = atoi(tok.substr(c2 + 1).c_str());
+                }
+            }
+            dst->items.push_back(s);
+        }
+        pos = semi + 1;
+    }
+    dst->initialized = true;
+    dst->loadedFromMeta = true;
+    SyncSummaryResearchFromSlice(stateOwner, *dst);
+}
+
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 {
     if (!fullSaveDir || !fullSaveDir[0]) return;
@@ -6456,6 +7118,18 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "state2_research_active=" << g_stateResearch[1].activeTechId << "\r\n";
     out << "state1_research_progress=" << (long long)llround((double)g_stateResearch[0].activeTechProgress * 10000.0) << "\r\n";
     out << "state2_research_progress=" << (long long)llround((double)g_stateResearch[1].activeTechProgress * 10000.0) << "\r\n";
+
+    if (mode == COOP_MODE_TWO_STATES && world) {
+        EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
+    }
+    if (g_engineResearch[0].initialized) {
+        out << "engine_research_unlocks1=" << SerializeEngineResearchUnlocks(g_engineResearch[0]) << "\r\n";
+        out << "engine_research_items1=" << SerializeEngineResearchItems(g_engineResearch[0]) << "\r\n";
+    }
+    if (g_engineResearch[1].initialized) {
+        out << "engine_research_unlocks2=" << SerializeEngineResearchUnlocks(g_engineResearch[1]) << "\r\n";
+        out << "engine_research_items2=" << SerializeEngineResearchItems(g_engineResearch[1]) << "\r\n";
+    }
 
     std::string data = out.str();
     FILE* f = nullptr;
@@ -6680,6 +7354,22 @@ static bool ParseCoopMetaResearchKey(const std::string& key, const std::string& 
         }
         return true;
     }
+    if (key == "engine_research_unlocks1") {
+        ParseEngineResearchUnlocks(val, &g_engineResearch[0]);
+        return true;
+    }
+    if (key == "engine_research_unlocks2") {
+        ParseEngineResearchUnlocks(val, &g_engineResearch[1]);
+        return true;
+    }
+    if (key == "engine_research_items1") {
+        ParseEngineResearchItems(val, 1, &g_engineResearch[0]);
+        return true;
+    }
+    if (key == "engine_research_items2") {
+        ParseEngineResearchItems(val, 2, &g_engineResearch[1]);
+        return true;
+    }
     return false;
 }
 
@@ -6841,6 +7531,9 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
     }
+    if ((g_engineResearch[0].initialized || g_engineResearch[1].initialized) && world) {
+        EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
+    }
 
     g_netTradeRub[0] = (double)tradeRubCents[0] / 100.0;
     g_netTradeRub[1] = (double)tradeRubCents[1] / 100.0;
@@ -6901,6 +7594,7 @@ void TwoStates_BeforeAnyWorldLoad()
     g_beforeLoadPrepared = true;
     TwoStates_RestoreUiMoneySwap();
     ResetStateHudPopCache();
+    ResetEngineResearchSlices();
     g_stateEconInitialized = false;
     ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
     ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
@@ -7042,6 +7736,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
             g_treasuryInitialized = true;
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+            EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
             char msg[240];
             _snprintf_s(msg, sizeof(msg), _TRUNCATE,
                         Tr("Загружен кооп-сейв «2 государства» (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",

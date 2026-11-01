@@ -195,6 +195,16 @@ void   TwoStates_SetSavedCameraForTest(int state, const float pos[3], const floa
 void   TwoStates_RestoreOrFrameCameraForTest(bool isHost);
 void*  TwoStates_BuildRegPreservingRelayStub(void* targetCppFn, bool keepXmm0Result, bool zeroRcxOnExit);
 
+// University & per-state engine research vector (world + 0x1175C..0x11780) isolation and Lockstep sync
+bool   TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int ownerState, int techIdx);
+int    TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* building, int stateOwner = 0);
+float  TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int techIdx);
+uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner, unsigned byteIdx);
+void   TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio);
+void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
+void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
+
+
 
 
 
