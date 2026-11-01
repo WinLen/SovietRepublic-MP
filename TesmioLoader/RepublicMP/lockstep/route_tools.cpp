@@ -434,6 +434,11 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
         m.object = m.building = m.node = m.vehicle = m.subject = kNoRef;
         m.object.list = 1;
         memcpy(&m.object.check, &squareYaw, sizeof(float));
+        m.building.list = (unsigned)*(int*)(world + 0xAF8);
+        m.building.place = *(int*)(world + 0xAFC);
+        m.building.check = 0x424D4F44u;
+        m.node.list = (unsigned)*(int*)(world + 0xB00);
+        m.node.place = *(int*)(world + 0xB04);
         m.ctrl = *(BYTE*)(world + 0xF63C);
         memcpy(m.posA, start, 12);
         memcpy(m.posB, end, 12);
@@ -900,6 +905,12 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     memcpy(keptCur, (const void*)(world + 0xF6C), 12);
     float* groupYaw = (float*)(g_exeBase + 0x9E9D20);
     float keptYaw = *groupYaw;
+    int keptBuildMode[4] = {
+        *(int*)(world + 0xAF8),
+        *(int*)(world + 0xAFC),
+        *(int*)(world + 0xB00),
+        *(int*)(world + 0xB04),
+    };
     BYTE keptDrag = *(BYTE*)(world + 0xD2AC), keptPlan = *(BYTE*)(world + 0xF63C);
     BYTE keptDown = *down, keptPress = *press, keptRPress = *rpress;
     U64 own428 = Q(world + SELECTED_OFFSET);
@@ -921,6 +932,12 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     memcpy((void*)(world + 0xF62C), m.posB, 12);
     memcpy((void*)(world + 0xF6C), m.posB, 12);
     if (m.object.list == 1) memcpy(groupYaw, &m.object.check, sizeof(float));
+    if (m.building.check == 0x424D4F44u) {
+        *(int*)(world + 0xAF8) = (int)m.building.list;
+        *(int*)(world + 0xAFC) = m.building.place;
+        *(int*)(world + 0xB00) = (int)m.node.list;
+        *(int*)(world + 0xB04) = m.node.place;
+    }
     *(BYTE*)(world + 0xD2AC) = 1;
     *(BYTE*)(world + 0xF63C) = m.ctrl;
     *down = 0;
@@ -936,6 +953,10 @@ static const char* ApplySquareRoad(const RouteMsg& m)
         faulted = true;
     }
     *groupYaw = keptYaw;
+    *(int*)(world + 0xAF8) = keptBuildMode[0];
+    *(int*)(world + 0xAFC) = keptBuildMode[1];
+    *(int*)(world + 0xB00) = keptBuildMode[2];
+    *(int*)(world + 0xB04) = keptBuildMode[3];
     memcpy((void*)(world + 0xF620), keptStart, 12);
     memcpy((void*)(world + 0xF62C), keptEnd, 12);
     memcpy((void*)(world + 0xF6C), keptCur, 12);

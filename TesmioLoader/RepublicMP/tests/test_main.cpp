@@ -1314,6 +1314,80 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
     return true;
 }
 
+static bool SubTest_WorldSettingMultiToggleAndPerStateBuildMode()
+{
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    TwoStates_OnSessionEnded();
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_HOST);
+
+    *(int*)(world + 0xAF8) = 0;
+    *(int*)(world + 0xAFC) = 1;
+    *(int*)(world + 0xB00) = 70;
+    *(int*)(world + 0xB04) = 1;
+    world[0xB08] = 1;
+    world[0xC798] = 1;
+    world[0xC799] = 0x5Au;
+
+    auto runUiFrame = [&](bool clicked, int rub, int usd, BYTE c798) {
+        g_mockExeBuffer[0xA54E91] = clicked ? 1 : 0;
+        BuildingSwitches_Before(false);
+        *(int*)(world + 0xAF8) = rub;
+        *(int*)(world + 0xAFC) = usd;
+        world[0xC798] = c798;
+        BuildingSwitches_After(false);
+        g_mockExeBuffer[0xA54E91] = 0;
+    };
+
+    // Initial baseline frame (no click)
+    runUiFrame(false, 0, 1, 1);
+
+    // 1. One-State mode: repeated multi-step toggles (USD -> RUB -> USD -> OWN -> RUB) must all succeed
+    const int kSeqOneState[4][2] = { { 1, 0 }, { 0, 1 }, { 0, 0 }, { 1, 0 } };
+    for (int step = 0; step < 4; ++step) {
+        int wantRub = kSeqOneState[step][0];
+        int wantUsd = kSeqOneState[step][1];
+        runUiFrame(true, wantRub, wantUsd, 1);
+        TEST_CHECK(Commands_Due((unsigned long long)(20 + step)));
+        Commands_Boundary((unsigned long long)(20 + step));
+        TEST_CHECK(*(int*)(world + 0xAF8) == wantRub);
+        TEST_CHECK(*(int*)(world + 0xAFC) == wantUsd);
+        runUiFrame(false, wantRub, wantUsd, 1);
+    }
+
+    // 1b. 1-byte world setting +0xC798 (autoSearchOffices) toggles 1 -> 0 -> 1 without touching +0xC799
+    runUiFrame(true, 1, 0, 0);
+    TEST_CHECK(Commands_Due(30));
+    Commands_Boundary(30);
+    TEST_CHECK(world[0xC798] == 0);
+    TEST_CHECK(world[0xC799] == 0x5Au);
+
+    runUiFrame(true, 1, 0, 1);
+    TEST_CHECK(Commands_Due(31));
+    Commands_Boundary(31);
+    TEST_CHECK(world[0xC798] == 1);
+    TEST_CHECK(world[0xC799] == 0x5Au);
+
+    // 2. Two-States mode (R4): BuildMode (+0xAF8..+0xB04) is strictly local per state and toggles freely without reverting
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    for (int step = 0; step < 4; ++step) {
+        int wantRub = kSeqOneState[step][0];
+        int wantUsd = kSeqOneState[step][1];
+        runUiFrame(true, wantRub, wantUsd, 1);
+        TEST_CHECK(!Commands_Due((unsigned long long)(40 + step)));
+        TEST_CHECK(*(int*)(world + 0xAF8) == wantRub);
+        TEST_CHECK(*(int*)(world + 0xAFC) == wantUsd);
+    }
+
+    Commands_SetSession(COMMANDS_OFF);
+    BuildingSwitches_Reset();
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -1383,6 +1457,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
 
     Commands_SetSession(COMMANDS_OFF);
     TwoStates_OnSessionEnded();
+    TEST_CHECK(SubTest_WorldSettingMultiToggleAndPerStateBuildMode());
 
     // 2b. Cheat / dev mode sanitization (C+H+E / D+E+V / cheat systab pages 5..7)
     {

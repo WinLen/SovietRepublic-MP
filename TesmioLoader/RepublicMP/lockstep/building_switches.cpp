@@ -405,10 +405,20 @@ static void WorldWords()
         for (unsigned at = w.at; at + 4 <= w.at + w.size && g_worldCount < WORLD_WORDS; at += 4) g_worldAt[g_worldCount++] = at;
 }
 
+static bool IsOneByteWorldSetting(unsigned at)
+{
+    return at == 0xB08 || at == 0xC798;
+}
+
+static bool IsLocalPerStateWorldSetting(unsigned at)
+{
+    return TwoStates_IsActive() && at >= 0xAF8 && at < 0xB08;
+}
+
 static bool ReadWorldSetting(BYTE* world, unsigned at, unsigned& out)
 {
     out = 0;
-    if (at == 0xB08) {
+    if (IsOneByteWorldSetting(at)) {
         BYTE b = 0;
         if (!Copy(&b, world + at, 1)) return false;
         out = (unsigned)b;
@@ -419,7 +429,7 @@ static bool ReadWorldSetting(BYTE* world, unsigned at, unsigned& out)
 
 static void WriteWorldSetting(BYTE* world, unsigned at, unsigned val)
 {
-    if (at == 0xB08) {
+    if (IsOneByteWorldSetting(at)) {
         BYTE b = (BYTE)(val & 0xFF);
         Copy(world + at, &b, 1);
         return;
@@ -447,7 +457,16 @@ static void WorldFrame(bool click)
     m.kind = KIND_WORLD;
     for (int i = 0; i < g_worldCount; i++) {
         unsigned cur = 0;
-        if (!ReadWorldSetting(world, g_worldAt[i], cur) || cur == g_auth[i]) continue;
+        if (!ReadWorldSetting(world, g_worldAt[i], cur)) continue;
+        if (IsLocalPerStateWorldSetting(g_worldAt[i])) {
+            g_auth[i] = g_stale[i] = cur;
+            g_sentValid[i] = false;
+            continue;
+        }
+        if (cur == g_auth[i]) {
+            g_stale[i] = cur;
+            continue;
+        }
         if (click && cur != g_stale[i] && !(g_sentValid[i] && g_sent[i] == cur)) {
             m.words[m.count++] = { g_worldAt[i], g_auth[i], cur };
             g_sent[i] = cur;
@@ -650,7 +669,8 @@ static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differi
 {
     for (unsigned i = 0; i < m.count; i++) {
         unsigned off = m.words[i].offset;
-        if (m.kind == KIND_WORLD && off == 0xB08) {
+        if (m.kind == KIND_WORLD && IsLocalPerStateWorldSetting(off)) continue;
+        if (m.kind == KIND_WORLD && IsOneByteWorldSetting(off)) {
             BYTE* pb = (BYTE*)WordAddress(building, m, off);
             if (!pb) continue;
             unsigned curVal = *pb;
@@ -665,7 +685,8 @@ static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differi
         if (m.kind == KIND_WORLD) // the session's value from now on
             for (int k = 0; k < g_worldCount; k++)
                 if (g_worldAt[k] == off) {
-                    g_auth[k] = off == 0xB08 ? (m.words[i].now & 0xFF) : m.words[i].now;
+                    g_auth[k] = IsOneByteWorldSetting(off) ? (m.words[i].now & 0xFF) : m.words[i].now;
+                    g_stale[k] = g_auth[k];
                     g_sentValid[k] = false;
                 }
     }

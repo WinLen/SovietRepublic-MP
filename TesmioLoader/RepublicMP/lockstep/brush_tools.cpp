@@ -437,6 +437,7 @@ static bool Sample(int kind, U64 world, int mode, BrushMsg& m, BYTE down, BYTE p
         m.record = RecordPlace(*(U64*)(w + SELECTED_OFFSET), m.name);
         if (m.record < 0) return false;
         ReadSample(w, m.sample);
+        m.sample.pad[0] = (unsigned char)(1u | (*(int*)(w + 0xAF8) != 0 ? 2u : 0u) | (*(int*)(w + 0xAFC) != 0 ? 4u : 0u));
         void* input = g_exeBase + INPUT_RVA;
         if (kind == 0) {
             m.sample.pressOff = g_getters[0] && g_getters[0](input) ? 1 : 0;
@@ -568,10 +569,15 @@ static bool Replay(const BrushMsg& m, U64 record, BrushState& state)
     BrushSample own;
     ReadSample(w, own);
     U64 ownTool = *(U64*)(w + SELECTED_OFFSET);
+    int ownRub = *(int*)(w + 0xAF8), ownUsd = *(int*)(w + 0xAFC);
     BYTE ownDown = g_exeBase[DOWN_RVA], ownPress = g_exeBase[PRESS_RVA];
     bool ok = true;
     __try {
         *(U64*)(w + SELECTED_OFFSET) = record;
+        if ((m.sample.pad[0] & 1u) != 0) {
+            *(int*)(w + 0xAF8) = (m.sample.pad[0] & 2u) ? 1 : 0;
+            *(int*)(w + 0xAFC) = (m.sample.pad[0] & 4u) ? 1 : 0;
+        }
         WriteSample(w, m.sample, state);
         g_exeBase[DOWN_RVA] = 1;
         g_exeBase[PRESS_RVA] = m.kind == TREE_KIND ? m.sample.press : 0;
@@ -588,6 +594,8 @@ static bool Replay(const BrushMsg& m, U64 record, BrushState& state)
     }
     g_exeBase[DOWN_RVA] = ownDown;
     g_exeBase[PRESS_RVA] = ownPress;
+    *(int*)(w + 0xAF8) = ownRub;
+    *(int*)(w + 0xAFC) = ownUsd;
     *(U64*)(w + SELECTED_OFFSET) = ownTool;
     WriteSample(w, own, own.state);
     return ok;
