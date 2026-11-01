@@ -635,6 +635,16 @@ static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppe
     }
 }
 
+static bool HasActiveEnginePath(const BYTE* v)
+{
+    if (!v) return false;
+    if (*(const void* const*)(v + 0x528) != nullptr) return true;
+    if (*(const void* const*)(v + 0x650) != nullptr) return true;
+    if (*(const uintptr_t*)(v + 0x680) != *(const uintptr_t*)(v + 0x688)) return true;
+    if (*(const uintptr_t*)(v + 0x738) != *(const uintptr_t*)(v + 0x740)) return true;
+    return false;
+}
+
 static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
     g_vssDiag.vehiclesSynced++;
@@ -663,14 +673,14 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
     if (distSq > batchMaxDriftSq && distSq < 1e6f) batchMaxDriftSq = distSq;
 
     if (e.currentBldId >= 0 && localBldId == e.currentBldId) {
-        if (distSq > 0.0f && distSq < 400.0f) {
+        if (distSq > 0.0f && distSq < 400.0f && !HasActiveEnginePath(v)) {
             TranslateVehicleNodes(v, dx, dy, dz);
             HeldFrame_OnVehicleSoftSynced(v);
             g_vssDiag.posSnapped++;
         }
         return;
     }
-    if (e.currentBldId < 0 && localBldId < 0) {
+    if (e.currentBldId < 0 && localBldId < 0 && !HasActiveEnginePath(v)) {
         if (distSq > 1e-4f && distSq < 2500.0f) {
             TranslateVehicleNodes(v, dx, dy, dz);
             HeldFrame_OnVehicleSoftSynced(v);

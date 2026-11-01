@@ -106,6 +106,8 @@ struct VehicleInterpRecord {
     float prevNode[VEH_MAX_NODES][NODE_SNAPSHOT_FLOATS];
     float currNode[VEH_MAX_NODES][NODE_SNAPSHOT_FLOATS];
     float smoothOffset[3];
+    float softSyncShift[3];
+    bool softSynced;
     float prevSteer;
     float currSteer;
     float currSteerTarget;
@@ -282,6 +284,8 @@ static void InitVehicleInterpRecord(VehicleInterpRecord& rec, const BYTE* p, uns
     rec.currTick = tick;
     rec.nodeCount = nNodes;
     rec.smoothOffset[0] = rec.smoothOffset[1] = rec.smoothOffset[2] = 0.0f;
+    rec.softSyncShift[0] = rec.softSyncShift[1] = rec.softSyncShift[2] = 0.0f;
+    rec.softSynced = false;
     for (int k = 0; k < nNodes; k++) {
         const float* nodeData = (const float*)(p + kVehicleNodeOffsets[k]);
         memcpy(rec.prevNode[k], nodeData, NODE_SNAPSHOT_FLOATS * sizeof(float));
@@ -366,6 +370,20 @@ static void RecordOneVehicleTick(BYTE* p, unsigned long long tick)
         memcpy(rec.prevNode[k], rec.currNode[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
         memcpy(rec.currNode[k], p + kVehicleNodeOffsets[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
     }
+    if (rec.softSynced) {
+        float dx = rec.currNode[0][32] - rec.prevNode[0][32];
+        float dy = rec.currNode[0][33] - rec.prevNode[0][33];
+        float dz = rec.currNode[0][34] - rec.prevNode[0][34];
+        float dot = dx * rec.softSyncShift[0] + dy * rec.softSyncShift[1] + dz * rec.softSyncShift[2];
+        if (dot < -1.0f) {
+            for (int k = 0; k < nNodes; k++) {
+                memcpy(rec.prevNode[k], rec.currNode[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
+            }
+            rec.smoothOffset[0] = rec.smoothOffset[1] = rec.smoothOffset[2] = 0.0f;
+        }
+        rec.softSynced = false;
+        rec.softSyncShift[0] = rec.softSyncShift[1] = rec.softSyncShift[2] = 0.0f;
+    }
     AdvanceVehicleSteerAndWheels(rec, p);
 }
 
@@ -384,6 +402,12 @@ void HeldFrame_OnVehicleSoftSynced(BYTE* vehicle)
             float sx = pos[0] - it->second.currNode[k][32];
             float sy = pos[1] - it->second.currNode[k][33];
             float sz = pos[2] - it->second.currNode[k][34];
+            if (k == 0) {
+                it->second.softSyncShift[0] = sx;
+                it->second.softSyncShift[1] = sy;
+                it->second.softSyncShift[2] = sz;
+                it->second.softSynced = true;
+            }
             float shiftSq = sx * sx + sy * sy + sz * sz;
             if (shiftSq < 2500.0f && isfinite(shiftSq)) {
                 it->second.prevNode[k][32] += sx;
@@ -409,9 +433,19 @@ void HeldFrame_AddVehicleSmoothOffset(BYTE* vehicle, float ox, float oy, float o
     if (it == g_vehicleInterp.end()) return;
     float magSq = ox * ox + oy * oy + oz * oz;
     if (magSq > 2500.0f) return;
-    it->second.smoothOffset[0] += ox;
-    it->second.smoothOffset[1] += oy;
-    it->second.smoothOffset[2] += oz;
+    float nx = it->second.smoothOffset[0] + ox;
+    float ny = it->second.smoothOffset[1] + oy;
+    float nz = it->second.smoothOffset[2] + oz;
+    float totalSq = nx * nx + ny * ny + nz * nz;
+    if (totalSq > 2500.0f && isfinite(totalSq)) {
+        float scale = 50.0f / sqrtf(totalSq);
+        nx *= scale;
+        ny *= scale;
+        nz *= scale;
+    }
+    it->second.smoothOffset[0] = nx;
+    it->second.smoothOffset[1] = ny;
+    it->second.smoothOffset[2] = nz;
 }
 
 static void SafeRecordOneVehicleTick(BYTE* p, unsigned long long tick)

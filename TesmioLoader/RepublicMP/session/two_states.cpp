@@ -1227,8 +1227,8 @@ static const BYTE kEconomyWindowExpect[16] = {
 };
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
-typedef void (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
-typedef void (__fastcall* OrphanageAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4);
+typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef bool (__fastcall* OrphanageAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4);
 typedef void (__fastcall* EconomyWindowFn)(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1742,19 +1742,19 @@ static bool __fastcall H_CourtAssign(BYTE* world, BYTE* caseObj, uintptr_t a3, u
     return o_courtAssign ? o_courtAssign(world, caseObj, a3, a4) : false;
 }
 
-static void __fastcall H_PrisonAssign(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4,
+static bool __fastcall H_PrisonAssign(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4,
                                       uintptr_t a5, uintptr_t a6)
 {
     int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(citizen) : 0;
     CivicBuildingFilterScope scope(world, citOwner);
-    if (o_prisonAssign) o_prisonAssign(world, citizen, a3, a4, a5, a6);
+    return o_prisonAssign ? o_prisonAssign(world, citizen, a3, a4, a5, a6) : false;
 }
 
-static void __fastcall H_OrphanageAssign(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4)
+static bool __fastcall H_OrphanageAssign(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4)
 {
     int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(citizen) : 0;
     CivicBuildingFilterScope scope(world, citOwner);
-    if (o_orphanageAssign) o_orphanageAssign(world, citizen, a3, a4);
+    return o_orphanageAssign ? o_orphanageAssign(world, citizen, a3, a4) : false;
 }
 
 static __int64 __fastcall H_LivingTick(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,

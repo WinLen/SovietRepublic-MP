@@ -373,7 +373,7 @@ static void Compare(const LsHash& theirs)
     bool vehPosDiff = (a.hashVehiclesPos != b.hashVehiclesPos);
     bool citDiff = (a.hashCitizens != b.hashCitizens);
     bool moneyDiff = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05);
-    if (bldSoftDiff || vehLogicalDiff || vehPosDiff || citDiff || moneyDiff) {
+    if (bldSoftDiff || vehLogicalDiff || vehPosDiff || moneyDiff) {
         VehicleSoftSync_RequestImmediate();
         if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
             g_lastSoftDriftLogTick = theirs.tick;

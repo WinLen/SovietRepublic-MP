@@ -6724,6 +6724,19 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
     msg->entries[0].passengers = 25.0f;
     TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
 
+    // 6. Vehicle with active road segment (+0x528) or waypoint queue (+0x738..+0x740) ->
+    //    must NOT yank C3D_NODE (+0xD60) off the road spline into fields, while still syncing fuel/passengers
+    *(BYTE**)(bus.data() + 0x458) = (BYTE*)passVector.data();
+    *(BYTE**)(bus.data() + 0x460) = (BYTE*)(passVector.data() + passVector.size());
+    *(void**)(bus.data() + 0x528) = (void*)0x140001000ULL;
+    float splinePosX = *(float*)(bus.data() + VEH_POS_OFFSET);
+    msg->entries[0].pos[0] = splinePosX + 45.0f;
+    msg->entries[0].passengers = 42.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(bus.data() + VEH_POS_OFFSET), splinePosX, 1e-4f);
+    TEST_CHECK_NEAR(passVector[0].amount, 42.0f, 1e-4f);
+    *(void**)(bus.data() + 0x528) = nullptr;
+
     memset(world + WORLD_VEHICLES_OFFSET, 0, 24);
     return true;
 }
