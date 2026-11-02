@@ -156,3 +156,12 @@ TesmioLoader\run_checks.bat
 ```
 
 Выходные файлы собираются в `TesmioLoader\build\` (`tesmioloader.dll`, `dinput8.dll`, `tesmiolauncher.exe`, `republicmp_tests.exe` и `plugins\RepublicMP.dll`).
+
+---
+
+## 📜 Лицензия и исходный код / License & Source Code (GNU GPL v3.0)
+
+- **Лицензия / License:** [GNU General Public License v3.0 only (`GPL-3.0-only`)](LICENSE)
+- **Исходный код / Corresponding Source Code:** [https://github.com/WinLen/SovietRepublic-MP](https://github.com/WinLen/SovietRepublic-MP)
+- **Уведомление о модификациях (GPL v3 Section 5a):** Модифицированная и расширенная версия (октябрь–ноябрь 2026 г., `WinLen`): режим «Два государства на одной карте» (`two_states`), нативный интерфейс «Госплан СССР» (`native_menu`), авто-синхронизация модов Steam Workshop (`mod_sync`), Steam P2P лобби в 1 клик, прокси-загрузчик `dinput8.dll`, суб-тиковая интерполяция `60–144+ FPS` и изолированный банк кооп-сохранений. Открытые компоненты экосистемы под лицензией GPL-3.0: `TesmioLoader` (`MaxLegend`), исследования Lockstep `RepublicLAN` (`SoylentGreed`) и базовая библиотека `RepublicMP` (`0.5.4`).
+

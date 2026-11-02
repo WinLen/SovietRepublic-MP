@@ -40,3 +40,8 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 [b]How to Start a Co-op Session:[/b]
 • [b]HOST:[/b] In the main menu, click [b]"CO-OP" -> "Host Server"[/b]. Optionally adjust [b]"Co-op Settings"[/b] ([i]1 or 2 States[/i], [i]Treasury 100% / 50-50[/i], [i]Border Zone[/i], [i]Map Borders[/i], [i]Mod Sync Mode[/i]), then select [b]"Continue Co-op"[/b], [b]"Co-op Saves"[/b], [b]"Import Singleplayer"[/b], or [b]"New Custom Game"[/b].
 • [b]CLIENT (Player 2):[/b] Wait until the Host loads the map (and enters the Co-op Waiting Lobby), open [b]"CO-OP" -> "Join Server"[/b], and click [b]"Host: <Friend's Name>"[/b] in the online Steam friends list (or paste their IP / [i]steam:<SteamID64>[/i]).
+
+[h2]📜 License & Open Source Code (GNU GPL v3.0):[/h2]
+• [b]License:[/b] GNU General Public License v3.0 ([b]GPL-3.0-only[/b], included in [i]LICENSE[/i]).
+• [b]Source Code (Corresponding Source):[/b] https://github.com/WinLen/SovietRepublic-MP
+• [b]Notice (GPL v3 Sec. 4–6):[/b] Modified and extended fork (Oct–Nov 2026 by WinLen: Two States mode, Gosplan native UI, Workshop mod sync, 60–144+ FPS interpolation, dinput8 proxy). Built on open-source GPL-3.0 components: TesmioLoader (MaxLegend), RepublicLAN research (SoylentGreed), and upstream RepublicMP (0.5.4).

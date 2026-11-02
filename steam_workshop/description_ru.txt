@@ -57,3 +57,9 @@ Deterministic ([b]Lockstep[/b]) co-op multiplayer mod with [b]1-click Steam P2P 
 3. Launch the game normally via [b]"Play"[/b] in Steam — the mod and all updates load automatically!
 4. [b]Host:[/b] `CO-OP` -> `Host Server` -> `Continue Co-op` / `Co-op Saves` / `Import Singleplayer` / `New Custom Game`.
 5. [b]Client:[/b] Once the Host loads the map, open `CO-OP` -> `Join Server` -> click [b]"Host: <Friend's Name>"[/b] in the Steam list.
+
+[hr][/hr]
+[h2]📜 Лицензия и исходный код / License & Source Code (GNU GPL v3.0):[/h2]
+• [b]License:[/b] GNU General Public License v3.0 ([b]GPL-3.0-only[/b], полный текст в файле [i]LICENSE[/i]).
+• [b]Исходный код / Corresponding Source:[/b] https://github.com/WinLen/SovietRepublic-MP
+• [b]Notice (GPL v3 Sec. 4–6):[/b] Модифицированная и расширенная версия (окт.–нояб. 2026, WinLen: режим «Два государства на одной карте», нативный интерфейс Госплана, авто-синхронизация модов Workshop, 60–144+ FPS интерполяция, прокси dinput8.dll). Включает открытые GPL-3.0 компоненты TesmioLoader (MaxLegend), RepublicLAN (SoylentGreed) и базовый RepublicMP (0.5.4).

@@ -31,6 +31,9 @@ if (Test-Path (Join-Path $root 'TesmioLoader\build\dinput8.dll')) {
 if (Test-Path (Join-Path $root 'README-RU.txt')) {
     Copy-Item (Join-Path $root 'README-RU.txt') (Join-Path $stage 'README-RU.txt') -Force
 }
+if (Test-Path (Join-Path $root 'LICENSE')) {
+    Copy-Item (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE') -Force
+}
 if (Test-Path (Join-Path $root 'TesmioLoader\RepublicMP\assets\editor')) {
     New-Item -ItemType Directory -Path (Join-Path $stage 'media_soviet\editor') -Force | Out-Null
     Copy-Item (Join-Path $root 'TesmioLoader\RepublicMP\assets\editor\mp_icon_*.png') (Join-Path $stage 'media_soviet\editor\') -Force

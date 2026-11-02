@@ -77,4 +77,10 @@
    - F7        : Toggle 3D state border line on terrain
    - Alt + LMB : Place a 3D map ping (20 sec beacon) for your partner
    - Tab       : Collapse / expand the waiting lobby window to inspect the map
+
+5. LICENSE & SOURCE CODE (GNU GPL v3.0):
+   - Distributed under the GNU General Public License v3.0 (GPL-3.0-only, see LICENSE file).
+   - Full source code (Corresponding Source): https://github.com/WinLen/SovietRepublic-MP
+   - Modified and extended (Oct-Nov 2026 by WinLen); includes open-source GPL-3.0 components
+     from TesmioLoader (MaxLegend), RepublicLAN (SoylentGreed), and RepublicMP (0.5.4).
 ============================================================================
