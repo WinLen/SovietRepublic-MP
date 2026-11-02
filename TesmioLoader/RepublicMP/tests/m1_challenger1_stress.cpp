@@ -137,7 +137,8 @@ static bool RunR1SinglePointCountCase(BYTE* world, std::vector<BYTE>& roadMgr, i
     }
 
     // Remote segment arrives and confirms
-    RoadSyncMsg remoteMsg = {};
+    auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& remoteMsg = *remoteMsgPtr;
     remoteMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     remoteMsg.seg.typeId = 1;
     remoteMsg.seg.pointCount = 2;
@@ -216,7 +217,8 @@ static bool Adversarial_R1_RouteBufferStress()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = overflowPoints.data() + overflowPoints.size();
     *(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
 
-    RoadSyncMsg remoteMsg = {};
+    auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& remoteMsg = *remoteMsgPtr;
     remoteMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     remoteMsg.seg.typeId = 1;
     remoteMsg.seg.pointCount = 2;
@@ -523,7 +525,8 @@ static bool Adversarial_R5_DlcRoadFilteringStress()
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 300, nullptr));
 
     // 7. Verification in Command Pipelines
-    RoadSyncMsg segMsg = {};
+    auto segMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& segMsg = *segMsgPtr;
     segMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     segMsg.seg.typeId = 30; // DLC3 blocked
     SaveSync_SetDlcCheck(true);

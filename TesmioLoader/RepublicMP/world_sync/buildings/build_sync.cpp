@@ -633,7 +633,7 @@ static bool ApplyOneRemotePlacement(__int64 thisPtr, const BuildSyncMsg& msg, in
             *yaw = msg.cursorRot;
             *mirror = msg.mirrored ? 1 : 0;
 
-            char typeName[64];
+            char typeName[64] = {};
             strncpy_s(typeName, msg.typeName, _TRUNCATE);
 
             SnapshotBeforePlacement();
@@ -1144,7 +1144,7 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
         unsigned char savedMenus[REPLAY_UI_FLAG_COUNT];
         for (int i = 0; i < REPLAY_UI_FLAG_COUNT; i++) savedMenus[i] = menus[kReplayUiFlagOffsets[i]];
         BuildMode mine = BuildMode_Read();
-        char typeName[64];
+        char typeName[64] = {};
         strncpy_s(typeName, msg.typeName, _TRUNCATE);
         __try {
             cursor[0] = cursorCopy[0] = msg.cursorX;

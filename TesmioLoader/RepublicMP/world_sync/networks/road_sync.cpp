@@ -3236,7 +3236,8 @@ static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
                 (*outRemoved)++;
                 begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
                 end = *(__int64**)(network + MGR_SEGMENTS_END_OFFSET);
-                if (!begin || i > end - begin) i = end - begin;
+                if (!begin || end <= begin) break;
+                if (i > end - begin) i = end - begin;
             }
         }
         ((void(*)(__int64))(g_exeBase + 0x4FAE50))(network);

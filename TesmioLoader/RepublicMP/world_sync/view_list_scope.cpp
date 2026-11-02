@@ -221,7 +221,7 @@ static void RestoreAll()
                     room = (long long)want;
                 }
             }
-            if (total <= room) {
+            if (total <= room && s.begin) {
                 if (!added.empty()) memcpy((void*)(s.begin + kept * 8), added.data(), added.size() * 8);
                 kept = total;
             }

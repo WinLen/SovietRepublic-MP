@@ -72,8 +72,10 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
 
     // 2. Simulate 1,000 rapid interleaved commands from 3 remote players (Player 2, 3, 4)
     int successfulReplays = 0;
+    auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& remoteMsg = *remoteMsgPtr;
     for (int iter = 0; iter < 1000; ++iter) {
-        RoadSyncMsg remoteMsg = {};
+        memset(&remoteMsg, 0, sizeof(remoteMsg));
         remoteMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
         remoteMsg.seg.typeId = 1 + (iter % 3);
         int simPlayer = 2 + (iter % 3);
@@ -191,7 +193,8 @@ static bool SubTest_M1_Challenger2_SnapshotManagerRouteMemorySafety()
     g_mockExeBuffer[0x542A30] = 0xC3;
     g_mockExeBuffer[0x542900] = 0xC3;
 
-    RoadSyncMsg remoteMsg = {};
+    auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& remoteMsg = *remoteMsgPtr;
     remoteMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     remoteMsg.seg.typeId = 1;
     remoteMsg.seg.pointCount = 2;
@@ -327,21 +330,24 @@ static bool SubTest_M1_Challenger2_MultiThreadedConcurrencyStress()
             std::this_thread::yield();
         }
 
+        RoadSyncMsg* pMsg = (RoadSyncMsg*)malloc(sizeof(RoadSyncMsg));
+        if (!pMsg) return;
         for (int i = 0; i < 50; ++i) {
-            RoadSyncMsg msg = {};
-            msg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
-            msg.seg.typeId = 1;
-            msg.seg.pointCount = 2;
-            msg.seg.startNode[0] = (float)(threadId * 1000 + i * 10);
-            msg.seg.endNode[0]   = (float)(threadId * 1000 + i * 10 + 50);
+            memset(pMsg, 0, sizeof(*pMsg));
+            pMsg->seg.category = ROAD_SYNC_CATEGORY_ROAD;
+            pMsg->seg.typeId = 1;
+            pMsg->seg.pointCount = 2;
+            pMsg->seg.startNode[0] = (float)(threadId * 1000 + i * 10);
+            pMsg->seg.endNode[0]   = (float)(threadId * 1000 + i * 10 + 50);
 
             __try {
-                RoadSync_ApplyCommandSegment(msg);
+                RoadSync_ApplyCommandSegment(*pMsg);
                 completedCalls.fetch_add(1, std::memory_order_relaxed);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 errorsCaught.fetch_add(1, std::memory_order_relaxed);
             }
         }
+        free(pMsg);
     };
 
     std::thread t1(WorkerThread, 1);

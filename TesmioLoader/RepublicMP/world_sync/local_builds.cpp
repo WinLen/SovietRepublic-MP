@@ -425,7 +425,9 @@ static bool FillSegment(__int64 manager, int category, RoadSyncSegment& seg)
     seg.variant = *(int*)(manager + MGR_VARIANT_OFFSET);
     seg.curveValue = *(float*)(manager + MGR_CURVE_OFFSET);
     seg.pointCount = count;
-    memcpy(seg.points, begin, bytes);
+    if (bytes > 0 && begin) {
+        memcpy(seg.points, begin, bytes);
+    }
     ReadBuildingPort(*(__int64*)(manager + MGR_START_PORT_BUILDING_OFFSET),
                      *(int*)(manager + MGR_START_PORT_INDEX_OFFSET), &seg.startPort);
     ReadBuildingPort(*(__int64*)((uintptr_t)g_exe + HOVER_PORT_BUILDING_RVA),

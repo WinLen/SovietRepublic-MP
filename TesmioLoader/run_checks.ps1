@@ -81,18 +81,64 @@ $analyzeCmd = @"
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1
 cd /d "$repDir"
-cl /nologo /analyze:only /analyze:quiet /W3 /EHsc /std:c++20 /utf-8 /MT ^
+cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    /D "NDEBUG" /D "_WINDOWS" /D "_USRDLL" /D "_CRT_SECURE_NO_WARNINGS" /D "NOMINMAX" ^
-   /wd6320 /wd6255 /wd6258 /wd28159 ^
+   /wd6320 /wd6255 /wd6258 /wd28159 /wd6101 /wd6322 ^
    /I"..\src" /I"third_party\imgui" /I"third_party\imgui\backends" ^
+   core\main.cpp ^
    core\diag_log.cpp ^
-   determinism\state_hash.cpp ^
-   lockstep\world_refs.cpp ^
-   lockstep\building_switches.cpp ^
-   lockstep\commands.cpp ^
+   game\save_load.cpp ^
+   game\present_hook.cpp ^
+   game\imgui_hook.cpp ^
+   game\session_patches.cpp ^
+   game\input_block.cpp ^
+   session\game_speed.cpp ^
+   session\sync_check.cpp ^
+   session\money.cpp ^
    session\two_states.cpp ^
    session\mod_sync.cpp ^
+   session\updater.cpp ^
+   session\settings_sync.cpp ^
+   session\weather.cpp ^
+   session\save_sync.cpp ^
+   determinism\state_hash.cpp ^
+   determinism\held_frame.cpp ^
+   determinism\determinism.cpp ^
+   determinism\sim_patches.cpp ^
+   determinism\probe_trace.cpp ^
+   determinism\probe_watch.cpp ^
+   lockstep\commands.cpp ^
+   lockstep\purchase.cpp ^
+   lockstep\route_tools.cpp ^
+   lockstep\world_refs.cpp ^
+   lockstep\game_calls.cpp ^
+   lockstep\line_accept.cpp ^
+   lockstep\vehicle_switches.cpp ^
+   lockstep\building_switches.cpp ^
+   lockstep\brush_tools.cpp ^
+   lockstep\hover_tools.cpp ^
+   lockstep\junction_accept.cpp ^
+   lockstep\cargo_settings.cpp ^
+   lockstep\source_slots.cpp ^
+   lockstep\rename.cpp ^
+   lockstep\lockstep_net.cpp ^
+   world_sync\local_builds.cpp ^
+   world_sync\view_list_scope.cpp ^
+   world_sync\terrain\terrain_hook.cpp ^
+   world_sync\terrain\terrain_sync.cpp ^
+   world_sync\buildings\demolish_hook.cpp ^
+   world_sync\buildings\placement_collision.cpp ^
+   world_sync\buildings\build_sync.cpp ^
+   world_sync\citizens\citizen_destinations.cpp ^
+   world_sync\vehicles\vehicle_soft_sync.cpp ^
+   world_sync\networks\road_sync.cpp ^
    save\save_zip.cpp ^
+   transport\network.cpp ^
+   transport\steam_p2p.cpp ^
+   ui\native_menu.cpp ^
+   ui\ui_log.cpp ^
+   ui\debug_log.cpp ^
+   ui\sync_block.cpp ^
    tests\test_main.cpp
 "@
 
@@ -102,26 +148,33 @@ $analyzeOut = & cmd.exe /c "`"$analyzeBat`" 2>&1"
 $analyzeExit = $LASTEXITCODE
 $analyzeOut | ForEach-Object { Write-Host $_ }
 Remove-Item -Path (Join-Path $repDir "*.nativecodeanalysis.xml") -Force -ErrorAction SilentlyContinue
-if ($analyzeExit -ne 0) {
-    Write-Error "MSVC /analyze failed with exit code $analyzeExit"
+$warns = $analyzeOut | Where-Object { $_ -match "warning C[0-9]+" }
+if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
+    Write-Error "MSVC /analyze failed with exit code $analyzeExit and $($warns.Count) warning(s)"
     exit 1
 }
-Write-Host "[PASS] MSVC /analyze completed cleanly." -ForegroundColor Green
+Write-Host "[PASS] MSVC /analyze completed cleanly across all 55 compilation units (0 warnings)." -ForegroundColor Green
 
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " [4/5] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
-$clangTidy = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
+$clangTidy = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
+if (-not (Test-Path $clangTidy)) {
+    $clangTidy = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
+}
 if (-not (Test-Path $clangTidy)) {
     $found = Get-Command clang-tidy.exe -ErrorAction SilentlyContinue
     if ($found) { $clangTidy = $found.Source }
 }
 
 if (Test-Path $clangTidy) {
-    # Use VS 2019 vcvars64.bat when clang-tidy comes from VS 2019 BuildTools so STL headers match Clang's version
-    $tidyVcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $tidyVcvars)) { $tidyVcvars = $vcvars }
+    $tidyVcvars = $vcvars
+    if ($clangTidy -like "*2019*") {
+        $vs2019Vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $vs2019Vcvars) { $tidyVcvars = $vs2019Vcvars }
+    }
+    $tidyStd = if ($clangTidy -like "*2019*") { "-std=c++17" } else { "-std=c++20" }
 
     $tidyCmd = @"
 call "$tidyVcvars" >nul
@@ -130,14 +183,18 @@ cd /d "$repDir"
 "$clangTidy" --quiet ^
    core\diag_log.cpp ^
    determinism\state_hash.cpp ^
+   determinism\determinism.cpp ^
    lockstep\world_refs.cpp ^
    lockstep\building_switches.cpp ^
    lockstep\commands.cpp ^
+   lockstep\rename.cpp ^
    session\two_states.cpp ^
    session\mod_sync.cpp ^
    save\save_zip.cpp ^
+   ui\native_menu.cpp ^
+   world_sync\networks\road_sync.cpp ^
    tests\test_main.cpp ^
-   -- -std=c++17 -fms-extensions -fms-compatibility -D_MT -DNDEBUG -D_WINDOWS -D_USRDLL -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -Wno-microsoft-include -Wno-pragma-pack -I..\src -Ithird_party\imgui -Ithird_party\imgui\backends
+   -- $tidyStd -fms-extensions -fms-compatibility -D_MT -DNDEBUG -D_WINDOWS -D_USRDLL -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -Wno-microsoft-include -Wno-pragma-pack -I..\src -Ithird_party\imgui -Ithird_party\imgui\backends
 "@
     $tidyBat = Join-Path $buildDir "run_clang_tidy.bat"
     Set-Content -Path $tidyBat -Value $tidyCmd -Encoding ASCII

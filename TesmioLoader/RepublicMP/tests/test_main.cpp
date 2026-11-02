@@ -162,6 +162,7 @@ static void InitMockHarness()
     if (!g_mockExeBuffer) {
         g_mockExeBuffer = (BYTE*)VirtualAlloc(nullptr, MOCK_EXE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     }
+    if (!g_mockExeBuffer) { abort(); }
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
     g_mockExeBuffer[0x542900] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
     g_mockExeBuffer[0x542A30] = 0xC3; // ret for MANAGER_RESET_RVA
@@ -4770,7 +4771,8 @@ static bool SubTest_T1_R1_LinearBuildingContinuity()
     // Remote road segment command arrives while local player is dragging.
     // RoadSync_ApplyCommandSegment executes ApplySegmentImplInner which resets
     // manager drag state for replay and restores local drag state in __finally.
-    RoadSyncMsg remoteMsg = {};
+    auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& remoteMsg = *remoteMsgPtr;
     remoteMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     remoteMsg.seg.typeId = 1;
     remoteMsg.seg.pointCount = 2;
@@ -5882,7 +5884,8 @@ static bool SubTest_T2_R5_DlcRoadFiltering_Boundaries()
 
     // 3. Remote replay of unshared DLC road safely dropped by RoadSync_ApplyCommandSegment
     SaveSync_SetTestDlcLists("dlc2", "");
-    RoadSyncMsg unsharedMsg = {};
+    auto unsharedMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& unsharedMsg = *unsharedMsgPtr;
     unsharedMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     unsharedMsg.seg.typeId = 20;
     TEST_CHECK(!RoadSync_ApplyCommandSegment(unsharedMsg));
@@ -6931,6 +6934,8 @@ static bool SubTest_Stress_M1_DragContinuityHighFrequency()
 
     printf("      DragContinuity: Entering 500 loop...\n"); fflush(stdout);
     // 2. High-frequency stream of 500 remote commands
+    auto segPtr = std::make_unique<RoadSyncSegment>();
+    RoadSyncSegment& seg = *segPtr;
     for (int k = 0; k < 500; ++k) {
         Commands_BeginRemoteReplayScope();
         int cmdType = k % 5;
@@ -6940,7 +6945,7 @@ static bool SubTest_Stress_M1_DragContinuityHighFrequency()
             bm.b00 = 1;
             BuildMode_Write(bm);
         } else if (cmdType == 1) {
-            RoadSyncSegment seg = {};
+            memset(&seg, 0, sizeof(seg));
             seg.category = ROAD_SYNC_CATEGORY_ROAD;
             seg.typeId = 1;
             seg.startNode[0] = (float)k;
@@ -7122,7 +7127,8 @@ static bool SubTest_Stress_M1_DlcRoadFilteringStress()
     TEST_CHECK(blockedCount == 10000);
 
     // 5. Verification through command dispatch rejection
-    RoadSyncMsg segMsg = {};
+    auto segMsgPtr = std::make_unique<RoadSyncMsg>();
+    RoadSyncMsg& segMsg = *segMsgPtr;
     segMsg.seg.category = ROAD_SYNC_CATEGORY_ROAD;
     segMsg.seg.typeId = 30;
     TEST_CHECK(!RoadSync_ApplyCommandSegment(segMsg));
@@ -7483,7 +7489,7 @@ static void* RunSimulatedBuildingRenderPass(M4RenderPassFn passFn, bool simulate
                     BYTE* b = *it;
                     if (!b) continue;
                     float dist = *(float*)(b + 0x115C);
-                    if (dist < 4000.0f && isfinite(dist)) {
+                    if (dist < 4000.0f && isfinite(dist) && keptCount < total) {
                         kept[keptCount].building = b;
                         kept[keptCount].visible = b[0x115A];
                         kept[keptCount].distance = *(float*)(b + 0x115C);

@@ -218,9 +218,14 @@ static void CopyMySteamCodeToClipboard(void)
         size_t len = strlen(code) + 1;
         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len);
         if (hMem) {
-            memcpy(GlobalLock(hMem), code, len);
-            GlobalUnlock(hMem);
-            SetClipboardData(CF_TEXT, hMem);
+            void* p = GlobalLock(hMem);
+            if (p) {
+                memcpy(p, code, len);
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_TEXT, hMem);
+            } else {
+                GlobalFree(hMem);
+            }
         }
         CloseClipboard();
     }
@@ -468,7 +473,7 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
                 : TrW(L"Казна: Делить 50/50", L"Budget: Split 50/50"));
 
             wchar_t bwLine[64] = {};
-            int bw = (int)(TwoStates_GetBorderHalfWidth() + 0.5f);
+            int bw = (int)std::lround(TwoStates_GetBorderHalfWidth());
             _snwprintf_s(bwLine, _TRUNCATE,
                          TrW(L"Погранзона: %d м", L"Border Zone: %d m"), bw);
             addEntry(SACT_BORDER_WIDTH, bwLine);
@@ -927,6 +932,8 @@ static void DrawSidebarText(float x, float y, unsigned int colorARGB, bool boldH
 
 static bool g_prevSidebarLmbDown = false;
 static bool g_sidebarLClickAvailable = false;
+static bool g_sidebarWaitRelease = false;
+static ULONGLONG g_sidebarSubTabSwitchTick = 0;
 
 static void PlayMenuClickSoundSafe()
 {
@@ -1001,9 +1008,10 @@ static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colo
     bool hovered = (mx > (float)hitLeft && mx < (float)boxRect[2] &&
                     my > (float)boxRect[1] && my < (float)boxRect[3]);
     bool clicked = false;
-    if (hovered && (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0 || g_sidebarLClickAvailable)) {
+    if (hovered && g_sidebarLClickAvailable) {
         clicked = true;
         g_sidebarLClickAvailable = false;
+        g_sidebarWaitRelease = true;
         *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
         PlayMenuClickSoundSafe();
     }
@@ -1120,6 +1128,8 @@ static void DrawSidebarSingleplayerSection(BYTE* menuObj, float leftX, float& cu
                           TrW(L"<< Назад", L"<< Back"),
                           "editor/mp_icon_back.png")) {
         g_inGameCoopSubTab = false;
+        g_sidebarSubTabSwitchTick = GetTickCount64();
+        g_sidebarWaitRelease = true;
     }
     currentY += btnStep;
 }
@@ -1307,6 +1317,8 @@ static void DrawSidebarActiveCoopSection(BYTE* menuObj, SessionState st, float l
                           TrW(L"<< Назад", L"<< Back"),
                           "editor/mp_icon_back.png")) {
         g_inGameCoopSubTab = false;
+        g_sidebarSubTabSwitchTick = GetTickCount64();
+        g_sidebarWaitRelease = true;
     }
     currentY += btnStep;
 }
@@ -1379,12 +1391,21 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
 
         bool focused = (*(BYTE*)(g_exeBase + WINDOW_FOCUS_BYTE_RVA) != 0) && IsGameWindowFocused() &&
                        !SyncBlock_BlocksWorldInput() && !SaveSync_IsWaitingLobbyActive();
+        bool rawClickByte = (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0);
         bool lmbDown = focused &&
-                       ((*(BYTE*)(g_exeBase + INPUT_LHELD_RVA) != 0) ||
+                       (rawClickByte ||
+                        (*(BYTE*)(g_exeBase + INPUT_LHELD_RVA) != 0) ||
                         ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0));
-        bool lmbEdge = (lmbDown && !g_prevSidebarLmbDown);
+        if (!lmbDown) {
+            g_sidebarWaitRelease = false;
+        } else if (g_sidebarWaitRelease && rawClickByte) {
+            *(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) = 0;
+            rawClickByte = false;
+        }
+        bool subTabCooledDown = (GetTickCount64() - g_sidebarSubTabSwitchTick) >= 250ULL;
+        bool lmbEdge = (lmbDown && !g_prevSidebarLmbDown && !g_sidebarWaitRelease && subTabCooledDown);
         g_prevSidebarLmbDown = lmbDown;
-        g_sidebarLClickAvailable = (*(BYTE*)(g_exeBase + INPUT_LCLICK_RVA) != 0) || lmbEdge;
+        g_sidebarLClickAvailable = (!g_sidebarWaitRelease && subTabCooledDown) && (rawClickByte || lmbEdge);
 
         int curSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
         if (curSubTab != -1) {
@@ -1423,6 +1444,8 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
 
         if (DrawSidebarButton(menuObj, leftX, currentY, btnCol, btnText, "editor/mp_icon_coop.png")) {
             g_inGameCoopSubTab = true;
+            g_sidebarSubTabSwitchTick = GetTickCount64();
+            g_sidebarWaitRelease = true;
             DiagLog_Printf("UI", "In-game Left Sidebar ('system' tab): opened native Co-op sub-tab");
         }
         currentY += guiScale * 38.0f;

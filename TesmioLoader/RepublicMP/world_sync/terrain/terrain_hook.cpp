@@ -676,8 +676,11 @@ bool InstallTerrainHooks()
     QueryPerformanceCounter(&g_qpcStart);
 
     // Not hooked - only used to compare heights after a remote batch.
-    g_heightOverPoint = (HeightOverPointFn)GetProcAddress(
-        g_engine ? g_engine : GetModuleHandleA(DLL_ENGINE),"?CollisionTerrainHeightOverPoint@C3D_TERRAIN@@QEAAMVC3DVECTOR3@@@Z");
+    HMODULE hEng = g_engine ? g_engine : GetModuleHandleA(DLL_ENGINE);
+    if (hEng) {
+        g_heightOverPoint = (HeightOverPointFn)GetProcAddress(
+            hEng, "?CollisionTerrainHeightOverPoint@C3D_TERRAIN@@QEAAMVC3DVECTOR3@@@Z");
+    }
     Logf("republicmp  TERRAIN: CollisionTerrainHeightOverPoint %s", g_heightOverPoint ? "found" : "NOT FOUND (no height check)");
 
     const TerrainHookDef defs[] = {

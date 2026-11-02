@@ -105,7 +105,7 @@ struct Reader {
     bool ok;
     bool raw(void* o, size_t k)
     {
-        if (!ok || k > n - at) return ok = false;
+        if (!ok || k > n - at) { ok = false; return false; }
         memcpy(o, p + at, k);
         at += k;
         return true;

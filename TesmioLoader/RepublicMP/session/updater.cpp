@@ -83,7 +83,7 @@ static unsigned int ComputeFileCrc(const char* path)
     FILE* f = nullptr;
     if (fopen_s(&f, path, "rb") != 0 || !f) return 0;
     mz_uint32 crc = MZ_CRC32_INIT;
-    unsigned char buf[16384];
+    unsigned char buf[4096];
     size_t n = 0;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
         crc = mz_crc32(crc, buf, n);
@@ -156,7 +156,8 @@ static bool HttpGetBytes(const char* urlUtf8, std::vector<unsigned char>& outDat
     WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
     bool ok = false;
-    if (WinHttpSendRequest(hRequest, L"Accept: application/vnd.github+json\r\n", -1L,
+    static const wchar_t kAcceptHdr[] = L"Accept: application/vnd.github+json\r\n";
+    if (WinHttpSendRequest(hRequest, kAcceptHdr, (DWORD)(sizeof(kAcceptHdr) / sizeof(kAcceptHdr[0]) - 1),
                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(hRequest, nullptr)) {
         DWORD statusCode = 0;

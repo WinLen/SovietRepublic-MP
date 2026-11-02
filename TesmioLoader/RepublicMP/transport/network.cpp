@@ -347,7 +347,7 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
 
     Logf("republicmp  NETWORK: sending [%s], %llu bytes...", filePath, fileSize);
 
-    char buffer[65536];
+    char buffer[8192];
     unsigned long long sentTotal = 0;
     while (sentTotal < fileSize) {
         size_t toRead = (size_t)std::min((unsigned long long)sizeof(buffer), fileSize - sentTotal);
@@ -391,7 +391,7 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
 
     Logf("republicmp  NETWORK: receiving [%s], expecting %llu bytes...", outFilePath, fileSize);
 
-    char buffer[65536];
+    char buffer[8192];
     unsigned long long receivedTotal = 0;
     unsigned long long nextLogMark = 4ULL * 1024ULL * 1024ULL;
     while (receivedTotal < fileSize) {

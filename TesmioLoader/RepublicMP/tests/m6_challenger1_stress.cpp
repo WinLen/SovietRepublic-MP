@@ -271,8 +271,8 @@ static bool SubTest_M6_C1_R13_BrushRateLimitingAndFixedTimestep()
     }
 
     // Slope error fallback code invariant: result[0] == 10
-    const int kSlopeErrorCode = 10;
-    if (kSlopeErrorCode != 10) return false;
+    constexpr int kSlopeErrorCode = 10;
+    static_assert(kSlopeErrorCode == 10, "Slope error code invariant");
 
     // Clean up test timer
     BrushTools_SetTestTimeMs(0);

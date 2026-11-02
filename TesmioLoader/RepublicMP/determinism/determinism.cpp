@@ -375,7 +375,7 @@ static void RedirectMath()
 {
     if (g_mathRedirected) return;
     g_mathRedirected = true;
-    _set_FMA3_enable(0);
+    (void)_set_FMA3_enable(0);
     int patched = 0;
     for (const MathImport& m : kMath) {
         void* orig = nullptr;
@@ -401,6 +401,11 @@ static LoadWorldFn o_loadWorld;
 
 enum ProbeState { PROBE_IDLE = 0, PROBE_WAIT_LOAD, PROBE_RUNNING, PROBE_RUN_DONE, PROBE_FAILED };
 static volatile LONG g_probeState = PROBE_IDLE;
+
+static inline LONG GetProbeState()
+{
+    return InterlockedCompareExchange((volatile LONG*)&g_probeState, 0, 0);
+}
 static volatile bool g_probeBusy = false;
 static int g_probeSteps = 0, g_probeInterval = 60, g_probeRun = 0;
 static int g_probeSpeed = 1;
@@ -610,7 +615,7 @@ static SRWLOCK g_ledgerLock = SRWLOCK_INIT;
 
 static void LedgerDraw(unsigned site, int value, bool worker)
 {
-    if (g_probeState != PROBE_RUNNING) return;
+    if (GetProbeState() != PROBE_RUNNING) return;
     LedgerEntry e = { (unsigned)g_runStep, site, (unsigned short)value, (unsigned char)(worker ? 1 : 0), 0 };
     AcquireSRWLockExclusive(&g_ledgerLock);
     if (g_probeRun == 0) {
@@ -790,7 +795,7 @@ static void HookedLoadWorld(void)
     bool session = g_sessionLoadPending;
     g_inLoadWorldCall = true;
     TwoStates_BeforeAnyWorldLoad();
-    if (g_probeState == PROBE_WAIT_LOAD || session) {
+    if (GetProbeState() == PROBE_WAIT_LOAD || session) {
         if (!SimPatches_Apply()) {
             if (session) {
                 g_sessionLoadPending = false;
@@ -838,7 +843,7 @@ static void HookedLoadWorld(void)
     if (NativeMenu_IsHostOnNextLoad() || SaveSync_IsWaitingLobbyActive()) {
         SaveSync_EnforceWaitingLobbyHold();
     }
-    if (g_probeState == PROBE_WAIT_LOAD) {
+    if (GetProbeState() == PROBE_WAIT_LOAD) {
         EmptySearchPool();
         SimPatches_ResetSearches();
         g_runStep = 0;
@@ -951,7 +956,7 @@ bool Determinism_BeginSession(bool host)
 
 bool Determinism_WorldLoading()
 {
-    return g_inLoadWorldCall || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD;
+    return g_inLoadWorldCall || g_sessionLoadPending || GetProbeState() == PROBE_WAIT_LOAD;
 }
 
 bool Determinism_SessionRunning()
@@ -1173,12 +1178,14 @@ static void LogSessionProgress(const StateSummary& s)
         BYTE** it = *(BYTE***)(g_exeBase + 0x9E6A18);
         BYTE** end = *(BYTE***)(g_exeBase + 0x9E6A20);
         for (; it && it < end; ++it) {
-            float p = *it ? *(float*)(*it + 0x604) : 1.0f;
+            BYTE* bld = *it;
+            if (!bld) continue;
+            float p = *(float*)(bld + 0x604);
             if (p < 1.0f) {
                 progress += p;
                 sites++;
-                if (*(*it + 0x608) || *(*it + 0x609)) paid++;
-                if (*(*it + 0x879)) stopped++;
+                if (*(bld + 0x608) || *(bld + 0x609)) paid++;
+                if (*(bld + 0x879)) stopped++;
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1190,7 +1197,7 @@ static void LogSessionProgress(const StateSummary& s)
 
 void Determinism_BeforePrepare()
 {
-    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
+    if (!g_active || g_sessionLoadPending || GetProbeState() == PROBE_WAIT_LOAD) return;
     g_simThread = GetCurrentThreadId();
     ++g_frameBeats;
     g_framePhase = 1;
@@ -1205,7 +1212,7 @@ void Determinism_BeforePrepare()
     else if (g_menuFrames) --g_menuFrames;
     TakeSpeedInput();
     g_frameStep = g_frameEarly = false;
-    if (g_probeState == PROBE_RUNNING) {
+    if (GetProbeState() == PROBE_RUNNING) {
         Commands_Collect();
         MakeCommands(g_runStep);
     }
@@ -1226,7 +1233,7 @@ void Determinism_BeforePrepare()
 // Probe and plain layer: this PC's own clock admits the ticks.
 static void ProbeAdmission(BYTE* timer)
 {
-    bool running = !g_probeBusy || g_probeState == PROBE_RUNNING;
+    bool running = !g_probeBusy || GetProbeState() == PROBE_RUNNING;
     // Tool hold (by SoylentGreed): tools act only on held frames, so while
     // one is selected and actions become commands, no tick is admitted.
     bool toolHold = Commands_Capturing() && *(__int64*)(g_exeBase + 0x9D4F10 + 0xD428) != 0;
@@ -1367,7 +1374,7 @@ static void SessionAdmission(BYTE* timer)
 
 static void HookedSimStep(__int64 world)
 {
-    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) {
+    if (!g_active || g_sessionLoadPending || GetProbeState() == PROBE_WAIT_LOAD) {
         if (!g_active && (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
             SaveSync_EnforceWaitingLobbyHold();
             o_simStep(world);
@@ -1383,15 +1390,15 @@ static void HookedSimStep(__int64 world)
     Commands_CheckMoney("the view preparation");
     if (!g_frameStep) {
         g_framePhase = 3;
-        if (g_probeState == PROBE_RUNNING) ++g_holdCount[g_probeRun];
-        if (!g_frameFault && g_probeState != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
+        if (GetProbeState() == PROBE_RUNNING) ++g_holdCount[g_probeRun];
+        if (!g_frameFault && GetProbeState() != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
             g_frameFault = true;
             Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
         }
         g_framePhase = 4;
         return;
     }
-    if (g_probeState == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
+    if (GetProbeState() == PROBE_RUNNING && g_runStep == 0) ProbeWatch_Step(g_probeRun, 0, false);
     g_framePhase = 2;
     WriteGameSpeed(GameSpeedOf(g_tickSpeed));
     // Early keeps the tool: its one read that changed the simulation (the
@@ -1413,7 +1420,7 @@ static void HookedSimStep(__int64 world)
 
 void Determinism_BeforeLate()
 {
-    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) {
+    if (!g_active || g_sessionLoadPending || GetProbeState() == PROBE_WAIT_LOAD) {
         if (!g_active && (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
             SaveSync_EnforceWaitingLobbyHold();
         }
@@ -1436,7 +1443,7 @@ void Determinism_BeforeLate()
 
 void Determinism_AfterLate()
 {
-    if (!g_active || g_sessionLoadPending || g_probeState == PROBE_WAIT_LOAD) return;
+    if (!g_active || g_sessionLoadPending || GetProbeState() == PROBE_WAIT_LOAD) return;
     g_framePhase = 6;
     g_inEarly = false;
     if (g_frameStep && g_frameEarly) {
@@ -1459,7 +1466,7 @@ void Determinism_AfterLate()
                 }
             }
         }
-        if (g_probeState == PROBE_RUNNING) {
+        if (GetProbeState() == PROBE_RUNNING) {
             ++g_runStep;
             ProbeTrace_Step(g_probeRun, g_runStep);
             ProbeWatch_Step(g_probeRun, g_runStep, g_runStep >= (unsigned long long)g_probeSteps);
@@ -1473,7 +1480,7 @@ void Determinism_AfterLate()
     g_frameStep = g_frameEarly = false;
     g_framePhase = 0;
     // Publish completion only after the final Late and all frame cleanup.
-    if (g_probeState == PROBE_RUNNING && (g_frameFault || g_runStep >= (unsigned long long)g_probeSteps))
+    if (GetProbeState() == PROBE_RUNNING && (g_frameFault || g_runStep >= (unsigned long long)g_probeSteps))
         InterlockedExchange(&g_probeState, PROBE_RUN_DONE);
 }
 
@@ -1661,7 +1668,7 @@ static void CompareRuns()
                        b.vehicles, a.citizens, b.citizens, a.storageTotal, b.storageTotal);
         return;
     }
-    if (n == 0) SetProbeStatus("no samples recorded - was the world loaded?");
+    if (n <= 0) SetProbeStatus("no samples recorded - was the world loaded?");
     else SetProbeStatus("IDENTICAL: both runs match at all %d samples (%llu steps)", n, g_samples[0][n - 1].step);
 }
 
@@ -1714,7 +1721,7 @@ static void LogThreadStack(const char* what, DWORD tid)
 static void CheckHang(unsigned long long& lastBeat, ULONGLONG& beatAt, bool& reported)
 {
     ULONGLONG now = GetTickCount64();
-    if (g_frameBeats != lastBeat || g_probeState != PROBE_RUNNING) {
+    if (g_frameBeats != lastBeat || GetProbeState() != PROBE_RUNNING) {
         lastBeat = g_frameBeats;
         beatAt = now;
         reported = false;
@@ -1739,8 +1746,8 @@ static bool WaitState(LONG want, DWORD timeoutMs)
     unsigned long long lastBeat = g_frameBeats;
     ULONGLONG beatAt = start;
     bool reported = false;
-    while (g_probeState != want) {
-        if (g_probeState == PROBE_FAILED) return false;
+    while (GetProbeState() != want) {
+        if (GetProbeState() == PROBE_FAILED) return false;
         if (GetTickCount64() - start > timeoutMs) return false;
         CheckHang(lastBeat, beatAt, reported);
         Sleep(50);

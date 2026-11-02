@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix 7-arg H_VehicleSale stack money corruption (-1e15 RUB) + automatic save balance healing; full lockstep support for all 5 RenameWindow kinds (building, vehicle, city, line, crossroad) + city creation (0x32F450); fix car dealer citizen filter (+0xCD8..+0xCE7) & odd-length UTF-16 building/vehicle names",
+                "v%s (Protocol %d) - Fix road upgrade with attached footpaths; separate planned construction per state in Two States mode; independent research trees & progress + separate vehicle blueprint/license purchases per state; fix sidebar Coop tab click-through & dual-window testbed switching",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

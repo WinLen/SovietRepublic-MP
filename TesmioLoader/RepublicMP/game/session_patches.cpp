@@ -161,6 +161,7 @@ static bool PrepareGate()
     DWORD old;
     const size_t size = 128;
     if (!VirtualProtect(relay, size, PAGE_EXECUTE_READWRITE, &old)) return false;
+    memset(relay, 0x90, size);
 
     // 1. Citizen init gate at relay + 0
     unsigned long long to = (unsigned long long)&CitizenInitGate;

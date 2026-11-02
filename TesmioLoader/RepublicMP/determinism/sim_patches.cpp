@@ -1506,7 +1506,7 @@ static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
                             float at[4] = {};
                             position(b + 0x320, at);
                             float dist = zDistance(g_exeBase + CAMERA_RVA, at);
-                            if (dist < 4000.0f && isfinite(dist)) {
+                            if (dist < 4000.0f && isfinite(dist) && keptCount < total) {
                                 kept[keptCount].building = b;
                                 kept[keptCount].visible = b[0x115A];
                                 kept[keptCount].distance = *(float*)(b + 0x115C);

@@ -386,7 +386,7 @@ static unsigned long long Key(int ki, const Blob& b, size_t i)
     if (ki == KIND_CITIZEN) return i < g_addresses[ki].size() ? (unsigned long long)g_addresses[ki][i] : i;
     if (!k.storage) return *(const unsigned*)(b.data() + VEH_ID_OFFSET);
     unsigned long long h = 0xcbf29ce484222325ull;
-    for (int i = 0; i < 12; i++) h = (h ^ b[BLD_POS_OFFSET + i]) * 0x100000001b3ull;
+    for (int j = 0; j < 12; j++) h = (h ^ b[BLD_POS_OFFSET + j]) * 0x100000001b3ull;
     return h;
 }
 
@@ -653,8 +653,12 @@ static void LogDword(const char* where, unsigned r1, unsigned r2, const unsigned
 static int g_hotLines = 0;
 static void LogHotNoise(int ki, size_t i, const Blob& a, const Blob& b, const std::vector<bool>& noise)
 {
+#if !HOT_SPOT
+    (void)ki; (void)i; (void)a; (void)b; (void)noise;
+    return;
+#else
     const Kind& k = kKinds[ki];
-    if (!HOT_SPOT || k.lists || g_hotLines >= HOT_LINES) return;
+    if (k.lists || g_hotLines >= HOT_LINES) return;
     float radius;
     const float* pos;
     if (ki == KIND_CITIZEN) {
@@ -684,6 +688,7 @@ static void LogHotNoise(int ki, size_t i, const Blob& a, const Blob& b, const st
         shown++;
         g_hotLines++;
     }
+#endif
 }
 
 // A citizen's activity entries (count +0x110, 0x80 each from +0x118; on
