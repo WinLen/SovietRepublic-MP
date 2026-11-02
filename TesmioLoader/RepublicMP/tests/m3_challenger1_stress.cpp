@@ -45,10 +45,6 @@ struct StateCivicStats {
 #endif
 
 extern void TwoStates_GetStateCivicStatsEx(const BYTE* world, int state, StateCivicStats* outStats);
-extern void TwoStates_GetStateCivicStats(int state, StateCivicStats* outStats);
-extern bool TwoStates_GetShowCivicStats();
-extern void TwoStates_SetShowCivicStats(bool show);
-extern bool TwoStates_IsEconomyWindowOpen();
 
 // ---------------------------------------------------------------------------
 // Challenger 1: Mirrored CivicBuildingFilterScope for exact behavioral stress
@@ -470,12 +466,6 @@ static bool SubTest_M3_Challenger1_CivicMetricsAndTourism()
     TEST_CHECK(stats2.orphans == 0);
     TEST_CHECK(stats2.criminals == 0);
     TEST_CHECK_NEAR(stats2.crimeRate, 0.0f, 1e-4f);
-
-    // Verify UI toggle states
-    TwoStates_SetShowCivicStats(true);
-    TEST_CHECK(TwoStates_GetShowCivicStats() == true);
-    TwoStates_SetShowCivicStats(false);
-    TEST_CHECK(TwoStates_GetShowCivicStats() == false);
 
     TwoStates_OnSessionEnded();
     memset(world + WORLD_BUILDINGS_OFFSET, 0, 24);

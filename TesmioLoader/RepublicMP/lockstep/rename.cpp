@@ -119,22 +119,9 @@ void Rename_Bind(const TsmHost* host)
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
-static unsigned Fnv(const BYTE* b, size_t n, unsigned h = 2166136261u)
-{
-    for (size_t i = 0; i < n; i++) {
-        h ^= b[i];
-        h *= 16777619u;
-    }
-    return h | 1u;
-}
+static unsigned CityCheck(U64 city) { return Ref_FnvWords((const unsigned*)(city + CITY_POSITION), 3); }
 
-static unsigned CityCheck(U64 city) { return Fnv((const BYTE*)(city + CITY_POSITION), 12); }
-
-static unsigned NodeCheck(U64 node)
-{
-    unsigned w[3] = { 0x4e4f4445u, *(unsigned*)(node + 4), *(unsigned*)(node + 0xc) };
-    return Fnv((const BYTE*)w, sizeof(w));
-}
+static unsigned NodeCheck(U64 node) { return Ref_NodeCheck(node); }
 
 // A vector of pointers: begin and count (false: not one, or longer than max).
 static bool List(U64 at, unsigned max, U64& begin, unsigned& count)
@@ -446,9 +433,12 @@ static const char* Apply(const RenameMsg& m)
     } else {
         return "unknown rename target";
     }
-    unsigned short t[MAX_CHARS + 1] = {};
-    memcpy(t, m.text, m.chars * 2);
-    memcpy((void*)field, t, (m.chars + 1) * 2);
+    const size_t charCount = (m.chars <= MAX_CHARS) ? (size_t)m.chars : (size_t)MAX_CHARS;
+    unsigned short* dst = (unsigned short*)field;
+    for (size_t i = 0; i < charCount; ++i) {
+        dst[i] = m.text[i];
+    }
+    dst[charCount] = 0;
     if (flag) *(BYTE*)flag = flagValue;
     if (m.kind == KIND_BUILDING_RENAME) {
         RefreshStopLinesAfterBuildingRename(world, target);
@@ -481,7 +471,7 @@ static __int64 __fastcall H_CityCreate(void* world, float* pos, const unsigned s
         CopyText((U64)name, CITY_CHARS, m);
     }
     EmbedCityPosExt(m, px, py, pz);
-    m.check = Fnv((const BYTE*)pos, 12);
+    m.check = Ref_FnvWords((const unsigned*)pos, 3);
     g_suppressNextCityReassign = true;
     Commands_Submit(LS_CMD_RENAME, &m, sizeof(m));
     Logf("republicmp  CITY: captured create of city at (%.1f, %.1f, %.1f)", px, py, pz);

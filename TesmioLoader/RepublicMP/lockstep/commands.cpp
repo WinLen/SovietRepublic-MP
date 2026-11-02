@@ -542,8 +542,12 @@ bool Commands_SanitizeCheatState(BYTE* world)
     }
     int32_t subPage = *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET);
     if (subPage >= 5 && subPage <= 7) {
-        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = -1;
-        changed = true;
+        const BYTE* tabPtr = nullptr;
+        SafeReadPod((const BYTE* const*)(world + WORLD_SYSTAB_TAB_PTR_OFFSET), &tabPtr);
+        if (tabPtr && SafeBytesMatch(tabPtr + 1, (const BYTE*)"system", 7)) {
+            *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = -1;
+            changed = true;
+        }
     }
     return changed;
 }

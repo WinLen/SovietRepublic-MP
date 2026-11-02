@@ -213,6 +213,15 @@ void   TwoStates_NotifyVehicleLicenseChanged(BYTE* world);
 bool   TwoStates_IsVehicleLicenseOwned(const BYTE* world, int stateOwner, int typeIdx);
 bool   TwoStates_SetVehicleLicenseOwnedForTest(BYTE* world, int stateOwner, int typeIdx, bool owned);
 void   TwoStates_VehicleSaleForTest(BYTE* world, BYTE* vehicle, float customSalePrice, float defaultDepreciatedPrice);
+void   TwoStates_CitizenEvalNeedsForTest(BYTE* world, BYTE* citizen, int healthCauseIdx, float healthDelta,
+                                         int happyCauseIdx, float happyDelta);
+int32_t TwoStates_GetStateEconExtraCountForTest(int state, int idx);
+float   TwoStates_GetStateEconExtraFloatForTest(int state, int idx);
+float   TwoStates_GetStateEconTourismFloatForTest(int state, int idx);
+void    TwoStates_CitizenCommitCrimeForTest(BYTE* world, BYTE* citizen, int32_t severity);
+void    TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismIdx, float spendAmount, bool isUsd);
+
+
 
 
 

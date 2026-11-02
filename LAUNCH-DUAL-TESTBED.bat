@@ -36,7 +36,7 @@ set "REPUBLICMP_AUTO_JOIN=0"
 start "[HOST] Soviet Republic MP" "%HOST_DIR%\SOVIET64.exe"
 popd
 
-timeout /t 2 /nobreak >nul
+timeout /t 5 /nobreak >nul
 
 echo [3/3] Запуск окна КЛИЕНТА (справа, Восточная ССР -> 127.0.0.1)...
 pushd "%CLIENT_DIR%"

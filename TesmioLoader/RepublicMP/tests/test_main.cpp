@@ -1808,9 +1808,17 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     // 2b. Cheat / dev mode sanitization (C+H+E / D+E+V / cheat systab pages 5..7)
     {
         BYTE* world = g_mockExeBuffer + WORLD_RVA;
+        BYTE sysTabStruct[32] = {};
+        memcpy(sysTabStruct + 1, "system", 7);
+        BYTE tradeTabStruct[32] = {};
+        memcpy(tradeTabStruct + 1, "trade", 6);
+        BYTE listTabStruct[32] = {};
+        memcpy(listTabStruct + 1, "list", 5);
+
+        *(const BYTE**)(world + WORLD_SYSTAB_TAB_PTR_OFFSET) = sysTabStruct;
         world[WORLD_CHEAT_MODE_OFFSET] = 1;
         world[WORLD_DEV_MODE_OFFSET]   = 1;
-        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6; // "cheatgeneral"
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6; // "cheatgeneral" under "system"
         TEST_CHECK(Commands_SanitizeCheatState(world));
         TEST_CHECK(world[WORLD_CHEAT_MODE_OFFSET] == 0);
         TEST_CHECK(world[WORLD_DEV_MODE_OFFSET] == 0);
@@ -1819,6 +1827,93 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 2;
         TEST_CHECK(!Commands_SanitizeCheatState(world));
         TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 2);
+
+        // Must preserve Tourism (subPage=5) and Crime & Justice (subPage=6) when top tab is "trade" or "list"!
+        *(const BYTE**)(world + WORLD_SYSTAB_TAB_PTR_OFFSET) = tradeTabStruct;
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 5; // Tourism tab in Economy & Trade
+        TEST_CHECK(!Commands_SanitizeCheatState(world));
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 5);
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6; // Crime & Justice tab in Economy & Trade
+        TEST_CHECK(!Commands_SanitizeCheatState(world));
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 6);
+
+        *(const BYTE**)(world + WORLD_SYSTAB_TAB_PTR_OFFSET) = listTabStruct;
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 7; // Line list tab
+        TEST_CHECK(!Commands_SanitizeCheatState(world));
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 7);
+
+        // Collapsing sidebar (tabPtr == nullptr) while on subPage 5..7 must NOT reset subPage or trigger false cheat warning
+        *(const BYTE**)(world + WORLD_SYSTAB_TAB_PTR_OFFSET) = nullptr;
+        *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6;
+        TEST_CHECK(!Commands_SanitizeCheatState(world));
+        TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == 6);
+    }
+
+    // 2b-bis. Two-States Tourism & Crime statistics attribution (hotel spending, citizen crime, and float rating sums)
+    {
+        ResetMockWorldMemory();
+        BYTE* world = g_mockExeBuffer + WORLD_RVA;
+        double startRub[2] = { 100000.0, 100000.0 };
+        double startUsd[2] = { 50000.0,  50000.0 };
+        TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, startRub, startUsd);
+        TwoStates_ResetEconStatsForTest(world);
+
+        std::vector<BYTE> hotelWest(0x1400, 0), hotelEast(0x1400, 0);
+        *(int*)hotelWest.data() = 501;
+        *(float*)(hotelWest.data() + OBJ_POS_OFFSET) = -1200.0f;
+        *(float*)(hotelWest.data() + OBJ_POS_OFFSET + 8) = 100.0f;
+        TwoStates_RegisterBuildingOwner(501, 1);
+
+        *(int*)hotelEast.data() = 502;
+        *(float*)(hotelEast.data() + OBJ_POS_OFFSET) = 1200.0f;
+        *(float*)(hotelEast.data() + OBJ_POS_OFFSET + 8) = 100.0f;
+        TwoStates_RegisterBuildingOwner(502, 2);
+
+        std::vector<BYTE> citWest(0x800, 0), touristEast(0x800, 0);
+        *(BYTE**)(citWest.data() + CIT_HOME_BUILDING_OFFSET) = hotelWest.data();
+        // Tourist has null home (0x20), staying at hotelEast (0x58)
+        *(BYTE**)(touristEast.data() + 0x58) = hotelEast.data();
+
+        TwoStates_BeforeStep(world);
+        TwoStates_BldHotelStepForTest(world, hotelWest.data(), 0, 1250.0f, true);  // West hotel USD
+        TwoStates_BldHotelStepForTest(world, hotelEast.data(), 1, 3400.0f, false); // East hotel RUB
+        TwoStates_CitizenCommitCrimeForTest(world, citWest.data(), 1);             // West medium crime (idx 13)
+        TwoStates_CitizenCommitCrimeForTest(world, touristEast.data(), 2);         // East severe crime (idx 14)
+
+        // Simulate tourist departure rating float sums in extraCounts[10] (USD) & extraCounts[11] (RUB) during East tourist scope
+        TwoStates_AfterStep(world);
+
+        TEST_CHECK_NEAR(TwoStates_GetStateEconTourismFloatForTest(1, 0), 1250.0f, 1e-2f);
+        TEST_CHECK_NEAR(TwoStates_GetStateEconTourismFloatForTest(2, 0), 0.0f,    1e-2f);
+        TEST_CHECK_NEAR(TwoStates_GetStateEconTourismFloatForTest(2, 1), 3400.0f, 1e-2f);
+        TEST_CHECK_NEAR(TwoStates_GetStateEconTourismFloatForTest(1, 1), 0.0f,    1e-2f);
+        TEST_CHECK(TwoStates_GetStateEconExtraCountForTest(1, 13) == 1);
+        TEST_CHECK(TwoStates_GetStateEconExtraCountForTest(2, 13) == 0);
+        TEST_CHECK(TwoStates_GetStateEconExtraCountForTest(2, 14) == 1);
+        TEST_CHECK(TwoStates_GetStateEconExtraCountForTest(1, 14) == 0);
+
+        // Verify float rating sum in extraCounts[10..11] and integer extraCounts are never double-added on SplitEngineStatRecordToStates
+        // and that single-tourist rating is not split out of sync with the integer tourist count (extraCounts[6])
+        BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+        *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 6 * sizeof(int32_t)) = 1; // 1 departed USD tourist
+        float scoreUsd = 4.0f;
+        memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 10 * sizeof(int32_t), &scoreUsd, sizeof(float));
+        TwoStates_ResetEconStatsForTest(world);
+        int32_t end1 = TwoStates_GetStateEconExtraCountForTest(1, 6);
+        int32_t end2 = TwoStates_GetStateEconExtraCountForTest(2, 6);
+        float sc1 = TwoStates_GetStateEconExtraFloatForTest(1, 10);
+        float sc2 = TwoStates_GetStateEconExtraFloatForTest(2, 10);
+        TEST_CHECK(end1 + end2 == 1);
+        TEST_CHECK_NEAR(sc1 + sc2, 4.0f, 1e-3f);
+        if (end1 == 1) {
+            TEST_CHECK_NEAR(sc1, 4.0f, 1e-3f);
+            TEST_CHECK_NEAR(sc2, 0.0f, 1e-3f);
+        } else {
+            TEST_CHECK_NEAR(sc1, 0.0f, 1e-3f);
+            TEST_CHECK_NEAR(sc2, 4.0f, 1e-3f);
+        }
+
+        TwoStates_OnSessionEnded();
     }
 
     // 2c. Rail/road depot row self-drop uncoupling guard (0x7C7E87 / 0x7C7ED8)
@@ -3372,6 +3467,101 @@ static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
     return true;
 }
 
+static bool TestEconStats_HealthAndHappinessTrackerIsolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    // 1 building in East SSR (X = +600), 0 citizens in West SSR, 4 citizens in East SSR
+    std::vector<BYTE> bldEast(0x1420, 0);
+    *(int32_t*)(bldEast.data() + 0) = 602;
+    *(float*)(bldEast.data() + OBJ_POS_OFFSET) = +600.0f;
+    *(float*)(bldEast.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    BYTE* bldPtrs[1] = { bldEast.data() };
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldPtrs;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldPtrs + 1;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = bldPtrs;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = bldPtrs + 1;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x10) = bldPtrs + 1;
+
+    std::vector<BYTE> citBuf(4 * 0x800, 0);
+    BYTE* citPtrs[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        citPtrs[i] = citBuf.data() + (size_t)i * 0x800;
+        *(BYTE**)(citPtrs[i] + CIT_HOME_BUILDING_OFFSET) = bldEast.data();
+        *(float*)(citPtrs[i] + CIT_AGE_OFFSET) = 30.0f;
+        *(float*)(citPtrs[i] + 0xD8) = 0.65f;
+        *(float*)(citPtrs[i] + 0xF8) = 0.55f;
+    }
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x00) = citPtrs;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x08) = citPtrs + 4;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x10) = citPtrs + 4;
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true /*Host = West SSR (0 citizens)*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // Simulate East SSR citizen needs evaluation accumulating health & happiness deterioration causes
+    TwoStates_BeforeStep(world);
+    TwoStates_CitizenEvalNeedsForTest(world, citPtrs[0], 0 /*alcohol*/, 0.25f, 3 /*food*/, 0.40f);
+    TwoStates_CitizenEvalNeedsForTest(world, citPtrs[1], 7 /*Cold*/,    0.60f, 7 /*pub*/,  0.30f);
+    TwoStates_AfterStep(world);
+
+    // Roll over current period so $TrackerHealthCur/$TrackerHappyCur copy into $TrackerHealthOld/$TrackerHappyOld
+    std::vector<BYTE> histBuf(STAT_RECORD_SIZE, 0);
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x00) = histBuf.data();
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x08) = histBuf.data() + STAT_RECORD_SIZE;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x10) = histBuf.data() + STAT_RECORD_SIZE;
+    TwoStates_StatRecordClearForTest(world, curStat);
+
+    // Seed world Old tracker with East's values (as the engine's rollover at 0x2FC5BF does)
+    *(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 0 * 4) = 0.25f;
+    *(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 0 * 4) = 1;
+    *(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 7 * 4) = 0.60f;
+    *(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 7 * 4) = 1;
+    *(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 3 * 4)  = 0.40f;
+    *(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 3 * 4)  = 1;
+    *(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 7 * 4)  = 0.30f;
+    *(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 7 * 4)  = 1;
+
+    // 1. Host (State 1, 0 citizens) enters UI -> MUST see 0 for all health & happiness deterioration causes!
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 0);
+    for (int i = 0; i < TRACKER_HEALTH_CAUSE_COUNT; ++i) {
+        TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + i * 4) == 0);
+        TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + i * 4), 0.0f, 1e-6f);
+    }
+    for (int i = 0; i < TRACKER_HAPPY_CAUSE_COUNT; ++i) {
+        TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + i * 4) == 0);
+        TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + i * 4), 0.0f, 1e-6f);
+    }
+    TwoStates_UiEnd();
+
+    // Verify world tracker block is restored after Host UI ends
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 0 * 4) == 1);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 3 * 4) == 1);
+
+    // 2. Client (State 2, 4 citizens) enters UI -> MUST see East SSR's deterioration causes!
+    TwoStates_OnSessionJoined(false /*Client = East SSR*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 4);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 0 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 0 * 4), 0.25f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 7 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 7 * 4), 0.60f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 3 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 3 * 4), 0.40f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 7 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 7 * 4), 0.30f, 1e-4f);
+    TwoStates_UiEnd();
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool Test_TwoStates_EconomyStats()
 {
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
@@ -3380,7 +3570,8 @@ static bool Test_TwoStates_EconomyStats()
            TestEconStats_BatchConstructionAndDemographics() &&
            TestEconStats_LeafHookRelayStubPreservesRegisters() &&
            TestEconStats_PosKeyAndPoisonedSaveHeal() &&
-           TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches();
+           TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches() &&
+           TestEconStats_HealthAndHappinessTrackerIsolation();
 }
 
 // ---------------------------------------------------------------------------

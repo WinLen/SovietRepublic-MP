@@ -24,9 +24,6 @@
 #include <vector>
 #include <string>
 
-extern bool TwoStates_GetShowCivicStats();
-extern void TwoStates_SetShowCivicStats(bool show);
-
 // SOVIET64.exe native menu constants (verified via disassembly of 0x140261400 & 0x14028AF60)
 #define MENU_CALL_SITE_RVA      0x261897
 #define MENU_BUILD_FN_RVA       0x28AF60
@@ -72,8 +69,8 @@ extern void TwoStates_SetShowCivicStats(bool show);
 #define SYSTAB_CHEAT_BYTE_OFF   0x0009
 #define SYSTAB_PANEL_W_OFF      0xAE54
 #define SYSTAB_PANEL_H_OFF      0xAE58
-#define SYSTAB_TAB_PTR_OFF      0xC650
-#define SYSTAB_SUBTAB_IDX_OFF   0xC65C
+#define SYSTAB_TAB_PTR_OFF      WORLD_SYSTAB_TAB_PTR_OFFSET
+#define SYSTAB_SUBTAB_IDX_OFF   WORLD_SYSTAB_SUBPAGE_OFFSET
 
 #define MENU_ITEM_COUNT_OFFSET  0x11B0
 #define MENU_ITEMS_OFFSET       0x11B4
@@ -1283,15 +1280,6 @@ static void DrawSidebarActiveCoopSection(BYTE* menuObj, SessionState st, float l
                               "editor/mp_icon_border.png")) {
             TwoStates_SetShow3DBorder(!show3D);
             TwoStates_SaveSettings();
-        }
-        currentY += btnStep;
-
-        bool showCivic = TwoStates_GetShowCivicStats();
-        if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF282420,
-                              showCivic ? TrW(L"Юстиция/Туризм: СКРЫТЬ [F8]", L"Justice/Tourism: HIDE [F8]")
-                                        : TrW(L"Юстиция/Туризм: ПОКАЗАТЬ [F8]", L"Justice/Tourism: SHOW [F8]"),
-                              "editor/mp_icon_border.png")) {
-            TwoStates_SetShowCivicStats(!showCivic);
         }
         currentY += btnStep;
     }

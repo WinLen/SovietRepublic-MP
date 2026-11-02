@@ -398,6 +398,55 @@ struct VisibleDistance {
 static std::vector<VisibleDistance> g_visibleDistance;
 static std::vector<VisibleKept> g_visibleKept;
 
+static bool IsValidVisibleBuilding(BYTE* b)
+{
+    if (!IsPointerLikeX64((uintptr_t)b)) return false;
+    uintptr_t connBegin = 0, connEnd = 0;
+    if (!SafeReadPod<uintptr_t>(b + 0xA10, &connBegin) || !SafeReadPod<uintptr_t>(b + 0xA18, &connEnd))
+        return false;
+    if (connBegin == 0 && connEnd == 0) return true;
+    if (!IsPointerLikeX64(connBegin) || connEnd < connBegin) return false;
+    uintptr_t byteSpan = connEnd - connBegin;
+    if ((byteSpan % 96u) != 0 || (byteSpan / 96u) > 4096u) return false;
+    return true;
+}
+
+static bool PruneVisibleVector(BYTE* vecHeader, const std::unordered_set<BYTE*>& still)
+{
+    if (!vecHeader) return false;
+    BYTE** begin = nullptr;
+    BYTE** end = nullptr;
+    if (!SafeReadPod<BYTE**>(vecHeader, &begin) || !SafeReadPod<BYTE**>(vecHeader + 8, &end)) return false;
+    if (!begin || end <= begin) return false;
+    BYTE** writeIt = begin;
+    bool pruned = false;
+    for (BYTE** readIt = begin; readIt < end; ++readIt) {
+        BYTE* b = *readIt;
+        if (b && still.count(b) && IsValidVisibleBuilding(b)) {
+            *writeIt++ = b;
+        } else {
+            pruned = true;
+        }
+    }
+    *(BYTE***)(vecHeader + 8) = writeIt;
+    return pruned;
+}
+
+static void SanitizeWorldVisibleVector()
+{
+    if (!g_exeBase || Determinism_WorldLoading()) return;
+    BYTE** listed = nullptr;
+    BYTE** listedEnd = nullptr;
+    if (!SafeReadPod<BYTE**>(g_exeBase + BUILDINGS_BEGIN_RVA, &listed) ||
+        !SafeReadPod<BYTE**>(g_exeBase + BUILDINGS_END_RVA, &listedEnd)) {
+        return;
+    }
+    if (listed && listedEnd >= listed && (size_t)(listedEnd - listed) < 200000u) {
+        std::unordered_set<BYTE*> still(listed, listedEnd);
+        PruneVisibleVector(g_exeBase + WORLD_RVA + VISIBLE_OFFSET, still);
+    }
+}
+
 static void FillPrivateVisible()
 {
     typedef void (*PushFn)(void* vector, void* value);
@@ -417,7 +466,7 @@ static void FillPrivateVisible()
         BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
         for (; engine && it && it < end; ++it) {
             BYTE* b = *it;
-            if (!b) continue;
+            if (!b || !IsValidVisibleBuilding(b)) continue;
             BYTE* type = *(BYTE**)(b + 0x318);
             bool visible = false;
             if (type) {
@@ -461,7 +510,11 @@ static bool VisibleIn()
     memcpy(g_sharedVisible, world + VISIBLE_OFFSET, sizeof(g_sharedVisible));
     memcpy(world + VISIBLE_OFFSET, g_privateVisible, sizeof(g_privateVisible));
     g_visibleKept.clear();
+    BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
+    BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
+    std::unordered_set<BYTE*> still(listed, listedEnd);
     for (const VisibleDistance& d : g_visibleDistance) {
+        if (!still.count(d.building) || !IsValidVisibleBuilding(d.building)) continue;
         g_visibleKept.push_back({ d.building, d.building[0x115A], *(float*)(d.building + 0x115C) });
         d.building[0x115A] = 1;
         *(float*)(d.building + 0x115C) = d.distance;
@@ -486,12 +539,20 @@ static void VisibleOut(bool swapped)
     // camera (13ce61/13ce6d; a construction site keeps its distance, 13d963):
     // the same on every PC, whatever this phase or an earlier one left.
     for (const VisibleKept& k : g_visibleKept) {
-        if (!still.count(k.building)) continue;
+        if (!still.count(k.building) || !IsValidVisibleBuilding(k.building)) continue;
         bool typed = *(void**)(k.building + 0x318) != nullptr;
         k.building[0x115A] = 0;
         *(float*)(k.building + 0x115C) = typed ? 100000.0f : k.distance;
     }
     g_visibleKept.clear();
+    // Prune both the private and shared visible vectors against `still` so a building
+    // deleted during Late (e.g. finished demolition site) never remains in world+0x11DC0
+    // on subsequent held frames (which skip Early and call 0x2F0F10 -> 0x3C4850 -> 0x3C779F).
+    bool prunedPriv = PruneVisibleVector(world + VISIBLE_OFFSET, still);
+    bool prunedShared = PruneVisibleVector(g_sharedVisible, still);
+    if (prunedPriv || prunedShared) {
+        g_visibleFresh = false;
+    }
     memcpy(g_privateVisible, world + VISIBLE_OFFSET, sizeof(g_privateVisible));
     memcpy(world + VISIBLE_OFFSET, g_sharedVisible, sizeof(g_sharedVisible));
     g_visibleIn = false;
@@ -984,6 +1045,7 @@ void SimPatches_BeforeEarly(__int64 world)
 void SimPatches_AfterEarly()
 {
     g_inPhase = false;
+    SanitizeWorldVisibleVector();
     if (g_on) HeldFrame_AfterEarly(); // the pass left every building off the camera
     g_visibleFresh = false; // the native pass may have removed buildings
 }
@@ -1410,22 +1472,45 @@ static void DetVehHighlightExtra(void* vehicle, unsigned char a2, unsigned char 
     HeldFrame_SubmitVehicleHighlight(vehicle, a2, a3, colorRgba, flag, true);
 }
 
-#define STEP_CALL_COUNT 38
+#define HOVER_PICK_RVA 0x2F0F10
+static void DetHoverPick(__int64 world)
+{
+    typedef void (*HoverPickFn)(__int64);
+    HoverPickFn original = (HoverPickFn)(g_exeBase + HOVER_PICK_RVA);
+    if (!g_on || !Determinism_IsActive() || Determinism_WorldLoading() || world != (__int64)(g_exeBase + WORLD_RVA)) {
+        SanitizeWorldVisibleVector();
+        original(world);
+        return;
+    }
+    PrivateView kept;
+    PrivateViewIn(kept);
+    SanitizeWorldVisibleVector();
+    {
+        Determinism_PrivateScope privateRng;
+        original(world);
+    }
+    PrivateViewOut(kept);
+}
+
+#define STEP_CALL_COUNT 39
 static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x30E3AC, 0x30E3B8, 0x30E3C4, 0x30D9DD, 0x30D9E7, 0x30D6BC, 0x30D6C4, 0x3155F4,
                                                       0x6F91DF, 0x6F92C8, 0x6F940E, 0x6FA603, 0x6FA657, 0x7FCAE6, 0x7FCBDC, 0x7FCD00,
                                                       0x2B2800, 0x2B4B03, 0x2B505C, 0x2B3790,
                                                       0x2B6ECA, 0x2B9263, 0x2B2152, 0x2B445F, 0x2B45CB, 0x2B49DF, 0x1D8EA6, 0x1D9188,
                                                       CHEAT_KEYS_CALL_RVA, 0x2595B5,
-                                                      0x40C4D4, 0x40C4ED, 0x40CD74, 0x40CD8B, 0x40D953, 0x40D96B, 0x40E4E9, 0x40E4FE };
+                                                      0x40C4D4, 0x40C4ED, 0x40CD74, 0x40CD8B, 0x40D953, 0x40D96B, 0x40E4E9, 0x40E4FE,
+                                                      0x105F39 };
 static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x547EF0, 0x547EF0, 0x547EF0, 0x333BD0, 0x5CFEA0, 0x12FD80, 0x12EC40, 0x40ECE0,
                                                         0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0, 0x1A48C0,
                                                         0x2B5120, 0x2B5120, 0x40CDE0, 0x40BD60,
                                                         0x40CDE0, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60, 0x40BD60,
                                                         CHEAT_KEYS_STEP_RVA, 0x3FA850,
-                                                        0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0 };
+                                                        0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0, 0x6712B0, 0x66EDD0,
+                                                        HOVER_PICK_RVA };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18,
                                                  17, 18, 18, 18, 18, 18, 18, 18, 20, 21,
-                                                 22, 23, 22, 23, 22, 23, 22, 23 }; // relay slot of each site
+                                                 22, 23, 22, 23, 22, 23, 22, 23,
+                                                 24 }; // relay slot of each site
 static bool VerifyStepCalls()
 {
     for (int i = 0; i < STEP_CALL_COUNT; i++) {
@@ -1443,7 +1528,7 @@ static bool VerifyStepCalls()
 
 // A relay page near the exe: one `jmp [rip+0]` per target, 16 bytes apart.
 static BYTE* g_relay = nullptr;
-#define RELAY_SLOTS 24
+#define RELAY_SLOTS 25
 
 static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
 {
@@ -1629,7 +1714,8 @@ bool SimPatches_Install()
                               (void*)&DetBuildingLinks, (void*)&DetConnectionChecks, (void*)&DetGroundPaint, (void*)&DetDisplayCost,
                               (void*)&DetPlacePress, (void*)&DetBuyPress, (void*)&DetStopPickVehicle, (void*)&DetStopPickLine,
                               (void*)&DetLineMark, (void*)&DetDepotMark, (void*)&DetPickRay, (void*)&DetCheatKeys,
-                              (void*)&HeldFrame_DrawStepVehicles, (void*)&DetVehHighlightMain, (void*)&DetVehHighlightExtra };
+                              (void*)&HeldFrame_DrawStepVehicles, (void*)&DetVehHighlightMain, (void*)&DetVehHighlightExtra,
+                              (void*)&DetHoverPick };
         for (int i = 0; i < RELAY_SLOTS; i++) {
             BYTE* r = g_relay + i * 16;
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;

@@ -219,9 +219,21 @@ struct StatRecordUiBackup {
     StateEconScalars    scalars;
 };
 
+struct StateTrackerSlice {
+    float   healthSum[12];
+    int32_t healthCnt[12];
+    float   happySum[23];
+    int32_t happyCnt[23];
+};
+
 static StateEconPeriodStats              g_stateCurEcon[2];
 static std::vector<StateEconPeriodStats> g_stateHistEcon[2];
 static bool                              g_stateEconInitialized = false;
+static StateTrackerSlice                 g_stateTrackerCur[2] = {};
+static StateTrackerSlice                 g_stateTrackerOld[2] = {};
+static bool                              g_stateTrackerInitialized = false;
+static bool                              g_uiTrackerSwapped = false;
+static BYTE                              g_uiSavedTrackerBlock[WORLD_TRACKER_BLOCK_SIZE] = {};
 static bool                              g_uiEconSwapped = false;
 static int                               g_uiEconSwappedState = 0;
 static StatRecordUiBackup                g_uiSavedCurStat = {};
@@ -653,6 +665,40 @@ static void AddIntSliceDelta(int32_t* dst, const int32_t* before, const int32_t*
     }
 }
 
+static void AddExtraCountsSliceDelta(int32_t* dst, const int32_t* before, const int32_t* after, float scale)
+{
+    for (int i = 0; i < 21; ++i) {
+        // Indices 10 and 11 (rec + 0x314 / 0x318, $Tourism_ToursitScoreUSD and $Tourism_ToursitScoreRUB)
+        // are accumulated in SOVIET64.exe (0x836420 / 0x836455) as IEEE-754 float rating sums, not int32_t!
+        if (i == 10 || i == 11) {
+            float bf = 0.0f, af = 0.0f, df = 0.0f;
+            memcpy(&bf, &before[i], sizeof(float));
+            memcpy(&af, &after[i], sizeof(float));
+            memcpy(&df, &dst[i], sizeof(float));
+            if (!isfinite(bf)) bf = 0.0f;
+            if (!isfinite(af)) af = 0.0f;
+            if (!isfinite(df)) df = 0.0f;
+            float fScale = scale;
+            if (scale > 0.0f && scale < 1.0f) {
+                int cntIdx = (i == 10) ? 6 : 7;
+                int32_t dCnt = after[cntIdx] - before[cntIdx];
+                if (dCnt != 0) {
+                    int32_t sCnt = (int32_t)lroundf((float)dCnt * scale);
+                    fScale = (float)sCnt / (float)dCnt;
+                }
+            }
+            float d = (af - bf) * fScale;
+            if (isfinite(d) && fabsf(d) <= 1.0e9f) {
+                df += d;
+                memcpy(&dst[i], &df, sizeof(float));
+            }
+        } else {
+            int32_t d = after[i] - before[i];
+            if (d != 0) dst[i] += (int32_t)lroundf((float)d * scale);
+        }
+    }
+}
+
 static void AddStatScalarsDelta(StateEconScalars* dst, const StateEconScalars& before,
                                 const StateEconScalars& after, float scale = 1.0f)
 {
@@ -660,9 +706,59 @@ static void AddStatScalarsDelta(StateEconScalars* dst, const StateEconScalars& b
     AddFloatSliceDelta(dst->vehicles,       before.vehicles,       after.vehicles,       4,  scale);
     AddFloatSliceDelta(dst->immigrantSpend, before.immigrantSpend, after.immigrantSpend, 2,  scale);
     AddIntSliceDelta(dst->citizenCounts,    before.citizenCounts,  after.citizenCounts,  5,  scale);
-    AddIntSliceDelta(dst->extraCounts,      before.extraCounts,    after.extraCounts,    21, scale);
+    AddExtraCountsSliceDelta(dst->extraCounts, before.extraCounts, after.extraCounts,    scale);
     AddFloatSliceDelta(dst->tourism,        before.tourism,        after.tourism,        44, scale);
     AddFloatSliceDelta(dst->loans,          before.loans,          after.loans,          4,  scale);
+}
+
+static void SafeReadTrackerSlice(const BYTE* world, bool readOld, StateTrackerSlice* out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!world) return;
+    size_t hSumOff = readOld ? WORLD_TRACKER_HEALTH_OLD_SUM_OFF : WORLD_TRACKER_HEALTH_CUR_SUM_OFF;
+    size_t hCntOff = readOld ? WORLD_TRACKER_HEALTH_OLD_CNT_OFF : WORLD_TRACKER_HEALTH_CUR_CNT_OFF;
+    size_t pSumOff = readOld ? WORLD_TRACKER_HAPPY_OLD_SUM_OFF  : WORLD_TRACKER_HAPPY_CUR_SUM_OFF;
+    size_t pCntOff = readOld ? WORLD_TRACKER_HAPPY_OLD_CNT_OFF  : WORLD_TRACKER_HAPPY_CUR_CNT_OFF;
+    SafeMemcpyPod(out->healthSum, world + hSumOff, sizeof(out->healthSum));
+    SafeMemcpyPod(out->healthCnt, world + hCntOff, sizeof(out->healthCnt));
+    SafeMemcpyPod(out->happySum,  world + pSumOff, sizeof(out->happySum));
+    SafeMemcpyPod(out->happyCnt,  world + pCntOff, sizeof(out->happyCnt));
+}
+
+static void SafeWriteTrackerSlice(BYTE* world, bool writeOld, const StateTrackerSlice& src)
+{
+    if (!world) return;
+    size_t hSumOff = writeOld ? WORLD_TRACKER_HEALTH_OLD_SUM_OFF : WORLD_TRACKER_HEALTH_CUR_SUM_OFF;
+    size_t hCntOff = writeOld ? WORLD_TRACKER_HEALTH_OLD_CNT_OFF : WORLD_TRACKER_HEALTH_CUR_CNT_OFF;
+    size_t pSumOff = writeOld ? WORLD_TRACKER_HAPPY_OLD_SUM_OFF  : WORLD_TRACKER_HAPPY_CUR_SUM_OFF;
+    size_t pCntOff = writeOld ? WORLD_TRACKER_HAPPY_OLD_CNT_OFF  : WORLD_TRACKER_HAPPY_CUR_CNT_OFF;
+    SafeMemcpyPod(world + hSumOff, src.healthSum, sizeof(src.healthSum));
+    SafeMemcpyPod(world + hCntOff, src.healthCnt, sizeof(src.healthCnt));
+    SafeMemcpyPod(world + pSumOff, src.happySum,  sizeof(src.happySum));
+    SafeMemcpyPod(world + pCntOff, src.happyCnt,  sizeof(src.happyCnt));
+}
+
+static void AddTrackerSliceDelta(StateTrackerSlice* dst, const StateTrackerSlice& before,
+                                 const StateTrackerSlice& after, float scale = 1.0f)
+{
+    if (!dst || !isfinite(scale) || scale <= 0.0f) return;
+    for (int i = 0; i < TRACKER_HEALTH_CAUSE_COUNT; ++i) {
+        float ds = after.healthSum[i] - before.healthSum[i];
+        if (isfinite(ds) && ds != 0.0f) dst->healthSum[i] += ds * scale;
+        if (dst->healthSum[i] < 0.0f) dst->healthSum[i] = 0.0f;
+        int32_t dc = after.healthCnt[i] - before.healthCnt[i];
+        if (dc != 0) dst->healthCnt[i] += (int32_t)lroundf((float)dc * scale);
+        if (dst->healthCnt[i] < 0) dst->healthCnt[i] = 0;
+    }
+    for (int i = 0; i < TRACKER_HAPPY_CAUSE_COUNT; ++i) {
+        float ds = after.happySum[i] - before.happySum[i];
+        if (isfinite(ds) && ds != 0.0f) dst->happySum[i] += ds * scale;
+        if (dst->happySum[i] < 0.0f) dst->happySum[i] = 0.0f;
+        int32_t dc = after.happyCnt[i] - before.happyCnt[i];
+        if (dc != 0) dst->happyCnt[i] += (int32_t)lroundf((float)dc * scale);
+        if (dst->happyCnt[i] < 0) dst->happyCnt[i] = 0;
+    }
 }
 
 static void ClearStateEconPeriod(StateEconPeriodStats* st, int32_t day = 0, int32_t year = 0)
@@ -868,6 +964,16 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
         BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
         SafeReadStatScalars(popWinStat, &g_uiSavedPopWinScalars);
         SafeWriteStatScalars(popWinStat, g_stateCurEcon[sIdx].scalars);
+
+        if (SafeMemcpyPod(g_uiSavedTrackerBlock, world + WORLD_TRACKER_BLOCK_OFFSET, WORLD_TRACKER_BLOCK_SIZE)) {
+            g_uiTrackerSwapped = true;
+            if (localPop <= 0) {
+                memset(&g_stateTrackerCur[sIdx], 0, sizeof(StateTrackerSlice));
+                memset(&g_stateTrackerOld[sIdx], 0, sizeof(StateTrackerSlice));
+            }
+            SafeWriteTrackerSlice(world, false, g_stateTrackerCur[sIdx]);
+            SafeWriteTrackerSlice(world, true,  g_stateTrackerOld[sIdx]);
+        }
     }
 
     if (g_lastUiSwappedState != localState || g_lastUiSwappedHistLen[sIdx] != g_stateHistEcon[sIdx].size()) {
@@ -882,6 +988,12 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
 static void RestoreUiCitizenVecAndHudPop(BYTE* world)
 {
     RestoreUiCitizenLifespans(g_uiSavedCitizenLifespans);
+    if (g_uiTrackerSwapped) {
+        g_uiTrackerSwapped = false;
+        if (world) {
+            SafeMemcpyPod(world + WORLD_TRACKER_BLOCK_OFFSET, g_uiSavedTrackerBlock, WORLD_TRACKER_BLOCK_SIZE);
+        }
+    }
     if (g_uiHudPopSwapped) {
         g_uiHudPopSwapped = false;
         if (world) {
@@ -1086,7 +1198,6 @@ static float __fastcall H_GetTerrainBoundaryZMax(BYTE* terrain)
 #define RVA_LIVING_TICK             0x1BC210
 #define RVA_WATER_HEALTH_STEP       0x1B0950
 #define RVA_HEATING_STEP            0x4881A0
-#define RVA_ECONOMY_TRADE_WINDOW    0x361BB0
 
 static const BYTE kBldEconExpect[19] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48,
@@ -1160,13 +1271,25 @@ static const BYTE kCitHomeStepExpect[18] = {
     0x40, 0x53, 0x48, 0x83, 0xEC, 0x60, 0x49, 0x8B, 0x40, 0x20,
     0x48, 0x8B, 0xDA, 0x0F, 0x29, 0x74, 0x24, 0x50
 };
+static const BYTE kCitizenChurchStepExpect[15] = {
+    0x4C, 0x8B, 0xDC, 0x55, 0x49, 0x8D, 0x6B, 0xA1, 0x48, 0x81,
+    0xEC, 0x00, 0x01, 0x00, 0x00
+};
 static const BYTE kCitizenBirthExpect[15] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
     0x57, 0x48, 0x83, 0xEC, 0x50
 };
+static const BYTE kCitizenStarveStepExpect[15] = {
+    0x48, 0x89, 0x4C, 0x24, 0x08, 0x57, 0x41, 0x54, 0x48, 0x81,
+    0xEC, 0xC8, 0x00, 0x00, 0x00
+};
 static const BYTE kCitizenRemoveExpect[18] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x55, 0x56, 0x57,
     0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
+};
+static const BYTE kCitizenEvalNeedsExpect[14] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+    0x41, 0x56, 0x41, 0x57
 };
 static const BYTE kCalcStoredResourcesExpect[16] = {
     0x48, 0x8B, 0xC4, 0x4C, 0x89, 0x40, 0x18, 0x48, 0x89, 0x50,
@@ -1252,9 +1375,47 @@ static const BYTE kHeatingStepExpect[17] = {
     0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x40,
     0x83, 0xB9, 0xB0, 0x05, 0x00, 0x00, 0x00
 };
-static const BYTE kEconomyWindowExpect[16] = {
-    0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
-    0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC
+static const BYTE kBldCourthouseStepExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x81, 0xEC, 0x20, 0x01, 0x00, 0x00
+};
+static const BYTE kBldPoliceStepExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x81, 0xEC, 0x20, 0x01, 0x00, 0x00
+};
+static const BYTE kBldHotelStepExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68,
+    0x10, 0x48, 0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20
+};
+static const BYTE kBldAttraction1StepExpect[22] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20, 0x56, 0x57, 0x41,
+    0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x81, 0xEC, 0xF0, 0x00,
+    0x00, 0x00
+};
+static const BYTE kBldAttraction2StepExpect[22] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x20, 0x56, 0x57, 0x41,
+    0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x81, 0xEC, 0xF0, 0x00,
+    0x00, 0x00
+};
+static const BYTE kBldCustomsTouristStepExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x56,
+    0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00
+};
+static const BYTE kCitizenCommitCrimeExpect[15] = {
+    0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20,
+    0x57, 0x48, 0x83, 0xEC, 0x20
+};
+static const BYTE kCrimeExpireCaseExpect[14] = {
+    0x48, 0x89, 0x54, 0x24, 0x10, 0x41, 0x56,
+    0x48, 0x81, 0xEC, 0x00, 0x01, 0x00, 0x00
+};
+static const BYTE kCitizenFootArriveExpect[20] = {
+    0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x57, 0x41, 0x55,
+    0x48, 0x83, 0xEC, 0x50, 0xC6, 0x82, 0x23, 0x07, 0x00, 0x00, 0x00
+};
+static const BYTE kCitizenVehicleAlightExpect[15] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10,
+    0x48, 0x89, 0x74, 0x24, 0x18
 };
 static const BYTE kBldUnivStepExpect[16] = {
     0x48, 0x8B, 0xC4, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
@@ -1283,7 +1444,14 @@ static const BYTE kAssignConstructionOfficeExpect[16] = {
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
 typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef bool (__fastcall* OrphanageAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4);
-typedef void (__fastcall* EconomyWindowFn)(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4);
+typedef void (__fastcall* CitizenCommitCrimeFn)(BYTE* world, BYTE* citizen, int32_t severity,
+                                                uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef void (__fastcall* CrimeExpireCaseFn)(BYTE* world, BYTE* caseObj, float a3,
+                                             uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef void (__fastcall* CitizenFootArriveFn)(BYTE* world, BYTE* citizen, unsigned char flag,
+                                               uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef unsigned char (__fastcall* CitizenVehicleAlightFn)(BYTE* world, BYTE* citizen, BYTE* stationBld,
+                                                           unsigned char flag, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* ResearchDailyUpdateFn)(BYTE* world);
 typedef void (__fastcall* ResearchRecomputeFn)(BYTE* world);
 typedef BYTE* (__fastcall* UnivResearchPanelFn)(BYTE* world, BYTE* building, BYTE* window, float* xPtr, float* yPtr, void* a6);
@@ -1310,8 +1478,11 @@ typedef void (__fastcall* MasterSaveFn)(BYTE* world);
 typedef float (__fastcall* GetMaxAvailableBorrowFn)(BYTE* world, int32_t loanType);
 typedef void (__fastcall* StepOneLoanDayFn)(BYTE* world, SovietLoan* loan);
 typedef void (__fastcall* CitHomeStepFn)(BYTE* world, BYTE* building, BYTE* citizen, float dt, uintptr_t a5, uintptr_t a6);
+typedef void (__fastcall* CitizenChurchStepFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenBirthFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef unsigned char (__fastcall* CitizenStarveStepFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenRemoveFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
+typedef void (__fastcall* CitizenEvalNeedsFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CalcStoredResourcesFn)(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
                                                  uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8);
 
@@ -1333,8 +1504,11 @@ static BldConsumeResFn o_bldConsumeRes = nullptr;
 static BldEconFn o_bldUtilityBorderStep = nullptr;
 static ForeignLaborStepFn o_foreignLaborStep = nullptr;
 static CitHomeStepFn o_citHomeStep = nullptr;
+static CitizenChurchStepFn o_citizenChurchStep = nullptr;
 static CitizenBirthFn o_citizenBirth = nullptr;
+static CitizenStarveStepFn o_citizenStarveStep = nullptr;
 static CitizenRemoveFn o_citizenRemove = nullptr;
+static CitizenEvalNeedsFn o_citizenEvalNeeds = nullptr;
 static CalcStoredResourcesFn o_calcStoredResources = nullptr;
 static VehicleSaleFn o_vehicleSale = nullptr;
 static VehicleExportFn o_vehicleBorderExport = nullptr;
@@ -1352,12 +1526,20 @@ static OrphanageAssignFn o_orphanageAssign = nullptr;
 static BldEconFn o_livingTick = nullptr;
 static BldEconFn o_waterHealthStep = nullptr;
 static BldEconFn o_heatingStep = nullptr;
-static EconomyWindowFn o_economyWindow = nullptr;
+static BldEconFn o_bldCourthouseStep = nullptr;
+static BldEconFn o_bldPoliceStep = nullptr;
+static BldEconFn o_bldHotelStep = nullptr;
+static BldEconFn o_bldAttraction1Step = nullptr;
+static BldEconFn o_bldAttraction2Step = nullptr;
+static BldEconFn o_bldCustomsTouristStep = nullptr;
+static CitizenCommitCrimeFn o_citizenCommitCrime = nullptr;
+static CrimeExpireCaseFn o_crimeExpireCase = nullptr;
+static CitizenFootArriveFn o_citizenFootArrive = nullptr;
+static CitizenVehicleAlightFn o_citizenVehicleAlight = nullptr;
 static BldEconFn o_bldUnivStep = nullptr;
 static ResearchDailyUpdateFn o_researchDailyUpdate = nullptr;
 static UnivResearchPanelFn o_univResearchPanel = nullptr;
 static AssignConstructionOfficeFn o_assignConstructionOffice = nullptr;
-static volatile ULONGLONG g_economyWindowLastTick = 0;
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
 static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize);
@@ -1381,28 +1563,52 @@ static StateEconScalars g_lastWorldScalars = {};
 static StateEconScalars g_unattributedScalars = {};
 static StateEconScalars g_econBeforeScalars = {};
 static StateEconScalars g_cmdBeforeScalars = {};
+static StateTrackerSlice g_lastWorldTrackerCur = {};
+static StateTrackerSlice g_unattributedTrackerCur = {};
+static StateTrackerSlice g_econBeforeTrackerCur = {};
+static StateTrackerSlice g_cmdBeforeTrackerCur = {};
+
+static void ResetStateTrackerSlices()
+{
+    memset(g_stateTrackerCur, 0, sizeof(g_stateTrackerCur));
+    memset(g_stateTrackerOld, 0, sizeof(g_stateTrackerOld));
+    memset(&g_lastWorldTrackerCur, 0, sizeof(g_lastWorldTrackerCur));
+    memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
+    memset(&g_econBeforeTrackerCur, 0, sizeof(g_econBeforeTrackerCur));
+    memset(&g_cmdBeforeTrackerCur, 0, sizeof(g_cmdBeforeTrackerCur));
+    g_stateTrackerInitialized = false;
+}
 
 static bool BeginEconAttribution(BYTE* world, int owner)
 {
     if (!g_inSimStep || g_inCommand || t_inEconHook || !TwoStates_IsActive()) return false;
-    if (IsUnlimitedMoney()) return false;
     if (Determinism_IsActive() && !Determinism_InStepFrame()) return false;
     if (world != g_exeBase + WORLD_RVA || GetCurrentThreadId() != g_simStepThread) return false;
     if (owner != 1 && owner != 2) return false;
 
+    bool unlim = IsUnlimitedMoney();
     EnsureStateEconInitialized(world);
     __try {
-        double curRub = *WorldRubles();
-        double curUsd = *WorldDollars();
-        g_unattributedRub += (curRub - g_lastWorldRub);
-        g_unattributedUsd += (curUsd - g_lastWorldUsd);
-        *WorldRubles()  = g_stateRub[owner - 1];
-        *WorldDollars() = g_stateUsd[owner - 1];
+        if (!unlim) {
+            double curRub = *WorldRubles();
+            double curUsd = *WorldDollars();
+            g_unattributedRub += (curRub - g_lastWorldRub);
+            g_unattributedUsd += (curUsd - g_lastWorldUsd);
+            *WorldRubles()  = g_stateRub[owner - 1];
+            *WorldDollars() = g_stateUsd[owner - 1];
+        }
         StateEconScalars curScalars = {};
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &curScalars);
         AddStatScalarsDelta(&g_unattributedScalars, g_lastWorldScalars, curScalars, 1.0f);
         g_econBeforeScalars = curScalars;
         g_lastWorldScalars  = curScalars;
+
+        StateTrackerSlice curTracker = {};
+        SafeReadTrackerSlice(world, false, &curTracker);
+        AddTrackerSliceDelta(&g_unattributedTrackerCur, g_lastWorldTrackerCur, curTracker, 1.0f);
+        g_econBeforeTrackerCur = curTracker;
+        g_lastWorldTrackerCur  = curTracker;
+
         t_econOwner  = owner;
         t_inEconHook = true;
         return true;
@@ -1422,27 +1628,36 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
 {
     if (!t_inEconHook) return;
     t_inEconHook = false;
+    bool unlim = IsUnlimitedMoney();
     __try {
         int idx = owner - 1;
-        double newRub = SanitizeMoneyStep(g_stateRub[idx], *WorldRubles());
-        double newUsd = SanitizeMoneyStep(g_stateUsd[idx], *WorldDollars());
-        double dRub = newRub - g_stateRub[idx];
-        double dUsd = newUsd - g_stateUsd[idx];
-        g_stateRub[idx] = newRub;
-        g_stateUsd[idx] = newUsd;
-        if (countInNetTrade) {
-            g_netTradeRub[idx] += dRub;
-            g_netTradeUsd[idx] += dUsd;
+        if (!unlim) {
+            double newRub = SanitizeMoneyStep(g_stateRub[idx], *WorldRubles());
+            double newUsd = SanitizeMoneyStep(g_stateUsd[idx], *WorldDollars());
+            double dRub = newRub - g_stateRub[idx];
+            double dUsd = newUsd - g_stateUsd[idx];
+            g_stateRub[idx] = newRub;
+            g_stateUsd[idx] = newUsd;
+            if (countInNetTrade) {
+                g_netTradeRub[idx] += dRub;
+                g_netTradeUsd[idx] += dUsd;
+            }
+            *WorldRubles()  = g_stateRub[0] + g_stateRub[1] + g_unattributedRub;
+            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1] + g_unattributedUsd;
+            g_lastWorldRub = *WorldRubles();
+            g_lastWorldUsd = *WorldDollars();
         }
-        *WorldRubles()  = g_stateRub[0] + g_stateRub[1] + g_unattributedRub;
-        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1] + g_unattributedUsd;
-        g_lastWorldRub = *WorldRubles();
-        g_lastWorldUsd = *WorldDollars();
         if (g_exeBase) {
+            BYTE* world = g_exeBase + WORLD_RVA;
             StateEconScalars afterScalars = {};
-            SafeReadStatScalars(g_exeBase + WORLD_RVA + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
+            SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
             AddStatScalarsDelta(&g_stateCurEcon[idx].scalars, g_econBeforeScalars, afterScalars, 1.0f);
             g_lastWorldScalars = afterScalars;
+
+            StateTrackerSlice afterTracker = {};
+            SafeReadTrackerSlice(world, false, &afterTracker);
+            AddTrackerSliceDelta(&g_stateTrackerCur[idx], g_econBeforeTrackerCur, afterTracker, 1.0f);
+            g_lastWorldTrackerCur = afterTracker;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -1494,9 +1709,29 @@ static int ResolveCitizenOwnerFast(const BYTE* cit)
             if (parentHome) {
                 owner = ResolveBuildingOwnerFast(parentHome);
             } else {
-                float x = *(const float*)(cit + CIT_POS_OFFSET);
-                float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
-                if (isfinite(x) && isfinite(z)) owner = (x <= 0.0f) ? 1 : 2;
+                // Tourists and foreign workers have home == nullptr; check hotel/visited/destination/origin building slots first
+                static const size_t kCitFallbackBldOffs[7] = { 0x58, 0x28, 0x40, 0x38, 0x78, 0x80, 0x88 };
+                bool resolvedFromBld = false;
+                for (size_t i = 0; i < 7; ++i) {
+                    const BYTE* b = *(const BYTE* const*)(cit + kCitFallbackBldOffs[i]);
+                    if (!IsPointerLikeX64((uintptr_t)b)) continue;
+                    float bx = *(const float*)(b + OBJ_POS_OFFSET);
+                    float bz = *(const float*)(b + OBJ_POS_OFFSET + 8);
+                    if (isfinite(bx) && isfinite(bz) && fabsf(bx) < 50000.0f && fabsf(bz) < 50000.0f) {
+                        owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
+                        resolvedFromBld = true;
+                        break;
+                    }
+                }
+                if (!resolvedFromBld && g_simLoopCurrentBuilding) {
+                    owner = ResolveBuildingOwnerFast(g_simLoopCurrentBuilding);
+                    resolvedFromBld = true;
+                }
+                if (!resolvedFromBld) {
+                    float x = *(const float*)(cit + CIT_POS_OFFSET);
+                    float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
+                    if (isfinite(x) && isfinite(z)) owner = (x <= 0.0f) ? 1 : 2;
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -1514,6 +1749,13 @@ static __int64 CallBuildingEconHook(BYTE* world, BYTE* building, uintptr_t a3, u
     __int64 r = orig ? orig(world, building, a3, a4, a5, a6) : 0;
     if (active) EndEconAttribution(owner);
     return r;
+}
+
+template <BldEconFn* OrigPtr>
+static __int64 __fastcall H_GenericBldEconStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
+                                               uintptr_t a5, uintptr_t a6)
+{
+    return CallBuildingEconHook(world, building, a3, a4, a5, a6, *OrigPtr);
 }
 
 static __int64 __fastcall H_BldEcon(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
@@ -1694,18 +1936,6 @@ static __int64 __fastcall H_BldUtilityBorderStep(BYTE* world, BYTE* building, ui
 static int ResolveForeignLaborOwnerFast(const BYTE* citizen)
 {
     if (g_simLoopCurrentBuilding) return ResolveBuildingOwnerFast(g_simLoopCurrentBuilding);
-    if (!citizen) return 1;
-    static const size_t kCitBldOffsets[6] = { 0x38, 0x58, 0x78, 0x80, 0x88, CIT_HOME_BUILDING_OFFSET };
-    for (size_t i = 0; i < 6; ++i) {
-        const BYTE* b = nullptr;
-        if (!SafeReadPod((const BYTE* const*)(citizen + kCitBldOffsets[i]), &b) || !IsPointerLikeX64((uintptr_t)b)) continue;
-        float bx = 0.0f, bz = 0.0f;
-        if (SafeReadPod((const float*)(b + OBJ_POS_OFFSET), &bx) &&
-            SafeReadPod((const float*)(b + OBJ_POS_OFFSET + 8), &bz) &&
-            isfinite(bx) && isfinite(bz) && fabsf(bx) < 50000.0f && fabsf(bz) < 50000.0f) {
-            return TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
-        }
-    }
     return ResolveCitizenOwnerFast(citizen);
 }
 
@@ -1743,11 +1973,58 @@ static void __fastcall H_CitHomeStep(BYTE* world, BYTE* building, BYTE* citizen,
     if (o_citHomeStep) o_citHomeStep(world, building, citizen, dt, a5, a6);
 }
 
+static void AttributePendingTouristHotelStay(BYTE* world, const BYTE* citizen)
+{
+    if (!g_inSimStep || g_inCommand || t_inEconHook || !TwoStates_IsActive() || !world || !citizen) return;
+    if (world != g_exeBase + WORLD_RVA || GetCurrentThreadId() != g_simStepThread) return;
+    int32_t touristType = 0;
+    if (!SafeReadPod((const int32_t*)(citizen + CIT_INFANT_FLAG_OFFSET), &touristType) || touristType == 0) return;
+    int owner = ResolveCitizenOwnerFast(citizen);
+    if (owner != 1 && owner != 2) return;
+    int idx = owner - 1;
+    __try {
+        if (!IsUnlimitedMoney()) {
+            double curRub = *WorldRubles();
+            double curUsd = *WorldDollars();
+            double dRub = curRub - g_lastWorldRub;
+            double dUsd = curUsd - g_lastWorldUsd;
+            if (isfinite(dRub) && fabs(dRub) <= 1.0e9) {
+                g_stateRub[idx] += dRub;
+                g_netTradeRub[idx] += dRub;
+            }
+            if (isfinite(dUsd) && fabs(dUsd) <= 1.0e9) {
+                g_stateUsd[idx] += dUsd;
+                g_netTradeUsd[idx] += dUsd;
+            }
+            g_lastWorldRub = curRub;
+            g_lastWorldUsd = curUsd;
+        }
+        StateEconScalars curScalars = {};
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &curScalars);
+        AddStatScalarsDelta(&g_stateCurEcon[idx].scalars, g_lastWorldScalars, curScalars, 1.0f);
+        g_lastWorldScalars = curScalars;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static void __fastcall H_CitizenBirth(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4,
                                       uintptr_t a5, uintptr_t a6)
 {
+    AttributePendingTouristHotelStay(world, citizen);
     CitizenEconScope scope(world, nullptr, citizen);
     if (o_citizenBirth) o_citizenBirth(world, citizen, a3, a4, a5, a6);
+}
+
+static void __fastcall H_CitizenChurchStep(BYTE* world, BYTE* citizen)
+{
+    CitizenEconScope scope(world, nullptr, citizen);
+    if (o_citizenChurchStep) o_citizenChurchStep(world, citizen);
+}
+
+static unsigned char __fastcall H_CitizenStarveStep(BYTE* world, BYTE* citizen)
+{
+    CitizenEconScope scope(world, nullptr, citizen);
+    return o_citizenStarveStep ? o_citizenStarveStep(world, citizen) : 0;
 }
 
 static void __fastcall H_CitizenRemove(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4,
@@ -1755,6 +2032,43 @@ static void __fastcall H_CitizenRemove(BYTE* world, BYTE* citizen, unsigned char
 {
     CitizenEconScope scope(world, nullptr, citizen);
     if (o_citizenRemove) o_citizenRemove(world, citizen, a3, a4, a5, a6);
+}
+
+static void __fastcall H_CitizenEvalNeeds(BYTE* world, BYTE* citizen)
+{
+    CitizenEconScope scope(world, nullptr, citizen);
+    if (o_citizenEvalNeeds) o_citizenEvalNeeds(world, citizen);
+}
+
+static int   g_mockHealthCauseIdx = -1;
+static float g_mockHealthDelta = 0.0f;
+static int   g_mockHappyCauseIdx = -1;
+static float g_mockHappyDelta = 0.0f;
+
+static void __fastcall MockEngineCitizenEvalNeeds(BYTE* world, BYTE* /*citizen*/)
+{
+    if (!world) return;
+    if (g_mockHealthCauseIdx >= 0 && g_mockHealthCauseIdx < 12) {
+        *(float*)(world + WORLD_TRACKER_HEALTH_CUR_SUM_OFF + (size_t)g_mockHealthCauseIdx * sizeof(float)) += g_mockHealthDelta;
+        *(int32_t*)(world + WORLD_TRACKER_HEALTH_CUR_CNT_OFF + (size_t)g_mockHealthCauseIdx * sizeof(int32_t)) += 1;
+    }
+    if (g_mockHappyCauseIdx >= 0 && g_mockHappyCauseIdx < 23) {
+        *(float*)(world + WORLD_TRACKER_HAPPY_CUR_SUM_OFF + (size_t)g_mockHappyCauseIdx * sizeof(float)) += g_mockHappyDelta;
+        *(int32_t*)(world + WORLD_TRACKER_HAPPY_CUR_CNT_OFF + (size_t)g_mockHappyCauseIdx * sizeof(int32_t)) += 1;
+    }
+}
+
+void TwoStates_CitizenEvalNeedsForTest(BYTE* world, BYTE* citizen, int healthCauseIdx, float healthDelta,
+                                       int happyCauseIdx, float happyDelta)
+{
+    CitizenEvalNeedsFn prev = o_citizenEvalNeeds;
+    o_citizenEvalNeeds = &MockEngineCitizenEvalNeeds;
+    g_mockHealthCauseIdx = healthCauseIdx;
+    g_mockHealthDelta = healthDelta;
+    g_mockHappyCauseIdx = happyCauseIdx;
+    g_mockHappyDelta = happyDelta;
+    H_CitizenEvalNeeds(world, citizen);
+    o_citizenEvalNeeds = prev;
 }
 
 static const BYTE* ResolveCourtCaseCitizen(const BYTE* caseOrCit)
@@ -1816,6 +2130,7 @@ static bool __fastcall H_PrisonAssign(BYTE* world, BYTE* citizen, uintptr_t a3, 
                                       uintptr_t a5, uintptr_t a6)
 {
     int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(citizen) : 0;
+    CitizenEconScope econ(world, nullptr, citizen);
     CivicBuildingFilterScope scope(world, citOwner);
     return o_prisonAssign ? o_prisonAssign(world, citizen, a3, a4, a5, a6) : false;
 }
@@ -1845,10 +2160,102 @@ static __int64 __fastcall H_HeatingStep(BYTE* world, BYTE* building, uintptr_t a
     return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_heatingStep);
 }
 
-static void __fastcall H_EconomyWindow(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4)
+static void __fastcall H_CitizenCommitCrime(BYTE* world, BYTE* citizen, int32_t severity,
+                                            uintptr_t a4, uintptr_t a5, uintptr_t a6)
 {
-    g_economyWindowLastTick = GetTickCount64();
-    if (o_economyWindow) o_economyWindow(world, a2, a3, a4);
+    CitizenEconScope scope(world, nullptr, citizen);
+    if (o_citizenCommitCrime) o_citizenCommitCrime(world, citizen, severity, a4, a5, a6);
+}
+
+static int ResolveCrimeCaseOwner(const BYTE* caseObj)
+{
+    if (!caseObj) return 1;
+    const BYTE* crimeBld = nullptr;
+    if (SafeReadPod((const BYTE* const*)(caseObj + 0x08), &crimeBld) && IsPointerLikeX64((uintptr_t)crimeBld)) {
+        return ResolveBuildingOwnerFast(crimeBld);
+    }
+    return ResolveCitizenOwnerFast(ResolveCourtCaseCitizen(caseObj));
+}
+
+static void __fastcall H_CrimeExpireCase(BYTE* world, BYTE* caseObj, float a3,
+                                         uintptr_t a4, uintptr_t a5, uintptr_t a6)
+{
+    int owner = (g_inSimStep && !g_inCommand && !t_inEconHook && TwoStates_IsActive())
+        ? ResolveCrimeCaseOwner(caseObj)
+        : 0;
+    if (owner == 1 || owner == 2) {
+        int32_t curUninv = 0;
+        if (world && SafeReadPod((const int32_t*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_EXTRA_COUNTS_OFF + 17 * sizeof(int32_t)), &curUninv)) {
+            int32_t d = curUninv - g_lastWorldScalars.extraCounts[17];
+            if (d > 0) {
+                g_stateCurEcon[owner - 1].scalars.extraCounts[17] += d;
+                g_lastWorldScalars.extraCounts[17] = curUninv;
+            }
+        }
+    }
+    bool active = owner ? BeginEconAttribution(world, owner) : false;
+    if (o_crimeExpireCase) o_crimeExpireCase(world, caseObj, a3, a4, a5, a6);
+    if (active) EndEconAttribution(owner);
+}
+
+static void __fastcall H_CitizenFootArrive(BYTE* world, BYTE* citizen, unsigned char flag,
+                                           uintptr_t a4, uintptr_t a5, uintptr_t a6)
+{
+    CitizenEconScope scope(world, nullptr, citizen);
+    if (o_citizenFootArrive) o_citizenFootArrive(world, citizen, flag, a4, a5, a6);
+}
+
+static unsigned char __fastcall H_CitizenVehicleAlight(BYTE* world, BYTE* citizen, BYTE* stationBld,
+                                                       unsigned char flag, uintptr_t a5, uintptr_t a6)
+{
+    CitizenEconScope scope(world, stationBld, citizen);
+    return o_citizenVehicleAlight ? o_citizenVehicleAlight(world, citizen, stationBld, flag, a5, a6) : 0;
+}
+
+static void __fastcall MockEngineCitizenCommitCrime(BYTE* world, BYTE* /*citizen*/, int32_t severity,
+                                                    uintptr_t /*a4*/, uintptr_t /*a5*/, uintptr_t /*a6*/)
+{
+    if (!world) return;
+    int idx = (severity >= 2) ? 14 : ((severity == 1) ? 13 : 12);
+    *(int32_t*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_EXTRA_COUNTS_OFF + (size_t)idx * sizeof(int32_t)) += 1;
+}
+
+void TwoStates_CitizenCommitCrimeForTest(BYTE* world, BYTE* citizen, int32_t severity)
+{
+    CitizenCommitCrimeFn prev = o_citizenCommitCrime;
+    o_citizenCommitCrime = &MockEngineCitizenCommitCrime;
+    H_CitizenCommitCrime(world, citizen, severity, 0, 0, 0);
+    o_citizenCommitCrime = prev;
+}
+
+static int   g_mockTourismIdx = 0;
+static float g_mockTourismSpend = 0.0f;
+static bool  g_mockTourismIsUsd = true;
+
+static __int64 __fastcall MockEngineBldHotelStep(BYTE* world, BYTE* /*building*/, uintptr_t /*a3*/,
+                                                 uintptr_t /*a4*/, uintptr_t /*a5*/, uintptr_t /*a6*/)
+{
+    if (!world) return 0;
+    if (g_mockTourismIdx >= 0 && g_mockTourismIdx < 44) {
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_TOURISM_OFF + (size_t)g_mockTourismIdx * sizeof(float)) += g_mockTourismSpend;
+    }
+    if (g_mockTourismIsUsd) {
+        *(double*)(world + WORLD_USD_OFFSET) += (double)g_mockTourismSpend;
+    } else {
+        *(double*)(world + WORLD_RUB_OFFSET) += (double)g_mockTourismSpend;
+    }
+    return 1;
+}
+
+void TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismIdx, float spendAmount, bool isUsd)
+{
+    BldEconFn prev = o_bldHotelStep;
+    o_bldHotelStep = &MockEngineBldHotelStep;
+    g_mockTourismIdx = tourismIdx;
+    g_mockTourismSpend = spendAmount;
+    g_mockTourismIsUsd = isUsd;
+    H_GenericBldEconStep<&o_bldHotelStep>(world, building, 0, 0, 0, 0);
+    o_bldHotelStep = prev;
 }
 
 // ---------------------------------------------------------------------------
@@ -2671,7 +3078,7 @@ class VehicleEconOverrideScope {
 public:
     VehicleEconOverrideScope(BYTE* world, const BYTE* vehicle)
     {
-        if (!g_inSimStep || g_inCommand || !vehicle || !TwoStates_IsActive() || IsUnlimitedMoney()) return;
+        if (!g_inSimStep || g_inCommand || !vehicle || !TwoStates_IsActive()) return;
         if (Determinism_IsActive() && !Determinism_InStepFrame()) return;
         if (!world || world != (g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr)) return;
         if (GetCurrentThreadId() != g_simStepThread) return;
@@ -2681,6 +3088,7 @@ public:
 
         m_world = world;
         m_vehOwner = vehOwner;
+        bool unlim = IsUnlimitedMoney();
 
         if (t_inEconHook) {
             m_prevOwner = t_econOwner;
@@ -2694,16 +3102,26 @@ public:
             __try {
                 int prevIdx = m_prevOwner - 1;
                 if (prevIdx >= 0 && prevIdx < 2) {
-                    g_stateRub[prevIdx] = *WorldRubles();
-                    g_stateUsd[prevIdx] = *WorldDollars();
+                    if (!unlim) {
+                        g_stateRub[prevIdx] = *WorldRubles();
+                        g_stateUsd[prevIdx] = *WorldDollars();
+                    }
                     StateEconScalars curScalars = {};
                     SafeReadStatScalars(m_world + WORLD_STAT_CURRENT_OFFSET, &curScalars);
                     AddStatScalarsDelta(&g_stateCurEcon[prevIdx].scalars, g_econBeforeScalars, curScalars, 1.0f);
                     m_vehBeforeScalars = curScalars;
                     g_econBeforeScalars = curScalars;
+
+                    StateTrackerSlice curTracker = {};
+                    SafeReadTrackerSlice(m_world, false, &curTracker);
+                    AddTrackerSliceDelta(&g_stateTrackerCur[prevIdx], g_econBeforeTrackerCur, curTracker, 1.0f);
+                    m_vehBeforeTrackerCur = curTracker;
+                    g_econBeforeTrackerCur = curTracker;
                 }
-                *WorldRubles()  = g_stateRub[vehOwner - 1];
-                *WorldDollars() = g_stateUsd[vehOwner - 1];
+                if (!unlim) {
+                    *WorldRubles()  = g_stateRub[vehOwner - 1];
+                    *WorldDollars() = g_stateUsd[vehOwner - 1];
+                }
                 t_econOwner = vehOwner;
                 m_active = true;
                 m_nested = true;
@@ -2723,27 +3141,35 @@ public:
     {
         if (!m_active) return;
         if (m_nested) {
+            bool unlim = IsUnlimitedMoney();
             DiagLog_BeginSafeSeh();
             __try {
                 int vehIdx = m_vehOwner - 1;
-                double newRub = SanitizeMoneyStep(g_stateRub[vehIdx], *WorldRubles());
-                double newUsd = SanitizeMoneyStep(g_stateUsd[vehIdx], *WorldDollars());
-                double dRub = newRub - g_stateRub[vehIdx];
-                double dUsd = newUsd - g_stateUsd[vehIdx];
-                g_stateRub[vehIdx] = newRub;
-                g_stateUsd[vehIdx] = newUsd;
-                g_netTradeRub[vehIdx] += dRub;
-                g_netTradeUsd[vehIdx] += dUsd;
+                if (!unlim) {
+                    double newRub = SanitizeMoneyStep(g_stateRub[vehIdx], *WorldRubles());
+                    double newUsd = SanitizeMoneyStep(g_stateUsd[vehIdx], *WorldDollars());
+                    double dRub = newRub - g_stateRub[vehIdx];
+                    double dUsd = newUsd - g_stateUsd[vehIdx];
+                    g_stateRub[vehIdx] = newRub;
+                    g_stateUsd[vehIdx] = newUsd;
+                    g_netTradeRub[vehIdx] += dRub;
+                    g_netTradeUsd[vehIdx] += dUsd;
+                }
 
                 if (m_world) {
                     StateEconScalars afterScalars = {};
                     SafeReadStatScalars(m_world + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
                     AddStatScalarsDelta(&g_stateCurEcon[vehIdx].scalars, m_vehBeforeScalars, afterScalars, 1.0f);
                     g_econBeforeScalars = afterScalars;
+
+                    StateTrackerSlice afterTracker = {};
+                    SafeReadTrackerSlice(m_world, false, &afterTracker);
+                    AddTrackerSliceDelta(&g_stateTrackerCur[vehIdx], m_vehBeforeTrackerCur, afterTracker, 1.0f);
+                    g_econBeforeTrackerCur = afterTracker;
                 }
 
                 int prevIdx = m_prevOwner - 1;
-                if (prevIdx >= 0 && prevIdx < 2) {
+                if (!unlim && prevIdx >= 0 && prevIdx < 2) {
                     *WorldRubles()  = g_stateRub[prevIdx];
                     *WorldDollars() = g_stateUsd[prevIdx];
                 }
@@ -2768,6 +3194,7 @@ private:
     bool m_active = false;
     bool m_nested = false;
     StateEconScalars m_vehBeforeScalars = {};
+    StateTrackerSlice m_vehBeforeTrackerCur = {};
 };
 
 static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4,
@@ -2996,24 +3423,6 @@ struct StateCivicStats {
     double tourismUsd = 0.0;
 };
 
-static bool g_showCivicStats = false;
-
-bool TwoStates_GetShowCivicStats()
-{
-    return g_showCivicStats;
-}
-
-void TwoStates_SetShowCivicStats(bool show)
-{
-    g_showCivicStats = show;
-}
-
-bool TwoStates_IsEconomyWindowOpen()
-{
-    ULONGLONG last = g_economyWindowLastTick;
-    return last > 0 && (GetTickCount64() - last) < 500;
-}
-
 static void AccumulateCivicBuilding(const BYTE* bld, int state, StateCivicStats* outStats)
 {
     if (!bld || !outStats || ResolveBuildingOwnerFast(bld) != state) return;
@@ -3081,12 +3490,6 @@ void TwoStates_GetStateCivicStatsEx(const BYTE* world, int state, StateCivicStat
     }
 
     AccumulateCivicTourism(state, outStats);
-}
-
-void TwoStates_GetStateCivicStats(int state, StateCivicStats* outStats)
-{
-    BYTE* world = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
-    TwoStates_GetStateCivicStatsEx(world, state, outStats);
 }
 
 static float ReadWorkResourceMultiplier(const BYTE* world, int loanType)
@@ -3379,10 +3782,14 @@ static void SplitEngineStatRecordToStates(const BYTE* world, const BYTE* rec, fl
     AddStatScalarsDelta(&outS1->scalars, outS0->scalars, fullScalars, 1.0f);
 
     float wCit0 = ComputeWorldCitizenState1Weight(world);
+    memset(outS0->scalars.citizenCounts, 0, sizeof(outS0->scalars.citizenCounts));
+    memset(outS1->scalars.citizenCounts, 0, sizeof(outS1->scalars.citizenCounts));
+    memset(outS0->scalars.extraCounts, 0, sizeof(outS0->scalars.extraCounts));
+    memset(outS1->scalars.extraCounts, 0, sizeof(outS1->scalars.extraCounts));
     AddIntSliceDelta(outS0->scalars.citizenCounts, zeroScalars.citizenCounts, fullScalars.citizenCounts, 5, wCit0);
     AddIntSliceDelta(outS1->scalars.citizenCounts, outS0->scalars.citizenCounts, fullScalars.citizenCounts, 5, 1.0f);
-    AddIntSliceDelta(outS0->scalars.extraCounts, zeroScalars.extraCounts, fullScalars.extraCounts, 21, wCit0);
-    AddIntSliceDelta(outS1->scalars.extraCounts, outS0->scalars.extraCounts, fullScalars.extraCounts, 21, 1.0f);
+    AddExtraCountsSliceDelta(outS0->scalars.extraCounts, zeroScalars.extraCounts, fullScalars.extraCounts, wCit0);
+    AddExtraCountsSliceDelta(outS1->scalars.extraCounts, outS0->scalars.extraCounts, fullScalars.extraCounts, 1.0f);
     memcpy(outS0->scalars.satisfaction, fullScalars.satisfaction, sizeof(fullScalars.satisfaction));
     memcpy(outS1->scalars.satisfaction, fullScalars.satisfaction, sizeof(fullScalars.satisfaction));
     memcpy(outS0->scalars.citizenAverages, fullScalars.citizenAverages, sizeof(fullScalars.citizenAverages));
@@ -3436,6 +3843,21 @@ static void EnsureStateEconInitialized(const BYTE* world)
         g_stateEconInitialized = true;
     } else {
         SyncStateEconHistoryLength(world, w0);
+    }
+    if (!g_stateTrackerInitialized) {
+        float wCit0 = ComputeWorldCitizenState1Weight(world);
+        StateTrackerSlice fullCur = {}, fullOld = {}, zeroTracker = {};
+        SafeReadTrackerSlice(world, false, &fullCur);
+        SafeReadTrackerSlice(world, true,  &fullOld);
+        memset(g_stateTrackerCur, 0, sizeof(g_stateTrackerCur));
+        memset(g_stateTrackerOld, 0, sizeof(g_stateTrackerOld));
+        AddTrackerSliceDelta(&g_stateTrackerCur[0], zeroTracker, fullCur, wCit0);
+        AddTrackerSliceDelta(&g_stateTrackerCur[1], g_stateTrackerCur[0], fullCur, 1.0f);
+        AddTrackerSliceDelta(&g_stateTrackerOld[0], zeroTracker, fullOld, wCit0);
+        AddTrackerSliceDelta(&g_stateTrackerOld[1], g_stateTrackerOld[0], fullOld, 1.0f);
+        g_lastWorldTrackerCur = fullCur;
+        memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
+        g_stateTrackerInitialized = true;
     }
 }
 
@@ -3589,8 +4011,13 @@ static void __fastcall H_LedgerAdd(BYTE* world, const SovietStatResEntry* row, B
 
 static void StatRecordClearFallback(BYTE* world, BYTE* rec)
 {
-    (void)world;
     if (!rec) return;
+    if (world && rec == world + WORLD_STAT_CURRENT_OFFSET) {
+        StateTrackerSlice curTracker = {}, zeroTracker = {};
+        SafeReadTrackerSlice(world, false, &curTracker);
+        SafeWriteTrackerSlice(world, true, curTracker);
+        SafeWriteTrackerSlice(world, false, zeroTracker);
+    }
     StateEconScalars zeroScalars = {};
     SafeWriteStatScalars(rec, zeroScalars);
     int32_t zeroInt = 0;
@@ -3606,7 +4033,7 @@ static void StatRecordClearFallback(BYTE* world, BYTE* rec)
     }
 }
 
-static void FlushUnattributedScalarsToStates(const BYTE* world)
+static void FlushUnattributedScalarsToStates(const BYTE* world, bool trackerFromOld = false)
 {
     if (!world) return;
     StateEconScalars curScalars = {};
@@ -3619,11 +4046,25 @@ static void FlushUnattributedScalarsToStates(const BYTE* world)
     float w0 = ComputeWorldState1Weight(world);
     float wCit0 = ComputeWorldCitizenState1Weight(world);
     AddStatScalarsDelta(&share0, zeroScalars, g_unattributedScalars, w0);
+    memset(share0.citizenCounts, 0, sizeof(share0.citizenCounts));
+    memset(share0.extraCounts, 0, sizeof(share0.extraCounts));
     AddIntSliceDelta(share0.citizenCounts, zeroScalars.citizenCounts, g_unattributedScalars.citizenCounts, 5, wCit0);
-    AddIntSliceDelta(share0.extraCounts, zeroScalars.extraCounts, g_unattributedScalars.extraCounts, 21, wCit0);
+    AddExtraCountsSliceDelta(share0.extraCounts, zeroScalars.extraCounts, g_unattributedScalars.extraCounts, wCit0);
     AddStatScalarsDelta(&g_stateCurEcon[0].scalars, zeroScalars, share0, 1.0f);
     AddStatScalarsDelta(&g_stateCurEcon[1].scalars, share0, g_unattributedScalars, 1.0f);
     memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+
+    StateTrackerSlice curTracker = {};
+    SafeReadTrackerSlice(world, trackerFromOld, &curTracker);
+    AddTrackerSliceDelta(&g_unattributedTrackerCur, g_lastWorldTrackerCur, curTracker, 1.0f);
+    g_lastWorldTrackerCur = curTracker;
+
+    StateTrackerSlice zeroTracker = {};
+    StateTrackerSlice trackerShare0 = {};
+    AddTrackerSliceDelta(&trackerShare0, zeroTracker, g_unattributedTrackerCur, wCit0);
+    AddTrackerSliceDelta(&g_stateTrackerCur[0], zeroTracker, trackerShare0, 1.0f);
+    AddTrackerSliceDelta(&g_stateTrackerCur[1], trackerShare0, g_unattributedTrackerCur, 1.0f);
+    memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
 }
 
 static void __fastcall H_StatRecordClear(BYTE* rcxWorld, BYTE* rec)
@@ -3640,7 +4081,10 @@ static void __fastcall H_StatRecordClear(BYTE* rcxWorld, BYTE* rec)
                       (g_inSimStep || g_inStatClearTest);
     if (isRollover) {
         EnsureStateEconInitialized(world);
-        FlushUnattributedScalarsToStates(world);
+        FlushUnattributedScalarsToStates(world, o_statRecordClear != nullptr);
+        g_stateTrackerOld[0] = g_stateTrackerCur[0];
+        g_stateTrackerOld[1] = g_stateTrackerCur[1];
+        memset(g_stateTrackerCur, 0, sizeof(g_stateTrackerCur));
 
         BYTE* histBegin = nullptr;
         int histCount = 0;
@@ -3690,6 +4134,8 @@ static void __fastcall H_StatRecordClear(BYTE* rcxWorld, BYTE* rec)
     if (isCurStat) {
         SafeReadStatScalars(rec, &g_lastWorldScalars);
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+        SafeReadTrackerSlice(world, false, &g_lastWorldTrackerCur);
+        memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
     }
 
     if (wasUiSwapped && !g_inSimStep && !g_inCommand) {
@@ -3705,6 +4151,7 @@ void TwoStates_ResetEconStatsForTest(BYTE* world)
     g_stateHistEcon[0].clear();
     g_stateHistEcon[1].clear();
     ResetStateHudPopCache();
+    ResetStateTrackerSlices();
     memset(g_testLedgerPool, 0, sizeof(g_testLedgerPool));
     memset(&g_lastWorldScalars, 0, sizeof(g_lastWorldScalars));
     memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
@@ -3774,6 +4221,26 @@ int TwoStates_GetStateEconHistoryCount(int state)
 {
     if (state != 1 && state != 2) return 0;
     return (int)g_stateHistEcon[state - 1].size();
+}
+
+int32_t TwoStates_GetStateEconExtraCountForTest(int state, int idx)
+{
+    if ((state != 1 && state != 2) || idx < 0 || idx >= 21) return 0;
+    return g_stateCurEcon[state - 1].scalars.extraCounts[idx];
+}
+
+float TwoStates_GetStateEconExtraFloatForTest(int state, int idx)
+{
+    if ((state != 1 && state != 2) || idx < 0 || idx >= 21) return 0.0f;
+    float f = 0.0f;
+    memcpy(&f, &g_stateCurEcon[state - 1].scalars.extraCounts[idx], sizeof(float));
+    return f;
+}
+
+float TwoStates_GetStateEconTourismFloatForTest(int state, int idx)
+{
+    if ((state != 1 && state != 2) || idx < 0 || idx >= 44) return 0.0f;
+    return g_stateCurEcon[state - 1].scalars.tourism[idx];
 }
 
 struct VehSaveSnapshot {
@@ -4204,12 +4671,21 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_CIT_HOME_STEP, (void*)&H_CitHomeStep,
                                 (void**)&o_citHomeStep, kCitHomeStepExpect,
                                 sizeof(kCitHomeStepExpect), "republicmp two_states cit_home_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_CHURCH_STEP, (void*)&H_CitizenChurchStep,
+                                (void**)&o_citizenChurchStep, kCitizenChurchStepExpect,
+                                sizeof(kCitizenChurchStepExpect), "republicmp two_states citizen_church_step");
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_BIRTH, (void*)&H_CitizenBirth,
                                 (void**)&o_citizenBirth, kCitizenBirthExpect,
                                 sizeof(kCitizenBirthExpect), "republicmp two_states citizen_birth");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STARVE_STEP, (void*)&H_CitizenStarveStep,
+                                (void**)&o_citizenStarveStep, kCitizenStarveStepExpect,
+                                sizeof(kCitizenStarveStepExpect), "republicmp two_states citizen_starve_step");
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_REMOVE, (void*)&H_CitizenRemove,
                                 (void**)&o_citizenRemove, kCitizenRemoveExpect,
                                 sizeof(kCitizenRemoveExpect), "republicmp two_states citizen_remove");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_EVAL_NEEDS, (void*)&H_CitizenEvalNeeds,
+                                (void**)&o_citizenEvalNeeds, kCitizenEvalNeedsExpect,
+                                sizeof(kCitizenEvalNeedsExpect), "republicmp two_states citizen_eval_needs");
     econOk += InstallInlineHook(g_exeBase + RVA_CALC_STORED_RESOURCES, (void*)&H_CalcStoredResources,
                                 (void**)&o_calcStoredResources, kCalcStoredResourcesExpect,
                                 sizeof(kCalcStoredResourcesExpect), "republicmp two_states calc_stored_resources");
@@ -4256,9 +4732,36 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_HEATING_STEP, (void*)&H_HeatingStep,
                                 (void**)&o_heatingStep, kHeatingStepExpect,
                                 sizeof(kHeatingStepExpect), "republicmp two_states heating_step");
-    econOk += InstallInlineHook(g_exeBase + RVA_ECONOMY_TRADE_WINDOW, (void*)&H_EconomyWindow,
-                                (void**)&o_economyWindow, kEconomyWindowExpect,
-                                sizeof(kEconomyWindowExpect), "republicmp two_states economy_trade_window");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_COURTHOUSE_STEP, (void*)&H_GenericBldEconStep<&o_bldCourthouseStep>,
+                                (void**)&o_bldCourthouseStep, kBldCourthouseStepExpect,
+                                sizeof(kBldCourthouseStepExpect), "republicmp two_states bld_courthouse_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_POLICE_STEP, (void*)&H_GenericBldEconStep<&o_bldPoliceStep>,
+                                (void**)&o_bldPoliceStep, kBldPoliceStepExpect,
+                                sizeof(kBldPoliceStepExpect), "republicmp two_states bld_police_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_HOTEL_STEP, (void*)&H_GenericBldEconStep<&o_bldHotelStep>,
+                                (void**)&o_bldHotelStep, kBldHotelStepExpect,
+                                sizeof(kBldHotelStepExpect), "republicmp two_states bld_hotel_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_ATTRACTION1_STEP, (void*)&H_GenericBldEconStep<&o_bldAttraction1Step>,
+                                (void**)&o_bldAttraction1Step, kBldAttraction1StepExpect,
+                                sizeof(kBldAttraction1StepExpect), "republicmp two_states bld_attraction1_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_ATTRACTION2_STEP, (void*)&H_GenericBldEconStep<&o_bldAttraction2Step>,
+                                (void**)&o_bldAttraction2Step, kBldAttraction2StepExpect,
+                                sizeof(kBldAttraction2StepExpect), "republicmp two_states bld_attraction2_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_CUSTOMS_TOURIST_STEP, (void*)&H_GenericBldEconStep<&o_bldCustomsTouristStep>,
+                                (void**)&o_bldCustomsTouristStep, kBldCustomsTouristStepExpect,
+                                sizeof(kBldCustomsTouristStepExpect), "republicmp two_states bld_customs_tourist_step");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_COMMIT_CRIME, (void*)&H_CitizenCommitCrime,
+                                (void**)&o_citizenCommitCrime, kCitizenCommitCrimeExpect,
+                                sizeof(kCitizenCommitCrimeExpect), "republicmp two_states citizen_commit_crime");
+    econOk += InstallInlineHook(g_exeBase + RVA_CRIME_EXPIRE_CASE, (void*)&H_CrimeExpireCase,
+                                (void**)&o_crimeExpireCase, kCrimeExpireCaseExpect,
+                                sizeof(kCrimeExpireCaseExpect), "republicmp two_states crime_expire_case");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_FOOT_ARRIVE, (void*)&H_CitizenFootArrive,
+                                (void**)&o_citizenFootArrive, kCitizenFootArriveExpect,
+                                sizeof(kCitizenFootArriveExpect), "republicmp two_states citizen_foot_arrive");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_VEHICLE_ALIGHT, (void*)&H_CitizenVehicleAlight,
+                                (void**)&o_citizenVehicleAlight, kCitizenVehicleAlightExpect,
+                                sizeof(kCitizenVehicleAlightExpect), "republicmp two_states citizen_vehicle_alight");
     econOk += InstallInlineHook(g_exeBase + RVA_BLD_UNIV_STEP, (void*)&H_BldUnivStep,
                                 (void**)&o_bldUnivStep, kBldUnivStepExpect,
                                 sizeof(kBldUnivStepExpect), "republicmp two_states bld_univ_step");
@@ -4275,7 +4778,7 @@ bool TwoStates_Install()
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/43), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/55), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -4594,9 +5097,6 @@ void TwoStates_OnSessionEnded()
     g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
     g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
 
-    g_showCivicStats = false;
-    g_economyWindowLastTick = 0;
-
     TwoStates_MountSaveBank(false);
     NativeMenu_ClearHostOnNextLoad();
     TwoStates_ResetResearch();
@@ -4689,18 +5189,22 @@ void TwoStates_BeginCommand(int ownerState)
         EnsureEngineVehLicensesInitialized(world);
         WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[g_cmdOwner - 1]);
     }
-    if (!TwoStates_IsActive() || IsUnlimitedMoney()) {
+    if (!TwoStates_IsActive()) {
         return;
     }
+    bool unlim = IsUnlimitedMoney();
     __try {
         if (g_exeBase) {
             BYTE* world = g_exeBase + WORLD_RVA;
             EnsureStateEconInitialized(world);
             SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_cmdBeforeScalars);
+            SafeReadTrackerSlice(world, false, &g_cmdBeforeTrackerCur);
             BeginConstructResSnapshot(world, g_cmdOwner, &g_cmdResSnapshot);
         }
-        *WorldRubles()  = g_stateRub[g_cmdOwner - 1];
-        *WorldDollars() = g_stateUsd[g_cmdOwner - 1];
+        if (!unlim) {
+            *WorldRubles()  = g_stateRub[g_cmdOwner - 1];
+            *WorldDollars() = g_stateUsd[g_cmdOwner - 1];
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -4754,7 +5258,7 @@ void TwoStates_EndCommand(int ownerState)
         WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
         WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
     }
-    if (!g_inCommand || !TwoStates_IsActive() || IsUnlimitedMoney()) {
+    if (!g_inCommand || !TwoStates_IsActive()) {
         if (g_cmdResSnapshot.active && g_exeBase) {
             EndConstructResSnapshot(g_exeBase + WORLD_RVA, owner, g_cmdResSnapshot);
             g_cmdResSnapshot.active = false;
@@ -4763,6 +5267,7 @@ void TwoStates_EndCommand(int ownerState)
         return;
     }
     g_inCommand = false;
+    bool unlim = IsUnlimitedMoney();
     __try {
         if (g_exeBase) {
             BYTE* world = g_exeBase + WORLD_RVA;
@@ -4772,15 +5277,21 @@ void TwoStates_EndCommand(int ownerState)
             SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &afterScalars);
             AddStatScalarsDelta(&g_stateCurEcon[owner - 1].scalars, g_cmdBeforeScalars, afterScalars, 1.0f);
             g_lastWorldScalars = afterScalars;
+            StateTrackerSlice afterTracker = {};
+            SafeReadTrackerSlice(world, false, &afterTracker);
+            AddTrackerSliceDelta(&g_stateTrackerCur[owner - 1], g_cmdBeforeTrackerCur, afterTracker, 1.0f);
+            g_lastWorldTrackerCur = afterTracker;
         }
-        double newRub = SanitizeMoneyStep(g_stateRub[owner - 1], *WorldRubles());
-        double newUsd = SanitizeMoneyStep(g_stateUsd[owner - 1], *WorldDollars());
-        g_netTradeRub[owner - 1] += (newRub - g_stateRub[owner - 1]);
-        g_netTradeUsd[owner - 1] += (newUsd - g_stateUsd[owner - 1]);
-        g_stateRub[owner - 1] = newRub;
-        g_stateUsd[owner - 1] = newUsd;
-        *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
-        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        if (!unlim) {
+            double newRub = SanitizeMoneyStep(g_stateRub[owner - 1], *WorldRubles());
+            double newUsd = SanitizeMoneyStep(g_stateUsd[owner - 1], *WorldDollars());
+            g_netTradeRub[owner - 1] += (newRub - g_stateRub[owner - 1]);
+            g_netTradeUsd[owner - 1] += (newUsd - g_stateUsd[owner - 1]);
+            g_stateRub[owner - 1] = newRub;
+            g_stateUsd[owner - 1] = newUsd;
+            *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         t_suppressCurStatLedgerHook = false;
         g_cmdResSnapshot.active = false;
@@ -5123,7 +5634,7 @@ void TwoStates_GetLoanDebt(int state, double* outRubDebt, double* outUsdDebt, in
     }
 }
 
-static void PrepareStructureVectorBeforeStep(size_t beginRva, size_t endRva)
+static void PrepareStructureVectorBeforeStep(size_t beginRva, size_t endRva, bool unlim)
 {
     if (!g_exeBase) return;
     BYTE** it = *(BYTE***)(g_exeBase + beginRva);
@@ -5137,10 +5648,12 @@ static void PrepareStructureVectorBeforeStep(size_t beginRva, size_t endRva)
         int owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(x, z), x, z);
         int idx = owner - 1;
         g_stepBldCount[idx]++;
-        float prog = *(float*)(b + BLD_PROGRESS_OFFSET);
-        if (prog < 1.0f) {
-            if (b[BLD_PAY_RUB_OFFSET] && g_stateRub[idx] <= 0.0) b[BLD_PAY_RUB_OFFSET] = 0;
-            if (b[BLD_PAY_USD_OFFSET] && g_stateUsd[idx] <= 0.0) b[BLD_PAY_USD_OFFSET] = 0;
+        if (!unlim) {
+            float prog = *(float*)(b + BLD_PROGRESS_OFFSET);
+            if (prog < 1.0f) {
+                if (b[BLD_PAY_RUB_OFFSET] && g_stateRub[idx] <= 0.0) b[BLD_PAY_RUB_OFFSET] = 0;
+                if (b[BLD_PAY_USD_OFFSET] && g_stateUsd[idx] <= 0.0) b[BLD_PAY_USD_OFFSET] = 0;
+            }
         }
     }
 }
@@ -5150,29 +5663,32 @@ void TwoStates_BeforeStep(BYTE* world)
     TwoStates_RestoreUiMoneySwap();
     g_simLoopCurrentBuilding = nullptr;
     if (!TwoStates_IsActive() || !world) return;
-    if (IsUnlimitedMoney()) {
-        g_inSimStep = false;
+    bool unlim = IsUnlimitedMoney();
+    if (unlim) {
         g_stateRub[0] = g_stateRub[1] = 100000000.0;
         g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
-        return;
     }
     EnsureStateEconInitialized(world);
     g_stepBldCount[0] = g_stepBldCount[1] = 0;
 
     __try {
-        *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
-        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
-        g_lastWorldRub = *WorldRubles();
-        g_lastWorldUsd = *WorldDollars();
-        g_unattributedRub = 0.0;
-        g_unattributedUsd = 0.0;
+        if (!unlim) {
+            *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+            g_lastWorldRub = *WorldRubles();
+            g_lastWorldUsd = *WorldDollars();
+            g_unattributedRub = 0.0;
+            g_unattributedUsd = 0.0;
+        }
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+        SafeReadTrackerSlice(world, false, &g_lastWorldTrackerCur);
+        memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
         g_simStepThread = GetCurrentThreadId();
         g_inSimStep = true;
 
-        PrepareStructureVectorBeforeStep(VEC_BUILDINGS_BEGIN_RVA, VEC_BUILDINGS_END_RVA);
-        PrepareStructureVectorBeforeStep(VEC_CONSTRUCTIONS_BEGIN_RVA, VEC_CONSTRUCTIONS_END_RVA);
+        PrepareStructureVectorBeforeStep(VEC_BUILDINGS_BEGIN_RVA, VEC_BUILDINGS_END_RVA, unlim);
+        PrepareStructureVectorBeforeStep(VEC_CONSTRUCTIONS_BEGIN_RVA, VEC_CONSTRUCTIONS_END_RVA, unlim);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -5189,41 +5705,44 @@ double TwoStates_ComputeStepWeightState1(int countState1, int countState2)
 void TwoStates_AfterStep(BYTE* world)
 {
     g_simLoopCurrentBuilding = nullptr;
-    if (!TwoStates_IsActive() || !world || IsUnlimitedMoney()) {
+    if (!TwoStates_IsActive() || !world) {
         g_inSimStep = false;
         return;
     }
     g_inSimStep = false;
+    bool unlim = IsUnlimitedMoney();
     __try {
         FlushUnattributedScalarsToStates(world);
         ComputeStateCitizenDemographics(world, 1, &g_stateCurEcon[0].scalars);
         ComputeStateCitizenDemographics(world, 2, &g_stateCurEcon[1].scalars);
 
-        double nowRub = *WorldRubles();
-        double nowUsd = *WorldDollars();
-        double dRub = g_unattributedRub + (nowRub - g_lastWorldRub);
-        double dUsd = g_unattributedUsd + (nowUsd - g_lastWorldUsd);
-        g_unattributedRub = 0.0;
-        g_unattributedUsd = 0.0;
+        if (!unlim) {
+            double nowRub = *WorldRubles();
+            double nowUsd = *WorldDollars();
+            double dRub = g_unattributedRub + (nowRub - g_lastWorldRub);
+            double dUsd = g_unattributedUsd + (nowUsd - g_lastWorldUsd);
+            g_unattributedRub = 0.0;
+            g_unattributedUsd = 0.0;
 
-        double w0 = TwoStates_ComputeStepWeightState1(g_stepBldCount[0], g_stepBldCount[1]);
+            double w0 = TwoStates_ComputeStepWeightState1(g_stepBldCount[0], g_stepBldCount[1]);
 
-        if (fabs(dRub) > 1e-6) {
-            double d0 = dRub * w0;
-            g_stateRub[0] += d0;
-            g_stateRub[1] += (dRub - d0);
-            g_netTradeRub[0] += d0;
-            g_netTradeRub[1] += (dRub - d0);
+            if (fabs(dRub) > 1e-6) {
+                double d0 = dRub * w0;
+                g_stateRub[0] += d0;
+                g_stateRub[1] += (dRub - d0);
+                g_netTradeRub[0] += d0;
+                g_netTradeRub[1] += (dRub - d0);
+            }
+            if (fabs(dUsd) > 1e-6) {
+                double d0 = dUsd * w0;
+                g_stateUsd[0] += d0;
+                g_stateUsd[1] += (dUsd - d0);
+                g_netTradeUsd[0] += d0;
+                g_netTradeUsd[1] += (dUsd - d0);
+            }
+            *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
+            *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
         }
-        if (fabs(dUsd) > 1e-6) {
-            double d0 = dUsd * w0;
-            g_stateUsd[0] += d0;
-            g_stateUsd[1] += (dUsd - d0);
-            g_netTradeUsd[0] += d0;
-            g_netTradeUsd[1] += (dUsd - d0);
-        }
-        *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
-        *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -5333,7 +5852,7 @@ void TwoStates_UiBegin()
     if (!g_exeBase || g_inSimStep || g_inCommand || TwoStates_IsSaveInProgress() ||
         g_beforeLoadPrepared || Determinism_WorldLoading() ||
         (o_statRecordClear && !SaveSync_IsWorldLoaded()) ||
-        Determinism_GetFramePhase() != 0 || IsUnlimitedMoney()) {
+        Determinism_GetFramePhase() != 0) {
         LeaveCriticalSection(&g_moneySwapLock);
         return;
     }
@@ -5345,7 +5864,7 @@ void TwoStates_UiBegin()
         return;
     }
 
-    if (SafeReadPod(WorldRubles(), &g_uiSavedSimRub) && SafeReadPod(WorldDollars(), &g_uiSavedSimUsd)) {
+    if (!IsUnlimitedMoney() && SafeReadPod(WorldRubles(), &g_uiSavedSimRub) && SafeReadPod(WorldDollars(), &g_uiSavedSimUsd)) {
         g_uiShownRub = twoStates ? TwoStates_LocalRubles() : g_uiSavedSimRub;
         g_uiShownUsd = twoStates ? TwoStates_LocalDollars() : g_uiSavedSimUsd;
         if (twoStates) {
@@ -6205,101 +6724,6 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
     }
 }
 
-static void DrawCivicTableRows(const StateCivicStats& s1, const StateCivicStats& s2)
-{
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Уровень преступности", "Crime Rate"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%.1f%%", s1.crimeRate);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%.1f%%", s2.crimeRate);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Осужденные / Под следствием", "Criminals / Caseload"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%d (%s: %d)", s1.criminals, Tr("дел", "cases"), s1.caseload);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%d (%s: %d)", s2.criminals, Tr("дел", "cases"), s2.caseload);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Заключенные в тюрьмах", "Prison Inmates"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%d (%s: %d)", s1.prisoners, Tr("тюрем", "prisons"), s1.prisons);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%d (%s: %d)", s2.prisoners, Tr("тюрем", "prisons"), s2.prisons);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Суды", "Courthouses"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%d", s1.courthouses);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%d", s2.courthouses);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Дети в детдомах", "Orphaned Children"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%d (%s: %d)", s1.orphans, Tr("детдомов", "orphanages"), s1.orphanages);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%d (%s: %d)", s2.orphans, Tr("детдомов", "orphanages"), s2.orphanages);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Туризм (Рубли)", "Tourism (RUB)"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%.0f ₽", s1.tourismRub);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%.0f ₽", s2.tourismRub);
-
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::Text("%s", Tr("Туризм (Доллары)", "Tourism (USD)"));
-    ImGui::TableSetColumnIndex(1);
-    ImGui::Text("%.0f $", s1.tourismUsd);
-    ImGui::TableSetColumnIndex(2);
-    ImGui::Text("%.0f $", s2.tourismUsd);
-}
-
-static void DrawCivicEconomyBreakdownOverlay(ImVec2 displaySize)
-{
-    StateCivicStats s1 = {}, s2 = {};
-    TwoStates_GetStateCivicStats(1, &s1);
-    TwoStates_GetStateCivicStats(2, &s2);
-
-    ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f - 240.0f, displaySize.y * 0.22f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_FirstUseEver);
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize;
-    bool open = true;
-    if (ImGui::Begin(Tr("ГОСПЛАН СССР — ЮСТИЦИЯ И ТУРИЗМ ГОСУДАРСТВ",
-                        "GOSPLAN — CIVIC INSTITUTIONS & TOURISM"), &open, flags)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "%s",
-                           Tr("Раздельная статистика юстиции, пенитенциарной системы и туризма",
-                              "Separate statistics for judiciary, corrections, and tourism"));
-        ImGui::Separator();
-
-        if (ImGui::BeginTable("CivicTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn(Tr("Показатель", "Metric"), ImGuiTableColumnFlags_WidthFixed, 180.0f);
-            ImGui::TableSetupColumn(Tr("Западная ССР", "West SSR"), ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn(Tr("Восточная ССР", "East SSR"), ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            DrawCivicTableRows(s1, s2);
-
-            ImGui::EndTable();
-        }
-
-        if (!open) {
-            g_showCivicStats = false;
-        }
-    }
-    ImGui::End();
-}
-
 void TwoStates_DrawOverlay()
 {
     const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
@@ -6310,11 +6734,9 @@ void TwoStates_DrawOverlay()
 
     // Hotkeys when game window is focused:
     //   F7: toggle 3D state border lines (Two States mode only)
-    //   F8: toggle Civic & Tourism stats overlay (Two States mode only)
     //   F6: jump camera to partner / active ping
     //   Alt + LMB: send map ping at cursor
     static bool s_f7WasDown = false;
-    static bool s_f8WasDown = false;
     static bool s_f6WasDown = false;
     static bool s_altClickWasDown = false;
 
@@ -6329,15 +6751,6 @@ void TwoStates_DrawOverlay()
             : Tr("3D-граница государств: СКРЫТА [F7]", "3D State Border: OFF [F7]"), 0);
     }
     s_f7WasDown = f7Down;
-
-    bool f8Down = allowWorldHotkeys && TwoStates_IsActive() && (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
-    if (f8Down && !s_f8WasDown) {
-        g_showCivicStats = !g_showCivicStats;
-        TwoStates_AddToast(g_showCivicStats
-            ? Tr("Статистика юстиции и туризма: ПОКАЗАНА [F8]", "Justice & Tourism Stats: SHOWN [F8]")
-            : Tr("Статистика юстиции и туризма: СКРЫТА [F8]", "Justice & Tourism Stats: HIDDEN [F8]"), 0);
-    }
-    s_f8WasDown = f8Down;
 
     bool f6Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
     if (f6Down && !s_f6WasDown && worldLoaded) {
@@ -6380,11 +6793,6 @@ void TwoStates_DrawOverlay()
     if (worldLoaded) {
         DrawPartnerCursorAndPing(bg, displaySize);
         DrawMinimapOverlay(bg);
-    }
-
-    // Draw Civic & Tourism Economy Breakdown window when open or when Economy & Trade window is open
-    if (worldLoaded && TwoStates_IsActive() && (g_showCivicStats || TwoStates_IsEconomyWindowOpen())) {
-        DrawCivicEconomyBreakdownOverlay(displaySize);
     }
 
     // Draw Toast notifications (top-center below the game's resource bar)
@@ -7637,6 +8045,12 @@ static void SanitizeEconPeriodScalars(StateEconPeriodStats* st)
         if (!isfinite(st->scalars.citizenAverages[i]) || fabsf(st->scalars.citizenAverages[i]) > 1.0e5f)
             st->scalars.citizenAverages[i] = 0.0f;
     }
+    for (int i = 10; i <= 11; ++i) {
+        float f = 0.0f;
+        memcpy(&f, &st->scalars.extraCounts[i], sizeof(float));
+        if (!isfinite(f) || f < 0.0f || f > 1.0e7f)
+            st->scalars.extraCounts[i] = 0;
+    }
 }
 
 static void HealCorruptedSaveBalances(long long rubCents[2], long long usdCents[2],
@@ -8038,10 +8452,12 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     FinalizeSavedCameraMeta(camState);
 
     g_stateEconInitialized = (haveEconCur[0] && haveEconCur[1]);
+    ResetStateTrackerSlices();
     HealLoadedCoopMetaTradeStats(hadPoisonedZero, rubCents, usdCents, tradeRubCents, tradeUsdCents);
     if (g_stateEconInitialized && world) {
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
+        EnsureStateEconInitialized(const_cast<BYTE*>(world));
     }
     if ((g_engineResearch[0].initialized || g_engineResearch[1].initialized) && world) {
         EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
@@ -8086,6 +8502,7 @@ void TwoStates_BeforeAnyWorldLoad()
     g_beforeLoadPrepared = true;
     TwoStates_RestoreUiMoneySwap();
     ResetStateHudPopCache();
+    ResetStateTrackerSlices();
     ResetEngineResearchSlices();
     ResetEngineVehLicenseSlices();
     g_stateEconInitialized = false;
@@ -8268,6 +8685,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
         g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
         ResetStateHudPopCache();
+        ResetStateTrackerSlices();
         g_stateEconInitialized = false;
         ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
         ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);

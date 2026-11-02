@@ -40,10 +40,6 @@ struct StateCivicStats {
 #endif
 
 extern void TwoStates_GetStateCivicStatsEx(const BYTE* world, int state, StateCivicStats* outStats);
-extern void TwoStates_GetStateCivicStats(int state, StateCivicStats* outStats);
-extern bool TwoStates_GetShowCivicStats();
-extern void TwoStates_SetShowCivicStats(bool show);
-extern bool TwoStates_IsEconomyWindowOpen();
 
 // ---------------------------------------------------------------------------
 // Test Filter Scope Mirror: mirrors session/two_states.cpp CivicBuildingFilterScope
@@ -331,16 +327,6 @@ static bool SubTest_M3_Challenger2_CivicStatsAndTourism()
     // 2. Crime Rate Boundary Check: 0 population must yield 0.0f crimeRate (no division by zero)
     TEST_CHECK(s1.crimeRate == 0.0f);
 
-    // 3. UI Toggle Hotkey State:
-    TEST_CHECK(!TwoStates_GetShowCivicStats());
-    TwoStates_SetShowCivicStats(true);
-    TEST_CHECK(TwoStates_GetShowCivicStats());
-    TwoStates_SetShowCivicStats(false);
-    TEST_CHECK(!TwoStates_GetShowCivicStats());
-
-    // 4. Economy window open predicate test
-    TEST_CHECK(!TwoStates_IsEconomyWindowOpen());
-
     TwoStates_OnSessionEnded();
     memset(world + WORLD_BUILDINGS_OFFSET, 0, 24);
     return true;
@@ -492,11 +478,7 @@ static bool SubTest_M3_Challenger2_SingleplayerIsolation()
 
     // 2. In Singleplayer, TwoStates_DrawOverlay must return immediately with 0 draw calls
     TwoStates_DrawOverlay(); // Must be completely dormant and safe
-
-    // 3. In Singleplayer, UI toggle does not alter active session state
-    TwoStates_SetShowCivicStats(true);
     TEST_CHECK(!TwoStates_IsActive());
-    TwoStates_SetShowCivicStats(false);
 
     memset(world + WORLD_BUILDINGS_OFFSET, 0, 24);
     return true;
@@ -560,8 +542,8 @@ static bool SubTest_M3_Challenger2_ConcurrencyAndHighPopStress()
         } else if (threadId == 3) {
             TestCivicBuildingFilterScope scope(world, (iter % 2) + 1);
         } else {
-            bool cur = TwoStates_GetShowCivicStats();
-            TwoStates_SetShowCivicStats(!cur);
+            StateCivicStats sBoth = {};
+            TwoStates_GetStateCivicStatsEx(world, (iter % 2) + 1, &sBoth);
         }
     };
 
