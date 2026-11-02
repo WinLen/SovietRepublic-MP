@@ -222,11 +222,30 @@ bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset)
     return IsLeftOutSlotDynamicOffset(offset);
 }
 
+void BuildingSwitches_RevertBuildingName(unsigned long long building)
+{
+    if (!g_taken || !building) return;
+    for (const Range& r : g_ranges) {
+        if (r.kind == KIND_BUILDING && r.building == building && r.bytes >= NAME_END &&
+            r.copy + NAME_END <= g_bytes.size()) {
+            Copy((void*)(building + NAME_AT), g_bytes.data() + r.copy + NAME_AT, NAME_END - NAME_AT);
+            break;
+        }
+    }
+}
+
+static bool IsNonPointerBuildingWord(int kind, unsigned offset)
+{
+    if (kind != KIND_BUILDING) return false;
+    return (offset >= NAME_AT && offset < NAME_END) ||
+           (offset >= BLD_CITIZEN_FILTER_AT && offset < BLD_CITIZEN_FILTER_END);
+}
+
 static bool IsNeverNoiseWord(const Range& r, unsigned offset)
 {
     if (r.kind == KIND_BUILDING)
         return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET ||
-               offset == BLD_UNIV_STAFF_RATIO_OFFSET;
+               offset == BLD_UNIV_STAFF_RATIO_OFFSET || IsNonPointerBuildingWord(r.kind, offset);
     if (r.kind == KIND_SLOT)
         return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) && ((offset % 16) == 0x0C);
     return false;
@@ -335,10 +354,10 @@ static void Compare(const Range& r, bool click)
             continue;
         }
         if (!neverNoise && word < noise.size() && noise[word]) continue;
-        // A heap address in the aligned pair (names are text).
+        // A heap address in the aligned pair (names and citizen/car filters are non-pointer fields).
         unsigned pair = q & ~7u;
-        bool text = r.kind == KIND_BUILDING && offset >= NAME_AT && offset < NAME_END;
-        if (!text && pair + 8 <= r.bytes &&
+        bool nonPtrPair = IsNonPointerBuildingWord(r.kind, offset);
+        if (!nonPtrPair && pair + 8 <= r.bytes &&
             (PointerLike(*(const U64*)(old + pair)) || PointerLike(*(const U64*)(cur.data() + pair)))) {
             if (g_heapLogged < 20) {
                 ++g_heapLogged;
@@ -681,6 +700,27 @@ static const char* ApplyUnivResearch(U64 building, const SwitchMsg& m)
     return nullptr;
 }
 
+static const TsmRoutineSig kRebuildStopLineNamesSig[] = {
+    { REBUILD_STOP_LINE_NAMES_RVA, { 0x48, 0x85, 0xD2, 0x0F, 0x84, 0x9F, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x48 }, 16 },
+};
+static int g_rebuildStopLineNamesReady = -1;
+
+static void RefreshStopLineNamesForBuilding(U64 building)
+{
+    if (!building || !g_exeBase) return;
+    BYTE* world = World();
+    U64 refreshSrc = 0;
+    if (Copy(&refreshSrc, world + WORLD_RENAME_REFRESH_SRC_OFF, 8)) {
+        Copy(world + WORLD_RENAME_REFRESH_DST_OFF, &refreshSrc, 8);
+    }
+    if (!TsmCheckRoutineTable(g_exeBase, &g_rebuildStopLineNamesReady, kRebuildStopLineNamesSig, 1)) return;
+    U64 linesMgr = 0;
+    if (Copy(&linesMgr, world + WORLD_LINES_OFFSET, 8) && linesMgr) {
+        typedef void (__fastcall* RebuildStopLineNamesFn)(void* linesMgr, void* bld);
+        ((RebuildStopLineNamesFn)(g_exeBase + REBUILD_STOP_LINE_NAMES_RVA))((void*)linesMgr, (void*)building);
+    }
+}
+
 static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
 {
     if (m.kind != KIND_WORLD && !building) return "the building is gone";
@@ -692,9 +732,9 @@ static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
             Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
             if (LeftOut(checkR, off))
                 return "a word is in a view/vector range";
-            bool text = m.kind == KIND_BUILDING && off >= NAME_AT && off < NAME_END;
+            bool nonPtrPair = IsNonPointerBuildingWord((int)m.kind, off);
             U64 pairAddr = WordAddress(building, m, off & ~7u);
-            if (!text && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
+            if (!nonPtrPair && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
                 PointerLike(*(const U64*)pairAddr))
                 return "a word overlaps a heap pointer here";
         }
@@ -704,6 +744,7 @@ static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
 
 static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differing)
 {
+    bool renamedBuilding = false;
     for (unsigned i = 0; i < m.count; i++) {
         unsigned off = m.words[i].offset;
         if (m.kind == KIND_WORLD && IsLocalPerStateWorldSetting(off)) continue;
@@ -718,6 +759,9 @@ static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differi
             if (!p) continue;
             if (*p != m.words[i].old && *p != m.words[i].now) differing++;
             *p = m.words[i].now;
+            if (m.kind == KIND_BUILDING && off >= NAME_AT && off < NAME_END) {
+                renamedBuilding = true;
+            }
         }
         if (m.kind == KIND_WORLD) // the session's value from now on
             for (int k = 0; k < g_worldCount; k++)
@@ -726,6 +770,9 @@ static void WriteSwitchWords(U64 building, const SwitchMsg& m, unsigned& differi
                     g_stale[k] = g_auth[k];
                     g_sentValid[k] = false;
                 }
+    }
+    if (renamedBuilding) {
+        RefreshStopLineNamesForBuilding(building);
     }
 }
 

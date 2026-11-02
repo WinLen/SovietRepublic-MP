@@ -799,8 +799,8 @@ static void HookedLoadWorld(void)
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
             SafeCallLoadWorld();
-            g_inLoadWorldCall = false;
             TwoStates_OnAnyWorldLoaded(false);
+            g_inLoadWorldCall = false;
             return;
         }
         g_simThread = GetCurrentThreadId();
@@ -814,24 +814,27 @@ static void HookedLoadWorld(void)
         }
     }
     SafeCallLoadWorld();
-    g_inLoadWorldCall = false;
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
+        // Keep g_sessionLoadPending / g_inLoadWorldCall true until TwoStates_OnAnyWorldLoaded
+        // finishes reading republicmp_coop.ini so SaveSync never deletes staging dir early.
         EmptySearchPool();
         SimPatches_ResetSearches();
         ResetFrames();
         g_paused = true;
         g_stepCount = 0;
-        g_sessionLoadPending = false;
-        g_sessionRunning = true;
         g_postLoadInitPending = true;
         TwoStates_OnAnyWorldLoaded(true);
         Commands_SetSession(g_sessionHost ? COMMANDS_HOST : COMMANDS_PLAYER);
+        g_sessionRunning = true;
+        g_sessionLoadPending = false;
+        g_inLoadWorldCall = false;
         Logf("republicmp  LOCKSTEP: shared simulation starts at this load (%s)", g_sessionHost ? "host" : "player");
         return;
     }
     TwoStates_OnAnyWorldLoaded(false);
+    g_inLoadWorldCall = false;
     if (NativeMenu_IsHostOnNextLoad() || SaveSync_IsWaitingLobbyActive()) {
         SaveSync_EnforceWaitingLobbyHold();
     }

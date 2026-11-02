@@ -729,13 +729,23 @@ static U64 HandleManualBuyCapture(const U64* a)
     return 0;
 }
 
-static U64 Run(unsigned index, const U64* a)
+static void SkipRenamePostMutationIfAtCallSite(uintptr_t* retAddr)
+{
+    if (retAddr && g_exeBase && *retAddr == (uintptr_t)(g_exeBase + SITE_RENAME_AFTER_CALL_RVA)) {
+        *retAddr = (uintptr_t)(g_exeBase + SITE_RENAME_SKIP_MUTATION_RVA);
+    }
+}
+
+static U64 Run(unsigned index, const U64* a, uintptr_t* retAddr = nullptr)
 {
     const GameCallSite& s = kSites[index];
     if (s.special != CALL_LOCAL &&
         (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
         if (s.special == CALL_DELETE_LINE && a[1]) {
             __try { *(BYTE*)(a[1] + 1) = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        if (s.special == CALL_RENAME) {
+            SkipRenamePostMutationIfAtCallSite(retAddr);
         }
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return s.result;
@@ -784,7 +794,11 @@ static U64 Run(unsigned index, const U64* a)
     case CALL_LOCAL:
         return CallSite(s, a);
     case CALL_RENAME:
-        return Rename_Capture(a[0], a[1], a[2]) ? 0 : CallSite(s, a);
+        if (Rename_Capture(a[0], a[1], a[2])) {
+            SkipRenamePostMutationIfAtCallSite(retAddr);
+            return 0;
+        }
+        return CallSite(s, a);
     case CALL_ACCEPT_MEASURES:
         LineAccept_RestoreMeasures();
         return s.result;
@@ -833,7 +847,7 @@ static U64 Thunk(U64 a1, U64 a2, U64 a3, U64 a4, U64 a5, U64 a6, U64 a7)
         if (kSites[I].special == CALL_ADD_BORDER_STOP) a[3] = 0;
         return CallSite(kSites[I], a);
     }
-    return Run(I, a);
+    return Run(I, a, (uintptr_t*)_AddressOfReturnAddress());
 }
 
 // The same for a site whose fourth argument is a float (xmm3): its bits go in a[3].

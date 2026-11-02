@@ -88,6 +88,14 @@ static bool  g_testUnivClickActive = false;
 static int   g_testUnivClickTechIdx = -1;
 static float g_testUnivClickRatio = 0.5f;
 
+struct StateEngineVehLicenses {
+    std::vector<std::string> ownedKeys;
+    bool initialized = false;
+    bool loadedFromMeta = false;
+};
+
+static StateEngineVehLicenses g_engineVehLicenses[2];
+
 static bool  g_hasSavedCam1 = false;
 static float g_savedCam1Pos[3] = { 0.0f, 0.0f, 0.0f };
 static float g_savedCam1Look[3] = { 0.0f, 0.0f, 0.0f };
@@ -633,7 +641,7 @@ static void AddFloatSliceDelta(float* dst, const float* before, const float* aft
 {
     for (int i = 0; i < count; ++i) {
         float d = (after[i] - before[i]) * scale;
-        if (isfinite(d)) dst[i] += d;
+        if (isfinite(d) && fabsf(d) <= 1.0e9f) dst[i] += d;
     }
 }
 
@@ -1287,7 +1295,8 @@ typedef float (__fastcall* BldProductivityStepFn)(BYTE* world, BYTE* building, f
 typedef void (__fastcall* BldConsumeResFn)(BYTE* world, BYTE* building, BYTE* resource, float amount, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* ForeignLaborStepFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
 typedef __int64 (__fastcall* ConstructStepFn)(BYTE* world, BYTE* building, float dt, unsigned char flag, uintptr_t a5, uintptr_t a6);
-typedef __int64 (__fastcall* VehicleSaleFn)(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
+typedef __int64 (__fastcall* VehicleSaleFn)(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4,
+                                            uintptr_t a5, uintptr_t a6, float a7);
 typedef void (__fastcall* VehicleExportFn)(BYTE* world, BYTE* vehicle, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef unsigned char (__fastcall* VehicleCargoTradeFn)(BYTE* vehicle, uintptr_t a2, uintptr_t a3, unsigned char a4,
                                                         uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8,
@@ -1403,14 +1412,20 @@ static bool BeginEconAttribution(BYTE* world, int owner)
     }
 }
 
+static double SanitizeMoneyStep(double oldBal, double newBal)
+{
+    if (!isfinite(newBal) || fabs(newBal - oldBal) > 1.0e9) return oldBal;
+    return newBal;
+}
+
 static void EndEconAttribution(int owner, bool countInNetTrade = true)
 {
     if (!t_inEconHook) return;
     t_inEconHook = false;
     __try {
         int idx = owner - 1;
-        double newRub = *WorldRubles();
-        double newUsd = *WorldDollars();
+        double newRub = SanitizeMoneyStep(g_stateRub[idx], *WorldRubles());
+        double newUsd = SanitizeMoneyStep(g_stateUsd[idx], *WorldDollars());
         double dRub = newRub - g_stateRub[idx];
         double dUsd = newUsd - g_stateUsd[idx];
         g_stateRub[idx] = newRub;
@@ -1840,23 +1855,29 @@ static void __fastcall H_EconomyWindow(BYTE* world, uintptr_t a2, uintptr_t a3, 
 // University & Engine Research Vector Isolation (world + 0x1175C..0x11780)
 // ---------------------------------------------------------------------------
 
-static bool SafeReadResearchVecHeader(const BYTE* world, BYTE** outBegin, int* outCount)
+static bool SafeReadStridedWorldVecHeader(const BYTE* world, size_t vecOffset, size_t elemStride, int maxCount,
+                                          BYTE** outBegin, int* outCount)
 {
-    if (!world || !outBegin || !outCount) return false;
+    if (!world || !outBegin || !outCount || elemStride == 0) return false;
     *outBegin = nullptr;
     *outCount = 0;
     uintptr_t ptrs[2] = {};
-    if (!SafeMemcpyPod(ptrs, world + WORLD_RESEARCH_VEC_BEGIN_OFFSET, sizeof(ptrs))) return false;
+    if (!SafeMemcpyPod(ptrs, world + vecOffset, sizeof(ptrs))) return false;
     BYTE* b = (BYTE*)ptrs[0];
     BYTE* e = (BYTE*)ptrs[1];
     if (!b || e < b) return false;
     ptrdiff_t bytes = e - b;
-    if (bytes < 0 || (bytes % (ptrdiff_t)RESEARCH_ITEM_STRIDE) != 0) return false;
-    int count = (int)(bytes / (ptrdiff_t)RESEARCH_ITEM_STRIDE);
-    if (count <= 0 || count > 256) return false;
+    if (bytes < 0 || (bytes % (ptrdiff_t)elemStride) != 0) return false;
+    int count = (int)(bytes / (ptrdiff_t)elemStride);
+    if (count <= 0 || count > maxCount) return false;
     *outBegin = b;
     *outCount = count;
     return true;
+}
+
+static bool SafeReadResearchVecHeader(const BYTE* world, BYTE** outBegin, int* outCount)
+{
+    return SafeReadStridedWorldVecHeader(world, WORLD_RESEARCH_VEC_BEGIN_OFFSET, RESEARCH_ITEM_STRIDE, 256, outBegin, outCount);
 }
 
 static int ComputeBuildingPosKeySafe(const BYTE* bld)
@@ -2004,25 +2025,47 @@ static void RecomputeEngineResearch(BYTE* world)
     RecomputeEngineResearchFallback(world);
 }
 
+static bool IsTwoStatesResearchOrLicenseActive()
+{
+    if (g_beforeLoadPrepared || Determinism_WorldLoading()) return false;
+    if (TwoStates_IsActive()) return true;
+    if (g_loadedFromCoopSave && TwoStates_GetMode() == COOP_MODE_TWO_STATES) return true;
+    return false;
+}
+
 static void SyncSummaryResearchFromSlice(int stateOwner, const StateEngineResearch& src)
 {
     if (stateOwner != 1 && stateOwner != 2) return;
+    if (src.items.empty()) return;
     StateResearchTree& tree = g_stateResearch[stateOwner - 1];
-    int n = (int)std::min(src.items.size(), (size_t)32);
-    for (int i = 0; i < n; ++i) {
-        const EngineResearchItemSlice& s = src.items[(size_t)i];
-        tree.techProgress[i] = s.progress;
-        uint32_t bit = (1u << i);
-        if (s.progress >= 1.0f) {
-            if ((tree.unlockedMask & bit) == 0) {
-                tree.unlockedMask |= bit;
-                tree.researchedCount++;
+    int activeIdx = -1;
+    float activeProg = 0.0f;
+    for (size_t i = 0; i < src.items.size(); ++i) {
+        const EngineResearchItemSlice& s = src.items[i];
+        if (i < 32) {
+            if (s.progress > 0.0f || s.researchingBld != nullptr || s.bldPosKey > 0) {
+                tree.techProgress[i] = s.progress;
+            }
+            uint32_t bit = (1u << i);
+            if (s.progress >= 1.0f) {
+                if ((tree.unlockedMask & bit) == 0) {
+                    tree.unlockedMask |= bit;
+                    tree.researchedCount++;
+                }
             }
         }
-        if (s.researchingBld != nullptr) {
-            tree.activeTechId = i;
-            tree.activeTechProgress = s.progress;
+        if (activeIdx < 0 && (s.researchingBld != nullptr || s.bldPosKey > 0)) {
+            activeIdx = (int)i;
+            activeProg = s.progress;
         }
+    }
+    if (activeIdx >= 0) {
+        tree.activeTechId = activeIdx;
+        tree.activeTechProgress = activeProg;
+    } else if (tree.activeTechId > 0 && (size_t)tree.activeTechId < src.items.size() &&
+               src.items[(size_t)tree.activeTechId].progress >= 1.0f) {
+        tree.activeTechId = 0;
+        tree.activeTechProgress = 0.0f;
     }
 }
 
@@ -2033,6 +2076,7 @@ static void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* 
     BYTE* begin = nullptr;
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    std::vector<EngineResearchItemSlice> prevItems = dst->items;
     dst->items.resize((size_t)count);
     for (int i = 0; i < count; ++i) {
         const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
@@ -2047,6 +2091,9 @@ static void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* 
             }
         }
         s.bldPosKey = ComputeBuildingPosKeySafe(s.researchingBld);
+        if (s.bldPosKey <= 0 && s.researchingBld != nullptr && (size_t)i < prevItems.size()) {
+            s.bldPosKey = prevItems[(size_t)i].bldPosKey;
+        }
         dst->items[(size_t)i] = s;
     }
     dst->initialized = true;
@@ -2094,15 +2141,26 @@ static void EnsureEngineResearchInitialized(BYTE* world)
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
     for (int s = 0; s < 2; ++s) {
-        int stateOwner = s + 1;
         if (!g_engineResearch[s].initialized) {
-            CaptureWorldResearchToSlice(world, &g_engineResearch[s], stateOwner);
-        } else if (g_engineResearch[s].loadedFromMeta) {
+            CaptureWorldResearchToSlice(world, &g_engineResearch[s], s + 1);
+        }
+    }
+    for (int s = 0; s < 2; ++s) {
+        int stateOwner = s + 1;
+        if (g_engineResearch[s].loadedFromMeta) {
             for (size_t i = 0; i < g_engineResearch[s].items.size(); ++i) {
                 EngineResearchItemSlice& it = g_engineResearch[s].items[i];
                 if (!it.researchingBld && it.bldPosKey > 0) {
                     it.researchingBld = FindWorldBuildingByPosKey(world, it.bldPosKey);
                 }
+            }
+            WriteSliceToWorldResearch(world, &g_engineResearch[s]);
+            RecomputeEngineResearch(world);
+            SafeMemcpyPod(g_engineResearch[s].unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+            int n = (int)std::min((size_t)count, g_engineResearch[s].items.size());
+            for (int i = 0; i < n; ++i) {
+                const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+                SafeReadPod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, &g_engineResearch[s].items[(size_t)i].available);
             }
             g_engineResearch[s].loadedFromMeta = false;
             SyncSummaryResearchFromSlice(stateOwner, g_engineResearch[s]);
@@ -2141,7 +2199,7 @@ static void BldUnivStepFallback(BYTE* world, BYTE* building)
 static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                         uintptr_t a5, uintptr_t a6)
 {
-    bool twoStates = TwoStates_IsActive() && world && building;
+    bool twoStates = IsTwoStatesResearchOrLicenseActive() && world && building;
     int owner = twoStates ? ResolveBuildingOwnerFast(building) : 1;
     if (owner != 1 && owner != 2) owner = 1;
     if (twoStates) {
@@ -2191,7 +2249,7 @@ static void ResearchDailyUpdateFallback(BYTE* world)
 
 static void __fastcall H_ResearchDailyUpdate(BYTE* world)
 {
-    if (!TwoStates_IsActive() || !world) {
+    if (!IsTwoStatesResearchOrLicenseActive() || !world) {
         if (o_researchDailyUpdate) o_researchDailyUpdate(world);
         else ResearchDailyUpdateFallback(world);
         return;
@@ -2214,7 +2272,7 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
     if (!world || !building) {
         return o_univResearchPanel ? o_univResearchPanel(world, building, window, xPtr, yPtr, a6) : nullptr;
     }
-    bool twoStates = TwoStates_IsActive();
+    bool twoStates = IsTwoStatesResearchOrLicenseActive();
     int bldOwner = twoStates ? ResolveBuildingOwnerFast(building) : 1;
     if (bldOwner != 1 && bldOwner != 2) bldOwner = 1;
     int localState = TwoStates_LocalState();
@@ -2275,7 +2333,7 @@ bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int owner
 {
     if (!world || !building) return false;
     int state = (ownerState == 2) ? 2 : 1;
-    bool twoStates = TwoStates_IsActive();
+    bool twoStates = IsTwoStatesResearchOrLicenseActive();
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[state - 1]);
@@ -2293,7 +2351,7 @@ bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int owner
 int TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* building, int stateOwner)
 {
     if (!world || !building) return -1;
-    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+    if (IsTwoStatesResearchOrLicenseActive() && (stateOwner == 1 || stateOwner == 2) &&
         g_engineResearch[stateOwner - 1].initialized) {
         const std::vector<EngineResearchItemSlice>& items = g_engineResearch[stateOwner - 1].items;
         int targetKey = ComputeBuildingPosKeySafe(building);
@@ -2311,7 +2369,7 @@ int TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* build
 float TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int techIdx)
 {
     if (techIdx < 0) return 0.0f;
-    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+    if (IsTwoStatesResearchOrLicenseActive() && (stateOwner == 1 || stateOwner == 2) &&
         g_engineResearch[stateOwner - 1].initialized) {
         const std::vector<EngineResearchItemSlice>& items = g_engineResearch[stateOwner - 1].items;
         return ((size_t)techIdx < items.size()) ? items[(size_t)techIdx].progress : 0.0f;
@@ -2327,7 +2385,7 @@ float TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int
 uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner, unsigned byteIdx)
 {
     if (byteIdx >= WORLD_RESEARCH_UNLOCKS_BYTES) return 0;
-    if (TwoStates_IsActive() && (stateOwner == 1 || stateOwner == 2) &&
+    if (IsTwoStatesResearchOrLicenseActive() && (stateOwner == 1 || stateOwner == 2) &&
         g_engineResearch[stateOwner - 1].initialized) {
         return g_engineResearch[stateOwner - 1].unlocks[byteIdx];
     }
@@ -2358,6 +2416,171 @@ int TwoStates_GetBuildingOwnerSlot(const BYTE* buildingPtr)
 void TwoStates_ResearchDailyUpdateForTest(BYTE* world)
 {
     H_ResearchDailyUpdate(world);
+}
+
+// ---------------------------------------------------------------------------
+// Per-State Vehicle Production License Isolation (world + 0x12840, +0x9C88)
+// ---------------------------------------------------------------------------
+
+static bool SafeReadVehTypeVecHeader(const BYTE* world, BYTE** outBegin, int* outCount)
+{
+    return SafeReadStridedWorldVecHeader(world, WORLD_VEHICLE_TYPES_OFFSET, WORLD_VEHICLE_TYPE_STRIDE, 8192, outBegin, outCount);
+}
+
+static std::string GetVehTypeLicenseKey(const BYTE* type, int idx)
+{
+    char raw[64] = {};
+    if (type && SafeMemcpyPod(raw, type + VEH_TYPE_SCRIPT_NAME_OFFSET, sizeof(raw))) {
+        raw[sizeof(raw) - 1] = '\0';
+        std::string key;
+        key.reserve(64);
+        for (size_t i = 0; i < sizeof(raw) && raw[i] != '\0'; ++i) {
+            unsigned char c = (unsigned char)raw[i];
+            if (c < 0x20 || c > 0x7E || c == ',' || c == ';') continue;
+            if (c == '/') c = '\\';
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+            key.push_back((char)c);
+        }
+        if (!key.empty()) return key;
+    }
+    return "__idx_" + std::to_string(idx);
+}
+
+static bool HasLicenseKeyInSlice(const StateEngineVehLicenses& slice, const std::string& key)
+{
+    if (key.empty()) return false;
+    for (size_t i = 0; i < slice.ownedKeys.size(); ++i) {
+        if (slice.ownedKeys[i] == key) return true;
+    }
+    return false;
+}
+
+static void AddLicenseKeyToSlice(StateEngineVehLicenses* slice, const std::string& key)
+{
+    if (!slice || key.empty()) return;
+    if (!HasLicenseKeyInSlice(*slice, key)) {
+        slice->ownedKeys.push_back(key);
+    }
+}
+
+static void RemoveLicenseKeyFromSlice(StateEngineVehLicenses* slice, const std::string& key)
+{
+    if (!slice || key.empty()) return;
+    slice->ownedKeys.erase(
+        std::remove(slice->ownedKeys.begin(), slice->ownedKeys.end(), key),
+        slice->ownedKeys.end());
+}
+
+static void CaptureWorldVehLicensesToSlice(const BYTE* world, StateEngineVehLicenses* dst)
+{
+    if (!world || !dst) return;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadVehTypeVecHeader(world, &begin, &count)) return;
+    dst->ownedKeys.clear();
+    for (int i = 0; i < count; ++i) {
+        const BYTE* type = begin + (size_t)i * WORLD_VEHICLE_TYPE_STRIDE;
+        uint8_t hasLic = 0;
+        if (SafeReadPod(type + VEH_TYPE_HAS_LICENCE_OFFSET, &hasLic) && hasLic != 0) {
+            AddLicenseKeyToSlice(dst, GetVehTypeLicenseKey(type, i));
+        }
+    }
+    dst->initialized = true;
+    dst->loadedFromMeta = false;
+}
+
+static void WriteSliceToWorldVehLicenses(BYTE* world, const StateEngineVehLicenses* src)
+{
+    if (!world || !src || !src->initialized) return;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadVehTypeVecHeader(world, &begin, &count)) return;
+    for (int i = 0; i < count; ++i) {
+        BYTE* type = begin + (size_t)i * WORLD_VEHICLE_TYPE_STRIDE;
+        uint8_t val = HasLicenseKeyInSlice(*src, GetVehTypeLicenseKey(type, i)) ? 1u : 0u;
+        SafeWritePod(type + VEH_TYPE_HAS_LICENCE_OFFSET, val);
+    }
+}
+
+static void ResetEngineVehLicenseSlices()
+{
+    for (int s = 0; s < 2; ++s) {
+        g_engineVehLicenses[s].ownedKeys.clear();
+        g_engineVehLicenses[s].initialized = false;
+        g_engineVehLicenses[s].loadedFromMeta = false;
+    }
+}
+
+static void EnsureEngineVehLicensesInitialized(BYTE* world)
+{
+    if (!world) return;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadVehTypeVecHeader(world, &begin, &count)) return;
+    bool needWriteToWorld = false;
+    for (int s = 0; s < 2; ++s) {
+        if (!g_engineVehLicenses[s].initialized) {
+            CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[s]);
+        } else if (g_engineVehLicenses[s].loadedFromMeta) {
+            g_engineVehLicenses[s].loadedFromMeta = false;
+            needWriteToWorld = true;
+        }
+    }
+    if (needWriteToWorld) {
+        int activeState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+        if (activeState != 1 && activeState != 2) activeState = 1;
+        WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[activeState - 1]);
+    }
+}
+
+void TwoStates_NotifyVehicleLicenseChanged(BYTE* world)
+{
+    if (!world || !IsTwoStatesResearchOrLicenseActive()) return;
+    int owner = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    if (owner != 1 && owner != 2) owner = 1;
+    EnsureEngineVehLicensesInitialized(world);
+    CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[owner - 1]);
+    if (!g_inCommand) {
+        int localSt = TwoStates_LocalState();
+        if (localSt != 1 && localSt != 2) localSt = 1;
+        WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
+    }
+}
+
+bool TwoStates_IsVehicleLicenseOwned(const BYTE* world, int stateOwner, int typeIdx)
+{
+    if (!world || typeIdx < 0) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadVehTypeVecHeader(world, &begin, &count) || typeIdx >= count) return false;
+    const BYTE* type = begin + (size_t)typeIdx * WORLD_VEHICLE_TYPE_STRIDE;
+    if (IsTwoStatesResearchOrLicenseActive() && (stateOwner == 1 || stateOwner == 2) &&
+        g_engineVehLicenses[stateOwner - 1].initialized) {
+        return HasLicenseKeyInSlice(g_engineVehLicenses[stateOwner - 1], GetVehTypeLicenseKey(type, typeIdx));
+    }
+    uint8_t val = 0;
+    SafeReadPod(type + VEH_TYPE_HAS_LICENCE_OFFSET, &val);
+    return val != 0;
+}
+
+bool TwoStates_SetVehicleLicenseOwnedForTest(BYTE* world, int stateOwner, int typeIdx, bool owned)
+{
+    if (!world || typeIdx < 0 || (stateOwner != 1 && stateOwner != 2)) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadVehTypeVecHeader(world, &begin, &count) || typeIdx >= count) return false;
+    EnsureEngineVehLicensesInitialized(world);
+    const BYTE* type = begin + (size_t)typeIdx * WORLD_VEHICLE_TYPE_STRIDE;
+    std::string key = GetVehTypeLicenseKey(type, typeIdx);
+    if (owned) {
+        AddLicenseKeyToSlice(&g_engineVehLicenses[stateOwner - 1], key);
+    } else {
+        RemoveLicenseKeyFromSlice(&g_engineVehLicenses[stateOwner - 1], key);
+    }
+    int activeState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+    if (activeState != 1 && activeState != 2) activeState = 1;
+    WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[activeState - 1]);
+    return true;
 }
 
 static bool ShouldAllowConstructionOfficeAssignment(const BYTE* officeBld, const BYTE* targetBld,
@@ -2503,8 +2726,8 @@ public:
             DiagLog_BeginSafeSeh();
             __try {
                 int vehIdx = m_vehOwner - 1;
-                double newRub = *WorldRubles();
-                double newUsd = *WorldDollars();
+                double newRub = SanitizeMoneyStep(g_stateRub[vehIdx], *WorldRubles());
+                double newUsd = SanitizeMoneyStep(g_stateUsd[vehIdx], *WorldDollars());
                 double dRub = newRub - g_stateRub[vehIdx];
                 double dUsd = newUsd - g_stateUsd[vehIdx];
                 g_stateRub[vehIdx] = newRub;
@@ -2548,10 +2771,31 @@ private:
 };
 
 static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4,
-                                        uintptr_t a5, uintptr_t a6)
+                                        uintptr_t a5, uintptr_t a6, float a7)
 {
+    if (!isfinite(a7) || fabsf(a7) > 1.0e9f) a7 = 0.0f;
     VehicleEconOverrideScope econ(world, vehicle);
-    return o_vehicleSale ? o_vehicleSale(world, vehicle, a3, a4, a5, a6) : 0;
+    return o_vehicleSale ? o_vehicleSale(world, vehicle, a3, a4, a5, a6, a7) : 0;
+}
+
+static float g_mockVehicleSaleDefaultPrice = 0.0f;
+static __int64 __fastcall MockEngineVehicleSale(BYTE* world, BYTE* /*vehicle*/, unsigned char a3, unsigned char /*a4*/,
+                                                uintptr_t /*a5*/, uintptr_t /*a6*/, float a7)
+{
+    if (!world || a3 == 0) return 0;
+    float saleRub = (a7 != 0.0f) ? a7 : g_mockVehicleSaleDefaultPrice;
+    *(double*)(world + WORLD_RUB_OFFSET) += (double)saleRub;
+    *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_VEHICLES_OFF + 12) += saleRub;
+    return 1;
+}
+
+void TwoStates_VehicleSaleForTest(BYTE* world, BYTE* vehicle, float customSalePrice, float defaultDepreciatedPrice)
+{
+    VehicleSaleFn prev = o_vehicleSale;
+    o_vehicleSale = &MockEngineVehicleSale;
+    g_mockVehicleSaleDefaultPrice = defaultDepreciatedPrice;
+    H_VehicleSale(world, vehicle, 1, 0, 1, 0, customSalePrice);
+    o_vehicleSale = prev;
 }
 
 static void __fastcall H_VehicleBorderExport(BYTE* world, BYTE* vehicle, uintptr_t a3, uintptr_t a4,
@@ -3666,6 +3910,16 @@ static void __fastcall H_MasterSave(BYTE* world)
                 *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
                 moneySwapped = true;
             }
+            if (twoStates) {
+                EnsureEngineResearchInitialized(world);
+                EnsureEngineVehLicensesInitialized(world);
+                int localSt = TwoStates_LocalState();
+                if (localSt != 1 && localSt != 2) localSt = 1;
+                CaptureWorldResearchToSlice(world, &g_engineResearch[localSt - 1], localSt);
+                CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[localSt - 1]);
+                WriteSliceToWorldResearch(world, &g_engineResearch[0]);
+                WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[0]);
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -3694,6 +3948,12 @@ static void __fastcall H_MasterSave(BYTE* world)
         if (moneySwapped) {
             *WorldRubles()  = prevRub;
             *WorldDollars() = prevUsd;
+        }
+        if (twoStates && world) {
+            int localSt = TwoStates_LocalState();
+            if (localSt != 1 && localSt != 2) localSt = 1;
+            WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
+            WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -4064,8 +4324,10 @@ bool TwoStates_GetFullStartingCapital()
 
 int TwoStates_LocalState()
 {
-    if (!g_inSession) return 1;
-    return g_isHost ? 1 : 2;
+    if (g_inSession) return g_isHost ? 1 : 2;
+    SessionState st = SaveSync_GetState();
+    if (st == SESSION_CLIENT_JOINING || st == SESSION_CLIENT_IN_GAME) return 2;
+    return 1;
 }
 
 const char* TwoStates_StateName(int state)
@@ -4228,6 +4490,7 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
                 (!o_statRecordClear || SaveSync_IsWorldLoaded())) {
                 EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
                 EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
+                EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
             }
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -4271,6 +4534,7 @@ void TwoStates_OnWorldLoaded()
         if (g_exeBase) {
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
+            EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
         }
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -4422,6 +4686,8 @@ void TwoStates_BeginCommand(int ownerState)
         BYTE* world = g_exeBase + WORLD_RVA;
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[g_cmdOwner - 1]);
+        EnsureEngineVehLicensesInitialized(world);
+        WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[g_cmdOwner - 1]);
     }
     if (!TwoStates_IsActive() || IsUnlimitedMoney()) {
         return;
@@ -4482,9 +4748,11 @@ void TwoStates_EndCommand(int ownerState)
     if (g_inCommand && TwoStates_IsActive() && g_exeBase) {
         BYTE* world = g_exeBase + WORLD_RVA;
         CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
+        CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[owner - 1]);
         int localSt = TwoStates_LocalState();
         if (localSt != 1 && localSt != 2) localSt = 1;
         WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
+        WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
     }
     if (!g_inCommand || !TwoStates_IsActive() || IsUnlimitedMoney()) {
         if (g_cmdResSnapshot.active && g_exeBase) {
@@ -4505,8 +4773,8 @@ void TwoStates_EndCommand(int ownerState)
             AddStatScalarsDelta(&g_stateCurEcon[owner - 1].scalars, g_cmdBeforeScalars, afterScalars, 1.0f);
             g_lastWorldScalars = afterScalars;
         }
-        double newRub = *WorldRubles();
-        double newUsd = *WorldDollars();
+        double newRub = SanitizeMoneyStep(g_stateRub[owner - 1], *WorldRubles());
+        double newUsd = SanitizeMoneyStep(g_stateUsd[owner - 1], *WorldDollars());
         g_netTradeRub[owner - 1] += (newRub - g_stateRub[owner - 1]);
         g_netTradeUsd[owner - 1] += (newUsd - g_stateUsd[owner - 1]);
         g_stateRub[owner - 1] = newRub;
@@ -4584,6 +4852,7 @@ void TwoStates_ResetResearch()
 {
     memset(g_stateResearch, 0, sizeof(g_stateResearch));
     ResetEngineResearchSlices();
+    ResetEngineVehLicenseSlices();
 }
 
 bool TwoStates_IsTechUnlocked(int stateOwner, int techId)
@@ -6275,19 +6544,68 @@ bool TwoStates_PatchSaveScriptIni(const char* saveDir, float customWorldSizeMete
 // Persistent Global Co-op Settings (republicmp_settings.ini)
 // ---------------------------------------------------------------------------
 
+static void RescueStrandedWorkshopSaveMeta(const char* realExeDir)
+{
+    static volatile LONG s_rescuedOnce = 0;
+    if (!realExeDir || !realExeDir[0] || !g_baseDir || !g_baseDir[0]) return;
+    if (_stricmp(realExeDir, g_baseDir) == 0) return;
+    if (InterlockedCompareExchange(&s_rescuedOnce, 1, 0) != 0) return;
+
+    std::error_code ec;
+    std::filesystem::path wsMedia = std::filesystem::path(g_baseDir) / "media_soviet";
+    std::filesystem::path exeMedia = std::filesystem::path(realExeDir) / "media_soviet";
+    const char* kSubDirs[2] = { "save", "save_coop" };
+    const char* kMetaFiles[3] = { "republicmp_coop.ini", "research_state1.bin", "research_state2.bin" };
+    for (int b = 0; b < 2; ++b) {
+        std::filesystem::path srcBank = wsMedia / kSubDirs[b];
+        if (!std::filesystem::exists(srcBank, ec)) continue;
+        for (const auto& entry : std::filesystem::directory_iterator(srcBank, ec)) {
+            if (!entry.is_directory(ec)) continue;
+            std::string folderName = entry.path().filename().string();
+            if (_strnicmp(folderName.c_str(), "mp_syncsave_", 12) == 0) continue;
+            if (!std::filesystem::exists(entry.path() / kMetaFiles[0], ec)) continue;
+            for (int d = 0; d < 2; ++d) {
+                std::filesystem::path dstFolder = exeMedia / kSubDirs[d] / folderName;
+                if (!std::filesystem::exists(dstFolder / "header.bin", ec)) continue;
+                for (int m = 0; m < 3; ++m) {
+                    std::filesystem::path sf = entry.path() / kMetaFiles[m];
+                    std::filesystem::path df = dstFolder / kMetaFiles[m];
+                    if (!std::filesystem::exists(sf, ec)) continue;
+                    bool shouldCopy = !std::filesystem::exists(df, ec);
+                    if (!shouldCopy) {
+                        auto st = std::filesystem::last_write_time(sf, ec);
+                        auto dt = std::filesystem::last_write_time(df, ec);
+                        if (!ec && st > dt) shouldCopy = true;
+                    }
+                    if (shouldCopy) {
+                        std::filesystem::copy_file(sf, df, std::filesystem::copy_options::overwrite_existing, ec);
+                    }
+                }
+            }
+        }
+    }
+}
+
 static bool GetExeDir(char* outDir, size_t outSize)
 {
     if (!outDir || outSize == 0) return false;
     outDir[0] = '\0';
+    char exePath[MAX_PATH] = {};
+    DWORD len = g_exe ? GetModuleFileNameA(g_exe, exePath, MAX_PATH) : 0;
+    if (len > 0 && len < MAX_PATH) {
+        char* lastSlash = strrchr(exePath, '\\');
+        if (lastSlash) {
+            *lastSlash = '\0';
+            strncpy_s(outDir, outSize, exePath, _TRUNCATE);
+            RescueStrandedWorkshopSaveMeta(outDir);
+            return true;
+        }
+    }
     if (g_baseDir && g_baseDir[0] != '\0') {
         strncpy_s(outDir, outSize, g_baseDir, _TRUNCATE);
         return true;
     }
-    char exePath[MAX_PATH] = {};
-    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
-    if (len == 0) {
-        len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-    }
+    len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
     if (len == 0 || len == MAX_PATH) return false;
     char* lastSlash = strrchr(exePath, '\\');
     if (!lastSlash) return false;
@@ -7018,7 +7336,7 @@ static void ParseEngineResearchUnlocks(const std::string& val, StateEngineResear
     dst->loadedFromMeta = true;
 }
 
-static void ParseEngineResearchItems(const std::string& val, int stateOwner, StateEngineResearch* dst)
+static void ParseEngineResearchItems(const std::string& val, int stateOwner, bool keepLoadedSummary, StateEngineResearch* dst)
 {
     if (!dst) return;
     dst->items.clear();
@@ -7049,7 +7367,37 @@ static void ParseEngineResearchItems(const std::string& val, int stateOwner, Sta
     }
     dst->initialized = true;
     dst->loadedFromMeta = true;
-    SyncSummaryResearchFromSlice(stateOwner, *dst);
+    if (!keepLoadedSummary) {
+        SyncSummaryResearchFromSlice(stateOwner, *dst);
+    }
+}
+
+static std::string SerializeEngineVehLicenses(const StateEngineVehLicenses& src)
+{
+    std::ostringstream ss;
+    for (size_t i = 0; i < src.ownedKeys.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << src.ownedKeys[i];
+    }
+    return ss.str();
+}
+
+static void ParseEngineVehLicenses(const std::string& val, StateEngineVehLicenses* dst)
+{
+    if (!dst) return;
+    dst->ownedKeys.clear();
+    size_t pos = 0;
+    while (pos < val.size()) {
+        size_t comma = val.find(',', pos);
+        if (comma == std::string::npos) comma = val.size();
+        std::string tok = val.substr(pos, comma - pos);
+        if (!tok.empty()) {
+            AddLicenseKeyToSlice(dst, tok);
+        }
+        pos = comma + 1;
+    }
+    dst->initialized = true;
+    dst->loadedFromMeta = true;
 }
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
@@ -7185,6 +7533,7 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 
     if (mode == COOP_MODE_TWO_STATES && world) {
         EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
+        EnsureEngineVehLicensesInitialized(const_cast<BYTE*>(world));
     }
     if (g_engineResearch[0].initialized) {
         out << "engine_research_unlocks1=" << SerializeEngineResearchUnlocks(g_engineResearch[0]) << "\r\n";
@@ -7193,6 +7542,12 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     if (g_engineResearch[1].initialized) {
         out << "engine_research_unlocks2=" << SerializeEngineResearchUnlocks(g_engineResearch[1]) << "\r\n";
         out << "engine_research_items2=" << SerializeEngineResearchItems(g_engineResearch[1]) << "\r\n";
+    }
+    if (g_engineVehLicenses[0].initialized) {
+        out << "veh_licenses1=" << SerializeEngineVehLicenses(g_engineVehLicenses[0]) << "\r\n";
+    }
+    if (g_engineVehLicenses[1].initialized) {
+        out << "veh_licenses2=" << SerializeEngineVehLicenses(g_engineVehLicenses[1]) << "\r\n";
     }
 
     std::string data = out.str();
@@ -7267,9 +7622,63 @@ static void ClearPeriodTradeResVecs(StateEconPeriodStats* st)
     }
 }
 
-static void HealLoadedCoopMetaTradeStats(bool hadPoisonedZero, const long long rubCents[2],
-                                         const long long tradeRubCents[2], const long long tradeUsdCents[2])
+static void SanitizeEconPeriodScalars(StateEconPeriodStats* st)
 {
+    if (!st) return;
+    for (int i = 0; i < 4; ++i) {
+        if (!isfinite(st->scalars.vehicles[i]) || fabsf(st->scalars.vehicles[i]) > 1.0e11f)
+            st->scalars.vehicles[i] = 0.0f;
+    }
+    for (int i = 0; i < 10; ++i) {
+        if (!isfinite(st->scalars.satisfaction[i]) || fabsf(st->scalars.satisfaction[i]) > 1.0e5f)
+            st->scalars.satisfaction[i] = 0.0f;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (!isfinite(st->scalars.citizenAverages[i]) || fabsf(st->scalars.citizenAverages[i]) > 1.0e5f)
+            st->scalars.citizenAverages[i] = 0.0f;
+    }
+}
+
+static void HealCorruptedSaveBalances(long long rubCents[2], long long usdCents[2],
+                                      long long tradeRubCents[2], long long tradeUsdCents[2])
+{
+    const long long kMaxSaneCents = 10000000000000LL; // 100 billion RUB/USD in cents
+    for (int s = 0; s < 2; ++s) {
+        long long garbageVehCents = FloatToCents(g_stateCurEcon[s].scalars.vehicles[3]);
+        if (llabs(garbageVehCents) > kMaxSaneCents) {
+            if (llabs(rubCents[s]) > kMaxSaneCents) rubCents[s] -= garbageVehCents;
+            if (llabs(tradeRubCents[s]) > kMaxSaneCents) tradeRubCents[s] -= garbageVehCents;
+            g_stateCurEcon[s].scalars.vehicles[3] = 0.0f;
+        }
+        for (size_t i = 0; i < g_stateHistEcon[s].size(); ++i) {
+            long long histGarbage = FloatToCents(g_stateHistEcon[s][i].scalars.vehicles[3]);
+            if (llabs(histGarbage) > kMaxSaneCents) {
+                if (llabs(rubCents[s]) > kMaxSaneCents) rubCents[s] -= histGarbage;
+                if (llabs(tradeRubCents[s]) > kMaxSaneCents) tradeRubCents[s] -= histGarbage;
+                g_stateHistEcon[s][i].scalars.vehicles[3] = 0.0f;
+            }
+            SanitizeEconPeriodScalars(&g_stateHistEcon[s][i]);
+        }
+        SanitizeEconPeriodScalars(&g_stateCurEcon[s]);
+        if (llabs(rubCents[s]) > kMaxSaneCents) {
+            int other = 1 - s;
+            rubCents[s] = (rubCents[other] > 0 && rubCents[other] <= kMaxSaneCents) ? rubCents[other] : 1000000000LL;
+        }
+        if (llabs(usdCents[s]) > kMaxSaneCents) {
+            int other = 1 - s;
+            usdCents[s] = (usdCents[other] > 0 && usdCents[other] <= kMaxSaneCents) ? usdCents[other] : 200000000LL;
+        }
+        if (llabs(tradeRubCents[s]) > kMaxSaneCents) tradeRubCents[s] = 0;
+        if (llabs(tradeUsdCents[s]) > kMaxSaneCents) tradeUsdCents[s] = 0;
+        if (!isfinite(g_stateRub[s]) || fabs(g_stateRub[s]) > 1.0e11) g_stateRub[s] = (double)rubCents[s] / 100.0;
+        if (!isfinite(g_stateUsd[s]) || fabs(g_stateUsd[s]) > 1.0e11) g_stateUsd[s] = (double)usdCents[s] / 100.0;
+    }
+}
+
+static void HealLoadedCoopMetaTradeStats(bool hadPoisonedZero, long long rubCents[2], long long usdCents[2],
+                                         long long tradeRubCents[2], long long tradeUsdCents[2])
+{
+    HealCorruptedSaveBalances(rubCents, usdCents, tradeRubCents, tradeUsdCents);
     if (!g_stateEconInitialized) return;
     if (hadPoisonedZero) {
         for (int s = 0; s < 2; ++s) {
@@ -7427,11 +7836,19 @@ static bool ParseCoopMetaResearchKey(const std::string& key, const std::string& 
         return true;
     }
     if (key == "engine_research_items1") {
-        ParseEngineResearchItems(val, 1, &g_engineResearch[0]);
+        ParseEngineResearchItems(val, 1, loadedR1, &g_engineResearch[0]);
         return true;
     }
     if (key == "engine_research_items2") {
-        ParseEngineResearchItems(val, 2, &g_engineResearch[1]);
+        ParseEngineResearchItems(val, 2, loadedR2, &g_engineResearch[1]);
+        return true;
+    }
+    if (key == "veh_licenses1") {
+        ParseEngineVehLicenses(val, &g_engineVehLicenses[0]);
+        return true;
+    }
+    if (key == "veh_licenses2") {
+        ParseEngineVehLicenses(val, &g_engineVehLicenses[1]);
         return true;
     }
     return false;
@@ -7489,32 +7906,63 @@ void TwoStates_SetSavedCameraForTest(int state, const float pos[3], const float 
     }
 }
 
+static void LoadOptionalBinaryResearchTrees(const char* fullSaveDir, bool* outLoadedR1, bool* outLoadedR2)
+{
+    *outLoadedR1 = false;
+    *outLoadedR2 = false;
+    const char* kNames[2] = { "research_state1.bin", "research_state2.bin" };
+    bool* outs[2] = { outLoadedR1, outLoadedR2 };
+    for (int i = 0; i < 2; ++i) {
+        char path[MAX_PATH] = {};
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", fullSaveDir, kNames[i]);
+        FILE* fp = nullptr;
+        if (fopen_s(&fp, path, "rb") == 0 && fp) {
+            if (fread(&g_stateResearch[i], 1, sizeof(StateResearchTree), fp) == sizeof(StateResearchTree)) {
+                *outs[i] = true;
+            }
+            fclose(fp);
+        }
+    }
+}
+
+static void ApplyLoadedCoopBudgetsAndMode(int mode, int bw, int expB, bool haveRub, bool haveUsd,
+                                          const long long rubCents[2], const long long usdCents[2])
+{
+    g_chosenMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
+    g_sessionMode = g_chosenMode;
+    if (bw >= 50 && bw <= 2000) g_borderHalfWidth = (float)bw;
+    g_expandBorders = (expB != 0);
+    if (haveRub) {
+        g_stateRub[0] = (double)rubCents[0] / 100.0;
+        g_stateRub[1] = (double)rubCents[1] / 100.0;
+    }
+    if (haveUsd) {
+        g_stateUsd[0] = (double)usdCents[0] / 100.0;
+        g_stateUsd[1] = (double)usdCents[1] / 100.0;
+    }
+    g_treasuryInitialized = (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd));
+    g_loadedFromCoopSave = true;
+
+    if (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd)) {
+        if (IsUnlimitedMoney()) {
+            g_stateRub[0] = g_stateRub[1] = 100000000.0;
+            g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
+            SafeWriteWorldMoney(100000000.0, 100000000.0);
+        } else {
+            SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
+        }
+    }
+}
+
 static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgetsAndMode)
 {
     ResetSavedCameraState();
     TwoStates_ResetResearch();
     if (!fullSaveDir || !fullSaveDir[0]) return false;
 
-    char r1Path[MAX_PATH] = {};
-    char r2Path[MAX_PATH] = {};
-    _snprintf_s(r1Path, sizeof(r1Path), _TRUNCATE, "%s\\research_state1.bin", fullSaveDir);
-    _snprintf_s(r2Path, sizeof(r2Path), _TRUNCATE, "%s\\research_state2.bin", fullSaveDir);
     bool loadedR1 = false;
     bool loadedR2 = false;
-    FILE* fr1 = nullptr;
-    if (fopen_s(&fr1, r1Path, "rb") == 0 && fr1) {
-        if (fread(&g_stateResearch[0], 1, sizeof(StateResearchTree), fr1) == sizeof(StateResearchTree)) {
-            loadedR1 = true;
-        }
-        fclose(fr1);
-    }
-    FILE* fr2 = nullptr;
-    if (fopen_s(&fr2, r2Path, "rb") == 0 && fr2) {
-        if (fread(&g_stateResearch[1], 1, sizeof(StateResearchTree), fr2) == sizeof(StateResearchTree)) {
-            loadedR2 = true;
-        }
-        fclose(fr2);
-    }
+    LoadOptionalBinaryResearchTrees(fullSaveDir, &loadedR1, &loadedR2);
 
     char metaPath[MAX_PATH] = {};
     _snprintf_s(metaPath, sizeof(metaPath), _TRUNCATE, "%s\\%s", fullSaveDir, COOP_SAVE_META_NAME);
@@ -7590,13 +8038,16 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     FinalizeSavedCameraMeta(camState);
 
     g_stateEconInitialized = (haveEconCur[0] && haveEconCur[1]);
-    HealLoadedCoopMetaTradeStats(hadPoisonedZero, rubCents, tradeRubCents, tradeUsdCents);
+    HealLoadedCoopMetaTradeStats(hadPoisonedZero, rubCents, usdCents, tradeRubCents, tradeUsdCents);
     if (g_stateEconInitialized && world) {
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
     }
     if ((g_engineResearch[0].initialized || g_engineResearch[1].initialized) && world) {
         EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
+    }
+    if ((g_engineVehLicenses[0].initialized || g_engineVehLicenses[1].initialized) && world) {
+        EnsureEngineVehLicensesInitialized(const_cast<BYTE*>(world));
     }
 
     g_netTradeRub[0] = (double)tradeRubCents[0] / 100.0;
@@ -7605,30 +8056,7 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     g_netTradeUsd[1] = (double)tradeUsdCents[1] / 100.0;
 
     if (updateBudgetsAndMode) {
-        g_chosenMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
-        g_sessionMode = g_chosenMode;
-        if (bw >= 50 && bw <= 2000) g_borderHalfWidth = (float)bw;
-        g_expandBorders = (expB != 0);
-        if (haveRub) {
-            g_stateRub[0] = (double)rubCents[0] / 100.0;
-            g_stateRub[1] = (double)rubCents[1] / 100.0;
-        }
-        if (haveUsd) {
-            g_stateUsd[0] = (double)usdCents[0] / 100.0;
-            g_stateUsd[1] = (double)usdCents[1] / 100.0;
-        }
-        g_treasuryInitialized = (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd));
-        g_loadedFromCoopSave = true;
-
-        if (g_chosenMode == COOP_MODE_TWO_STATES && (haveRub || haveUsd)) {
-            if (IsUnlimitedMoney()) {
-                g_stateRub[0] = g_stateRub[1] = 100000000.0;
-                g_stateUsd[0] = g_stateUsd[1] = 100000000.0;
-                SafeWriteWorldMoney(100000000.0, 100000000.0);
-            } else {
-                SafeWriteWorldMoney(g_stateRub[0] + g_stateRub[1], g_stateUsd[0] + g_stateUsd[1]);
-            }
-        }
+        ApplyLoadedCoopBudgetsAndMode(mode, bw, expB, haveRub, haveUsd, rubCents, usdCents);
     }
 
     Logf("republicmp  COOP_META: loaded [%s] (updateBudgets=%d, mode=%d, rub=[%.0f, %.0f], usd=[%.0f, %.0f], blds=%zu, vehs=%zu)",
@@ -7659,6 +8087,7 @@ void TwoStates_BeforeAnyWorldLoad()
     TwoStates_RestoreUiMoneySwap();
     ResetStateHudPopCache();
     ResetEngineResearchSlices();
+    ResetEngineVehLicenseSlices();
     g_stateEconInitialized = false;
     ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
     ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
@@ -7687,35 +8116,39 @@ void TwoStates_BeforeAnyWorldLoad()
     }
 
     if (!TwoStates_IsCoopBankMounted()) {
-        // User is importing a Singleplayer save into Co-op!
-        bool isSaveFolder = (_strnicmp(saveRel, "save\\", 5) == 0 || _strnicmp(saveRel, "save/", 5) == 0);
-        if (terrainFlag == 0 && isSaveFolder) {
-            char spFullDir[MAX_PATH] = {};
-            char exeDir[MAX_PATH] = {};
-            if (BuildFullSaveDir(saveRel, spFullDir, sizeof(spFullDir)) && GetExeDir(exeDir, sizeof(exeDir))) {
-                std::error_code ec;
-                std::filesystem::path srcPath(spFullDir);
-                std::string folderName = srcPath.filename().string();
-                std::filesystem::path coopCopy = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / folderName;
-                if (std::filesystem::exists(srcPath, ec) && std::filesystem::is_directory(srcPath, ec)) {
-                    std::filesystem::create_directories(coopCopy.parent_path(), ec);
-                    if (std::filesystem::exists(coopCopy, ec)) {
-                        std::filesystem::remove_all(coopCopy, ec);
-                    }
-                    std::filesystem::copy(srcPath, coopCopy,
-                                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
-                                          ec);
-                    // Remove any old republicmp_coop.ini on a fresh SP import so menu capital settings apply cleanly
-                    std::filesystem::remove(coopCopy / COOP_SAVE_META_NAME, ec);
-                    Logf("republicmp  SAVE_BANK: imported SP save [%s] -> [%s]",
-                         srcPath.string().c_str(), coopCopy.string().c_str());
-                } else {
-                    // Check if it was a .zip save in Singleplayer
-                    std::filesystem::path srcZip( std::string(spFullDir) + ".zip" );
-                    std::filesystem::path coopZip = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / (folderName + ".zip");
-                    if (std::filesystem::exists(srcZip, ec)) {
-                        std::filesystem::create_directories(coopZip.parent_path(), ec);
-                        std::filesystem::copy_file(srcZip, coopZip, std::filesystem::copy_options::overwrite_existing, ec);
+        if (g_importingSpSave) {
+            // User explicitly selected a Singleplayer save to import into Co-op!
+            bool isSaveFolder = (_strnicmp(saveRel, "save\\", 5) == 0 || _strnicmp(saveRel, "save/", 5) == 0);
+            if (terrainFlag == 0 && isSaveFolder) {
+                char spFullDir[MAX_PATH] = {};
+                char exeDir[MAX_PATH] = {};
+                if (BuildFullSaveDir(saveRel, spFullDir, sizeof(spFullDir)) && GetExeDir(exeDir, sizeof(exeDir))) {
+                    std::error_code ec;
+                    std::filesystem::path srcPath(spFullDir);
+                    std::string folderName = srcPath.filename().string();
+                    std::filesystem::path coopCopy = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / folderName;
+                    if (std::filesystem::exists(srcPath, ec) && std::filesystem::is_directory(srcPath, ec)) {
+                        std::filesystem::create_directories(coopCopy.parent_path(), ec);
+                        if (std::filesystem::exists(coopCopy, ec)) {
+                            std::filesystem::remove_all(coopCopy, ec);
+                        }
+                        std::filesystem::copy(srcPath, coopCopy,
+                                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                                              ec);
+                        // Remove any old Co-op metadata on a fresh SP import so menu capital settings apply cleanly
+                        std::filesystem::remove(coopCopy / COOP_SAVE_META_NAME, ec);
+                        std::filesystem::remove(coopCopy / "research_state1.bin", ec);
+                        std::filesystem::remove(coopCopy / "research_state2.bin", ec);
+                        Logf("republicmp  SAVE_BANK: imported SP save [%s] -> [%s]",
+                             srcPath.string().c_str(), coopCopy.string().c_str());
+                    } else {
+                        // Check if it was a .zip save in Singleplayer
+                        std::filesystem::path srcZip( std::string(spFullDir) + ".zip" );
+                        std::filesystem::path coopZip = std::filesystem::path(exeDir) / "media_soviet" / "save_coop" / (folderName + ".zip");
+                        if (std::filesystem::exists(srcZip, ec)) {
+                            std::filesystem::create_directories(coopZip.parent_path(), ec);
+                            std::filesystem::copy_file(srcZip, coopZip, std::filesystem::copy_options::overwrite_existing, ec);
+                        }
                     }
                 }
             }
@@ -7801,6 +8234,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
             g_treasuryInitialized = true;
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
+            EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
             char msg[240];
             _snprintf_s(msg, sizeof(msg), _TRUNCATE,
                         Tr("Загружен кооп-сейв «2 государства» (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",

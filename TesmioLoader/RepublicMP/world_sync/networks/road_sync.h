@@ -433,3 +433,5 @@ struct LsDemolishHoverMsg {
 // The hovered node / edge as they are now, when they belong to this network.
 bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* out);
 bool RoadSync_ApplyCommandDemolishHover(const LsDemolishHoverMsg& msg);
+int RoadSync_GetPlannedSegmentOwner(__int64 seg);
+void RoadSync_SetPlannedSegmentOwnerForTest(__int64 seg, int owner);

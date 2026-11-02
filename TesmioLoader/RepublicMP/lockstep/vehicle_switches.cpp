@@ -24,8 +24,8 @@
 #define MAX_RECORDS 256
 #define MAX_VEHICLES 16384
 #define MAX_WORDS 60
-#define NAME_FLAG 0x108          // a vehicle's custom-name flag and its name (0x40 characters at +0x10a): text
-#define NAME_END ((0x10A + 0x40 + 3) & ~3u)
+#define NAME_FLAG 0x108          // a vehicle's custom-name flag and its name (0x40 characters = 0x80 bytes at +0x10a): text
+#define NAME_END ((0x10A + 0x80 + 3) & ~3u)
 #define SAMPLE_EVERY 16
 
 enum { KIND_VEHICLE = 0, KIND_STOP = 1, KIND_CARGO = 2, KIND_COUNT = 3 };
@@ -232,8 +232,9 @@ static void Compare(const Snap& s, int kind, bool click)
             unsigned offset = (unsigned)(q + h);
             unsigned word = (offset % kRecordBytes[kind]) / 4;
             if (ListWord(kind, offset % kRecordBytes[kind])) continue;
+            bool neverNoise = TextWord(kind, offset % kRecordBytes[kind]);
             if (!click) {
-                if (!noise[word]) {
+                if (!neverNoise && !noise[word]) {
                     noise[word] = true;
                     if (g_noiseLogged < 40) {
                         ++g_noiseLogged;
@@ -243,7 +244,7 @@ static void Compare(const Snap& s, int kind, bool click)
                 }
                 continue;
             }
-            if (noise[word]) continue;
+            if (!neverNoise && noise[word]) continue;
             if (heap) {
                 if (g_heapLogged < 20) {
                     ++g_heapLogged;

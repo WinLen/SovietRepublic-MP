@@ -39,6 +39,7 @@
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../ui/sync_block.h"
 #include "../world_sync/networks/road_sync.h"
+#include "../world_sync/local_builds.h"
 #include "../game/session_patches.h"
 #include "../game/input_block.h"
 #include "../game/imgui_hook.h"
@@ -603,6 +604,39 @@ static bool Test_StateHash()
 // Test 4: TwoStates Territory Zones, Ownership, Economy Attribution & Invariant #10
 // ---------------------------------------------------------------------------
 
+static __int64 MockPlanStartFn(__int64 network, unsigned char /*dollars*/, unsigned char /*rubles*/, __int64 /*count*/, __int64 /*group*/)
+{
+    __int64* begin = *(__int64**)(network + 0x2B0);
+    __int64* end   = *(__int64**)(network + 0x2B8);
+    __int64 started = 0;
+    for (__int64* it = begin; it && it < end; ++it) {
+        if (*it && *(unsigned char*)(*it + 0x140) == 1) {
+            *(unsigned char*)(*it + 0x140) = 0;
+            started++;
+        }
+    }
+    return started;
+}
+
+static __int64 MockCancelSegFn(__int64 /*network*/, __int64 seg, unsigned char /*p3*/, int /*p4*/, unsigned char /*p5*/)
+{
+    if (seg && *(unsigned char*)(seg + 0x140) == 1) {
+        *(unsigned char*)(seg + 0x140) = 0;
+        *(unsigned char*)(seg + 0x141) = 0xFF;
+    }
+    return 1;
+}
+
+static void WriteAbsJmp12(BYTE* dst, void* fn)
+{
+    dst[0] = 0x48;
+    dst[1] = 0xB8;
+    memcpy(dst + 2, &fn, 8);
+    dst[10] = 0xFF;
+    dst[11] = 0xE0;
+    FlushInstructionCache(GetCurrentProcess(), dst, 12);
+}
+
 static bool Test_TwoStates_ZonesAndEconomy()
 {
     ResetMockWorldMemory();
@@ -715,7 +749,84 @@ static bool Test_TwoStates_ZonesAndEconomy()
     TwoStates_AfterStep(world);
     TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 100000000.0, 1e-2);
     TEST_CHECK_NEAR(*(double*)(world + WORLD_USD_OFFSET), 100000000.0, 1e-2);
+    *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
 
+    // Planned road segment ownership & per-republic separation for "Build planned" / "Cancel all planned"
+    WriteAbsJmp12(g_mockExeBuffer + 0x5258E0, (void*)&MockPlanStartFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x5434C0, (void*)&MockCancelSegFn);
+    g_mockExeBuffer[0x4FAE50] = 0xC3;
+
+    auto makeNode = [](float x, float y, float z) {
+        std::vector<BYTE> n(0x40, 0);
+        *(float*)(n.data() + 4)  = x;
+        *(float*)(n.data() + 8)  = y;
+        *(float*)(n.data() + 12) = z;
+        return n;
+    };
+    auto makePlannedSeg = [](BYTE* n0, BYTE* n1) {
+        std::vector<BYTE> s(0x200, 0);
+        *(__int64*)(s.data() + 0x20) = (__int64)n0;
+        *(__int64*)(s.data() + 0x28) = (__int64)n1;
+        *(unsigned char*)(s.data() + 0x140) = 1; // planned
+        *(unsigned char*)(s.data() + 0x141) = 0; // not built
+        return s;
+    };
+
+    auto nHost0 = makeNode(-600.0f, 10.0f, 0.0f);
+    auto nHost1 = makeNode(-500.0f, 10.0f, 0.0f);
+    auto nCli0  = makeNode( 500.0f, 10.0f, 0.0f);
+    auto nCli1  = makeNode( 600.0f, 10.0f, 0.0f);
+    auto nBrd0  = makeNode(  40.0f, 10.0f, 0.0f);
+    auto nBrd1  = makeNode(  60.0f, 10.0f, 0.0f);
+
+    auto segHost   = makePlannedSeg(nHost0.data(), nHost1.data());
+    auto segClient = makePlannedSeg(nCli0.data(),  nCli1.data());
+    auto segBorder = makePlannedSeg(nBrd0.data(),  nBrd1.data());
+    RoadSync_SetPlannedSegmentOwnerForTest((__int64)segBorder.data(), 2);
+
+    TEST_CHECK(RoadSync_GetPlannedSegmentOwner((__int64)segHost.data()) == 1);
+    TEST_CHECK(RoadSync_GetPlannedSegmentOwner((__int64)segClient.data()) == 2);
+    TEST_CHECK(RoadSync_GetPlannedSegmentOwner((__int64)segBorder.data()) == 2);
+
+    std::vector<BYTE> roadMgr(0x800, 0);
+    std::vector<BYTE*> roadSegs = { segHost.data(), segClient.data(), segBorder.data() };
+    WriteMockVectorHeader(roadMgr.data() + 0x2B0, roadSegs);
+    *(__int64*)(g_mockExeBuffer + UNIVERSAL_THIS_RVA + 0xF7A0) = (__int64)roadMgr.data();
+
+    // Host (State 1) presses "Build planned": only segHost starts; segClient and segBorder stay planned
+    RoadSyncPlanStartMsg msgStart = {};
+    msgStart.category = ROAD_SYNC_CATEGORY_ROAD;
+    msgStart.exceptGroup = 0;
+    msgStart.rubles = 1;
+    msgStart.count = -1;
+    msgStart.group = -1;
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(RoadSync_ApplyCommandPlanStart(msgStart));
+    TwoStates_EndCommand(1);
+
+    TEST_CHECK(*(unsigned char*)(segHost.data() + 0x140) == 0);
+    TEST_CHECK(*(unsigned char*)(segClient.data() + 0x140) == 1);
+    TEST_CHECK(*(unsigned char*)(segClient.data() + 0x141) == 0);
+    TEST_CHECK(*(unsigned char*)(segBorder.data() + 0x140) == 1);
+    TEST_CHECK(*(unsigned char*)(segBorder.data() + 0x141) == 0);
+
+    // Client (State 2) presses "Cancel all planned": only segClient and segBorder are cancelled; segHost stays untouched
+    *(unsigned char*)(segHost.data() + 0x140) = 1;
+    RoadSyncPlanStartMsg msgCancel = {};
+    msgCancel.category = ROAD_SYNC_CATEGORY_ROAD;
+    msgCancel.exceptGroup = 2;
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(RoadSync_ApplyCommandPlanStart(msgCancel));
+    TwoStates_EndCommand(2);
+
+    TEST_CHECK(*(unsigned char*)(segHost.data() + 0x140) == 1);
+    TEST_CHECK(*(unsigned char*)(segHost.data() + 0x141) == 0);
+    TEST_CHECK(*(unsigned char*)(segClient.data() + 0x140) == 0);
+    TEST_CHECK(*(unsigned char*)(segClient.data() + 0x141) == 0xFF);
+    TEST_CHECK(*(unsigned char*)(segBorder.data() + 0x140) == 0);
+    TEST_CHECK(*(unsigned char*)(segBorder.data() + 0x141) == 0xFF);
+
+    RoadSync_SetPlannedSegmentOwnerForTest((__int64)segBorder.data(), 0);
     TwoStates_OnSessionEnded();
     return true;
 }
@@ -1457,24 +1568,99 @@ static bool SubTest_UnivResearchTwoStatesIsolation()
     TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0);
 
     // Step univEast once -> State 2 advances tech #2 to 0.50, State 1 remains at 0.0 on tech #2
+    // Also test real-engine university with *(int*)univEast == 0 (resolved by TwoStates_BuildingPosKey)
+    *(int*)univEast.data() = 0;
     TwoStates_BldUnivStepForTest(world, univEast.data());
     TwoStates_ResearchDailyUpdateForTest(world);
     TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 2), 0.50f, 1e-4f);
     TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 2), 0.00f, 1e-4f);
 
-    // 4. Persistence round-trip via republicmp_coop.ini
+    // 4. Per-republic vehicle production license separation (type + VEH_TYPE_HAS_LICENCE_OFFSET = 0x9C88)
+    std::vector<BYTE> vehTypesBuf(3 * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* vt0 = vehTypesBuf.data() + 0 * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vt1 = vehTypesBuf.data() + 1 * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vt2 = vehTypesBuf.data() + 2 * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(vt0 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "t815_dump");
+    strcpy_s((char*)(vt1 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "ikarus_260");
+    strcpy_s((char*)(vt2 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "chs4_loco");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x00) = vehTypesBuf.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x08) = vehTypesBuf.data() + vehTypesBuf.size();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x10) = vehTypesBuf.data() + vehTypesBuf.size();
+
+    // State 1 acquires license for vt0 ("t815_dump"), State 2 acquires license for vt1 ("ikarus_260")
+    TwoStates_BeginCommand(1);
+    vt0[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
+    TwoStates_NotifyVehicleLicenseChanged(world);
+    TwoStates_EndCommand(1);
+
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(vt0[VEH_TYPE_HAS_LICENCE_OFFSET] == 0); // State 2 must NOT see State 1's license
+    vt1[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
+    TwoStates_NotifyVehicleLicenseChanged(world);
+    TwoStates_EndCommand(2);
+
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 0) == true);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 1) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 0) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 1) == true);
+    // Local player is Host (State 1), so world has State 1's licenses restored
+    TEST_CHECK(vt0[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+    TEST_CHECK(vt1[VEH_TYPE_HAS_LICENCE_OFFSET] == 0);
+
+    // 5. Persistence round-trip via republicmp_coop.ini + Client load with Host's research.bin in world:
+    //    Client's research tree & active progress (0.50 on tech #2 in univEast) and vehicle licenses
+    //    must NOT be overwritten by Host's research.bin (tech #1 unlocked, tech #2 at 0.0, vt0 licensed)!
     std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_univ_res";
     std::error_code ec;
     std::filesystem::create_directories(saveDir, ec);
     TEST_CHECK(TwoStates_WriteSaveMetaToDir(saveDir.string().c_str()));
+
+    // Simulate Client joining and loading the world whose research.bin and vehicle types reflect Host (State 1)
+    TwoStates_OnSessionEnded();
     TwoStates_ResetResearch();
+    {
+        BYTE* it0 = resBuf.data() + 0 * RESEARCH_ITEM_STRIDE;
+        BYTE* it1 = resBuf.data() + 1 * RESEARCH_ITEM_STRIDE;
+        BYTE* it2 = resBuf.data() + 2 * RESEARCH_ITEM_STRIDE;
+        *(float*)(it0 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;
+        *(float*)(it1 + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;  // Host completed tech #1
+        *(void**)(it1 + RESEARCH_ITEM_BLD_PTR_OFFSET)  = nullptr;
+        *(float*)(it2 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;  // Host has 0 progress on tech #2
+        *(void**)(it2 + RESEARCH_ITEM_BLD_PTR_OFFSET)  = nullptr;
+        vt0[VEH_TYPE_HAS_LICENCE_OFFSET] = 1; // Host owns vt0 in saved world
+        vt1[VEH_TYPE_HAS_LICENCE_OFFSET] = 0; // Host does not own vt1 in saved world
+    }
+    TwoStates_OnSessionJoined(/*isHost=*/false, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
     TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir.string().c_str(), true));
+    TwoStates_OnWorldLoaded();
+
+    // Verify Client's research tree was NOT replaced by Host's research.bin and preserved its 0.50 progress & univEast assignment
     TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 1), 1.00f, 1e-4f);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 1), 0.00f, 1e-4f);
     TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 2), 0.50f, 1e-4f);
     TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
     TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0);
     TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univEast.data(), 2) == 2);
+
+    // Verify Client's world research items now reflect State 2 (Client) and univEast pointer is restored
+    {
+        BYTE* it1 = resBuf.data() + 1 * RESEARCH_ITEM_STRIDE;
+        BYTE* it2 = resBuf.data() + 2 * RESEARCH_ITEM_STRIDE;
+        TEST_CHECK_NEAR(*(float*)(it1 + RESEARCH_ITEM_PROGRESS_OFFSET), 0.0f, 1e-4f);
+        TEST_CHECK_NEAR(*(float*)(it2 + RESEARCH_ITEM_PROGRESS_OFFSET), 0.50f, 1e-4f);
+        TEST_CHECK(*(void**)(it2 + RESEARCH_ITEM_BLD_PTR_OFFSET) == univEast.data());
+    }
+
+    // Verify Client's vehicle production licenses are isolated and restored into world for Client (State 2)
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 0) == true);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 1) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 0) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 1) == true);
+    TEST_CHECK(vt0[VEH_TYPE_HAS_LICENCE_OFFSET] == 0);
+    TEST_CHECK(vt1[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+
     std::filesystem::remove_all(saveDir, ec);
+    memset(world + WORLD_VEHICLE_TYPES_OFFSET, 0, 24);
 
     Commands_SetSession(COMMANDS_OFF);
     BuildingSwitches_Reset();
@@ -3010,6 +3196,181 @@ static bool TestEconStats_PosKeyAndPoisonedSaveHeal()
     return true;
 }
 
+static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    double initRub[2] = { 10000000.0, 10000000.0 };
+    double initUsd[2] = {  2000000.0,  2000000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+    *(double*)(world + WORLD_RUB_OFFSET) = 10000000.0;
+    *(double*)(world + WORLD_USD_OFFSET) =  2000000.0;
+
+    // 1. 7-parameter H_VehicleSale ABI & stack-garbage (-1.07448163e15f) sanitization
+    std::vector<BYTE> veh(0x2000, 0);
+    *(uint32_t*)(veh.data() + 4) = 777;
+    *(float*)(veh.data() + OBJ_POS_OFFSET) = -400.0f;
+    *(float*)(veh.data() + OBJ_POS_OFFSET + 8) = 100.0f;
+    TwoStates_RegisterVehicleOwner(777, 1);
+
+    // Uninitialized stack garbage (-1.07448163e15f) in 7th arg must be sanitized to 0.0f
+    TwoStates_BeforeStep(world);
+    TwoStates_VehicleSaleForTest(world, veh.data(), -1.07448163e15f, 50000.0f);
+    TwoStates_AfterStep(world);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 10050000.0, 1.0);
+    float vehScalars[4] = {};
+    TwoStates_GetStateEconFloat4ForTest(1, false, vehScalars);
+    TEST_CHECK_NEAR(vehScalars[3], 50000.0f, 1.0f);
+
+    // 2. Load-time healing of a save corrupted by the old 6-arg H_VehicleSale bug (-1.07448162e15 RUB)
+    std::filesystem::path corrDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_corrupted_veh_sale";
+    std::filesystem::create_directories(corrDir);
+    std::string corrMeta =
+        "[republicmp_coop]\r\n"
+        "version=1\r\n"
+        "coop_mode=1\r\n"
+        "border_half_width_m=250\r\n"
+        "expand_borders=0\r\n"
+        "state1_rub_cents=-107448162050870752\r\n"
+        "state2_rub_cents=1242009265\r\n"
+        "state1_usd_cents=200000000\r\n"
+        "state2_usd_cents=200000000\r\n"
+        "net_trade1_rub_cents=-107448163914098352\r\n"
+        "net_trade2_rub_cents=-2757990735\r\n"
+        "net_trade1_usd_cents=0\r\n"
+        "net_trade2_usd_cents=0\r\n"
+        "econ_cur1=D:29,1975;V:16282194,0,0,-107448163211673600\r\n"
+        "econ_cur2=D:29,1975;V:0,0,0,0\r\n"
+        "econ_hist_count=0\r\n";
+    {
+        FILE* f = nullptr;
+        std::string metaPath = (corrDir / "republicmp_coop.ini").string();
+        if (fopen_s(&f, metaPath.c_str(), "wb") == 0 && f) {
+            fwrite(corrMeta.data(), 1, corrMeta.size(), f);
+            fclose(f);
+        }
+    }
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(corrDir.string().c_str(), true));
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 11608028.48, 1.0);
+    TwoStates_GetStateEconFloat4ForTest(1, false, vehScalars);
+    TEST_CHECK_NEAR(vehScalars[3], 0.0f, 1e-3f);
+
+    // 3. BuildingSwitches_ApplyCommand on Car Dealer (+0xCD8..+0xCE4 = (0, 1) -> 0x0000000100000000ULL)
+    //    and odd-length Cyrillic building name (+0x114 -> 0x0000041204110410ULL)
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(uint32_t*)(bld.data() + 0) = 501;
+    *(float*)(bld.data() + 0x350) = -300.0f;
+    *(float*)(bld.data() + 0x358) = 50.0f;
+    *(uint32_t*)(bld.data() + BLD_CITIZEN_FILTER_AT + 0) = 0;
+    *(uint32_t*)(bld.data() + BLD_CITIZEN_FILTER_AT + 4) = 1; // 8-byte pair is 0x0000000100000000ULL (4 GB!)
+    *(uint32_t*)(bld.data() + 0x114) = 0x04110410u;           // L"АБ"
+    *(uint32_t*)(bld.data() + 0x118) = 0x00000412u;           // L"В\0" -> 8-byte pair is 0x0000041204110410ULL (4.47 TB!)
+
+    BYTE* bldPtrs[1] = { bld.data() };
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = bldPtrs;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = bldPtrs + 1;
+
+    #pragma pack(push, 1)
+    struct LocalSwitchWord { unsigned offset, old, now; };
+    struct LocalSwitchMsg {
+        RouteRef building;
+        unsigned kind, shape, count;
+        LocalSwitchWord words[60];
+    };
+    #pragma pack(pop)
+    LocalSwitchMsg swMsg{};
+    TEST_CHECK(Ref_Building((U64)bld.data(), swMsg.building));
+    swMsg.kind = 0; // KIND_BUILDING
+    swMsg.count = 2;
+    swMsg.words[0] = { BLD_CITIZEN_FILTER_AT, 0u, 2u };
+    swMsg.words[1] = { 0x114u, 0x04110410u, 0x04140413u };
+    TEST_CHECK(BuildingSwitches_ApplyCommand(&swMsg, sizeof(swMsg)));
+    TEST_CHECK(*(uint32_t*)(bld.data() + BLD_CITIZEN_FILTER_AT) == 2u);
+    TEST_CHECK(*(uint32_t*)(bld.data() + 0x114) == 0x04140413u);
+
+    // 4. On-the-fly Rename_ApplyCommand for City (with shifted index + different terrain Y),
+    //    Building, Vehicle (including >32-char Cyrillic name), and Line
+    std::vector<BYTE> cityObj(0x100, 0);
+    *(float*)(cityObj.data() + 4)  = -500.0f;
+    *(float*)(cityObj.data() + 8)  = 42.5f;   // Local terrain Y = 42.5f
+    *(float*)(cityObj.data() + 12) = 200.0f;
+    BYTE* cityPtrs[1] = { cityObj.data() };
+    *(BYTE***)(world + 0x10348 + 0x00) = cityPtrs;
+    *(BYTE***)(world + 0x10348 + 0x08) = cityPtrs + 1;
+
+    #pragma pack(push, 1)
+    struct LocalRenameMsg {
+        unsigned magic, kind, index, check, chars;
+        unsigned short text[0x40];
+    };
+    struct LocalCityPosExt {
+        unsigned extMagic;
+        float pos[3];
+    };
+    #pragma pack(pop)
+
+    // City rename where sender had index=5 and Y=19.0f (so both index and CityCheck differ, resolved via CityPosExt XZ)
+    LocalRenameMsg renCity{};
+    renCity.magic = 0x314D414Eu;
+    renCity.kind = 3; // KIND_CITY
+    renCity.index = 5;
+    renCity.check = 0x12345679u;
+    const wchar_t* kNewCityName = L"Ленинград";
+    renCity.chars = (unsigned)wcslen(kNewCityName);
+    memcpy(renCity.text, kNewCityName, renCity.chars * sizeof(wchar_t));
+    LocalCityPosExt cExt{ 0x43504F53u, { -500.0f, 19.0f, 200.0f } };
+    memcpy(&renCity.text[0x20], &cExt, sizeof(cExt));
+    TEST_CHECK(Rename_ApplyCommand(&renCity, sizeof(renCity)));
+    TEST_CHECK(wcscmp((const wchar_t*)(cityObj.data() + 0x10), kNewCityName) == 0);
+
+    // Vehicle rename with a 40-char Cyrillic name (> 32 chars)
+    BYTE* vehPtrs[1] = { veh.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 0x00) = vehPtrs;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 0x08) = vehPtrs + 1;
+    LocalRenameMsg renVeh{};
+    renVeh.magic = 0x314D414Eu;
+    renVeh.kind = 1; // KIND_VEHICLE_RENAME
+    renVeh.index = 0;
+    renVeh.check = 777;
+    const wchar_t* kLongVehName = L"Магистральный_Автопоезд_Восточной_ССР_01";
+    renVeh.chars = (unsigned)wcslen(kLongVehName);
+    TEST_CHECK(renVeh.chars == 40);
+    memcpy(renVeh.text, kLongVehName, renVeh.chars * sizeof(wchar_t));
+    TEST_CHECK(Rename_ApplyCommand(&renVeh, sizeof(renVeh)));
+    TEST_CHECK(*(BYTE*)(veh.data() + VEH_CUSTOM_NAME_FLAG_OFF) == 1);
+    TEST_CHECK(wcscmp((const wchar_t*)(veh.data() + VEH_NAME_OFFSET), kLongVehName) == 0);
+
+    // Line rename on the fly (updates line + 4 and sets line + 1 = 1 so Ref_Line stays synchronized)
+    std::vector<BYTE> lineObj(0x100, 0);
+    const wchar_t* kOldLineName = L"Line 1";
+    memcpy(lineObj.data() + LINE_NAME_OFFSET, kOldLineName, (wcslen(kOldLineName) + 1) * sizeof(wchar_t));
+    BYTE* linePtrs[1] = { lineObj.data() };
+    std::vector<BYTE> linesMgr(0x40, 0);
+    *(BYTE***)(linesMgr.data() + 0x00) = linePtrs;
+    *(BYTE***)(linesMgr.data() + 0x08) = linePtrs + 1;
+    *(BYTE**)(world + WORLD_LINES_OFFSET) = linesMgr.data();
+
+    RouteRef lineRefBefore{};
+    TEST_CHECK(Ref_Line((U64)lineObj.data(), lineRefBefore));
+    LocalRenameMsg renLine{};
+    renLine.magic = 0x314D414Eu;
+    renLine.kind = 8; // KIND_LINE
+    renLine.index = ((lineRefBefore.list & 1u) << 31) | (unsigned)lineRefBefore.place;
+    renLine.check = lineRefBefore.check;
+    const wchar_t* kNewLineName = L"Маршрут Уголь-Сталь";
+    renLine.chars = (unsigned)wcslen(kNewLineName);
+    memcpy(renLine.text, kNewLineName, renLine.chars * sizeof(wchar_t));
+    TEST_CHECK(Rename_ApplyCommand(&renLine, sizeof(renLine)));
+    TEST_CHECK(*(BYTE*)(lineObj.data() + LINE_CUSTOM_NAME_FLAG_OFF) == 1);
+    TEST_CHECK(wcscmp((const wchar_t*)(lineObj.data() + LINE_NAME_OFFSET), kNewLineName) == 0);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool Test_TwoStates_EconomyStats()
 {
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
@@ -3017,7 +3378,8 @@ static bool Test_TwoStates_EconomyStats()
            TestEconStats_PeriodRolloverAndSaveMetaPersistence() &&
            TestEconStats_BatchConstructionAndDemographics() &&
            TestEconStats_LeafHookRelayStubPreservesRegisters() &&
-           TestEconStats_PosKeyAndPoisonedSaveHeal();
+           TestEconStats_PosKeyAndPoisonedSaveHeal() &&
+           TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches();
 }
 
 // ---------------------------------------------------------------------------
@@ -5187,7 +5549,38 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
     TEST_CHECK(*(long long*)(pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(pedMgr.data() + 0x370) == 0);
 
-    // 5. Cleanup mock pointers
+    // 5. Multi-piece mud road (seg->type == -1, split by footpaths) upgraded to asphalt (1):
+    //    LocalBuilds_FillUpgrade and RoadSync_ApplyCommandUpgrade must preserve target type394 == 1
+    //    instead of writing -1 (which triggers segment deletion 0x1405434C0 in 0x1405205A0).
+    *(int*)(roadSeg.data() + 0x120) = -1; // mud road surface
+    *(int*)(roadSeg.data() + 0x124) = 0;
+    __int64 pathSegs[2] = { (__int64)roadSeg.data(), (__int64)roadSeg.data() };
+    __int64 pathVec[3] = { (__int64)&pathSegs[0], (__int64)&pathSegs[2], (__int64)&pathSegs[2] };
+    *(unsigned char*)(roadMgr.data() + 0x390) = 1;
+    *(unsigned char*)(roadMgr.data() + 0x3D0) = 1; // multi-piece upgrade
+    *(int*)(roadMgr.data() + 0x3D8) = 0;
+    *(__int64*)(roadMgr.data() + 0x3F0) = (__int64)&pathVec[0];
+    *(__int64*)(roadMgr.data() + 0x3F8) = (__int64)(&pathVec[0] + 3);
+    *(int*)(roadMgr.data() + 0x394) = 1;  // target asphalt type in +0x394
+    *(int*)(roadMgr.data() + 0x398) = 0;  // target variant in +0x398
+    *(int*)(roadMgr.data() + 0x39C) = -1; // normal surface upgrade (dirFlag == -1)
+    *(int*)(roadMgr.data() + 0x528) = 1;  // asphalt
+    *(int*)(roadMgr.data() + 0x52C) = 0;
+
+    int totalMultiPieces = 0;
+    RoadSyncUpgradeMsg multiMsg = {};
+    TEST_CHECK(LocalBuilds_FillUpgrade((__int64)roadMgr.data(), ROAD_SYNC_CATEGORY_ROAD, multiMsg, 0, &totalMultiPieces));
+    TEST_CHECK(totalMultiPieces == 2 && multiMsg.pieceCount == 2);
+    TEST_CHECK(multiMsg.pieces[0].oldType == 1 && multiMsg.pieces[1].oldType == 1);
+
+    // Even if a caller passes piece.oldType == -1 for a mud road upgrade, ApplyUpgradePieceInner
+    // must fall back to msg.newType (1) so manager+0x394 is never negative during commit.
+    multiMsg.pieceCount = 1;
+    multiMsg.pieces[0].oldType = -1;
+    TEST_CHECK(RoadSync_ApplyCommandUpgrade(multiMsg));
+    TEST_CHECK(*(int*)(roadMgr.data() + 0x394) == 1);
+
+    // 6. Cleanup mock pointers
     *(BYTE**)(world + 0xF7A0) = nullptr;
     *(BYTE**)(world + 0xF968) = nullptr;
     return true;

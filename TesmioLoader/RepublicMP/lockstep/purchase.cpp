@@ -593,13 +593,17 @@ static const char* ReplayBlueprint(BYTE* world, const PurchaseMsg& m, BYTE* type
         btype = *(BYTE**)(depot + 0x318);
         if (!btype) return "not carried (factory)";
     }
-    if (licence && type[0x9C88]) return "refused (licence held)";
+    if (licence && type[VEH_TYPE_HAS_LICENCE_OFFSET]) return "refused (licence held)";
+    if (!licence && *(const unsigned*)(type + VEH_TYPE_CATEGORY_OFFSET) != 9 && !type[VEH_TYPE_HAS_LICENCE_OFFSET]) {
+        return "refused (licence not held)";
+    }
     bool fail = !CanPay(world, m.rubles, m.dollars);
     if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x627E80))(world, depot, type + 0x200) != 0;
     if (fail) return "refused (money or campaign)";
     Pay(world, m.rubles, m.dollars, type, ResourceAt(world, m.resIndex));
     if (licence) {
-        type[0x9C88] = 1;
+        type[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
+        TwoStates_NotifyVehicleLicenseChanged(world);
         if (campaign != -1 && !strcmp((const char*)(world + 0x13348), "BuyVehicle")) world[0x13651] = 1;
         return nullptr;
     }
@@ -897,6 +901,12 @@ static const char* Replay(const PurchaseMsg& m)
         }
         BYTE* depot = BuildingAt(world, m.depot);
         if (!depot) return "the depot differs";
+        if (TwoStates_IsActive() && TwoStates_GetCommandOwner() != 0) {
+            float dx = *(const float*)(depot + OBJ_POS_OFFSET);
+            float dz = *(const float*)(depot + OBJ_POS_OFFSET + 8);
+            int depotOwner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(dx, dz), dx, dz);
+            if (depotOwner != TwoStates_GetCommandOwner()) return "refused (foreign building)";
+        }
         if (!WriteVariants(type, m)) return "the trailers differ";
         int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         const char* res = nullptr;

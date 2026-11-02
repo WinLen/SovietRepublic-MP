@@ -208,3 +208,11 @@ bool   TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, B
                                                  unsigned char checkFilters, unsigned char isDemolishOffice,
                                                  uintptr_t callerRvaOverride = 0);
 
+// Per-state vehicle production license isolation (world + 0x12840, stride 0x9F08, byte +0x9C88)
+void   TwoStates_NotifyVehicleLicenseChanged(BYTE* world);
+bool   TwoStates_IsVehicleLicenseOwned(const BYTE* world, int stateOwner, int typeIdx);
+bool   TwoStates_SetVehicleLicenseOwnedForTest(BYTE* world, int stateOwner, int typeIdx, bool owned);
+void   TwoStates_VehicleSaleForTest(BYTE* world, BYTE* vehicle, float customSalePrice, float defaultDepreciatedPrice);
+
+
+

@@ -187,6 +187,15 @@
 #ifndef WORLD_VEHICLE_TYPE_STRIDE
 #define WORLD_VEHICLE_TYPE_STRIDE   0x9F08
 #endif
+#ifndef VEH_TYPE_SCRIPT_NAME_OFFSET
+#define VEH_TYPE_SCRIPT_NAME_OFFSET 0x200u
+#endif
+#ifndef VEH_TYPE_CATEGORY_OFFSET
+#define VEH_TYPE_CATEGORY_OFFSET    0x294u
+#endif
+#ifndef VEH_TYPE_HAS_LICENCE_OFFSET
+#define VEH_TYPE_HAS_LICENCE_OFFSET 0x9C88u
+#endif
 
 #ifndef TOOL_DRAG_ACTIVE_OFFSET
 #define TOOL_DRAG_ACTIVE_OFFSET     0xD2AC
@@ -1017,6 +1026,9 @@ static_assert(RVA_IAT_RESTORE_ORIGINAL_VALUES == 0x86D570, "RVA_IAT_RESTORE_ORIG
 #ifndef RESEARCH_ITEM_BUILDING_PTR_OFFSET
 #define RESEARCH_ITEM_BUILDING_PTR_OFFSET   0xD8u
 #endif
+#ifndef RESEARCH_ITEM_BLD_PTR_OFFSET
+#define RESEARCH_ITEM_BLD_PTR_OFFSET        RESEARCH_ITEM_BUILDING_PTR_OFFSET
+#endif
 #ifndef RESEARCH_ITEM_TIMER_E0_OFFSET
 #define RESEARCH_ITEM_TIMER_E0_OFFSET       0xE0u
 #endif
@@ -1085,5 +1097,69 @@ static_assert(RVA_UNASSIGN_CONSTRUCTION_OFFICE == RVA_ASSIGN_CONSTRUCTION_OFFICE
               RVA_CALLER_OFFICE_ROAD_SCAN < RVA_ASSIGN_CONSTRUCTION_OFFICE &&
               SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA == SITE_CONSTRUCT_TOOL_START_PLAN_RVA + 0x2Du,
               "Construction Office assignment RVAs (0x161C90, 0x162360, 0x14119B, 0x1D9FFD/0x1DA02A) must match 1.1.1.9 layout");
+
+static_assert(VEH_TYPE_SCRIPT_NAME_OFFSET == 0x200u &&
+              VEH_TYPE_CATEGORY_OFFSET == 0x294u &&
+              VEH_TYPE_HAS_LICENCE_OFFSET == 0x9C88u &&
+              VEH_TYPE_HAS_LICENCE_OFFSET < WORLD_VEHICLE_TYPE_STRIDE,
+              "VEHICLE_TYPE license & script offsets (+0x200, +0x294, +0x9C88, stride 0x9F08) must match 0x3DDA80 / 0x76D81E");
+
+
+// ---------------------------------------------------------------------------
+// City Creation/Deletion, On-the-Fly Rename & Car Dealer Filter Offsets
+// ---------------------------------------------------------------------------
+
+#ifndef CITY_CREATE_RVA
+#define CITY_CREATE_RVA                     0x32F450u
+#endif
+#ifndef CITY_DELETE_RVA
+#define CITY_DELETE_RVA                     0x32F5C0u
+#endif
+#ifndef CITY_REASSIGN_BLDS_RVA
+#define CITY_REASSIGN_BLDS_RVA              0x32FF40u
+#endif
+#ifndef REBUILD_STOP_LINE_NAMES_RVA
+#define REBUILD_STOP_LINE_NAMES_RVA         0x4963D0u
+#endif
+#ifndef WORLD_RENAME_REFRESH_SRC_OFF
+#define WORLD_RENAME_REFRESH_SRC_OFF        0xC6B0u
+#endif
+#ifndef WORLD_RENAME_REFRESH_DST_OFF
+#define WORLD_RENAME_REFRESH_DST_OFF        0xC6B8u
+#endif
+#ifndef BLD_CITIZEN_FILTER_AT
+#define BLD_CITIZEN_FILTER_AT               0xCD8u
+#endif
+#ifndef BLD_CITIZEN_FILTER_END
+#define BLD_CITIZEN_FILTER_END              0xCE8u
+#endif
+#ifndef LINE_CUSTOM_NAME_FLAG_OFF
+#define LINE_CUSTOM_NAME_FLAG_OFF           0x01u
+#endif
+#ifndef LINE_NAME_OFFSET
+#define LINE_NAME_OFFSET                    0x04u
+#endif
+#ifndef SITE_RENAME_AFTER_CALL_RVA
+#define SITE_RENAME_AFTER_CALL_RVA          0x8018D5u
+#endif
+#ifndef SITE_RENAME_SKIP_MUTATION_RVA
+#define SITE_RENAME_SKIP_MUTATION_RVA       0x8019CEu
+#endif
+#ifndef VEH_CUSTOM_NAME_FLAG_OFF
+#define VEH_CUSTOM_NAME_FLAG_OFF            0x108u
+#endif
+#ifndef VEH_NAME_OFFSET
+#define VEH_NAME_OFFSET                     0x10Au
+#endif
+#ifndef VEH_NAME_END_OFFSET
+#define VEH_NAME_END_OFFSET                 ((0x10Au + 0x80u + 3u) & ~3u)
+#endif
+
+static_assert(CITY_DELETE_RVA == CITY_CREATE_RVA + 0x170u &&
+              CITY_REASSIGN_BLDS_RVA == CITY_CREATE_RVA + 0xAF0u &&
+              BLD_CITIZEN_FILTER_END == BLD_CITIZEN_FILTER_AT + 0x10u &&
+              VEH_NAME_END_OFFSET == 0x18Cu,
+              "City creation/rename RVAs and building/vehicle name/filter offsets must match 1.1.1.9 layout");
+
 
 

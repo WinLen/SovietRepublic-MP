@@ -250,12 +250,81 @@ static bool FillUpgradePiece(__int64 seg, RoadSyncUpgradePiece* p)
     return true;
 }
 
+#define UPGRADE_MAX_PATH_PIECES 64
+
+// One-way direction per segment: the commit derives it from a path bitset;
+// approximated here from how each segment chains to its neighbour (forward -> 1, reversed -> 2).
+static void ComputeMultiPieceDirections(const __int64* segs, RoadSyncUpgradePiece* pieces, int count, int dirFlag)
+{
+    for (int i = 0; i < count; i++) {
+        if (dirFlag != 1) {
+            pieces[i].flag39c = dirFlag;
+            continue;
+        }
+        __int64 a0 = *(__int64*)(segs[i] + SEG_NODE0_OFFSET);
+        __int64 a1 = *(__int64*)(segs[i] + SEG_NODE1_OFFSET);
+        bool forward = true;
+        if (i + 1 < count) {
+            __int64 b0 = *(__int64*)(segs[i + 1] + SEG_NODE0_OFFSET);
+            __int64 b1 = *(__int64*)(segs[i + 1] + SEG_NODE1_OFFSET);
+            forward = (a1 == b0 || a1 == b1);
+        } else if (i > 0) {
+            __int64 b0 = *(__int64*)(segs[i - 1] + SEG_NODE0_OFFSET);
+            __int64 b1 = *(__int64*)(segs[i - 1] + SEG_NODE1_OFFSET);
+            forward = (a0 == b0 || a0 == b1);
+        }
+        pieces[i].flag39c = forward ? 1 : 2;
+    }
+}
+
+static int ReadMultiUpgradePieces(__int64 manager, int dirFlag, int fallbackType, int fallbackVariant,
+                                  RoadSyncUpgradePiece* outPieces, int maxPieces)
+{
+    int idx = *(int*)(manager + MGR_UPG_PATH_INDEX_OFFSET);
+    char* listBegin = *(char**)(manager + MGR_UPG_PATHS_BEGIN_OFFSET);
+    char* listEnd = *(char**)(manager + MGR_UPG_PATHS_END_OFFSET);
+    if (idx < 0 || !listBegin || idx >= (int)((listEnd - listBegin) / 0x18)) return 0;
+
+    __int64* segIt = *(__int64**)(listBegin + idx * 0x18);
+    __int64* segEnd = *(__int64**)(listBegin + idx * 0x18 + 8);
+    __int64 segs[UPGRADE_MAX_PATH_PIECES];
+    const bool keepSegSurface = (dirFlag == 0 || dirFlag == 1);
+    const int mgrType394 = *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET);
+    const int mgrVar398 = *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET);
+    const int targetType = (mgrType394 >= 0) ? mgrType394 : fallbackType;
+    const int targetVar = (mgrType394 >= 0) ? mgrVar398 : fallbackVariant;
+
+    int n = 0;
+    for (; segIt && segIt < segEnd && n < maxPieces; ++segIt) {
+        __int64 seg = *segIt;
+        if (!seg || *(char*)(seg + SEG_SKIP_FLAG_OFFSET) != 0 ||
+            (unsigned)(*(int*)(seg + SEG_KIND_OFFSET) - 2) <= 1)
+            continue;
+        if (!FillUpgradePiece(seg, &outPieces[n])) continue;
+        outPieces[n].rangeStart = -1;
+        outPieces[n].rangeEnd = outPieces[n].segPointCount;
+        outPieces[n].oldType = keepSegSurface ? *(int*)(seg + SEG_TYPE_OFFSET) : targetType;
+        outPieces[n].oldVariant = keepSegSurface ? *(int*)(seg + SEG_VARIANT_OFFSET) : targetVar;
+        segs[n++] = seg;
+    }
+    ComputeMultiPieceDirections(segs, outPieces, n, dirFlag);
+    return n;
+}
+
 // Captures an upgrade commit (manager+0x390 != 0): either one segment over a
 // point range (+0x3d0 == 0), or every segment of the pathfound list the
 // commit walks (+0x3f0[+0x3d8], same filter as FUN_140518a80 lines 349-414).
+// In FUN_140518a80 (0x140518F34..0x140518FC1) and 0x1405205A0, manager+0x394
+// and manager+0x398 are the target surface type/variant passed to 0x14051F9C0
+// (and +0x394 < 0 triggers segment deletion 0x1405434C0). Only when dirFlag is
+// 0 (Two-Way 0x33) or 1 (One-Way 0x32) does FUN_140518a80 overwrite +0x394/+0x398
+// with seg+0x120 / seg+0x124; for normal surface upgrades (dirFlag == -1),
+// +0x394/+0x398 remain equal to the target upgrade type/variant.
 // Caller wraps in __try.
-static bool FillUpgrade(__int64 manager, int category, RoadSyncUpgradeMsg& m)
+bool LocalBuilds_FillUpgrade(__int64 manager, int category, RoadSyncUpgradeMsg& m, int startPiece, int* outTotalPieces)
 {
+    if (outTotalPieces) *outTotalPieces = 0;
+    if (startPiece < 0) return false;
     m.category = category;
     m.newType = *(int*)(manager + MGR_TYPE_OFFSET);
     m.newVariant = *(int*)(manager + MGR_VARIANT_OFFSET);
@@ -264,52 +333,29 @@ static bool FillUpgrade(__int64 manager, int category, RoadSyncUpgradeMsg& m)
     int dirFlag = *(int*)(manager + MGR_UPG_DIR_OFFSET);
 
     if (*(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) == 0) {
+        if (startPiece > 0) return false;
         RoadSyncUpgradePiece& p = m.pieces[0];
         if (!FillUpgradePiece(*(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET), &p)) return false;
         p.rangeStart = *(int*)(manager + MGR_UPG_RANGE_START_OFFSET);
         p.rangeEnd = *(int*)(manager + MGR_UPG_RANGE_END_OFFSET);
-        p.oldType = *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET);
-        p.oldVariant = *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET);
+        const int mgrType394 = *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET);
+        const int mgrVar398 = *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET);
+        p.oldType = (mgrType394 >= 0) ? mgrType394 : m.newType;
+        p.oldVariant = (mgrType394 >= 0) ? mgrVar398 : m.newVariant;
         p.flag39c = dirFlag;
         m.pieceCount = 1;
+        if (outTotalPieces) *outTotalPieces = 1;
     } else {
-        int idx = *(int*)(manager + MGR_UPG_PATH_INDEX_OFFSET);
-        char* listBegin = *(char**)(manager + MGR_UPG_PATHS_BEGIN_OFFSET);
-        char* listEnd = *(char**)(manager + MGR_UPG_PATHS_END_OFFSET);
-        if (idx < 0 || !listBegin || idx >= (int)((listEnd - listBegin) / 0x18)) return false;
-        __int64* segIt = *(__int64**)(listBegin + idx * 0x18);
-        __int64* segEnd = *(__int64**)(listBegin + idx * 0x18 + 8);
-        __int64 segs[ROAD_SYNC_MAX_UPGRADE_PIECES];
-        int n = 0;
-        for (; segIt && segIt < segEnd && n < ROAD_SYNC_MAX_UPGRADE_PIECES; ++segIt) {
-            __int64 seg = *segIt;
-            if (!seg || *(char*)(seg + SEG_SKIP_FLAG_OFFSET) != 0 ||
-                (unsigned)(*(int*)(seg + SEG_KIND_OFFSET) - 2) <= 1)
-                continue;
-            if (!FillUpgradePiece(seg, &m.pieces[n])) continue;
-            m.pieces[n].rangeStart = -1;
-            m.pieces[n].rangeEnd = m.pieces[n].segPointCount;
-            m.pieces[n].oldType = *(int*)(seg + SEG_TYPE_OFFSET);
-            m.pieces[n].oldVariant = *(int*)(seg + SEG_VARIANT_OFFSET);
-            segs[n++] = seg;
-        }
-        // One-way direction per segment: the commit derives it from a path
-        // bitset; approximated here from how each segment chains to its
-        // neighbour (forward -> 1, reversed -> 2).
-        for (int i = 0; i < n; i++) {
-            if (dirFlag != 1) { m.pieces[i].flag39c = dirFlag; continue; }
-            __int64 a0 = *(__int64*)(segs[i] + SEG_NODE0_OFFSET), a1 = *(__int64*)(segs[i] + SEG_NODE1_OFFSET);
-            bool forward = true;
-            if (i + 1 < n) {
-                __int64 b0 = *(__int64*)(segs[i + 1] + SEG_NODE0_OFFSET), b1 = *(__int64*)(segs[i + 1] + SEG_NODE1_OFFSET);
-                forward = (a1 == b0 || a1 == b1);
-            } else if (i > 0) {
-                __int64 b0 = *(__int64*)(segs[i - 1] + SEG_NODE0_OFFSET), b1 = *(__int64*)(segs[i - 1] + SEG_NODE1_OFFSET);
-                forward = (a0 == b0 || a0 == b1);
-            }
-            m.pieces[i].flag39c = forward ? 1 : 2;
-        }
-        m.pieceCount = n;
+        static RoadSyncUpgradePiece s_allPieces[UPGRADE_MAX_PATH_PIECES];
+        int total = ReadMultiUpgradePieces(manager, dirFlag, m.newType, m.newVariant,
+                                           s_allPieces, UPGRADE_MAX_PATH_PIECES);
+        if (outTotalPieces) *outTotalPieces = total;
+        if (startPiece >= total) return false;
+        int chunkCount = total - startPiece;
+        if (chunkCount > ROAD_SYNC_MAX_UPGRADE_PIECES) chunkCount = ROAD_SYNC_MAX_UPGRADE_PIECES;
+        memset(m.pieces, 0, sizeof(m.pieces));
+        memcpy(m.pieces, s_allPieces + startPiece, sizeof(m.pieces[0]) * chunkCount);
+        m.pieceCount = chunkCount;
     }
     return m.pieceCount >= 1;
 }
@@ -318,7 +364,7 @@ static void CaptureUpgrade(__int64 manager, int category)
 {
     if (InterlockedCompareExchange(&g_upgradePending, 0, 0) != 0) return;
     RoadSyncUpgradeMsg m = {};
-    if (!FillUpgrade(manager, category, m)) return;
+    if (!LocalBuilds_FillUpgrade(manager, category, m)) return;
     g_upgradeCapture = m;
     MemoryBarrier();
     InterlockedExchange(&g_upgradePending, 1);
@@ -785,6 +831,30 @@ static bool SegmentListed(__int64 manager, __int64 seg)
     return false;
 }
 
+static void SubmitUpgradeCommandChunks(__int64 manager, int category)
+{
+    int totalPieces = 0;
+    RoadSyncUpgradeMsg m = {};
+    if (!LocalBuilds_FillUpgrade(manager, category, m, 0, &totalPieces)) return;
+    const char* tool = *(const char**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET);
+    if (!SaveSync_CheckRoadDlcAllowed(m.category, m.newType, tool)) return;
+    const char* upgDesc = Tr("модернизация дороги/сети", "road/network upgrade");
+    if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], upgDesc) ||
+        !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], upgDesc))
+        return;
+
+    TerrainHook_LockstepFlush();
+    m.mode = BuildMode_Read();
+    Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
+    for (int at = ROAD_SYNC_MAX_UPGRADE_PIECES; at < totalPieces; at += ROAD_SYNC_MAX_UPGRADE_PIECES) {
+        RoadSyncUpgradeMsg nextChunk = {};
+        if (LocalBuilds_FillUpgrade(manager, category, nextChunk, at, nullptr)) {
+            nextChunk.mode = m.mode;
+            Commands_Submit(LS_CMD_UPGRADE, &nextChunk, sizeof(nextChunk));
+        }
+    }
+}
+
 static bool TakeCommitAsCommand(__int64 manager, int category)
 {
     __try {
@@ -863,23 +933,7 @@ static bool TakeCommitAsCommand(__int64 manager, int category)
             return true;
         }
         if (*(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) != 0) {
-            RoadSyncUpgradeMsg m = {};
-            if (FillUpgrade(manager, category, m)) {
-                const char* tool = *(const char**)(GetPlacementManagerThisPtr() + ACTIVE_TOOL_OFFSET);
-                if (!SaveSync_CheckRoadDlcAllowed(m.category, m.newType, tool)) {
-                    RoadSync_ClearCategoryPreview(category);
-                    return true;
-                }
-                const char* upgDesc = Tr("модернизация дороги/сети", "road/network upgrade");
-                if (!TwoStates_CheckBuildAllowed(m.pieces[0].segStart[0], m.pieces[0].segStart[2], upgDesc) ||
-                    !TwoStates_CheckBuildAllowed(m.pieces[0].segEnd[0], m.pieces[0].segEnd[2], upgDesc)) {
-                    RoadSync_ClearCategoryPreview(category);
-                    return true;
-                }
-                TerrainHook_LockstepFlush();
-                m.mode = BuildMode_Read();
-                Commands_Submit(LS_CMD_UPGRADE, &m, sizeof(m));
-            }
+            SubmitUpgradeCommandChunks(manager, category);
             RoadSync_ClearCategoryPreview(category);
             return true;
         }

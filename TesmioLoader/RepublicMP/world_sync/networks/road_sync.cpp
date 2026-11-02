@@ -117,6 +117,9 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define SEG_NODE1_OFFSET 0x28
 #define SEG_TYPE_OFFSET 0x120
 #define SEG_VARIANT_OFFSET 0x124
+#define SEG_OWNER_OFFSET 0x138
+#define EDGE_PLANNED_OFFSET 0x140
+#define EDGE_BUILT_OFFSET 0x141
 
 #define NODE_POS_OFFSET 4                 // node object: float x,y,z
 #define BUILDING_POS_OFFSET 0x350         // building object: float x,y,z
@@ -712,9 +715,102 @@ static void ResetManagerDragState(__int64 manager)
     }
 }
 
+static std::unordered_map<__int64, uint8_t> g_plannedSegOwner;
+
+static bool ReadSegOwnerCoords(__int64 seg, float* outX, float* outZ)
+{
+    if (!seg) return false;
+    __try {
+        __int64 ownerBld = *(__int64*)(seg + SEG_OWNER_OFFSET);
+        if (IsPointerLikeX64((uintptr_t)ownerBld)) {
+            *outX = *(const float*)(ownerBld + BUILDING_POS_OFFSET);
+            *outZ = *(const float*)(ownerBld + BUILDING_POS_OFFSET + 8);
+            return true;
+        }
+        __int64 n0 = *(__int64*)(seg + SEG_NODE0_OFFSET);
+        __int64 n1 = *(__int64*)(seg + SEG_NODE1_OFFSET);
+        if (n0 && n1) {
+            const float* p0 = (const float*)(n0 + NODE_POS_OFFSET);
+            const float* p1 = (const float*)(n1 + NODE_POS_OFFSET);
+            *outX = 0.5f * (p0[0] + p1[0]);
+            *outZ = 0.5f * (p0[2] + p1[2]);
+            return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
+void RoadSync_SetPlannedSegmentOwnerForTest(__int64 seg, int owner)
+{
+    if (!seg) return;
+    if (owner == 1 || owner == 2)
+        g_plannedSegOwner[seg] = (uint8_t)owner;
+    else
+        g_plannedSegOwner.erase(seg);
+}
+
+int RoadSync_GetPlannedSegmentOwner(__int64 seg)
+{
+    if (!seg) return 0;
+    auto it = g_plannedSegOwner.find(seg);
+    if (it != g_plannedSegOwner.end() && (it->second == 1 || it->second == 2))
+        return (int)it->second;
+    float mx = 0.0f, mz = 0.0f;
+    if (ReadSegOwnerCoords(seg, &mx, &mz))
+        return TwoStates_GetBuildingOwner(0, mx, mz);
+    return 0;
+}
+
+static void SnapshotManagerSegments(__int64 manager, std::vector<__int64>& out)
+{
+    out.clear();
+    if (!manager) return;
+    __int64* begin = nullptr;
+    __int64* end = nullptr;
+    if (!SafeReadPod((const void*)(manager + MGR_SEGMENTS_BEGIN_OFFSET), &begin) ||
+        !SafeReadPod((const void*)(manager + MGR_SEGMENTS_END_OFFSET), &end))
+        return;
+    if (!begin || end <= begin || (end - begin) > 65536) return;
+    size_t count = (size_t)(end - begin);
+    out.resize(count);
+    if (!SafeMemcpyPod(out.data(), begin, count * sizeof(__int64)))
+        out.clear();
+}
+
+static void TagNewManagerSegments(__int64 manager, const std::vector<__int64>& before, int owner)
+{
+    if (!manager || (owner != 1 && owner != 2)) return;
+    std::vector<__int64> after;
+    SnapshotManagerSegments(manager, after);
+    for (__int64 seg : after) {
+        if (!seg) continue;
+        bool existed = false;
+        for (__int64 oldSeg : before) {
+            if (oldSeg == seg) { existed = true; break; }
+        }
+        if (!existed) {
+            g_plannedSegOwner[seg] = (uint8_t)owner;
+            float mx = 0.0f, mz = 0.0f;
+            if (ReadSegOwnerCoords(seg, &mx, &mz))
+                TwoStates_RegisterBuildingOwner(TwoStates_BuildingPosKey(mx, mz), owner);
+        }
+    }
+}
+
 // The replay sees the same "camera-visible" edges as the sender's does.
 static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted)
 {
+    const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(seg.category);
+    __int64 manager = 0;
+    if (info && info->enabled)
+        SafeReadPod((const void*)(GetWorldThisPtr() + info->managerOffset), &manager);
+    int owner = TwoStates_GetCommandOwner();
+    if (owner == 0) owner = TwoStates_LocalState();
+    std::vector<__int64> beforeSegs;
+    if (manager && (owner == 1 || owner == 2))
+        SnapshotManagerSegments(manager, beforeSegs);
+
     ScopeBox box = {};
     BoxAdd(box, seg.startNode);
     BoxAdd(box, seg.endNode);
@@ -722,6 +818,9 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
     bool scoped = BeginScope(box, SCOPE_ROAD_MARGIN);
     bool ok = ApplySegmentImplInner(seg, outEngineAccepted);
     if (scoped) ViewListScope_End();
+
+    if (ok && manager && (owner == 1 || owner == 2))
+        TagNewManagerSegments(manager, beforeSegs, owner);
     return ok;
 }
 
@@ -1233,13 +1332,20 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         RawVectorHeader route = { pts + first, pts + first + (n > 0 ? n : 0), pts + first + (n > 0 ? n : 0) };
         ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + MGR_ROUTE_BEGIN_OFFSET), &route);
 
+        const int type394 = (piece.oldType >= 0) ? piece.oldType : msg.newType;
+        const int var398 = (piece.oldType >= 0) ? piece.oldVariant : msg.newVariant;
+        if (type394 < 0) {
+            Logf("republicmp  ROAD_SYNC: upgrade: refusing negative target type394=%d newType=%d", piece.oldType, msg.newType);
+            return false;
+        }
+
         *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
         *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = rs;
         *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = re;
         *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 1;
         *(unsigned char*)(manager + MGR_UPG_MULTI_OFFSET) = 0;
-        *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET) = piece.oldType;
-        *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET) = piece.oldVariant;
+        *(int*)(manager + MGR_UPG_OLD_TYPE_OFFSET) = type394;
+        *(int*)(manager + MGR_UPG_OLD_VARIANT_OFFSET) = var398;
         *(int*)(manager + MGR_UPG_DIR_OFFSET) = dir;
         *(int*)(manager + MGR_TYPE_OFFSET) = msg.newType;
         *(int*)(manager + MGR_VARIANT_OFFSET) = msg.newVariant;
@@ -1259,10 +1365,10 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         }
 
         Logf("republicmp  ROAD_SYNC: %s %s%s range=(%d,%d)/%d type %d/%d -> %d/%d type394=%d dir=%d",
-             piece.oldType == 0x65 ? "DEMOLISH" : "upgrade",
+             type394 == 0x65 ? "DEMOLISH" : "upgrade",
              info->name, reversed ? " (reversed)" : "", rs, re, count,
              *(int*)(seg + SEG_TYPE_OFFSET), *(int*)(seg + SEG_VARIANT_OFFSET), msg.newType, msg.newVariant,
-             piece.oldType, dir);
+             type394, dir);
 
         RoadCommitFn commit = g_origRoadCommit ? g_origRoadCommit : (RoadCommitFn)((uintptr_t)g_exe + COMMIT_RVA);
         __try {
@@ -1796,7 +1902,6 @@ static bool DemolishPieceStillHere(const RoadSyncDemolishMsg& m)
 // demolished (owner +0xea8 set - fcaf0 at 0x4FE0B3): a piece next to a
 // building the other PC is still pulling down cannot be picked until that
 // demolition is over. Fills owner details for the log.
-#define SEG_OWNER_OFFSET 0x138
 #define OWNER_DEMOLISHING_OFFSET 0xea8
 #define OWNER_PROGRESS_OFFSET 0x604
 #define OWNER_POS_OFFSET 0x350
@@ -2184,6 +2289,7 @@ void RoadSync_Reset()
         CloseConnection();
     }
     NetworkJoinAndCloseThread(&g_workerThread);
+    g_plannedSegOwner.clear();
 }
 
 bool RoadSync_IsConnected()  { return g_connected; }
@@ -2745,9 +2851,85 @@ static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
 
 #define PLAN_START_RVA 0x5258E0        // FUN_1405258e0(network, dollars, rubles, count, group)
 #define PLAN_START_EXCEPT_RVA 0x525C30 // FUN_140525c30(network, dollars, rubles, -, group)
-#define EDGE_PLANNED_OFFSET 0x140      // byte: 1 = a plan not started yet
+#define PLAN_COLLECT_UI_RVA 0x86A40    // FUN_140086a40(world, &groupVec, &netVec, &hasGroupFlag)
+#define LEFT_MENU_PLAN_UI_RVA 0x86F40  // FUN_140086f40(world, x, y, flag)
+#define BOTTOM_BAR_PLAN_UI_RVA 0x395C90 // FUN_140395c90(world)
 #define EDGE_GROUP_OFFSET 0x124
 #define PLAN_CAPTURE_MAX 16
+#define WORLD_NETWORK_COUNT_OFFSET 0x14034 // int: entries below
+#define WORLD_NETWORK_ENTRIES_OFFSET 0x14038 // entries of 0x50, the network at +0
+#define WORLD_NETWORK_ENTRY_SIZE 0x50
+
+struct MaskedPlannedSeg {
+    __int64 seg;
+    unsigned char orig140;
+    unsigned char orig141;
+};
+
+static void MaskPlannedNetwork(__int64 network, int activeOwner, std::vector<MaskedPlannedSeg>& outMasked)
+{
+    if (!network || (activeOwner != 1 && activeOwner != 2)) return;
+    __int64* begin = nullptr;
+    __int64* end = nullptr;
+    if (!SafeReadPod((const void*)(network + MGR_SEGMENTS_BEGIN_OFFSET), &begin) ||
+        !SafeReadPod((const void*)(network + MGR_SEGMENTS_END_OFFSET), &end))
+        return;
+    if (!begin || end <= begin || (end - begin) > 65536) return;
+    for (__int64* it = begin; it < end; ++it) {
+        __int64 seg = 0;
+        if (!SafeReadPod((const void*)it, &seg) || !seg) continue;
+        unsigned char planned = 0;
+        if (!SafeReadPod((const void*)(seg + EDGE_PLANNED_OFFSET), &planned) || planned != 1) continue;
+        int segOwner = RoadSync_GetPlannedSegmentOwner(seg);
+        if (segOwner != 0 && segOwner != activeOwner) {
+            unsigned char built = 0;
+            SafeReadPod((const void*)(seg + EDGE_BUILT_OFFSET), &built);
+            outMasked.push_back({ seg, planned, built });
+            SafeWritePod((void*)(seg + EDGE_PLANNED_OFFSET), (unsigned char)0);
+            SafeWritePod((void*)(seg + EDGE_BUILT_OFFSET), (unsigned char)1);
+        }
+    }
+}
+
+class ScopedPlannedSegMask {
+public:
+    ScopedPlannedSegMask(__int64 targetPtr, int activeOwner, bool isWorld)
+    {
+        if (!TwoStates_IsActive() || (activeOwner != 1 && activeOwner != 2) || !targetPtr)
+            return;
+        if (!isWorld) {
+            MaskPlannedNetwork(targetPtr, activeOwner, m_masked);
+            return;
+        }
+        int networks = 0;
+        if (SafeReadPod((const void*)(targetPtr + WORLD_NETWORK_COUNT_OFFSET), &networks)) {
+            for (int k = 0; k < networks && k < 256; k++) {
+                __int64 net = 0;
+                if (SafeReadPod((const void*)(targetPtr + WORLD_NETWORK_ENTRIES_OFFSET + (__int64)k * WORLD_NETWORK_ENTRY_SIZE), &net) && net)
+                    MaskPlannedNetwork(net, activeOwner, m_masked);
+            }
+        }
+        for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
+            __int64 net = 0;
+            if (SafeReadPod((const void*)(targetPtr + g_categories[c].managerOffset), &net) && net)
+                MaskPlannedNetwork(net, activeOwner, m_masked);
+        }
+    }
+    ~ScopedPlannedSegMask()
+    {
+        for (const MaskedPlannedSeg& e : m_masked) {
+            SafeWritePod((void*)(e.seg + EDGE_PLANNED_OFFSET), e.orig140);
+            SafeWritePod((void*)(e.seg + EDGE_BUILT_OFFSET), e.orig141);
+        }
+    }
+private:
+    std::vector<MaskedPlannedSeg> m_masked;
+};
+
+static void UntagPlannedSegment(__int64 seg)
+{
+    if (seg) g_plannedSegOwner.erase(seg);
+}
 
 // mov rax,rsp / mov [rax+10h],dl / push rbp,rsi,rdi,r12,r13,r14 - 15 bytes
 static const unsigned char kPlanStartExpect[15] = {
@@ -2819,10 +3001,11 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
         SaveSync_NotifyWaitingLobbyActionBlocked();
         return 0;
     }
+    bool isUi = (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
+                             : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])));
+    bool isLocalUi = isUi && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0;
     // Lockstep: the button press becomes a command, made on every PC.
-    if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-        (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
-                     : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])))) {
+    if (Commands_TakeLocal() && isLocalUi) {
         int lsCategory = RoadSync_CategoryForManager(GetWorldThisPtr(), network);
         if (lsCategory >= 0) {
             RoadSyncPlanStartMsg m = {};
@@ -2837,9 +3020,8 @@ static __int64 PlanStartCommon(bool exceptGroup, void* ret, __int64 network, uns
             return 0;
         }
     }
-    bool capture = g_connected && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
-                   (exceptGroup ? IsUiCall(ret, kPlanStartExceptUiReturns, sizeof(kPlanStartExceptUiReturns) / sizeof(kPlanStartExceptUiReturns[0]))
-                                : IsUiCall(ret, kPlanStartUiReturns, sizeof(kPlanStartUiReturns) / sizeof(kPlanStartUiReturns[0])));
+    ScopedPlannedSegMask mask(network, isLocalUi ? TwoStates_LocalState() : 0, false);
+    bool capture = g_connected && isLocalUi;
     int category = capture ? RoadSync_CategoryForManager(GetWorldThisPtr(), network) : -1;
     int before = category >= 0 ? CountStartablePlans(network, exceptGroup, (int)count, (int)group) : 0;
     __int64 result = orig(network, dollars, rubles, count, group);
@@ -2875,6 +3057,43 @@ static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, uns
 typedef __int64 (*CancelSegFn)(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5);
 #define CANCEL_SEG_RVA 0x5434C0
 #define BOTTOM_BAR_CANCEL_CALL_RVA 0x39F497
+#define LEFT_MENU_CANCEL_CALL_RVA 0x886C3
+
+static const unsigned char kPlanCollectUiExpect[16] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56
+};
+static const unsigned char kLeftMenuPlanUiExpect[14] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
+};
+static const unsigned char kBottomBarPlanUiExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20
+};
+
+typedef unsigned char (*PlanCollectUiFn)(__int64 world, void* a2, void* a3, void* a4);
+typedef void (*LeftMenuPlanUiFn)(__int64 world, float a2, float a3, unsigned char a4);
+typedef void (*BottomBarPlanUiFn)(__int64 world);
+
+static PlanCollectUiFn g_origPlanCollectUi = nullptr;
+static LeftMenuPlanUiFn g_origLeftMenuPlanUi = nullptr;
+static BottomBarPlanUiFn g_origBottomBarPlanUi = nullptr;
+
+static unsigned char HookedPlanCollectUi(__int64 world, void* a2, void* a3, void* a4)
+{
+    ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+    return g_origPlanCollectUi(world, a2, a3, a4);
+}
+
+static void HookedLeftMenuPlanUi(__int64 world, float a2, float a3, unsigned char a4)
+{
+    ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+    g_origLeftMenuPlanUi(world, a2, a3, a4);
+}
+
+static void HookedBottomBarPlanUi(__int64 world)
+{
+    ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+    g_origBottomBarPlanUi(world);
+}
 
 static ULONGLONG g_lastBottomBarCancelMs = 0;
 static __int64 g_lastBottomBarCancelNet = 0;
@@ -2906,7 +3125,33 @@ static __int64 HookedBottomBarCancelSeg(__int64 network, __int64 seg, unsigned c
         }
         return 0;
     }
+    UntagPlannedSegment(seg);
     return ((CancelSegFn)(g_exeBase + CANCEL_SEG_RVA))(network, seg, p3, p4, p5);
+}
+
+static void PatchCallToCancelSeg(unsigned int callRva)
+{
+    BYTE* callAt = g_exeBase + callRva;
+    int rel = 0;
+    memcpy(&rel, callAt + 1, 4);
+    if (callAt[0] != 0xE8 || callRva + 5 + rel != CANCEL_SEG_RVA)
+        return;
+    BYTE* relay = AllocNear(callAt, 64);
+    if (!relay) return;
+    void* target = (void*)&HookedBottomBarCancelSeg;
+    DWORD old = 0;
+    VirtualProtect(relay, 16, PAGE_EXECUTE_READWRITE, &old);
+    relay[0] = 0xFF; relay[1] = 0x25; relay[2] = relay[3] = relay[4] = relay[5] = 0;
+    memcpy(relay + 6, &target, 8);
+    VirtualProtect(relay, 16, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, 16);
+    int relToRelay = (int)((long long)relay - (long long)(callAt + 5));
+    unsigned char patch[5] = { 0xE8, 0, 0, 0, 0 };
+    memcpy(patch + 1, &relToRelay, 4);
+    VirtualProtect(callAt, 5, PAGE_EXECUTE_READWRITE, &old);
+    memcpy(callAt, patch, 5);
+    VirtualProtect(callAt, 5, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), callAt, 5);
 }
 
 bool RoadSync_InstallPlanStartHooks()
@@ -2916,28 +3161,14 @@ bool RoadSync_InstallPlanStartHooks()
     bool b = InstallInlineHook(g_exeBase + PLAN_START_EXCEPT_RVA, (void*)HookedPlanStartExcept,
                                (void**)&g_origPlanStartExcept, kPlanStartExceptExpect, sizeof(kPlanStartExceptExpect),
                                "republicmp plan start except");
-    BYTE* callAt = g_exeBase + BOTTOM_BAR_CANCEL_CALL_RVA;
-    int rel = 0;
-    memcpy(&rel, callAt + 1, 4);
-    if (callAt[0] == 0xE8 && BOTTOM_BAR_CANCEL_CALL_RVA + 5 + rel == CANCEL_SEG_RVA) {
-        BYTE* relay = AllocNear(callAt, 64);
-        if (relay) {
-            void* target = (void*)&HookedBottomBarCancelSeg;
-            DWORD old;
-            VirtualProtect(relay, 16, PAGE_EXECUTE_READWRITE, &old);
-            relay[0] = 0xFF; relay[1] = 0x25; relay[2] = relay[3] = relay[4] = relay[5] = 0;
-            memcpy(relay + 6, &target, 8);
-            VirtualProtect(relay, 16, PAGE_EXECUTE_READ, &old);
-            FlushInstructionCache(GetCurrentProcess(), relay, 16);
-            int relToRelay = (int)((long long)relay - (long long)(callAt + 5));
-            unsigned char patch[5] = { 0xE8, 0, 0, 0, 0 };
-            memcpy(patch + 1, &relToRelay, 4);
-            VirtualProtect(callAt, 5, PAGE_EXECUTE_READWRITE, &old);
-            memcpy(callAt, patch, 5);
-            VirtualProtect(callAt, 5, old, &old);
-            FlushInstructionCache(GetCurrentProcess(), callAt, 5);
-        }
-    }
+    InstallInlineHook(g_exeBase + PLAN_COLLECT_UI_RVA, (void*)HookedPlanCollectUi, (void**)&g_origPlanCollectUi,
+                      kPlanCollectUiExpect, sizeof(kPlanCollectUiExpect), "republicmp plan collect ui");
+    InstallInlineHook(g_exeBase + LEFT_MENU_PLAN_UI_RVA, (void*)HookedLeftMenuPlanUi, (void**)&g_origLeftMenuPlanUi,
+                      kLeftMenuPlanUiExpect, sizeof(kLeftMenuPlanUiExpect), "republicmp left menu plan ui");
+    InstallInlineHook(g_exeBase + BOTTOM_BAR_PLAN_UI_RVA, (void*)HookedBottomBarPlanUi, (void**)&g_origBottomBarPlanUi,
+                      kBottomBarPlanUiExpect, sizeof(kBottomBarPlanUiExpect), "republicmp bottom bar plan ui");
+    PatchCallToCancelSeg(BOTTOM_BAR_CANCEL_CALL_RVA);
+    PatchCallToCancelSeg(LEFT_MENU_CANCEL_CALL_RVA);
     // Patch SECOND_ROAD wrapper (0x3CF6F0) empty-segments guard at RVA 0x3CFA48:
     // When HookedRoadCommit intercepts a commit in Lockstep without pushing a segment,
     // segments_begin == segments_end (0 == 0). The original `je +0x11` (74 11) jumped to
@@ -3000,6 +3231,7 @@ static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
             for (long long i = (end - begin) - 1; i >= 0; --i) {
                 __int64 seg = begin[i];
                 if (!seg || *(unsigned char*)(seg + EDGE_PLANNED_OFFSET) == 0) continue;
+                UntagPlannedSegment(seg);
                 ((CancelSegFn)(g_exeBase + CANCEL_SEG_RVA))(network, seg, 0, -1, 0);
                 (*outRemoved)++;
                 begin = *(__int64**)(network + MGR_SEGMENTS_BEGIN_OFFSET);
@@ -3021,11 +3253,11 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 {
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
     __int64 network = 0;
-    __try {
-        network = info ? *(__int64*)(GetWorldThisPtr() + info->managerOffset) : 0;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        network = 0;
-    }
+    if (info)
+        SafeReadPod((const void*)(GetWorldThisPtr() + info->managerOffset), &network);
+    int cmdOwner = TwoStates_GetCommandOwner();
+    if (cmdOwner == 0) cmdOwner = TwoStates_LocalState();
+    ScopedPlannedSegMask mask(network, cmdOwner, false);
     if (m.exceptGroup == 2) {
         if (!network) {
             SendAck(m.seq, m.category, false, 1);
@@ -3042,7 +3274,9 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
         SendAck(m.seq, m.category, ok, 1);
         return;
     }
-    PlanStartFn fn = m.exceptGroup ? g_origPlanStartExcept : g_origPlanStart;
+    PlanStartFn fn = m.exceptGroup
+        ? (g_origPlanStartExcept ? g_origPlanStartExcept : (PlanStartFn)(g_exeBase + PLAN_START_EXCEPT_RVA))
+        : (g_origPlanStart ? g_origPlanStart : (PlanStartFn)(g_exeBase + PLAN_START_RVA));
     if (!network || !fn) {
         Logf("republicmp  ROAD_SYNC: plan start seq=%d %s - no network here, skipped", m.seq, CategoryName(m.category));
         SendAck(m.seq, m.category, false, 1);
@@ -3082,9 +3316,6 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 #define WORLD_GROUP_BOX_OFFSET 0x13f5c
 #define WORLD_GROUP_DRAG_OFFSET 0x14033
 #define WORLD_CURSOR_OFFSET 0xf6c
-#define WORLD_NETWORK_COUNT_OFFSET 0x14034 // int: entries below
-#define WORLD_NETWORK_ENTRIES_OFFSET 0x14038 // entries of 0x50, the network at +0
-#define WORLD_NETWORK_ENTRY_SIZE 0x50
 #define GROUP_CAPTURE_MAX 8
 
 // mov rax,rsp / push rbp,rsi,rdi,r12,r13,r14,r15 / lea rbp,[rsp-70h] - 19 bytes
@@ -3148,6 +3379,17 @@ static int CountPlannedPieces(__int64 world)
     return n;
 }
 
+static bool CheckGroupToolCommit(__int64 world, GroupToolState& outState)
+{
+    __try {
+        BYTE* w = (BYTE*)world;
+        ReadGroupToolState(world, outState);
+        return !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !outState.down && outState.drag;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 static __int64 HookedGroupTool(__int64 world, int mode)
 {
     if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
@@ -3155,26 +3397,21 @@ static __int64 HookedGroupTool(__int64 world, int mode)
 
     if (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 &&
         (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
-        __try { *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0; } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        SafeWritePod((void*)(world + WORLD_GROUP_DRAG_OFFSET), (unsigned char)0);
         return 0;
     }
     // Lockstep: the commit frame becomes a command; this PC drops its drag
     // mark instead of committing, so the next frame does not commit again.
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
-        GroupToolState s;
-        bool commit = false;
-        __try {
-            BYTE* w = (BYTE*)world;
-            ReadGroupToolState(world, s);
-            commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            commit = false;
+        GroupToolState s = {};
+        if (!CheckGroupToolCommit(world, s)) {
+            ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+            return g_origGroupTool(world, mode);
         }
-        if (!commit) return g_origGroupTool(world, mode);
         const char* grpBuildDesc = Tr("групповое строительство", "group construction");
         if (!TwoStates_CheckBuildAllowed(s.box[0], s.box[2], grpBuildDesc) ||
             !TwoStates_CheckBuildAllowed(s.box[3], s.box[5], grpBuildDesc)) {
-            *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+            SafeWritePod((void*)(world + WORLD_GROUP_DRAG_OFFSET), (unsigned char)0);
             return 0;
         }
         RoadSyncGroupToolMsg m = {};
@@ -3185,25 +3422,24 @@ static __int64 HookedGroupTool(__int64 world, int mode)
         m.yaw = s.yaw;
         m.buildMode = BuildMode_Read();
         Commands_Submit(LS_CMD_GROUP_TOOL, &m, sizeof(m));
-        *(unsigned char*)(world + WORLD_GROUP_DRAG_OFFSET) = 0;
+        SafeWritePod((void*)(world + WORLD_GROUP_DRAG_OFFSET), (unsigned char)0);
         return 0;
     }
-    if (!g_connected || InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0)
+    if (!g_connected || InterlockedCompareExchange(&g_applyingSegment, 0, 0) != 0) {
+        int owner = (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 && TwoStates_IsActive()) ? TwoStates_LocalState() : 0;
+        ScopedPlannedSegMask mask(world, owner, true);
         return g_origGroupTool(world, mode);
+    }
 
     // The commit frame as the game decides it (menus closed, button up, a
     // drag marked); every other frame only tracks the drag.
-    GroupToolState s;
-    bool commit = false;
-    __try {
-        BYTE* w = (BYTE*)world;
-        ReadGroupToolState(world, s);
-        commit = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && !s.down && s.drag;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        commit = false;
+    GroupToolState s = {};
+    if (!CheckGroupToolCommit(world, s)) {
+        ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+        return g_origGroupTool(world, mode);
     }
-    if (!commit) return g_origGroupTool(world, mode);
 
+    ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
     int before = CountPlannedPieces(world);
     __int64 result = g_origGroupTool(world, mode);
     int started = before - CountPlannedPieces(world);
@@ -3297,6 +3533,33 @@ void RoadSync_CtrlRectUpgradeTool(__int64 world)
     HandleCtrlRectTool(world, 11, CTRL_RECT_UPGRADE_RVA);
 }
 
+static bool CheckShiftCancelClicked(__int64 world, const BYTE* press, float* outCx, float* outCz)
+{
+    __try {
+        const BYTE* w = (const BYTE*)world;
+        if (w[0xfbc] || w[0xfbe] || w[0xfc3] || *press == 0)
+            return false;
+        *outCx = *(const float*)(world + WORLD_CURSOR_OFFSET);
+        *outCz = *(const float*)(world + WORLD_CURSOR_OFFSET + 8);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void FillShiftCancelMsg(__int64 world, RoadSyncGroupToolMsg& m)
+{
+    __try {
+        memcpy(m.box, (const void*)(world + 0xF60), 12);
+        memcpy(m.box + 3, (const void*)(g_exeBase + 0x9E9D10), 12);
+        memcpy(m.cursor, (const void*)(world + WORLD_CURSOR_OFFSET), 12);
+        m.buildMode = BuildMode_Read();
+        const char* tool = *(const char**)(world + 0xD428);
+        if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 void RoadSync_ShiftCancelTool(__int64 world)
 {
     typedef void (*ShiftCancelFn)(__int64);
@@ -3310,39 +3573,28 @@ void RoadSync_ShiftCancelTool(__int64 world)
         return;
     }
     if (Commands_TakeLocal() && InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0) {
-        BYTE* w = (BYTE*)world;
         BYTE* press = g_exeBase + GROUP_TOOL_PRESS_RVA;
-        bool clicked = false;
-        __try {
-            clicked = !w[0xfbc] && !w[0xfbe] && !w[0xfc3] && *press != 0;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            clicked = false;
-        }
-        if (clicked) {
-            float cx = *(float*)(world + WORLD_CURSOR_OFFSET);
-            float cz = *(float*)(world + WORLD_CURSOR_OFFSET + 8);
+        float cx = 0.0f, cz = 0.0f;
+        if (CheckShiftCancelClicked(world, press, &cx, &cz)) {
             if (TwoStates_CheckDemolishAllowed(cx, cz, Tr("отмена планируемого участка", "cancelling planned segment"))) {
                 RoadSyncGroupToolMsg m = {};
                 m.category = ROAD_SYNC_GROUP_TOOL_CATEGORY;
                 m.mode = 12;
-                __try {
-                    memcpy(m.box, (const void*)(world + 0xF60), 12);
-                    memcpy(m.box + 3, (const void*)(g_exeBase + 0x9E9D10), 12);
-                    memcpy(m.cursor, (const void*)(world + WORLD_CURSOR_OFFSET), 12);
-                    m.buildMode = BuildMode_Read();
-                    const char* tool = *(const char**)(world + 0xD428);
-                    if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
-                } __except (EXCEPTION_EXECUTE_HANDLER) {
-                }
+                FillShiftCancelMsg(world, m);
                 Commands_Submit(LS_CMD_GROUP_TOOL, &m, sizeof(m));
             }
             BYTE savedPress = *press;
             *press = 0;
-            orig(world);
+            {
+                ScopedPlannedSegMask mask(world, TwoStates_IsActive() ? TwoStates_LocalState() : 0, true);
+                orig(world);
+            }
             *press = savedPress;
             return;
         }
     }
+    int owner = (InterlockedCompareExchange(&g_applyingSegment, 0, 0) == 0 && TwoStates_IsActive()) ? TwoStates_LocalState() : 0;
+    ScopedPlannedSegMask mask(world, owner, true);
     orig(world);
 }
 
@@ -3410,7 +3662,7 @@ static bool CallGroupTool(__int64 world, const RoadSyncGroupToolMsg& m)
     }
 }
 
-// The menus are already closed by the caller's ReplayUiScope.
+    // The menus are already closed by the caller's ReplayUiScope.
 static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
 {
     __int64 world = GetWorldThisPtr();
@@ -3420,6 +3672,9 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
         SendAck(m.seq, m.category, false, 1);
         return;
     }
+    int cmdOwner = TwoStates_GetCommandOwner();
+    if (cmdOwner == 0) cmdOwner = TwoStates_LocalState();
+    ScopedPlannedSegMask mask(world, (m.mode <= 3 || m.mode == 12) ? cmdOwner : 0, true);
     // All of it lives in the exe image (the world object is a global).
     GroupToolState own, replay;
     int before = CountPlannedPieces(world);

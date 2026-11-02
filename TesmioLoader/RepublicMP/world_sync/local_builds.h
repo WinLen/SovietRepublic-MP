@@ -77,3 +77,6 @@ void LocalBuilds_Bind(const TsmHost* host);
 struct RoadSyncDemolishMsg;
 struct RoadSyncDemolishHover;
 void LocalBuilds_DemolishMade(const RoadSyncDemolishMsg& m, const RoadSyncDemolishHover* hover = nullptr);
+
+struct RoadSyncUpgradeMsg;
+bool LocalBuilds_FillUpgrade(__int64 manager, int category, RoadSyncUpgradeMsg& m, int startPiece = 0, int* outTotalPieces = nullptr);

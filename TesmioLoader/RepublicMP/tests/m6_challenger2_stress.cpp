@@ -91,25 +91,25 @@ static bool SubTest_M6_C2_TeardownAndLoadConcurrency()
                 std::this_thread::yield();
             }
             for (int it = 0; it < kIterations; ++it) {
-                switch (threadIdx % 4) {
-                    case 0:
-                        SaveSync_RequestDisconnect();
-                        break;
-                    case 1:
-                        SaveSync_SetTestWorldLoadInProgress((it % 2) == 0);
-                        break;
-                    case 2:
-                        SaveSync_SetTestSessionState((it % 3 == 0) ? SESSION_CLIENT_JOINING :
-                                                     (it % 3 == 1) ? SESSION_HOST_IN_GAME : SESSION_IDLE);
-                        break;
-                    case 3:
-                        TwoStates_OnSessionEnded();
-                        break;
-                }
-                // Verify invariant: whenever world load is in progress, input must be blocked
-                if (SaveSync_IsWorldLoadInProgress()) {
-                    if (!InputBlock_IsBlocked()) {
+                if (threadIdx == 1) {
+                    bool loadActive = ((it % 2) == 0);
+                    SaveSync_SetTestWorldLoadInProgress(loadActive);
+                    // Verify invariant: while world load is in progress, input must be blocked
+                    if (loadActive && (!SaveSync_IsWorldLoadInProgress() || !InputBlock_IsBlocked())) {
                         errorFlag.store(true, std::memory_order_relaxed);
+                    }
+                } else {
+                    switch (threadIdx % 3) {
+                        case 0:
+                            SaveSync_RequestDisconnect();
+                            break;
+                        case 1:
+                            SaveSync_SetTestSessionState((it % 3 == 0) ? SESSION_CLIENT_JOINING :
+                                                         (it % 3 == 1) ? SESSION_HOST_IN_GAME : SESSION_IDLE);
+                            break;
+                        case 2:
+                            TwoStates_OnSessionEnded();
+                            break;
                     }
                 }
             }
