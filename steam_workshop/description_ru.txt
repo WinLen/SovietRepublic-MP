@@ -1,4 +1,4 @@
-[h1]☭ RepublicMP v1.3.1 — Кооперативный мультиплеер (RU / EN)[/h1]
+[h1]☭ RepublicMP v1.4.1 — Кооперативный мультиплеер (RU / EN)[/h1]
 
 Кооперативный мод с синхронизацией [b]Lockstep[/b], входом через [b]Steam P2P в 1 клик[/b] (без VPN и портов), интеграцией в [b]нативное меню игры[/b], режимом [b]«Два государства на одной карте»[/b], [b]авто-синхронизацией модов Мастерской Steam[/b] и плавной [b]60–144+ FPS интерполяцией транспорта и камер[/b]!
 
@@ -21,7 +21,7 @@
 [/list]
 
 [h2]🚀 Правила установки и запуска (RU):[/h2]
-1. Подпишитесь на мод в Steam Workshop (оба игрока, [b]v1.3.1[/b]).
+1. Подпишитесь на мод в Steam Workshop (оба игрока, [b]v1.4.1[/b]).
 2. Откройте папку мода (`Steam\steamapps\workshop\content\784150\3823543010\`) и [b]один раз[/b] запустите [b]START-COOP.bat[/b] (скопирует `dinput8.dll` и иконки в папку игры `SovietRepublic\`).
 3. Далее всегда запускайте игру кнопкой [b]«Играть»[/b] в Steam — мод и обновления подхватываются автоматически!
 4. [b]Хост:[/b] `КООПЕРАТИВ` -> `Создать сервер` -> `Продолжить кооп` / `Кооп-сохранения` / `Импорт одиночного` / `Новая своя игра`.
@@ -29,7 +29,7 @@
 
 [hr][/hr]
 
-[h1]🇬🇧 RepublicMP v1.3.1 — Co-op Multiplayer for Workers & Resources[/h1]
+[h1]🇬🇧 RepublicMP v1.4.1 — Co-op Multiplayer for Workers & Resources[/h1]
 
 Deterministic ([b]Lockstep[/b]) co-op multiplayer mod with [b]1-click Steam P2P connection[/b] (no VPN or port forwarding), native in-game menus, [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod sync[/b], and smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
 
@@ -52,7 +52,7 @@ Deterministic ([b]Lockstep[/b]) co-op multiplayer mod with [b]1-click Steam P2P 
 [/list]
 
 [h2]🚀 Installation & Launch Rules (EN):[/h2]
-1. Subscribe to this mod on Steam Workshop (both players, [b]v1.3.1[/b]).
+1. Subscribe to this mod on Steam Workshop (both players, [b]v1.4.1[/b]).
 2. Open the mod folder (`Steam\steamapps\workshop\content\784150\3823543010\`) and run [b]START-COOP.bat[/b] [b]once[/b] (copies `dinput8.dll` and menu icons into your `SovietRepublic\` game folder).
 3. Launch the game normally via [b]"Play"[/b] in Steam — the mod and all updates load automatically!
 4. [b]Host:[/b] `CO-OP` -> `Host Server` -> `Continue Co-op` / `Co-op Saves` / `Import Singleplayer` / `New Custom Game`.

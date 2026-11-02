@@ -1,4 +1,4 @@
-[h1]☭ RepublicMP v1.3.1 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
+[h1]☭ RepublicMP v1.4.1 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
 
 Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P connection[/b] (no VPN/Hamachi or port forwarding required), seamless integration into the [b]native game UI[/b], the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
 
@@ -26,7 +26,7 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 [/list]
 
 [h2]🚀 Installation & Launch Rules:[/h2]
-[b]Important:[/b] Both players must run the same game version and [b]RepublicMP v1.3.1[/b].
+[b]Important:[/b] Both players must run the same game version and [b]RepublicMP v1.4.1[/b].
 
 [b]Method 1 — Via Steam Workshop (Recommended):[/b]
 1. Subscribe to this mod on Steam Workshop (both players).
