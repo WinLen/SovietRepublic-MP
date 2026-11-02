@@ -257,6 +257,23 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(offsetof(SovietLoan, unpaidPenaltyBalance) == 0x18);
     TEST_CHECK(offsetof(SovietLoan, totalPaidSoFar) == 0x24);
     TEST_CHECK(sizeof(LsLoanCommand) == 84);
+    TEST_CHECK(RVA_HUD_DRAW_BTN_FRAME == 0x4461F0);
+    TEST_CHECK(RVA_MINIMAP_DRAW_CONTENT == 0x4BDE80);
+    TEST_CHECK(RVA_MINIMAP_DRAW_BUTTONS == 0x4BFF40);
+    TEST_CHECK(WORLD_MINIMAP_PTR_OFFSET == 0xD400);
+    TEST_CHECK(MINIMAP_TOOLTIP_WSTR_RVA == 0x9E24B0);
+    TEST_CHECK(HUD_QUAD_STAGE_RVA == 0x9BE060);
+    TEST_CHECK(HUD_PIN_ICON_TEX_PTR_RVA == 0x9E03E8);
+    TEST_CHECK(RVA_IAT_HUD_HIT_TEST_QUAD == 0x86C850);
+    TEST_CHECK(RVA_IAT_HUD_DRAW_QUAD == 0x86C860);
+    TEST_CHECK(RVA_IAT_HUD_GET_MOUSE_POS == 0x86C868);
+    TEST_CHECK(RVA_IAT_TEXT_DRAW_W == 0x86C880);
+
+    TEST_CHECK(TwoStates_GetShowMinimapBorders() == true);
+    TwoStates_SetShowMinimapBorders(false);
+    TEST_CHECK(TwoStates_GetShowMinimapBorders() == false);
+    TwoStates_SetShowMinimapBorders(true);
+    TEST_CHECK(TwoStates_GetShowMinimapBorders() == true);
 
     // SafeReadPod / SafeWritePod on valid memory
     uint64_t val = 0;

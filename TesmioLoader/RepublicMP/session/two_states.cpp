@@ -50,6 +50,7 @@ static float g_borderHalfWidth = 250.0f; // [-250m .. +250m] = 500m shared borde
 static bool g_fullStartingCapital = true;
 static volatile bool g_expandBorders = false; // default: standard 20x20 km map with borders (16x16 km playable zone)
 static bool g_show3DBorder = true;
+static bool g_showMinimapBorders = true;
 static volatile bool g_sendClientLogs = true;
 
 static double g_stateRub[2] = { 0.0, 0.0 };
@@ -1440,6 +1441,14 @@ static const BYTE kAssignConstructionOfficeExpect[16] = {
     0x48, 0x8B, 0xC4, 0xF3, 0x0F, 0x11, 0x58, 0x20,
     0x4C, 0x89, 0x40, 0x18, 0x48, 0x89, 0x50, 0x10
 };
+static const BYTE kMinimapDrawContentExpect[16] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41,
+    0x56, 0x48, 0x8D, 0xA8, 0x28, 0xFF, 0xFF, 0xFF
+};
+static const BYTE kMinimapDrawButtonsExpect[15] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xA1,
+    0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00
+};
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
 typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1457,6 +1466,7 @@ typedef void (__fastcall* ResearchRecomputeFn)(BYTE* world);
 typedef BYTE* (__fastcall* UnivResearchPanelFn)(BYTE* world, BYTE* building, BYTE* window, float* xPtr, float* yPtr, void* a6);
 typedef void (__fastcall* AssignConstructionOfficeFn)(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
                                                       unsigned char checkFilters, unsigned char isDemolishOffice);
+typedef void (__fastcall* MinimapDrawFn)(BYTE* mm);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef float (__fastcall* BldProductivityStepFn)(BYTE* world, BYTE* building, float a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1540,6 +1550,11 @@ static BldEconFn o_bldUnivStep = nullptr;
 static ResearchDailyUpdateFn o_researchDailyUpdate = nullptr;
 static UnivResearchPanelFn o_univResearchPanel = nullptr;
 static AssignConstructionOfficeFn o_assignConstructionOffice = nullptr;
+static MinimapDrawFn o_minimapDrawContent = nullptr;
+static MinimapDrawFn o_minimapDrawButtons = nullptr;
+
+static void __fastcall H_MinimapDrawContent(BYTE* mm);
+static void __fastcall H_MinimapDrawButtons(BYTE* mm);
 
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir);
 static bool BuildFullSaveDir(const char* saveRel, char* outFullDir, size_t outSize);
@@ -4774,11 +4789,17 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_ASSIGN_CONSTRUCTION_OFFICE, (void*)&H_AssignConstructionOffice,
                                 (void**)&o_assignConstructionOffice, kAssignConstructionOfficeExpect,
                                 sizeof(kAssignConstructionOfficeExpect), "republicmp two_states assign_construction_office");
+    econOk += InstallInlineHook(g_exeBase + RVA_MINIMAP_DRAW_CONTENT, (void*)&H_MinimapDrawContent,
+                                (void**)&o_minimapDrawContent, kMinimapDrawContentExpect,
+                                sizeof(kMinimapDrawContentExpect), "republicmp two_states minimap_draw_content");
+    econOk += InstallInlineHook(g_exeBase + RVA_MINIMAP_DRAW_BUTTONS, (void*)&H_MinimapDrawButtons,
+                                (void**)&o_minimapDrawButtons, kMinimapDrawButtonsExpect,
+                                sizeof(kMinimapDrawButtonsExpect), "republicmp two_states minimap_draw_buttons");
     econOk += InstallBldSimLoopHooks();
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research hooks (%d/55), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/57), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -6362,8 +6383,10 @@ bool TwoStates_JumpCameraToPartner()
     return false;
 }
 
-void TwoStates_SetShow3DBorder(bool on) { g_show3DBorder = on; }
-bool TwoStates_GetShow3DBorder()         { return g_show3DBorder; }
+void TwoStates_SetShow3DBorder(bool on)       { g_show3DBorder = on; }
+bool TwoStates_GetShow3DBorder()              { return g_show3DBorder; }
+void TwoStates_SetShowMinimapBorders(bool on) { g_showMinimapBorders = on; }
+bool TwoStates_GetShowMinimapBorders()        { return g_showMinimapBorders; }
 
 void TwoStates_PingAtCursor()
 {
@@ -6426,142 +6449,375 @@ static void Draw3DTextBadge(ImDrawList* dl, const ImVec2& pos, const char* text,
     dl->AddText(ImVec2(pos.x - sz.x * 0.5f, pos.y - sz.y * 0.5f), textCol, text);
 }
 
-// Native Minimap pointer at world + 0xD400 (RVA 0x9E2310), HUD hidden flag at world + 0xFBA (RVA 0x9D5ECA).
-static bool GetNativeMinimapRect(float* outCenterX, float* outCenterY, float* outMapSize)
+// ---------------------------------------------------------------------------
+// Native Minimap Territory Overlay & 6th Resource-Strip Toggle Button
+// (Hooks on 0x4BDE80 Minimap_DrawMapContent & 0x4BFF40 Minimap_DrawLayerButtons)
+// ---------------------------------------------------------------------------
+
+typedef void (__fastcall* FnTexBind)(void* texPtr, uint32_t slot, void* rendererPtr);
+typedef void (__fastcall* FnHudDrawQuad)(void* stage, float u0, float v0, float u1, float v1, float a6, uint8_t a7);
+typedef void (__fastcall* FnHudDrawBtnFrame)(void* hudStyle, float cx, float cy, int styleIdx);
+typedef float* (__fastcall* FnHudGetMousePos)(void* mouseState, float outPt[2]);
+typedef uint8_t (__fastcall* FnHudHitTestQuad)(void* stage, const float mousePt[2], float padX, float padY);
+typedef void (__cdecl* FnTextDrawW)(void* textMgr, void* font, float x, float y, uint32_t colorArgb, const wchar_t* fmt, ...);
+
+static bool BindHudTexture(uintptr_t texPtrRva)
 {
     if (!g_exeBase) return false;
-    __try {
-        BYTE hideHud = *(BYTE*)(g_exeBase + WORLD_RVA + 0xFBA);
-        if (hideHud != 0) return false;
-        BYTE* mm = *(BYTE**)(g_exeBase + WORLD_RVA + 0xD400);
-        if (!mm) return false;
-        if (mm[0] == 0) return false; // minimap panel collapsed
-        float rightX  = *(float*)(mm + 0x48);
-        float bottomY = *(float*)(mm + 0x4C);
-        float mapSize = *(float*)(mm + 0x50);
-        float panelW  = *(float*)(mm + 0x54);
-        float panelH  = *(float*)(mm + 0x58);
-        if (!isfinite(mapSize) || mapSize < 40.0f || mapSize > 2500.0f) return false;
-        if (!isfinite(rightX)  || !isfinite(bottomY) || !isfinite(panelW) || !isfinite(panelH)) return false;
-        *outCenterX = (rightX - panelW) + panelH * 0.5f;
-        *outCenterY = bottomY - panelH * 0.5f;
-        *outMapSize = mapSize;
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+    void* tex = *(void**)(g_exeBase + texPtrRva);
+    void* renderer = *(void**)(g_exeBase + HUD_RENDERER_PTR_RVA);
+    if (!IsPointerLikeX64((uintptr_t)tex) || !IsPointerLikeX64((uintptr_t)renderer)) return false;
+    uintptr_t vtbl = *(uintptr_t*)tex;
+    if (!IsPointerLikeX64(vtbl)) return false;
+    FnTexBind bindFn = *(FnTexBind*)(vtbl + HUD_TEX_BIND_VTABLE_OFF);
+    if (!IsPointerLikeX64((uintptr_t)bindFn)) return false;
+    bindFn(tex, 0, renderer);
+    return true;
+}
+
+static void SetHudQuadStage(float cx, float cy, float w, float h, const float rgba[4])
+{
+    *(float*)(g_exeBase + HUD_QUAD_SIZE_X_RVA) = w;
+    *(float*)(g_exeBase + HUD_QUAD_SIZE_Y_RVA) = h;
+    *(float*)(g_exeBase + HUD_QUAD_POS_X_RVA)  = cx;
+    *(float*)(g_exeBase + HUD_QUAD_POS_Y_RVA)  = cy;
+    *(uint32_t*)(g_exeBase + HUD_QUAD_Z_RVA)   = 0;
+    *(float*)(g_exeBase + HUD_QUAD_ROT_RVA)    = 0.0f;
+    memcpy(g_exeBase + HUD_QUAD_COLOR_RVA, rgba, 4 * sizeof(float));
+}
+
+static void DrawHudSolidQuad(float cx, float cy, float w, float h, const float rgba[4])
+{
+    if (w <= 0.0f || h <= 0.0f) return;
+    SetHudQuadStage(cx, cy, w, h, rgba);
+    FnHudDrawQuad drawFn = *(FnHudDrawQuad*)(g_exeBase + RVA_IAT_HUD_DRAW_QUAD);
+    if (IsPointerLikeX64((uintptr_t)drawFn)) {
+        drawFn(g_exeBase + HUD_QUAD_STAGE_RVA, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1);
     }
 }
 
-static void DrawMinimapOverlay(ImDrawList* dl)
+static void DrawHudHollowRect(float cx, float cy, float w, float h, float thickness, const float rgba[4])
 {
-    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
-    if (!inCoop) return;
+    if (w <= thickness * 2.0f || h <= thickness * 2.0f) return;
+    float halfW = w * 0.5f;
+    float halfH = h * 0.5f;
+    float halfT = thickness * 0.5f;
+    DrawHudSolidQuad(cx, cy - halfH + halfT, w, thickness, rgba);
+    DrawHudSolidQuad(cx, cy + halfH - halfT, w, thickness, rgba);
+    DrawHudSolidQuad(cx - halfW + halfT, cy, thickness, h - thickness * 2.0f, rgba);
+    DrawHudSolidQuad(cx + halfW - halfT, cy, thickness, h - thickness * 2.0f, rgba);
+}
 
-    float cx = 0.0f, cy = 0.0f, mapSize = 0.0f;
-    if (!GetNativeMinimapRect(&cx, &cy, &mapSize)) return;
+static void DrawHudMinimapTextPill(float cx, float cy, float pillW, float pillH, float uiScale,
+                                   const wchar_t* label, const float bgCol[4], const float brdCol[4], uint32_t textArgb)
+{
+    DrawHudSolidQuad(cx, cy, pillW, pillH, bgCol);
+    DrawHudHollowRect(cx, cy, pillW, pillH, 1.4f * uiScale, brdCol);
+    void* font = *(void**)(g_exeBase + HUD_FONT_MAIN_PTR_RVA);
+    FnTextDrawW drawText = *(FnTextDrawW*)(g_exeBase + RVA_IAT_TEXT_DRAW_W);
+    if (IsPointerLikeX64((uintptr_t)font) && IsPointerLikeX64((uintptr_t)drawText) && label && label[0]) {
+        size_t len = wcslen(label);
+        float approxW = (float)len * 6.8f * uiScale;
+        float tx = cx - approxW * 0.5f;
+        float ty = cy - 7.5f * uiScale;
+        drawText(g_exeBase + HUD_TEXT_MGR_RVA, font, tx, ty, textArgb, L"%s", label);
+        BindHudTexture(HUD_SOLID_TEX_PTR_RVA);
+    }
+}
 
+static void EnsureTwoStatesMinimapSize(BYTE* mm)
+{
+    if (!g_exeBase || !TwoStates_IsActive()) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (!mm) mm = *(BYTE**)(g_exeBase + WORLD_RVA + WORLD_MINIMAP_PTR_OFFSET);
+        if (IsPointerLikeX64((uintptr_t)mm)) {
+            float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
+            if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
+            float screenH = (float)*(int32_t*)(g_exeBase + HUD_SCREEN_HEIGHT_RVA);
+            float minMapSize = 465.0f * uiScale;
+            if (screenH > 200.0f && minMapSize > screenH * 0.75f) {
+                minMapSize = screenH * 0.75f;
+            }
+            float curSize = *(float*)(mm + 0x50);
+            if (isfinite(curSize) && curSize >= 40.0f && curSize < minMapSize) {
+                *(float*)(mm + 0x50) = minMapSize;
+                *(float*)(mm + 0x54) = minMapSize + 72.5f * uiScale;
+                *(float*)(mm + 0x58) = minMapSize + 20.0f * uiScale;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize, float uiScale)
+{
+    int myState = TwoStates_LocalState(); // 1 = West (X < 0), 2 = East (X > 0)
     float half = mapSize * 0.5f;
-    ImVec2 mapMin(cx - half, cy - half);
-    ImVec2 mapMax(cx + half, cy + half);
+    float borderZoneHalfPx = (g_borderHalfWidth / 20000.0f) * mapSize;
+    if (borderZoneHalfPx < 1.5f) borderZoneHalfPx = 1.5f;
+    if (borderZoneHalfPx > half * 0.45f) borderZoneHalfPx = half * 0.45f;
 
-    dl->PushClipRect(mapMin, mapMax, true);
+    const float ownTint[4]     = { 0.18f, 0.82f, 0.37f, 0.16f };
+    const float partnerTint[4] = { 0.92f, 0.25f, 0.22f, 0.16f };
+    const float* westTint      = (myState == 1) ? ownTint : partnerTint;
+    const float* eastTint      = (myState == 2) ? ownTint : partnerTint;
+    const float zoneCol[4]     = { 1.00f, 0.84f, 0.24f, 0.20f };
+    const float westEdgeCol[4] = { 0.35f, 0.78f, 1.00f, 0.72f };
+    const float eastEdgeCol[4] = { 1.00f, 0.69f, 0.27f, 0.72f };
+    const float brdRedCol[4]   = { 1.00f, 0.25f, 0.20f, 0.92f };
+    const float brdGoldCol[4]  = { 1.00f, 0.90f, 0.37f, 0.85f };
+    const float ownFrameCol[4] = { 0.30f, 0.94f, 0.47f, 0.82f };
 
-    bool twoStates = TwoStates_IsActive();
-    if (twoStates) {
-        int myState = TwoStates_LocalState(); // 1 = West (X < 0), 2 = East (X > 0)
-        float borderZoneHalfPx = (g_borderHalfWidth / 20000.0f) * mapSize;
-        if (borderZoneHalfPx < 1.5f) borderZoneHalfPx = 1.5f;
-
-        ImU32 ownTint     = IM_COL32(45, 210, 95, 36);
-        ImU32 partnerTint = IM_COL32(235, 65, 55, 36);
-        ImU32 westTint    = (myState == 1) ? ownTint : partnerTint;
-        ImU32 eastTint    = (myState == 2) ? ownTint : partnerTint;
-
-        // Subtle territory tint on West (X < 0) and East (X > 0) halves
-        dl->AddRectFilled(mapMin, ImVec2(cx - borderZoneHalfPx, mapMax.y), westTint);
-        dl->AddRectFilled(ImVec2(cx + borderZoneHalfPx, mapMin.y), mapMax, eastTint);
-
-        // Shared border zone band [-g_borderHalfWidth .. +g_borderHalfWidth]
-        dl->AddRectFilled(ImVec2(cx - borderZoneHalfPx, mapMin.y),
-                          ImVec2(cx + borderZoneHalfPx, mapMax.y),
-                          IM_COL32(255, 215, 60, 42));
-
-        // Dashed/highlighted border zone edges
-        dl->AddLine(ImVec2(cx - borderZoneHalfPx, mapMin.y),
-                    ImVec2(cx - borderZoneHalfPx, mapMax.y),
-                    IM_COL32(90, 200, 255, 175), 1.2f);
-        dl->AddLine(ImVec2(cx + borderZoneHalfPx, mapMin.y),
-                    ImVec2(cx + borderZoneHalfPx, mapMax.y),
-                    IM_COL32(255, 175, 70, 175), 1.2f);
-
-        // Center state border line X = 0
-        dl->AddLine(ImVec2(cx, mapMin.y), ImVec2(cx, mapMax.y), IM_COL32(255, 65, 50, 235), 2.5f);
-        dl->AddLine(ImVec2(cx, mapMin.y), ImVec2(cx, mapMax.y), IM_COL32(255, 230, 95, 200), 1.2f);
-
-        // Highlight border around the player's own half of the minimap
-        ImVec2 ownMin = (myState == 1) ? mapMin : ImVec2(cx, mapMin.y);
-        ImVec2 ownMax = (myState == 1) ? ImVec2(cx, mapMax.y) : mapMax;
-        dl->AddRect(ownMin, ownMax, IM_COL32(75, 240, 120, 200), 0.0f, 0, 2.0f);
-
-        // Top badges inside West & East halves showing which side is YOURS vs PARTNER'S
-        const char* westLabel = (myState == 1) ? Tr("ЗАПАД (ВЫ)", "WEST (YOU)") : Tr("ЗАПАД (ПАРТНЁР)", "WEST (PARTNER)");
-        const char* eastLabel = (myState == 2) ? Tr("ВОСТОК (ВЫ)", "EAST (YOU)") : Tr("ВОСТОК (ПАРТНЁР)", "EAST (PARTNER)");
-
-        ImU32 ownBg       = IM_COL32(16, 48, 24, 225);
-        ImU32 ownBrd      = IM_COL32(80, 240, 125, 245);
-        ImU32 ownTxt      = IM_COL32(185, 255, 200, 255);
-        ImU32 partnerBg   = IM_COL32(52, 20, 20, 220);
-        ImU32 partnerBrd  = IM_COL32(255, 110, 95, 235);
-        ImU32 partnerTxt  = IM_COL32(255, 205, 195, 255);
-
-        float badgeY = mapMin.y + 13.0f;
-        float westCx = mapMin.x + half * 0.5f;
-        float eastCx = cx + half * 0.5f;
-
-        Draw3DTextBadge(dl, ImVec2(westCx, badgeY), westLabel,
-                        (myState == 1) ? ownBg : partnerBg,
-                        (myState == 1) ? ownBrd : partnerBrd,
-                        (myState == 1) ? ownTxt : partnerTxt);
-        Draw3DTextBadge(dl, ImVec2(eastCx, badgeY), eastLabel,
-                        (myState == 2) ? ownBg : partnerBg,
-                        (myState == 2) ? ownBrd : partnerBrd,
-                        (myState == 2) ? ownTxt : partnerTxt);
+    float sideW = half - borderZoneHalfPx;
+    if (sideW > 1.0f) {
+        DrawHudSolidQuad(cx - borderZoneHalfPx - sideW * 0.5f, cy, sideW, mapSize, westTint);
+        DrawHudSolidQuad(cx + borderZoneHalfPx + sideW * 0.5f, cy, sideW, mapSize, eastTint);
     }
 
+    DrawHudSolidQuad(cx, cy, borderZoneHalfPx * 2.0f, mapSize, zoneCol);
+    DrawHudSolidQuad(cx - borderZoneHalfPx, cy, 1.4f * uiScale, mapSize, westEdgeCol);
+    DrawHudSolidQuad(cx + borderZoneHalfPx, cy, 1.4f * uiScale, mapSize, eastEdgeCol);
+    DrawHudSolidQuad(cx, cy, 2.8f * uiScale, mapSize, brdRedCol);
+    DrawHudSolidQuad(cx, cy, 1.3f * uiScale, mapSize, brdGoldCol);
+
+    float ownCx = (myState == 1) ? (cx - half * 0.5f) : (cx + half * 0.5f);
+    DrawHudHollowRect(ownCx, cy, half, mapSize, 2.0f * uiScale, ownFrameCol);
+
+    const float ownBg[4]      = { 0.06f, 0.19f, 0.09f, 0.88f };
+    const float ownBrd[4]     = { 0.31f, 0.94f, 0.49f, 0.96f };
+    const float partnerBg[4]  = { 0.20f, 0.08f, 0.08f, 0.88f };
+    const float partnerBrd[4] = { 1.00f, 0.43f, 0.37f, 0.94f };
+
+    const wchar_t* westLbl = (myState == 1)
+        ? TrW(L"ЗАПАД (ВЫ)", L"WEST (YOU)")
+        : TrW(L"ЗАПАД (ПАРТНЁР)", L"WEST (PARTNER)");
+    const wchar_t* eastLbl = (myState == 2)
+        ? TrW(L"ВОСТОК (ВЫ)", L"EAST (YOU)")
+        : TrW(L"ВОСТОК (ПАРТНЁР)", L"EAST (PARTNER)");
+
+    float pillY = (cy - half) + 14.0f * uiScale;
+    float pillH = 19.0f * uiScale;
+    float pillW = fminf(half - 8.0f * uiScale, 128.0f * uiScale);
+    if (pillW > 36.0f) {
+        DrawHudMinimapTextPill(cx - half * 0.5f, pillY, pillW, pillH, uiScale, westLbl,
+                               (myState == 1) ? ownBg : partnerBg,
+                               (myState == 1) ? ownBrd : partnerBrd,
+                               (myState == 1) ? 0xFFB9FFC8u : 0xFFFFCDC3u);
+        DrawHudMinimapTextPill(cx + half * 0.5f, pillY, pillW, pillH, uiScale, eastLbl,
+                               (myState == 2) ? ownBg : partnerBg,
+                               (myState == 2) ? ownBrd : partnerBrd,
+                               (myState == 2) ? 0xFFB9FFC8u : 0xFFFFCDC3u);
+    }
+}
+
+static void DrawHudPulsingMarker(float px, float py, float cx, float cy, float half,
+                                 float innerSz, float outerSz, float thickness,
+                                 const float innerCol[4], const float outerCol[4])
+{
+    if (px < cx - half + 2.0f || px > cx + half - 2.0f ||
+        py < cy - half + 2.0f || py > cy + half - 2.0f) {
+        return;
+    }
+    DrawHudHollowRect(px, py, outerSz, outerSz, thickness, outerCol);
+    DrawHudSolidQuad(px, py, innerSz, innerSz, innerCol);
+}
+
+static void DrawNativeMinimapMarkers(float cx, float cy, float mapSize, float uiScale)
+{
+    float half = mapSize * 0.5f;
     ULONGLONG now = GetTickCount64();
 
-    // Draw local ping marker on minimap (20s)
     if (g_localPingActive && now - g_localPingSentMs < PING_LIFETIME_MS) {
         float ageSec = (float)(now - g_localPingSentMs) * 0.001f;
         float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
         float px = cx + (g_localPingX / 20000.0f) * mapSize;
         float py = cy - (g_localPingZ / 20000.0f) * mapSize;
-        dl->AddCircle(ImVec2(px, py), 5.0f + pulse * 7.0f, IM_COL32(110, 245, 130, 235), 20, 2.0f);
-        dl->AddCircleFilled(ImVec2(px, py), 3.5f, IM_COL32(80, 255, 120, 255));
+        const float inCol[4]  = { 0.31f, 1.00f, 0.47f, 1.00f };
+        const float outCol[4] = { 0.43f, 0.96f, 0.51f, 0.92f };
+        DrawHudPulsingMarker(px, py, cx, cy, half, 6.5f * uiScale, (10.0f + pulse * 14.0f) * uiScale,
+                             2.0f * uiScale, inCol, outCol);
     }
 
-    // Draw partner cursor & partner ping marker on minimap
     if (LockstepNet_IsConnected()) {
         PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
         if (pc.valid) {
             if (now - pc.lastUpdateMs < 10000 && (fabsf(pc.x) > 0.01f || fabsf(pc.z) > 0.01f)) {
                 float px = cx + (pc.x / 20000.0f) * mapSize;
                 float py = cy - (pc.z / 20000.0f) * mapSize;
-                dl->AddCircleFilled(ImVec2(px, py), 3.5f, IM_COL32(60, 215, 255, 240));
-                dl->AddCircle(ImVec2(px, py), 6.5f, IM_COL32(255, 255, 255, 200), 16, 1.5f);
+                const float inCol[4]  = { 0.24f, 0.84f, 1.00f, 0.95f };
+                const float outCol[4] = { 1.00f, 1.00f, 1.00f, 0.80f };
+                DrawHudPulsingMarker(px, py, cx, cy, half, 6.5f * uiScale, 12.5f * uiScale,
+                                     1.6f * uiScale, inCol, outCol);
             }
             if (pc.hasPing && now - pc.pingReceivedMs < PING_LIFETIME_MS) {
                 float ageSec = (float)(now - pc.pingReceivedMs) * 0.001f;
                 float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
                 float px = cx + (pc.pingX / 20000.0f) * mapSize;
                 float py = cy - (pc.pingZ / 20000.0f) * mapSize;
-                dl->AddCircle(ImVec2(px, py), 6.0f + pulse * 9.0f, IM_COL32(255, 215, 50, 245), 24, 2.2f);
-                dl->AddCircleFilled(ImVec2(px, py), 4.0f, IM_COL32(255, 85, 40, 255));
+                const float inCol[4]  = { 1.00f, 0.33f, 0.16f, 1.00f };
+                const float outCol[4] = { 1.00f, 0.84f, 0.20f, 0.96f };
+                DrawHudPulsingMarker(px, py, cx, cy, half, 7.5f * uiScale, (12.0f + pulse * 16.0f) * uiScale,
+                                     2.2f * uiScale, inCol, outCol);
             }
         }
     }
+}
 
-    dl->PopClipRect();
+static void DrawNativeMinimapOverlay(BYTE* mm)
+{
+    if (!g_exeBase || !IsPointerLikeX64((uintptr_t)mm) || mm[0] == 0) return;
+    float rightX  = *(float*)(mm + 0x48);
+    float bottomY = *(float*)(mm + 0x4C);
+    float mapSize = *(float*)(mm + 0x50);
+    float panelW  = *(float*)(mm + 0x54);
+    float panelH  = *(float*)(mm + 0x58);
+    if (!isfinite(mapSize) || mapSize < 40.0f || mapSize > 2500.0f) return;
+    if (!isfinite(rightX) || !isfinite(bottomY) || !isfinite(panelW) || !isfinite(panelH)) return;
+
+    float cx = (rightX - panelW) + panelH * 0.5f;
+    float cy = bottomY - panelH * 0.5f;
+    float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
+    if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
+
+    if (BindHudTexture(HUD_SOLID_TEX_PTR_RVA)) {
+        if (TwoStates_IsActive() && g_showMinimapBorders) {
+            DrawNativeMinimapTwoStatesBorders(cx, cy, mapSize, uiScale);
+        }
+        DrawNativeMinimapMarkers(cx, cy, mapSize, uiScale);
+    }
+
+    // Restore C3D_HUD quad stage to full map square (cx, cy, mapSize, mapSize) as expected by 0x4BEB10 at 0x4BECFE
+    const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    SetHudQuadStage(cx, cy, mapSize, mapSize, white);
+}
+
+static bool IsMinimapMouseInputAllowed(const BYTE* mm)
+{
+    if (!g_exeBase || !mm) return false;
+    if (mm[0x5C] != 0 || mm[0x69] != 0) return false;
+    if (*(BYTE*)(g_exeBase + 0x9D5ED3) != 0) return false;
+    const BYTE* pMgr = *(const BYTE* const*)(g_exeBase + 0x9E2358);
+    if (IsPointerLikeX64((uintptr_t)pMgr) && pMgr[0x160] != 0) return false;
+    if (*(BYTE*)(g_exeBase + 0x9D5ED0) != 0 && *(BYTE*)(g_exeBase + 0x9D5ECA) == 0) return false;
+    return true;
+}
+
+static void DrawNativeMinimapSplitIcon(float btnX, float btnY, float iconSz, float alpha)
+{
+    if (!BindHudTexture(HUD_SOLID_TEX_PTR_RVA)) return;
+    int myState = TwoStates_LocalState();
+    const float bgCol[4]      = { 0.08f, 0.10f, 0.13f, 0.90f * alpha };
+    const float ownCol[4]     = { 0.22f, 0.86f, 0.42f, 0.85f * alpha };
+    const float partnerCol[4] = { 0.92f, 0.28f, 0.24f, 0.85f * alpha };
+    const float brdCol[4]     = { 1.00f, 0.88f, 0.32f, 0.98f * alpha };
+    const float* westCol      = (myState == 1) ? ownCol : partnerCol;
+    const float* eastCol      = (myState == 2) ? ownCol : partnerCol;
+
+    float innerSz = iconSz * 0.78f;
+    float halfW   = innerSz * 0.44f;
+    DrawHudSolidQuad(btnX, btnY, innerSz, innerSz, bgCol);
+    DrawHudSolidQuad(btnX - innerSz * 0.24f, btnY, halfW, innerSz * 0.86f, westCol);
+    DrawHudSolidQuad(btnX + innerSz * 0.24f, btnY, halfW, innerSz * 0.86f, eastCol);
+    DrawHudSolidQuad(btnX, btnY, fmaxf(2.0f, iconSz * 0.08f), innerSz * 0.92f, brdCol);
+}
+
+static void DrawNativeMinimapBordersButton(BYTE* mm)
+{
+    if (!g_exeBase || !IsPointerLikeX64((uintptr_t)mm) || mm[0] == 0) return;
+    float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
+    if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
+
+    float rightX  = *(float*)(mm + 0x48);
+    float bottomY = *(float*)(mm + 0x4C);
+    float panelH  = *(float*)(mm + 0x58);
+    if (!isfinite(rightX) || !isfinite(bottomY) || !isfinite(panelH)) return;
+
+    float topY    = bottomY - panelH;
+    float btnStep = 55.0f * uiScale;
+    float iconSz  = btnStep * 0.70f;
+    float btnX    = rightX - 27.5f * uiScale;
+    float btnY    = topY + (86.0f + 5.0f * 55.0f) * uiScale;
+    float maxBtnY = bottomY - 124.0f * uiScale;
+    if (btnY > maxBtnY) btnY = maxBtnY;
+
+    const float halfWhite[4] = { 1.0f, 1.0f, 1.0f, 0.5f };
+    const float fullWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+    BindHudTexture(HUD_BTN_FRAME_TEX_PTR_RVA);
+    SetHudQuadStage(btnX, btnY, btnStep, btnStep, halfWhite);
+    FnHudDrawBtnFrame drawBtnFrame = (FnHudDrawBtnFrame)(g_exeBase + RVA_HUD_DRAW_BTN_FRAME);
+    drawBtnFrame(g_exeBase + HUD_STYLE_BLOCK_RVA, btnX, btnY, 3);
+
+    bool hovered = false;
+    if (IsMinimapMouseInputAllowed(mm)) {
+        FnHudGetMousePos getMousePos = *(FnHudGetMousePos*)(g_exeBase + RVA_IAT_HUD_GET_MOUSE_POS);
+        FnHudHitTestQuad hitTestQuad = *(FnHudHitTestQuad*)(g_exeBase + RVA_IAT_HUD_HIT_TEST_QUAD);
+        if (IsPointerLikeX64((uintptr_t)getMousePos) && IsPointerLikeX64((uintptr_t)hitTestQuad)) {
+            float mousePt[2] = {};
+            float* mp = getMousePos(g_exeBase + HUD_MOUSE_STATE_RVA, mousePt);
+            float hitPad = 5.0f * uiScale;
+            hovered = (hitTestQuad(g_exeBase + HUD_QUAD_STAGE_RVA, mp, hitPad, hitPad) != 0);
+        }
+    }
+
+    if (hovered) {
+        if (*(BYTE*)(g_exeBase + HUD_MOUSE_LCLICK_EDGE_RVA) != 0) {
+            g_showMinimapBorders = !g_showMinimapBorders;
+            TwoStates_SaveSettings();
+        }
+        const wchar_t* tip = g_showMinimapBorders
+            ? TrW(L"Границы государств на миникарте (ВКЛ)", L"State borders on minimap (ON)")
+            : TrW(L"Границы государств на миникарте (ВЫКЛ)", L"State borders on minimap (OFF)");
+        wcsncpy_s((wchar_t*)(g_exeBase + MINIMAP_TOOLTIP_WSTR_RVA), 2048, tip, _TRUNCATE);
+    }
+
+    bool lit = hovered || g_showMinimapBorders;
+    DrawHudSolidQuad(btnX, btnY, btnStep, btnStep, lit ? fullWhite : halfWhite);
+
+    SetHudQuadStage(btnX, btnY, iconSz, iconSz, lit ? fullWhite : halfWhite);
+    drawBtnFrame(g_exeBase + HUD_STYLE_BLOCK_RVA, btnX, btnY, 3);
+    DrawNativeMinimapSplitIcon(btnX, btnY, iconSz, lit ? 1.0f : 0.55f);
+
+    if (g_showMinimapBorders && BindHudTexture(HUD_PIN_ICON_TEX_PTR_RVA)) {
+        float pinOff = btnStep * 0.20f;
+        float pinSz  = btnStep * 0.50f;
+        DrawHudSolidQuad(btnX + pinOff, btnY + pinOff, pinSz, pinSz, fullWhite);
+    }
+}
+
+static void __fastcall H_MinimapDrawContent(BYTE* mm)
+{
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
+    if (inCoop && TwoStates_IsActive()) {
+        EnsureTwoStatesMinimapSize(mm);
+    }
+    if (o_minimapDrawContent) {
+        o_minimapDrawContent(mm);
+    }
+    if (!inCoop || !SaveSync_IsWorldLoaded()) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        DrawNativeMinimapOverlay(mm);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void __fastcall H_MinimapDrawButtons(BYTE* mm)
+{
+    if (o_minimapDrawButtons) {
+        o_minimapDrawButtons(mm);
+    }
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
+    if (!inCoop || !TwoStates_IsActive() || !SaveSync_IsWorldLoaded()) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        DrawNativeMinimapBordersButton(mm);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
 }
 
 static void Draw3DBorderLines(ImDrawList* dl, const ImVec2& displaySize)
@@ -6789,10 +7045,14 @@ void TwoStates_DrawOverlay()
         Draw3DBorderLines(bg, displaySize);
     }
 
-    // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime)
+    // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime).
+    // Minimap territory/border/ping overlay is rendered natively inside H_MinimapDrawContent (0x4BDE80)
+    // and its toggle button inside H_MinimapDrawButtons (0x4BFF40), respecting HUD hide (G) and window Z-order.
     if (worldLoaded) {
         DrawPartnerCursorAndPing(bg, displaySize);
-        DrawMinimapOverlay(bg);
+        if (TwoStates_IsActive()) {
+            EnsureTwoStatesMinimapSize(nullptr);
+        }
     }
 
     // Draw Toast notifications (top-center below the game's resource bar)
@@ -7043,6 +7303,9 @@ void TwoStates_LoadSettings()
     int show3d = GetPrivateProfileIntA("coop", "show_3d_border", g_show3DBorder ? 1 : 0, ini.c_str());
     g_show3DBorder = (show3d != 0);
 
+    int showMini = GetPrivateProfileIntA("coop", "show_minimap_borders", g_showMinimapBorders ? 1 : 0, ini.c_str());
+    g_showMinimapBorders = (showMini != 0);
+
     int dlc = GetPrivateProfileIntA("coop", "dlc_check", SaveSync_GetDlcCheck() ? 1 : 0, ini.c_str());
     SaveSync_SetDlcCheck(dlc != 0);
 
@@ -7057,10 +7320,10 @@ void TwoStates_LoadSettings()
 
     ModSync_LoadSettingsFromIni(ini.c_str());
 
-    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, dlc=%d, sendLogs=%d, addr='%s')",
+    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, showMini=%d, dlc=%d, sendLogs=%d, addr='%s')",
          ini.c_str(), (int)g_chosenMode, g_fullStartingCapital ? 1 : 0, (int)g_borderHalfWidth,
-         g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, SaveSync_GetDlcCheck() ? 1 : 0,
-         g_sendClientLogs ? 1 : 0, g_savedJoinAddress);
+         g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, g_showMinimapBorders ? 1 : 0,
+         SaveSync_GetDlcCheck() ? 1 : 0, g_sendClientLogs ? 1 : 0, g_savedJoinAddress);
 }
 
 void TwoStates_SaveSettings()
@@ -7078,6 +7341,7 @@ void TwoStates_SaveSettings()
 
     WritePrivateProfileStringA("coop", "expand_borders", g_expandBorders ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "show_3d_border", g_show3DBorder ? "1" : "0", ini.c_str());
+    WritePrivateProfileStringA("coop", "show_minimap_borders", g_showMinimapBorders ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "dlc_check", SaveSync_GetDlcCheck() ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "send_client_logs", g_sendClientLogs ? "1" : "0", ini.c_str());
 

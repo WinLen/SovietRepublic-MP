@@ -1260,6 +1260,105 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
               WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 23 * sizeof(int32_t) == WORLD_LOANS_OFFSET,
               "Health & Happiness Tracker block (+0x109A0..+0x10BCF, 0x230 bytes) must match 0x2FC010 / 0x8C3C0 / 0x8D490");
 
+// ---------------------------------------------------------------------------
+// Native Minimap & HUD Quad / Font Rendering RVAs (SOVIET64.exe PE 6A3EB6AD)
+// ---------------------------------------------------------------------------
+
+#ifndef RVA_HUD_DRAW_BTN_FRAME
+#define RVA_HUD_DRAW_BTN_FRAME              0x4461F0u
+#endif
+#ifndef RVA_MINIMAP_DRAW_CONTENT
+#define RVA_MINIMAP_DRAW_CONTENT            0x4BDE80u
+#endif
+#ifndef RVA_MINIMAP_DRAW_BUTTONS
+#define RVA_MINIMAP_DRAW_BUTTONS            0x4BFF40u
+#endif
+#ifndef WORLD_MINIMAP_PTR_OFFSET
+#define WORLD_MINIMAP_PTR_OFFSET            0xD400u
+#endif
+#ifndef MINIMAP_TOOLTIP_WSTR_RVA
+#define MINIMAP_TOOLTIP_WSTR_RVA            0x9E24B0u
+#endif
+#ifndef HUD_QUAD_STAGE_RVA
+#define HUD_QUAD_STAGE_RVA                  0x9BE060u
+#endif
+#ifndef HUD_QUAD_SIZE_X_RVA
+#define HUD_QUAD_SIZE_X_RVA                 0x9BE2E8u
+#endif
+#ifndef HUD_QUAD_SIZE_Y_RVA
+#define HUD_QUAD_SIZE_Y_RVA                 0x9BE2ECu
+#endif
+#ifndef HUD_QUAD_POS_X_RVA
+#define HUD_QUAD_POS_X_RVA                  0x9BE2F0u
+#endif
+#ifndef HUD_QUAD_POS_Y_RVA
+#define HUD_QUAD_POS_Y_RVA                  0x9BE2F4u
+#endif
+#ifndef HUD_QUAD_Z_RVA
+#define HUD_QUAD_Z_RVA                      0x9BE2F8u
+#endif
+#ifndef HUD_QUAD_ROT_RVA
+#define HUD_QUAD_ROT_RVA                    0x9BE308u
+#endif
+#ifndef HUD_QUAD_COLOR_RVA
+#define HUD_QUAD_COLOR_RVA                  0x9BE30Cu
+#endif
+#ifndef HUD_UI_SCALE_RVA
+#define HUD_UI_SCALE_RVA                    0x992088u
+#endif
+#ifndef HUD_SCREEN_HEIGHT_RVA
+#define HUD_SCREEN_HEIGHT_RVA               0x99206Cu
+#endif
+#ifndef HUD_RENDERER_PTR_RVA
+#define HUD_RENDERER_PTR_RVA                0x9EAD08u
+#endif
+#ifndef HUD_TEX_BIND_VTABLE_OFF
+#define HUD_TEX_BIND_VTABLE_OFF             0x70u
+#endif
+#ifndef HUD_SOLID_TEX_PTR_RVA
+#define HUD_SOLID_TEX_PTR_RVA               0x9E0B40u
+#endif
+#ifndef HUD_BTN_FRAME_TEX_PTR_RVA
+#define HUD_BTN_FRAME_TEX_PTR_RVA           0x9DFF38u
+#endif
+#ifndef HUD_PIN_ICON_TEX_PTR_RVA
+#define HUD_PIN_ICON_TEX_PTR_RVA            0x9E03E8u
+#endif
+#ifndef HUD_FONT_MAIN_PTR_RVA
+#define HUD_FONT_MAIN_PTR_RVA               0x994208u
+#endif
+#ifndef HUD_TEXT_MGR_RVA
+#define HUD_TEXT_MGR_RVA                    0x996FB0u
+#endif
+#ifndef HUD_STYLE_BLOCK_RVA
+#define HUD_STYLE_BLOCK_RVA                 0x9DFCC0u
+#endif
+#ifndef HUD_MOUSE_STATE_RVA
+#define HUD_MOUSE_STATE_RVA                 0xA54B90u
+#endif
+#ifndef HUD_MOUSE_LCLICK_EDGE_RVA
+#define HUD_MOUSE_LCLICK_EDGE_RVA           0xA54E91u
+#endif
+#ifndef RVA_IAT_HUD_HIT_TEST_QUAD
+#define RVA_IAT_HUD_HIT_TEST_QUAD           0x86C850u
+#endif
+#ifndef RVA_IAT_HUD_DRAW_QUAD
+#define RVA_IAT_HUD_DRAW_QUAD               0x86C860u
+#endif
+#ifndef RVA_IAT_HUD_GET_MOUSE_POS
+#define RVA_IAT_HUD_GET_MOUSE_POS           0x86C868u
+#endif
+#ifndef RVA_IAT_TEXT_DRAW_W
+#define RVA_IAT_TEXT_DRAW_W                 0x86C880u
+#endif
+
+static_assert(RVA_MINIMAP_DRAW_BUTTONS == RVA_MINIMAP_DRAW_CONTENT + 0x20C0u &&
+              HUD_QUAD_POS_X_RVA == HUD_QUAD_SIZE_X_RVA + 8u &&
+              HUD_QUAD_COLOR_RVA == HUD_QUAD_SIZE_X_RVA + 0x24u &&
+              RVA_IAT_HUD_DRAW_QUAD == RVA_IAT_HUD_HIT_TEST_QUAD + 0x10u,
+              "Minimap DrawContent/DrawButtons RVAs (0x4BDE80, 0x4BFF40) and C3D_HUD quad offsets must match 1.1.1.9 layout");
+
+
 
 
 

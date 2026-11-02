@@ -140,9 +140,11 @@ bool TwoStates_HasCapturedResyncCamera();
 bool TwoStates_JumpCameraTo(float wx, float wz);
 bool TwoStates_JumpCameraToPartner();
 
-// 3D World Overlays & Toast notifications:
+// 3D World Overlays, Native Minimap Borders & Toast notifications:
 void TwoStates_SetShow3DBorder(bool on);
 bool TwoStates_GetShow3DBorder();
+void TwoStates_SetShowMinimapBorders(bool on);
+bool TwoStates_GetShowMinimapBorders();
 void TwoStates_PingAtCursor();
 void TwoStates_AddToast(const char* text, int colorKind = 0);
 void TwoStates_DrawOverlay();
