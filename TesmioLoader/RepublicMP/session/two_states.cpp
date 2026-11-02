@@ -6549,19 +6549,70 @@ typedef void (__fastcall* FnHudDrawBtnFrame)(void* hudStyle, float cx, float cy,
 typedef float* (__fastcall* FnHudGetMousePos)(void* mouseState, float outPt[2]);
 typedef uint8_t (__fastcall* FnHudHitTestQuad)(void* stage, const float mousePt[2], float padX, float padY);
 typedef void (__cdecl* FnTextDrawW)(void* textMgr, void* font, float x, float y, uint32_t colorArgb, const wchar_t* fmt, ...);
+typedef int* (__fastcall* FnHudGetTextRect)(void* font, int* outRect, float x, float y, const wchar_t* text);
+typedef void (__fastcall* FnHudEndDraw)(void* stage);
+typedef void (__fastcall* FnHudBeginDraw)(void* stage, void* arg2, uint8_t flag);
+typedef void (__fastcall* FnTextPrintAll)(void* textMgr, const char* passName);
+typedef void* (__fastcall* FnHudCreateManagedTex)(void* middlePoint, const char* relPath);
+typedef int (__fastcall* FnHudTexLoadFile)(void* tex, const char* relPath, int a3, int a4, int a5, int a6);
 
-static bool BindHudTexture(uintptr_t texPtrRva)
+static void*     g_minimapBordersIconTex       = nullptr;
+static uintptr_t g_minimapBordersIconVtbl      = 0;
+static bool      g_minimapBordersIconAttempted = false;
+
+static bool BindHudTexturePtr(void* tex)
 {
-    if (!g_exeBase) return false;
-    void* tex = *(void**)(g_exeBase + texPtrRva);
+    if (!g_exeBase || !IsPointerLikeX64((uintptr_t)tex)) return false;
     void* renderer = *(void**)(g_exeBase + HUD_RENDERER_PTR_RVA);
-    if (!IsPointerLikeX64((uintptr_t)tex) || !IsPointerLikeX64((uintptr_t)renderer)) return false;
+    if (!IsPointerLikeX64((uintptr_t)renderer)) return false;
     uintptr_t vtbl = *(uintptr_t*)tex;
     if (!IsPointerLikeX64(vtbl)) return false;
     FnTexBind bindFn = *(FnTexBind*)(vtbl + HUD_TEX_BIND_VTABLE_OFF);
     if (!IsPointerLikeX64((uintptr_t)bindFn)) return false;
     bindFn(tex, 0, renderer);
     return true;
+}
+
+static bool BindHudTexture(uintptr_t texPtrRva)
+{
+    if (!g_exeBase) return false;
+    return BindHudTexturePtr(*(void**)(g_exeBase + texPtrRva));
+}
+
+static void* GetOrLoadMinimapBordersIconTex()
+{
+    if (!g_exeBase) return nullptr;
+    if (g_minimapBordersIconAttempted && g_minimapBordersIconTex) {
+        if (IsPointerLikeX64((uintptr_t)g_minimapBordersIconTex) &&
+            g_minimapBordersIconVtbl != 0 &&
+            *(uintptr_t*)g_minimapBordersIconTex == g_minimapBordersIconVtbl &&
+            IsPointerLikeX64(g_minimapBordersIconVtbl)) {
+            return g_minimapBordersIconTex;
+        }
+        g_minimapBordersIconTex       = nullptr;
+        g_minimapBordersIconVtbl      = 0;
+        g_minimapBordersIconAttempted = false;
+    }
+    if (g_minimapBordersIconAttempted) {
+        return g_minimapBordersIconTex;
+    }
+    g_minimapBordersIconAttempted = true;
+    FnHudCreateManagedTex createTex = *(FnHudCreateManagedTex*)(g_exeBase + RVA_IAT_CREATE_MANAGED_TEX);
+    if (!IsPointerLikeX64((uintptr_t)createTex)) return nullptr;
+    const char* relPath = "editor/mp_icon_mode.png";
+    void* tex = createTex(g_exeBase + HUD_MIDDLEPOINT_OBJ_RVA, relPath);
+    if (IsPointerLikeX64((uintptr_t)tex)) {
+        uintptr_t vtbl = *(uintptr_t*)tex;
+        if (IsPointerLikeX64(vtbl)) {
+            FnHudTexLoadFile loadFn = *(FnHudTexLoadFile*)(vtbl + 2 * sizeof(void*));
+            if (IsPointerLikeX64((uintptr_t)loadFn)) {
+                g_minimapBordersIconVtbl = vtbl;
+                loadFn(tex, relPath, 0, 0, 1, 0);
+                g_minimapBordersIconTex = tex;
+            }
+        }
+    }
+    return g_minimapBordersIconTex;
 }
 
 static void SetHudQuadStage(float cx, float cy, float w, float h, const float rgba[4])
@@ -6575,13 +6626,15 @@ static void SetHudQuadStage(float cx, float cy, float w, float h, const float rg
     memcpy(g_exeBase + HUD_QUAD_COLOR_RVA, rgba, 4 * sizeof(float));
 }
 
-static void DrawHudSolidQuad(float cx, float cy, float w, float h, const float rgba[4])
+static void DrawHudSolidQuad(float cx, float cy, float w, float h, const float rgba[4], bool fullTexUv = false)
 {
     if (w <= 0.0f || h <= 0.0f) return;
     SetHudQuadStage(cx, cy, w, h, rgba);
     FnHudDrawQuad drawFn = *(FnHudDrawQuad*)(g_exeBase + RVA_IAT_HUD_DRAW_QUAD);
     if (IsPointerLikeX64((uintptr_t)drawFn)) {
-        drawFn(g_exeBase + HUD_QUAD_STAGE_RVA, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1);
+        float u0 = fullTexUv ? 0.0f : 0.25f;
+        float u1 = fullTexUv ? 1.0f : 0.75f;
+        drawFn(g_exeBase + HUD_QUAD_STAGE_RVA, u0, u0, u1, u1, 0.0f, 1);
     }
 }
 
@@ -6597,21 +6650,53 @@ static void DrawHudHollowRect(float cx, float cy, float w, float h, float thickn
     DrawHudSolidQuad(cx + halfW - halfT, cy, thickness, h - thickness * 2.0f, rgba);
 }
 
-static void DrawHudMinimapTextPill(float cx, float cy, float pillW, float pillH, float uiScale,
+static void FlushHudQueuedTexts()
+{
+    if (!g_exeBase) return;
+    FnHudEndDraw   endDraw   = *(FnHudEndDraw*)(g_exeBase + RVA_IAT_HUD_END_DRAW);
+    FnTextPrintAll printAll  = *(FnTextPrintAll*)(g_exeBase + RVA_IAT_TEXT_PRINT_ALL);
+    FnHudBeginDraw beginDraw = *(FnHudBeginDraw*)(g_exeBase + RVA_IAT_HUD_BEGIN_DRAW);
+    if (IsPointerLikeX64((uintptr_t)endDraw) &&
+        IsPointerLikeX64((uintptr_t)printAll) &&
+        IsPointerLikeX64((uintptr_t)beginDraw)) {
+        endDraw(g_exeBase + HUD_QUAD_STAGE_RVA);
+        printAll(g_exeBase + HUD_TEXT_MGR_RVA, (const char*)(g_exeBase + HUD_BASIC_PASS_STR_RVA));
+        beginDraw(g_exeBase + HUD_QUAD_STAGE_RVA, nullptr, 0);
+    }
+}
+
+static void DrawHudMinimapTextPill(float cx, float cy, float maxPillW, float uiScale,
                                    const wchar_t* label, const float bgCol[4], const float brdCol[4], uint32_t textArgb)
 {
-    DrawHudSolidQuad(cx, cy, pillW, pillH, bgCol);
-    DrawHudHollowRect(cx, cy, pillW, pillH, 1.4f * uiScale, brdCol);
+    if (!g_exeBase || !label || !label[0]) return;
     void* font = *(void**)(g_exeBase + HUD_FONT_MAIN_PTR_RVA);
     FnTextDrawW drawText = *(FnTextDrawW*)(g_exeBase + RVA_IAT_TEXT_DRAW_W);
-    if (IsPointerLikeX64((uintptr_t)font) && IsPointerLikeX64((uintptr_t)drawText) && label && label[0]) {
-        size_t len = wcslen(label);
-        float approxW = (float)len * 6.8f * uiScale;
-        float tx = cx - approxW * 0.5f;
-        float ty = cy - 7.5f * uiScale;
-        drawText(g_exeBase + HUD_TEXT_MGR_RVA, font, tx, ty, textArgb, L"%s", label);
-        BindHudTexture(HUD_SOLID_TEX_PTR_RVA);
+    if (!IsPointerLikeX64((uintptr_t)font) || !IsPointerLikeX64((uintptr_t)drawText)) return;
+
+    uintptr_t fontVtbl = *(uintptr_t*)font;
+    if (!IsPointerLikeX64(fontVtbl)) return;
+    FnHudGetTextRect getTextRect = *(FnHudGetTextRect*)(fontVtbl + 5 * sizeof(void*));
+    int textRect[4] = { 0, 0, (int)(wcslen(label) * 8), 14 };
+    if (IsPointerLikeX64((uintptr_t)getTextRect)) {
+        getTextRect(font, textRect, 0.0f, 0.0f, label);
     }
+
+    float textW = (float)(textRect[2] - textRect[0]);
+    float textH = (float)(textRect[3] - textRect[1]);
+    if (textW < 20.0f) textW = (float)wcslen(label) * 7.5f * uiScale;
+    if (textH < 10.0f) textH = 14.0f * uiScale;
+
+    float pillW = fminf(maxPillW, fmaxf(52.0f * uiScale, textW + 14.0f * uiScale));
+    float pillH = fmaxf(18.0f * uiScale, textH + 6.0f * uiScale);
+
+    DrawHudSolidQuad(cx, cy, pillW, pillH, bgCol);
+    DrawHudHollowRect(cx, cy, pillW, pillH, fmaxf(1.0f, 1.3f * uiScale), brdCol);
+
+    float tx = floorf(cx - 0.5f * (float)(textRect[0] + textRect[2]) + 0.5f);
+    float ty = floorf(cy - 0.5f * (float)(textRect[1] + textRect[3]) + 0.5f);
+    const wchar_t* fmt = (const wchar_t*)(g_exeBase + HUD_FMT_WSTR_RVA);
+    drawText(g_exeBase + HUD_TEXT_MGR_RVA, font, tx, ty, textArgb, fmt, label);
+    BindHudTexture(HUD_SOLID_TEX_PTR_RVA);
 }
 
 static void EnsureTwoStatesMinimapSize(BYTE* mm)
@@ -6624,7 +6709,7 @@ static void EnsureTwoStatesMinimapSize(BYTE* mm)
             float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
             if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
             float screenH = (float)*(int32_t*)(g_exeBase + HUD_SCREEN_HEIGHT_RVA);
-            float minMapSize = 465.0f * uiScale;
+            float minMapSize = 475.0f * uiScale;
             if (screenH > 200.0f && minMapSize > screenH * 0.75f) {
                 minMapSize = screenH * 0.75f;
             }
@@ -6648,53 +6733,43 @@ static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize,
     if (borderZoneHalfPx < 1.5f) borderZoneHalfPx = 1.5f;
     if (borderZoneHalfPx > half * 0.45f) borderZoneHalfPx = half * 0.45f;
 
-    const float ownTint[4]     = { 0.18f, 0.82f, 0.37f, 0.16f };
-    const float partnerTint[4] = { 0.92f, 0.25f, 0.22f, 0.16f };
-    const float* westTint      = (myState == 1) ? ownTint : partnerTint;
-    const float* eastTint      = (myState == 2) ? ownTint : partnerTint;
-    const float zoneCol[4]     = { 1.00f, 0.84f, 0.24f, 0.20f };
-    const float westEdgeCol[4] = { 0.35f, 0.78f, 1.00f, 0.72f };
-    const float eastEdgeCol[4] = { 1.00f, 0.69f, 0.27f, 0.72f };
-    const float brdRedCol[4]   = { 1.00f, 0.25f, 0.20f, 0.92f };
-    const float brdGoldCol[4]  = { 1.00f, 0.90f, 0.37f, 0.85f };
+    const float zoneCol[4]     = { 1.00f, 0.84f, 0.24f, 0.14f };
+    const float westEdgeCol[4] = { 0.35f, 0.78f, 1.00f, 0.78f };
+    const float eastEdgeCol[4] = { 1.00f, 0.69f, 0.27f, 0.78f };
+    const float brdRedCol[4]   = { 1.00f, 0.25f, 0.20f, 0.94f };
+    const float brdGoldCol[4]  = { 1.00f, 0.90f, 0.37f, 0.88f };
     const float ownFrameCol[4] = { 0.30f, 0.94f, 0.47f, 0.82f };
 
-    float sideW = half - borderZoneHalfPx;
-    if (sideW > 1.0f) {
-        DrawHudSolidQuad(cx - borderZoneHalfPx - sideW * 0.5f, cy, sideW, mapSize, westTint);
-        DrawHudSolidQuad(cx + borderZoneHalfPx + sideW * 0.5f, cy, sideW, mapSize, eastTint);
-    }
-
+    // Do NOT draw full-half washes over the minimap so natural terrain, road, building & deposit colors stay crisp.
     DrawHudSolidQuad(cx, cy, borderZoneHalfPx * 2.0f, mapSize, zoneCol);
-    DrawHudSolidQuad(cx - borderZoneHalfPx, cy, 1.4f * uiScale, mapSize, westEdgeCol);
-    DrawHudSolidQuad(cx + borderZoneHalfPx, cy, 1.4f * uiScale, mapSize, eastEdgeCol);
-    DrawHudSolidQuad(cx, cy, 2.8f * uiScale, mapSize, brdRedCol);
-    DrawHudSolidQuad(cx, cy, 1.3f * uiScale, mapSize, brdGoldCol);
+    DrawHudSolidQuad(cx - borderZoneHalfPx, cy, fmaxf(1.0f, 1.3f * uiScale), mapSize, westEdgeCol);
+    DrawHudSolidQuad(cx + borderZoneHalfPx, cy, fmaxf(1.0f, 1.3f * uiScale), mapSize, eastEdgeCol);
+    DrawHudSolidQuad(cx, cy, fmaxf(2.0f, 2.6f * uiScale), mapSize, brdRedCol);
+    DrawHudSolidQuad(cx, cy, fmaxf(1.0f, 1.2f * uiScale), mapSize, brdGoldCol);
 
     float ownCx = (myState == 1) ? (cx - half * 0.5f) : (cx + half * 0.5f);
-    DrawHudHollowRect(ownCx, cy, half, mapSize, 2.0f * uiScale, ownFrameCol);
+    DrawHudHollowRect(ownCx, cy, half, mapSize, fmaxf(1.5f, 2.0f * uiScale), ownFrameCol);
 
-    const float ownBg[4]      = { 0.06f, 0.19f, 0.09f, 0.88f };
+    const float ownBg[4]      = { 0.06f, 0.20f, 0.09f, 0.90f };
     const float ownBrd[4]     = { 0.31f, 0.94f, 0.49f, 0.96f };
-    const float partnerBg[4]  = { 0.20f, 0.08f, 0.08f, 0.88f };
+    const float partnerBg[4]  = { 0.22f, 0.08f, 0.08f, 0.90f };
     const float partnerBrd[4] = { 1.00f, 0.43f, 0.37f, 0.94f };
 
     const wchar_t* westLbl = (myState == 1)
         ? TrW(L"ЗАПАД (ВЫ)", L"WEST (YOU)")
-        : TrW(L"ЗАПАД (ПАРТНЁР)", L"WEST (PARTNER)");
+        : TrW(L"ЗАПАД", L"WEST");
     const wchar_t* eastLbl = (myState == 2)
         ? TrW(L"ВОСТОК (ВЫ)", L"EAST (YOU)")
-        : TrW(L"ВОСТОК (ПАРТНЁР)", L"EAST (PARTNER)");
+        : TrW(L"ВОСТОК", L"EAST");
 
-    float pillY = (cy - half) + 14.0f * uiScale;
-    float pillH = 19.0f * uiScale;
-    float pillW = fminf(half - 8.0f * uiScale, 128.0f * uiScale);
-    if (pillW > 36.0f) {
-        DrawHudMinimapTextPill(cx - half * 0.5f, pillY, pillW, pillH, uiScale, westLbl,
+    float pillY    = (cy - half) + 15.0f * uiScale;
+    float maxPillW = half - 10.0f * uiScale;
+    if (maxPillW > 40.0f) {
+        DrawHudMinimapTextPill(cx - half * 0.5f, pillY, maxPillW, uiScale, westLbl,
                                (myState == 1) ? ownBg : partnerBg,
                                (myState == 1) ? ownBrd : partnerBrd,
                                (myState == 1) ? 0xFFB9FFC8u : 0xFFFFCDC3u);
-        DrawHudMinimapTextPill(cx + half * 0.5f, pillY, pillW, pillH, uiScale, eastLbl,
+        DrawHudMinimapTextPill(cx + half * 0.5f, pillY, maxPillW, uiScale, eastLbl,
                                (myState == 2) ? ownBg : partnerBg,
                                (myState == 2) ? ownBrd : partnerBrd,
                                (myState == 2) ? 0xFFB9FFC8u : 0xFFFFCDC3u);
@@ -6771,10 +6846,15 @@ static void DrawNativeMinimapOverlay(BYTE* mm)
     if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
 
     if (BindHudTexture(HUD_SOLID_TEX_PTR_RVA)) {
-        if (TwoStates_IsActive() && g_showMinimapBorders) {
+        bool drewBorders = (TwoStates_IsActive() && g_showMinimapBorders);
+        if (drewBorders) {
             DrawNativeMinimapTwoStatesBorders(cx, cy, mapSize, uiScale);
         }
         DrawNativeMinimapMarkers(cx, cy, mapSize, uiScale);
+        if (drewBorders) {
+            // Flush queued text pills inside the minimap pass (matching 0x4BEA85..0x4BEAB2 in 0x4BDE80)
+            FlushHudQueuedTexts();
+        }
     }
 
     // Restore C3D_HUD quad stage to full map square (cx, cy, mapSize, mapSize) as expected by 0x4BEB10 at 0x4BECFE
@@ -6828,7 +6908,7 @@ static void DrawNativeMinimapBordersButton(BYTE* mm)
     float iconSz  = btnStep * 0.70f;
     float btnX    = rightX - 27.5f * uiScale;
     float btnY    = topY + (86.0f + 5.0f * 55.0f) * uiScale;
-    float maxBtnY = bottomY - 124.0f * uiScale;
+    float maxBtnY = bottomY - 130.0f * uiScale;
     if (btnY > maxBtnY) btnY = maxBtnY;
 
     const float halfWhite[4] = { 1.0f, 1.0f, 1.0f, 0.5f };
@@ -6863,16 +6943,21 @@ static void DrawNativeMinimapBordersButton(BYTE* mm)
     }
 
     bool lit = hovered || g_showMinimapBorders;
-    DrawHudSolidQuad(btnX, btnY, btnStep, btnStep, lit ? fullWhite : halfWhite);
+    DrawHudSolidQuad(btnX, btnY, btnStep, btnStep, lit ? fullWhite : halfWhite, true);
 
     SetHudQuadStage(btnX, btnY, iconSz, iconSz, lit ? fullWhite : halfWhite);
     drawBtnFrame(g_exeBase + HUD_STYLE_BLOCK_RVA, btnX, btnY, 3);
-    DrawNativeMinimapSplitIcon(btnX, btnY, iconSz, lit ? 1.0f : 0.55f);
+    void* iconTex = GetOrLoadMinimapBordersIconTex();
+    if (iconTex && BindHudTexturePtr(iconTex)) {
+        DrawHudSolidQuad(btnX, btnY, iconSz, iconSz, lit ? fullWhite : halfWhite, true);
+    } else {
+        DrawNativeMinimapSplitIcon(btnX, btnY, iconSz, lit ? 1.0f : 0.55f);
+    }
 
     if (g_showMinimapBorders && BindHudTexture(HUD_PIN_ICON_TEX_PTR_RVA)) {
         float pinOff = btnStep * 0.20f;
         float pinSz  = btnStep * 0.50f;
-        DrawHudSolidQuad(btnX + pinOff, btnY + pinOff, pinSz, pinSz, fullWhite);
+        DrawHudSolidQuad(btnX + pinOff, btnY + pinOff, pinSz, pinSz, fullWhite, true);
     }
 }
 

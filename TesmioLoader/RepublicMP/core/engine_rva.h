@@ -1328,7 +1328,7 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #define HUD_TEX_BIND_VTABLE_OFF             0x70u
 #endif
 #ifndef HUD_SOLID_TEX_PTR_RVA
-#define HUD_SOLID_TEX_PTR_RVA               0x9E0B40u
+#define HUD_SOLID_TEX_PTR_RVA               0x9E0B38u
 #endif
 #ifndef HUD_BTN_FRAME_TEX_PTR_RVA
 #define HUD_BTN_FRAME_TEX_PTR_RVA           0x9DFF38u
@@ -1345,11 +1345,23 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #ifndef HUD_STYLE_BLOCK_RVA
 #define HUD_STYLE_BLOCK_RVA                 0x9DFCC0u
 #endif
+#ifndef HUD_MIDDLEPOINT_OBJ_RVA
+#define HUD_MIDDLEPOINT_OBJ_RVA             0x9EACD0u
+#endif
+#ifndef HUD_FMT_WSTR_RVA
+#define HUD_FMT_WSTR_RVA                    0x8B5528u
+#endif
+#ifndef HUD_BASIC_PASS_STR_RVA
+#define HUD_BASIC_PASS_STR_RVA              0x8D8464u
+#endif
 #ifndef HUD_MOUSE_STATE_RVA
 #define HUD_MOUSE_STATE_RVA                 0xA54B90u
 #endif
 #ifndef HUD_MOUSE_LCLICK_EDGE_RVA
 #define HUD_MOUSE_LCLICK_EDGE_RVA           0xA54E91u
+#endif
+#ifndef RVA_IAT_CREATE_MANAGED_TEX
+#define RVA_IAT_CREATE_MANAGED_TEX          0x86C4C0u
 #endif
 #ifndef RVA_IAT_HUD_HIT_TEST_QUAD
 #define RVA_IAT_HUD_HIT_TEST_QUAD           0x86C850u
@@ -1360,11 +1372,21 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #ifndef RVA_IAT_HUD_GET_MOUSE_POS
 #define RVA_IAT_HUD_GET_MOUSE_POS           0x86C868u
 #endif
+#ifndef RVA_IAT_TEXT_PRINT_ALL
+#define RVA_IAT_TEXT_PRINT_ALL              0x86C870u
+#endif
 #ifndef RVA_IAT_TEXT_DRAW_W
 #define RVA_IAT_TEXT_DRAW_W                 0x86C880u
 #endif
+#ifndef RVA_IAT_HUD_END_DRAW
+#define RVA_IAT_HUD_END_DRAW                0x86C8F8u
+#endif
+#ifndef RVA_IAT_HUD_BEGIN_DRAW
+#define RVA_IAT_HUD_BEGIN_DRAW              0x86C918u
+#endif
 
 static_assert(RVA_MINIMAP_DRAW_BUTTONS == RVA_MINIMAP_DRAW_CONTENT + 0x20C0u &&
+              HUD_SOLID_TEX_PTR_RVA == 0x9E0B38u &&
               HUD_QUAD_POS_X_RVA == HUD_QUAD_SIZE_X_RVA + 8u &&
               HUD_QUAD_COLOR_RVA == HUD_QUAD_SIZE_X_RVA + 0x24u &&
               RVA_IAT_HUD_DRAW_QUAD == RVA_IAT_HUD_HIT_TEST_QUAD + 0x10u,
