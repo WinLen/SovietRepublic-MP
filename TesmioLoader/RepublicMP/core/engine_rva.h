@@ -406,11 +406,17 @@
 #ifndef RVA_BLD_CONSUME_RESOURCE
 #define RVA_BLD_CONSUME_RESOURCE    0x1990C0
 #endif
+#ifndef RVA_WATER_HEALTH_STEP
+#define RVA_WATER_HEALTH_STEP       0x1B0950
+#endif
 #ifndef RVA_CUSTOMS_BORDER
 #define RVA_CUSTOMS_BORDER          0x1B7D50
 #endif
 #ifndef RVA_CUSTOMS_VEHICLE
 #define RVA_CUSTOMS_VEHICLE         0x1B9A40
+#endif
+#ifndef RVA_LIVING_TICK
+#define RVA_LIVING_TICK             0x1BC210
 #endif
 #ifndef RVA_BLD_STEP_PRE_POST
 #define RVA_BLD_STEP_PRE_POST       0x1BD530
@@ -441,6 +447,9 @@
 #endif
 #ifndef RVA_VEC_LOAN_PUSH_BACK
 #define RVA_VEC_LOAN_PUSH_BACK      0x448AA0
+#endif
+#ifndef RVA_HEATING_STEP
+#define RVA_HEATING_STEP            0x4881A0
 #endif
 #ifndef RVA_TAKE_LOAN
 #define RVA_TAKE_LOAN               0x4B9140
@@ -612,6 +621,9 @@ struct SovietStatResEntry {
 #endif
 #ifndef BLD_WORKERS_OFFSET
 #define BLD_WORKERS_OFFSET          0xBC0
+#endif
+#ifndef BLD_EFFECTIVE_CAP_FLOAT_OFFSET
+#define BLD_EFFECTIVE_CAP_FLOAT_OFFSET 0xDDC
 #endif
 #ifndef BLD_PRODUCED_OFFSET
 #define BLD_PRODUCED_OFFSET         0xDE4

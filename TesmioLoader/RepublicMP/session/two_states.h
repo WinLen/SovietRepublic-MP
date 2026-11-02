@@ -222,6 +222,10 @@ float   TwoStates_GetStateEconExtraFloatForTest(int state, int idx);
 float   TwoStates_GetStateEconTourismFloatForTest(int state, int idx);
 void    TwoStates_CitizenCommitCrimeForTest(BYTE* world, BYTE* citizen, int32_t severity);
 void    TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismIdx, float spendAmount, bool isUsd);
+float   TwoStates_WaterHealthStepForTest(BYTE* world, BYTE* building, float waterNeeded,
+                                         unsigned char flag4, BYTE* citizen,
+                                         unsigned char flag6, float factor7, float spendRub);
+
 
 
 

@@ -1196,9 +1196,6 @@ static float __fastcall H_GetTerrainBoundaryZMax(BYTE* terrain)
 #define RVA_COURT_ASSIGN            0x255B30
 #define RVA_PRISON_ASSIGN           0x82FA50
 #define RVA_ORPHANAGE_ASSIGN        0x8303C0
-#define RVA_LIVING_TICK             0x1BC210
-#define RVA_WATER_HEALTH_STEP       0x1B0950
-#define RVA_HEATING_STEP            0x4881A0
 
 static const BYTE kBldEconExpect[19] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48,
@@ -1469,6 +1466,9 @@ typedef void (__fastcall* AssignConstructionOfficeFn)(BYTE* world, BYTE* officeB
 typedef void (__fastcall* MinimapDrawFn)(BYTE* mm);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef float (__fastcall* WaterHealthStepFn)(BYTE* world, BYTE* building, float waterNeeded,
+                                              unsigned char flag4, BYTE* citizen,
+                                              unsigned char flag6, float factor7);
 typedef float (__fastcall* BldProductivityStepFn)(BYTE* world, BYTE* building, float a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* BldConsumeResFn)(BYTE* world, BYTE* building, BYTE* resource, float amount, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* ForeignLaborStepFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
@@ -1534,7 +1534,7 @@ static CourtAssignFn o_courtAssign = nullptr;
 static PrisonAssignFn o_prisonAssign = nullptr;
 static OrphanageAssignFn o_orphanageAssign = nullptr;
 static BldEconFn o_livingTick = nullptr;
-static BldEconFn o_waterHealthStep = nullptr;
+static WaterHealthStepFn o_waterHealthStep = nullptr;
 static BldEconFn o_heatingStep = nullptr;
 static BldEconFn o_bldCourthouseStep = nullptr;
 static BldEconFn o_bldPoliceStep = nullptr;
@@ -1756,12 +1756,49 @@ static int ResolveCitizenOwnerFast(const BYTE* cit)
     return owner;
 }
 
+static void SanitizeBuildingEffectiveCapFloat(BYTE* b)
+{
+    if (!b) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        float cap = *(const float*)(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET);
+        if (!isfinite(cap) || cap < 0.0f || cap > 1.0e6f) {
+            *(float*)(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) = 0.0f;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void SanitizeAllWorldBuildingsEffectiveCap(const BYTE* world)
+{
+    if (!world) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE* const* b = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        BYTE* const* e = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (b && e > b && (e - b) <= 200000) {
+            for (BYTE* const* it = b; it < e; ++it) {
+                BYTE* bld = *it;
+                if (!bld) continue;
+                float cap = *(const float*)(bld + BLD_EFFECTIVE_CAP_FLOAT_OFFSET);
+                if (!isfinite(cap) || cap < 0.0f || cap > 1.0e6f) {
+                    *(float*)(bld + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) = 0.0f;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
 static __int64 CallBuildingEconHook(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                     uintptr_t a5, uintptr_t a6, BldEconFn orig)
 {
     int owner = (g_inSimStep && !t_inEconHook) ? ResolveBuildingOwnerFast(building) : 0;
     bool active = owner ? BeginEconAttribution(world, owner) : false;
     __int64 r = orig ? orig(world, building, a3, a4, a5, a6) : 0;
+    if (building) SanitizeBuildingEffectiveCapFloat(building);
     if (active) EndEconAttribution(owner);
     return r;
 }
@@ -2163,10 +2200,56 @@ static __int64 __fastcall H_LivingTick(BYTE* world, BYTE* building, uintptr_t a3
     return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_livingTick);
 }
 
-static __int64 __fastcall H_WaterHealthStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
-                                            uintptr_t a5, uintptr_t a6)
+static float __fastcall H_WaterHealthStep(BYTE* world, BYTE* building, float waterNeeded,
+                                          unsigned char flag4, BYTE* citizen,
+                                          unsigned char flag6, float factor7)
 {
-    return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_waterHealthStep);
+    int owner = (g_inSimStep && !t_inEconHook)
+        ? (building ? ResolveBuildingOwnerFast(building) : ResolveCitizenOwnerFast(citizen))
+        : 0;
+    bool active = owner ? BeginEconAttribution(world, owner) : false;
+    float safeWater = isfinite(waterNeeded) ? waterNeeded : 0.0f;
+    float safeFactor = isfinite(factor7) ? factor7 : 0.0f;
+    float r = o_waterHealthStep
+        ? o_waterHealthStep(world, building, safeWater, flag4, citizen, flag6, safeFactor)
+        : 0.0f;
+    if (active) EndEconAttribution(owner);
+    return isfinite(r) ? r : 0.0f;
+}
+
+static float g_mockWaterSpendRub = 0.0f;
+static float __fastcall MockEngineWaterHealthStep(BYTE* world, BYTE* building, float waterNeeded,
+                                                  unsigned char flag4, BYTE* citizen,
+                                                  unsigned char flag6, float factor7)
+{
+    if (!world || !isfinite(waterNeeded) || !isfinite(factor7) || waterNeeded <= 0.0f || factor7 <= 0.0f) {
+        return 0.0f;
+    }
+    if (g_mockWaterSpendRub != 0.0f) {
+        *(double*)(world + WORLD_RUB_OFFSET) -= (double)g_mockWaterSpendRub;
+    }
+    float eff = (flag4 != 0 || flag6 != 0 || citizen != nullptr || building != nullptr)
+        ? (waterNeeded * factor7)
+        : 0.0f;
+    if (building) {
+        *(float*)(building + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) = 27.0f * eff;
+    }
+    return eff;
+}
+
+float TwoStates_WaterHealthStepForTest(BYTE* world, BYTE* building, float waterNeeded,
+                                       unsigned char flag4, BYTE* citizen,
+                                       unsigned char flag6, float factor7, float spendRub)
+{
+    WaterHealthStepFn prev = o_waterHealthStep;
+    o_waterHealthStep = &MockEngineWaterHealthStep;
+    g_mockWaterSpendRub = spendRub;
+    float r = H_WaterHealthStep(world, building, waterNeeded, flag4, citizen, flag6, factor7);
+    if (building) {
+        SanitizeBuildingEffectiveCapFloat(building);
+    }
+    o_waterHealthStep = prev;
+    return r;
 }
 
 static __int64 __fastcall H_HeatingStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
@@ -5669,6 +5752,12 @@ static void PrepareStructureVectorBeforeStep(size_t beginRva, size_t endRva, boo
         int owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(x, z), x, z);
         int idx = owner - 1;
         g_stepBldCount[idx]++;
+        if (beginRva == VEC_BUILDINGS_BEGIN_RVA) {
+            float cap = *(const float*)(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET);
+            if (!isfinite(cap) || cap < 0.0f || cap > 1.0e6f) {
+                *(float*)(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) = 0.0f;
+            }
+        }
         if (!unlim) {
             float prog = *(float*)(b + BLD_PROGRESS_OFFSET);
             if (prog < 1.0f) {
@@ -8882,6 +8971,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
 {
     g_beforeLoadPrepared = false;
     if (!g_exeBase) return;
+    SanitizeAllWorldBuildingsEffectiveCap(g_exeBase + WORLD_RVA);
     BYTE terrainFlag = 0;
     char saveRel[128] = {};
     if (!SafeReadPendingLoadInfo(&terrainFlag, saveRel, sizeof(saveRel))) {

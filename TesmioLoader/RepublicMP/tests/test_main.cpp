@@ -3574,6 +3574,29 @@ static bool TestEconStats_HealthAndHappinessTrackerIsolation()
     TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 7 * 4), 0.30f, 1e-4f);
     TwoStates_UiEnd();
 
+    // 3. 7-parameter float-return H_WaterHealthStep (0x1B0950) ABI & hotel/service capacity (+0xDDC) NaN sanitization:
+    //    Verifies XMM2 (waterNeeded), [rsp+30h] (factor7), and XMM0 float return value survive Begin/EndEconAttribution,
+    //    and non-finite *(float*)(building + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) is sanitized to 0.0f so cvttss2si at 0x7269B7
+    //    never produces 0x80000000 (INT_MIN).
+    *(double*)(world + WORLD_RUB_OFFSET) = 500000.0;
+    *(double*)(world + WORLD_USD_OFFSET) = 100000.0;
+    *(float*)(bldEast.data() + BLD_EFFECTIVE_CAP_FLOAT_OFFSET) = NAN;
+    TwoStates_BeforeStep(world);
+    TEST_CHECK_NEAR(*(float*)(bldEast.data() + BLD_EFFECTIVE_CAP_FLOAT_OFFSET), 0.0f, 1e-6f);
+    float waterEff = TwoStates_WaterHealthStepForTest(world, bldEast.data(), 0.75f, 0, citPtrs[0], 1, 0.80f, 1200.0f);
+    TwoStates_AfterStep(world);
+    TEST_CHECK_NEAR(waterEff, 0.60f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(bldEast.data() + BLD_EFFECTIVE_CAP_FLOAT_OFFSET), 16.2f, 1e-3f);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 500000.0, 1.0);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 498800.0, 1.0);
+
+    // Non-finite waterNeeded / factor7 must be sanitized to 0.0f and never poison building + 0xDDC
+    TwoStates_BeforeStep(world);
+    float nanEff = TwoStates_WaterHealthStepForTest(world, bldEast.data(), NAN, 1, citPtrs[0], 1, -INFINITY, 0.0f);
+    TwoStates_AfterStep(world);
+    TEST_CHECK(isfinite(nanEff) && nanEff == 0.0f);
+    TEST_CHECK(isfinite(*(float*)(bldEast.data() + BLD_EFFECTIVE_CAP_FLOAT_OFFSET)));
+
     TwoStates_OnSessionEnded();
     ResetMockWorldMemory();
     return true;
