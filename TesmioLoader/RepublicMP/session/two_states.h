@@ -225,6 +225,9 @@ void    TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismId
 float   TwoStates_WaterHealthStepForTest(BYTE* world, BYTE* building, float waterNeeded,
                                          unsigned char flag4, BYTE* citizen,
                                          unsigned char flag6, float factor7, float spendRub);
+void    TwoStates_CitizenStarveStepForTest(BYTE* world, BYTE* citizen);
+bool    TwoStates_CitizenCanMoveToBldForTest(BYTE* world, BYTE* targetBld, BYTE* citizen);
+void    TwoStates_CitizenMoveToBldForTest(BYTE* world, BYTE* citizen, BYTE* targetBld);
 
 
 

@@ -3072,6 +3072,8 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.88f, 1e-3f);
     TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 3);          // Top HUD population = 3
     TEST_CHECK(*(int32_t*)(hudBlock + 0x24) == 2);                             // Top HUD independent adults = 2
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x2C) == 0);                             // Top HUD basic-educated workers = 0
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x30) == 3);                             // Top HUD university-educated workers = 3
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.90f, 1e-3f);                 // Top HUD Health = 90%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xA8) / *(float*)(hudBlock + 0x00), 0.75f, 1e-3f); // Top HUD Loyalty = 75%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.88f, 1e-3f); // Top HUD Happiness = 88%
@@ -3109,6 +3111,8 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK_NEAR(*(float*)(popWinStat + STAT_CITIZEN_SATISFACTION_OFF + 8 * 4), 0.42f, 1e-3f);
     TEST_CHECK(*(int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET) == 7);          // Top HUD population = 7
     TEST_CHECK(*(int32_t*)(hudBlock + 0x24) == 5);                             // Top HUD independent adults = 5
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x2C) == 7);                             // Top HUD basic-educated workers = 7
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x30) == 0);                             // Top HUD university-educated workers = 0
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0x0C), 0.50f, 1e-3f);                 // Top HUD Health = 50%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xA8) / *(float*)(hudBlock + 0x00), 0.35f, 1e-3f); // Top HUD Loyalty = 35%
     TEST_CHECK_NEAR(*(float*)(hudBlock + 0xAC) / *(float*)(hudBlock + 0x00), 0.42f, 1e-3f); // Top HUD Happiness = 42%
@@ -3116,8 +3120,49 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_COUNTS_OFF + 0) == 0);
     TEST_CHECK(*(int32_t*)(popWinStat + STAT_CITIZEN_ADULTS_OFF) == 5);
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 7);
+    *(float*)(world + WORLD_HUD_POP_TIMER_OFFSET) = 5.0f;
     TwoStates_UiEnd();
     TEST_CHECK(SafeCountStdVector(world + WORLD_CITIZENS_OFFSET, sizeof(void*)) == 10);
+
+    // Graduate an East SSR citizen (citPtrs[3]) from basic (1.25f) to university (2.15f) with unchanged localPop = 7:
+    // Top HUD educated slots (+0x2C/+0x30) and refresh timers must update immediately on TwoStates_UiBegin()!
+    *(float*)(citPtrs[3] + 0xA8) = 2.15f;
+    *(float*)(world + WORLD_HUD_POP_TIMER_OFFSET) = 5.0f;
+    *(float*)(world + WORLD_POP_STAT_TIMER_OFF)   = 5.0f;
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 2 * 4) == 6);
+    TEST_CHECK(*(int32_t*)(curStat + STAT_CITIZEN_BRACKETS_OFF + 3 * 4) == 1);
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x2C) == 6);
+    TEST_CHECK(*(int32_t*)(hudBlock + 0x30) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_HUD_POP_TIMER_OFFSET), 0.0f, 1e-6f);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_POP_STAT_TIMER_OFF),   0.0f, 1e-6f);
+    TwoStates_UiEnd();
+    *(float*)(citPtrs[3] + 0xA8) = 1.25f;
+
+    // Verify university hostel graduation / citizen relocation isolation (0x834DE0, 0x83C590, 0x83CA50):
+    // A West SSR student/graduate (citPtrs[0], living in bldWest) must never relocate into East SSR (bldEast),
+    // and H_CitizenStarveStep must filter WORLD_BUILDINGS_OFFSET to same-state buildings.
+    std::vector<BYTE> bldWestApt(0x1600, 0);
+    *(float*)(bldWestApt.data() + OBJ_POS_OFFSET)     = -900.0f;
+    *(float*)(bldWestApt.data() + OBJ_POS_OFFSET + 8) =  200.0f;
+    TwoStates_RegisterBuildingOwner(TwoStates_BuildingPosKey(-900.0f, 200.0f), 1);
+
+    TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldEast.data(), citPtrs[0]));
+    TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+    TwoStates_CitizenMoveToBldForTest(world, citPtrs[0], bldEast.data());
+    TEST_CHECK(*(BYTE**)(citPtrs[0] + CIT_HOME_BUILDING_OFFSET) == bldWest.data());
+
+    BYTE* worldBlds3[3] = { bldWest.data(), bldWestApt.data(), bldEast.data() };
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = worldBlds3;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = worldBlds3 + 3;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x10) = worldBlds3 + 3;
+    TwoStates_CitizenStarveStepForTest(world, citPtrs[0]);
+    TEST_CHECK(*(BYTE**)(citPtrs[0] + CIT_HOME_BUILDING_OFFSET) == bldWestApt.data());
+    TEST_CHECK(SafeCountStdVector(world + WORLD_BUILDINGS_OFFSET, sizeof(void*)) == 3);
+    *(BYTE**)(citPtrs[0] + CIT_HOME_BUILDING_OFFSET) = bldWest.data();
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = bldPtrs;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = bldPtrs + 2;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x10) = bldPtrs + 2;
 
     // Verify period rollover + republicmp_coop.ini round-trip of ;S:, ;A:, ;P:, ;B: tags
     std::vector<BYTE> histBuf(STAT_RECORD_SIZE, 0);

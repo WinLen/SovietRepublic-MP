@@ -256,6 +256,8 @@ static BYTE                              g_uiSavedHudPopBlock[WORLD_HUD_POP_BLOC
 static BYTE                              g_stateHudPopBlock[2][WORLD_HUD_POP_BLOCK_SIZE] = {};
 static bool                              g_stateHudPopInitialized[2] = { false, false };
 static int                               g_stateLastLocalPop[2] = { -1, -1 };
+static int32_t                           g_stateLastEduBasic[2] = { -1, -1 };
+static int32_t                           g_stateLastEduUniv[2]  = { -1, -1 };
 static StateEconScalars                  g_uiSavedPopWinScalars = {};
 static int                               g_lastUiSwappedState = 0;
 static size_t                            g_lastUiSwappedHistLen[2] = { 0, 0 };
@@ -553,6 +555,8 @@ static void ResetStateHudPopCache()
     memset(g_stateHudPopBlock, 0, sizeof(g_stateHudPopBlock));
     g_stateHudPopInitialized[0] = g_stateHudPopInitialized[1] = false;
     g_stateLastLocalPop[0] = g_stateLastLocalPop[1] = -1;
+    g_stateLastEduBasic[0] = g_stateLastEduBasic[1] = -1;
+    g_stateLastEduUniv[0]  = g_stateLastEduUniv[1]  = -1;
     g_lastUiSwappedState = 0;
     g_lastUiSwappedHistLen[0] = g_lastUiSwappedHistLen[1] = 0;
 }
@@ -875,13 +879,22 @@ static void PopulateHudPopBlockFromScalars(BYTE* outBlock, const StateEconScalar
     memset(outBlock, 0, WORLD_HUD_POP_BLOCK_SIZE);
     float fPop = (float)localPop;
     int32_t adults = sc.demographics[3];
+    int32_t dependents = sc.demographics[0] + sc.demographics[1] + sc.demographics[2];
     *(float*)(outBlock + 0x00)   = fPop;
     *(float*)(outBlock + 0x04)   = (adults > 0) ? ((float)sc.citizenBrackets[0] / (float)adults) : 0.0f;
     *(float*)(outBlock + 0x08)   = sc.satisfaction[2];
     *(float*)(outBlock + 0x0C)   = sc.satisfaction[0];
     *(float*)(outBlock + 0x10)   = sc.satisfaction[1];
     *(float*)(outBlock + 0x14)   = 0.0f;
+    *(int32_t*)(outBlock + 0x18) = (int32_t)localPop;
     *(int32_t*)(outBlock + 0x24) = adults;
+    *(int32_t*)(outBlock + 0x28) = sc.citizenBrackets[1];
+    *(int32_t*)(outBlock + 0x2C) = sc.citizenBrackets[2];
+    *(int32_t*)(outBlock + 0x30) = sc.citizenBrackets[3];
+    *(int32_t*)(outBlock + 0x34) = dependents;
+    *(int32_t*)(outBlock + 0x38) = sc.demographics[0];
+    *(int32_t*)(outBlock + 0x3C) = sc.demographics[1];
+    *(int32_t*)(outBlock + 0x44) = sc.demographics[2];
     *(int32_t*)(outBlock + 0x58) = (int32_t)localPop;
     memcpy(outBlock + 0x5C, sc.citizenBrackets, sizeof(sc.citizenBrackets));
     memcpy(outBlock + 0x80, sc.demographics, sizeof(sc.demographics));
@@ -949,17 +962,29 @@ static void SwapUiCitizenVecAndHudPop(BYTE* world, int localState)
     if (SafeMemcpyPod(g_uiSavedHudPopBlock, world + WORLD_HUD_POP_BLOCK_OFFSET, WORLD_HUD_POP_BLOCK_SIZE)) {
         g_uiHudPopSwapped = true;
         int localPop = CountLocalHudPopulation(lb, lb ? (lb + g_uiLocalCitizens.size()) : nullptr);
+        const StateEconScalars& curSc = g_stateCurEcon[sIdx].scalars;
+        bool eduChanged = (g_stateLastEduBasic[sIdx] != curSc.citizenBrackets[2] ||
+                           g_stateLastEduUniv[sIdx]  != curSc.citizenBrackets[3]);
         if (!g_stateHudPopInitialized[sIdx]) {
-            PopulateHudPopBlockFromScalars(g_stateHudPopBlock[sIdx], g_stateCurEcon[sIdx].scalars, localPop);
+            PopulateHudPopBlockFromScalars(g_stateHudPopBlock[sIdx], curSc, localPop);
+        } else if (eduChanged) {
+            *(int32_t*)(g_stateHudPopBlock[sIdx] + 0x24) = curSc.demographics[3];
+            *(int32_t*)(g_stateHudPopBlock[sIdx] + 0x28) = curSc.citizenBrackets[1];
+            *(int32_t*)(g_stateHudPopBlock[sIdx] + 0x2C) = curSc.citizenBrackets[2];
+            *(int32_t*)(g_stateHudPopBlock[sIdx] + 0x30) = curSc.citizenBrackets[3];
+            memcpy(g_stateHudPopBlock[sIdx] + 0x5C, curSc.citizenBrackets, sizeof(curSc.citizenBrackets));
         }
         SafeMemcpyPod(world + WORLD_HUD_POP_BLOCK_OFFSET, g_stateHudPopBlock[sIdx], WORLD_HUD_POP_BLOCK_SIZE);
         int32_t pop32 = (int32_t)localPop;
         SafeWritePod((int32_t*)(world + WORLD_HUD_POP_COUNT_OFFSET), pop32);
-        if (!g_stateHudPopInitialized[sIdx] || g_stateLastLocalPop[sIdx] != localPop || g_lastUiSwappedState != localState) {
+        if (!g_stateHudPopInitialized[sIdx] || g_stateLastLocalPop[sIdx] != localPop ||
+            eduChanged || g_lastUiSwappedState != localState) {
             float zeroTimer = 0.0f;
             SafeWritePod((float*)(world + WORLD_HUD_POP_TIMER_OFFSET), zeroTimer);
             SafeWritePod((float*)(world + WORLD_POP_STAT_TIMER_OFF), zeroTimer);
             g_stateLastLocalPop[sIdx] = localPop;
+            g_stateLastEduBasic[sIdx] = curSc.citizenBrackets[2];
+            g_stateLastEduUniv[sIdx]  = curSc.citizenBrackets[3];
         }
 
         BYTE* popWinStat = world + WORLD_POP_STAT_CURRENT_OFF;
@@ -1289,6 +1314,14 @@ static const BYTE kCitizenEvalNeedsExpect[14] = {
     0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
     0x41, 0x56, 0x41, 0x57
 };
+static const BYTE kCitizenCanMoveToBldExpect[19] = {
+    0x80, 0xBA, 0x14, 0x14, 0x00, 0x00, 0x01, 0x75, 0x03, 0x32,
+    0xC0, 0xC3, 0x80, 0xBA, 0x17, 0x14, 0x00, 0x00, 0x01
+};
+static const BYTE kCitizenMoveToBldExpect[17] = {
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10,
+    0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55
+};
 static const BYTE kCalcStoredResourcesExpect[16] = {
     0x48, 0x8B, 0xC4, 0x4C, 0x89, 0x40, 0x18, 0x48, 0x89, 0x50,
     0x10, 0x48, 0x89, 0x48, 0x08, 0x55
@@ -1493,6 +1526,8 @@ typedef void (__fastcall* CitizenBirthFn)(BYTE* world, BYTE* citizen, uintptr_t 
 typedef unsigned char (__fastcall* CitizenStarveStepFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenRemoveFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* CitizenEvalNeedsFn)(BYTE* world, BYTE* citizen);
+typedef unsigned char (__fastcall* CitizenCanMoveToBldFn)(BYTE* world, BYTE* targetBld, BYTE* citizen);
+typedef void (__fastcall* CitizenMoveToBldFn)(BYTE* world, BYTE* citizen, BYTE* targetBld);
 typedef void (__fastcall* CalcStoredResourcesFn)(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
                                                  uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8);
 
@@ -1519,6 +1554,8 @@ static CitizenBirthFn o_citizenBirth = nullptr;
 static CitizenStarveStepFn o_citizenStarveStep = nullptr;
 static CitizenRemoveFn o_citizenRemove = nullptr;
 static CitizenEvalNeedsFn o_citizenEvalNeeds = nullptr;
+static CitizenCanMoveToBldFn o_citizenCanMoveToBld = nullptr;
+static CitizenMoveToBldFn o_citizenMoveToBld = nullptr;
 static CalcStoredResourcesFn o_calcStoredResources = nullptr;
 static VehicleSaleFn o_vehicleSale = nullptr;
 static VehicleExportFn o_vehicleBorderExport = nullptr;
@@ -2073,12 +2110,6 @@ static void __fastcall H_CitizenChurchStep(BYTE* world, BYTE* citizen)
     if (o_citizenChurchStep) o_citizenChurchStep(world, citizen);
 }
 
-static unsigned char __fastcall H_CitizenStarveStep(BYTE* world, BYTE* citizen)
-{
-    CitizenEconScope scope(world, nullptr, citizen);
-    return o_citizenStarveStep ? o_citizenStarveStep(world, citizen) : 0;
-}
-
 static void __fastcall H_CitizenRemove(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4,
                                        uintptr_t a5, uintptr_t a6)
 {
@@ -2170,6 +2201,106 @@ public:
 
     bool IsSwapped() const { return m_swapped; }
 };
+
+static int ResolveExistingCitizenHomeOwner(const BYTE* cit)
+{
+    if (!cit) return 0;
+    int owner = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* home = *(const BYTE* const*)(cit + CIT_HOME_BUILDING_OFFSET);
+        if (!home) {
+            const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
+            if (parent) home = *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET);
+        }
+        if (home) {
+            owner = ResolveBuildingOwnerFast(home);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        owner = 0;
+    }
+    DiagLog_EndSafeSeh();
+    return owner;
+}
+
+static bool IsCrossStateCitizenRelocation(const BYTE* citizen, const BYTE* targetBld)
+{
+    if (!TwoStates_IsActive() || !citizen || !targetBld) return false;
+    int citOwner = ResolveExistingCitizenHomeOwner(citizen);
+    if (citOwner != 1 && citOwner != 2) return false;
+    int bldOwner = ResolveBuildingOwnerFast(targetBld);
+    return (bldOwner == 1 || bldOwner == 2) && (citOwner != bldOwner);
+}
+
+static unsigned char __fastcall H_CitizenCanMoveToBld(BYTE* world, BYTE* targetBld, BYTE* citizen)
+{
+    if (IsCrossStateCitizenRelocation(citizen, targetBld)) {
+        return 0;
+    }
+    return o_citizenCanMoveToBld ? o_citizenCanMoveToBld(world, targetBld, citizen) : 1;
+}
+
+static void __fastcall H_CitizenMoveToBld(BYTE* world, BYTE* citizen, BYTE* targetBld)
+{
+    if (IsCrossStateCitizenRelocation(citizen, targetBld)) {
+        return;
+    }
+    CitizenEconScope scope(world, targetBld, citizen);
+    if (o_citizenMoveToBld) {
+        o_citizenMoveToBld(world, citizen, targetBld);
+    } else if (citizen && targetBld) {
+        SafeWritePod((BYTE**)(citizen + CIT_HOME_BUILDING_OFFSET), targetBld);
+    }
+}
+
+static unsigned char __fastcall H_CitizenStarveStep(BYTE* world, BYTE* citizen)
+{
+    int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(citizen) : 0;
+    CitizenEconScope scope(world, nullptr, citizen);
+    CivicBuildingFilterScope bldFilter(world, citOwner);
+    return o_citizenStarveStep ? o_citizenStarveStep(world, citizen) : 0;
+}
+
+static unsigned char __fastcall MockEngineCitizenStarveStep(BYTE* world, BYTE* citizen)
+{
+    if (!world || !citizen) return 0;
+    BYTE* bestBld = nullptr;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE* const* b = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        BYTE* const* e = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (b && e > b && (e - b) <= 200000) {
+            for (BYTE* const* it = b; it < e; ++it) {
+                if (*it) bestBld = *it;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        bestBld = nullptr;
+    }
+    DiagLog_EndSafeSeh();
+    if (bestBld) {
+        H_CitizenMoveToBld(world, citizen, bestBld);
+    }
+    return 0;
+}
+
+void TwoStates_CitizenStarveStepForTest(BYTE* world, BYTE* citizen)
+{
+    CitizenStarveStepFn prev = o_citizenStarveStep;
+    o_citizenStarveStep = &MockEngineCitizenStarveStep;
+    H_CitizenStarveStep(world, citizen);
+    o_citizenStarveStep = prev;
+}
+
+bool TwoStates_CitizenCanMoveToBldForTest(BYTE* world, BYTE* targetBld, BYTE* citizen)
+{
+    return H_CitizenCanMoveToBld(world, targetBld, citizen) != 0;
+}
+
+void TwoStates_CitizenMoveToBldForTest(BYTE* world, BYTE* citizen, BYTE* targetBld)
+{
+    H_CitizenMoveToBld(world, citizen, targetBld);
+}
 
 static bool __fastcall H_CourtAssign(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4)
 {
@@ -2717,6 +2848,9 @@ static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a
         r = o_bldUnivStep(world, building, a3, a4, a5, a6);
     } else {
         BldUnivStepFallback(world, building);
+    }
+    if (building) {
+        SanitizeBuildingEffectiveCapFloat(building);
     }
     if (econActive) {
         EndEconAttribution(owner);
@@ -4784,6 +4918,12 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_EVAL_NEEDS, (void*)&H_CitizenEvalNeeds,
                                 (void**)&o_citizenEvalNeeds, kCitizenEvalNeedsExpect,
                                 sizeof(kCitizenEvalNeedsExpect), "republicmp two_states citizen_eval_needs");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_CAN_MOVE_TO_BLD, (void*)&H_CitizenCanMoveToBld,
+                                (void**)&o_citizenCanMoveToBld, kCitizenCanMoveToBldExpect,
+                                sizeof(kCitizenCanMoveToBldExpect), "republicmp two_states citizen_can_move_to_bld");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_MOVE_TO_BLD, (void*)&H_CitizenMoveToBld,
+                                (void**)&o_citizenMoveToBld, kCitizenMoveToBldExpect,
+                                sizeof(kCitizenMoveToBldExpect), "republicmp two_states citizen_move_to_bld");
     econOk += InstallInlineHook(g_exeBase + RVA_CALC_STORED_RESOURCES, (void*)&H_CalcStoredResources,
                                 (void**)&o_calcStoredResources, kCalcStoredResourcesExpect,
                                 sizeof(kCalcStoredResourcesExpect), "republicmp two_states calc_stored_resources");
@@ -6545,9 +6685,8 @@ static void Draw3DTextBadge(ImDrawList* dl, const ImVec2& pos, const char* text,
 
 typedef void (__fastcall* FnTexBind)(void* texPtr, uint32_t slot, void* rendererPtr);
 typedef void (__fastcall* FnHudDrawQuad)(void* stage, float u0, float v0, float u1, float v1, float a6, uint8_t a7);
-typedef void (__fastcall* FnHudDrawBtnFrame)(void* hudStyle, float cx, float cy, int styleIdx);
-typedef float* (__fastcall* FnHudGetMousePos)(void* mouseState, float outPt[2]);
-typedef uint8_t (__fastcall* FnHudHitTestQuad)(void* stage, const float mousePt[2], float padX, float padY);
+typedef float* (__fastcall* FnHudGetMousePos)(void* mouseState, float outPt[3]);
+typedef uint8_t (__fastcall* FnHudHitTestQuad)(void* stage, const float mousePt[3], float padX, float padY);
 typedef void (__cdecl* FnTextDrawW)(void* textMgr, void* font, float x, float y, uint32_t colorArgb, const wchar_t* fmt, ...);
 typedef int* (__fastcall* FnHudGetTextRect)(void* font, int* outRect, float x, float y, const wchar_t* text);
 typedef void (__fastcall* FnHudEndDraw)(void* stage);
@@ -6699,32 +6838,6 @@ static void DrawHudMinimapTextPill(float cx, float cy, float maxPillW, float uiS
     BindHudTexture(HUD_SOLID_TEX_PTR_RVA);
 }
 
-static void EnsureTwoStatesMinimapSize(BYTE* mm)
-{
-    if (!g_exeBase || !TwoStates_IsActive()) return;
-    DiagLog_BeginSafeSeh();
-    __try {
-        if (!mm) mm = *(BYTE**)(g_exeBase + WORLD_RVA + WORLD_MINIMAP_PTR_OFFSET);
-        if (IsPointerLikeX64((uintptr_t)mm)) {
-            float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
-            if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
-            float screenH = (float)*(int32_t*)(g_exeBase + HUD_SCREEN_HEIGHT_RVA);
-            float minMapSize = 475.0f * uiScale;
-            if (screenH > 200.0f && minMapSize > screenH * 0.75f) {
-                minMapSize = screenH * 0.75f;
-            }
-            float curSize = *(float*)(mm + 0x50);
-            if (isfinite(curSize) && curSize >= 40.0f && curSize < minMapSize) {
-                *(float*)(mm + 0x50) = minMapSize;
-                *(float*)(mm + 0x54) = minMapSize + 72.5f * uiScale;
-                *(float*)(mm + 0x58) = minMapSize + 20.0f * uiScale;
-            }
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    DiagLog_EndSafeSeh();
-}
-
 static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize, float uiScale)
 {
     int myState = TwoStates_LocalState(); // 1 = West (X < 0), 2 = East (X > 0)
@@ -6733,22 +6846,39 @@ static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize,
     if (borderZoneHalfPx < 1.5f) borderZoneHalfPx = 1.5f;
     if (borderZoneHalfPx > half * 0.45f) borderZoneHalfPx = half * 0.45f;
 
-    const float zoneCol[4]     = { 1.00f, 0.84f, 0.24f, 0.14f };
-    const float westEdgeCol[4] = { 0.35f, 0.78f, 1.00f, 0.78f };
-    const float eastEdgeCol[4] = { 1.00f, 0.69f, 0.27f, 0.78f };
-    const float brdRedCol[4]   = { 1.00f, 0.25f, 0.20f, 0.94f };
-    const float brdGoldCol[4]  = { 1.00f, 0.90f, 0.37f, 0.88f };
-    const float ownFrameCol[4] = { 0.30f, 0.94f, 0.47f, 0.82f };
+    const float ownTint[4]     = { 0.18f, 0.82f, 0.37f, 0.10f };
+    const float partnerTint[4] = { 0.92f, 0.25f, 0.22f, 0.10f };
+    const float* westTint      = (myState == 1) ? ownTint : partnerTint;
+    const float* eastTint      = (myState == 2) ? ownTint : partnerTint;
 
-    // Do NOT draw full-half washes over the minimap so natural terrain, road, building & deposit colors stay crisp.
+    const float zoneCol[4]     = { 1.00f, 0.84f, 0.24f, 0.15f };
+    const float westEdgeCol[4] = { 0.35f, 0.78f, 1.00f, 0.72f };
+    const float eastEdgeCol[4] = { 1.00f, 0.69f, 0.27f, 0.72f };
+    const float brdRedCol[4]   = { 1.00f, 0.25f, 0.20f, 0.92f };
+    const float brdGoldCol[4]  = { 1.00f, 0.90f, 0.37f, 0.85f };
+    const float ownFrameCol[4] = { 0.30f, 0.94f, 0.47f, 0.80f };
+
+    // Subtle territory tint on West (X < 0) and East (X > 0) halves (matching v1.4.1)
+    float sideW = half - borderZoneHalfPx;
+    if (sideW > 2.0f) {
+        DrawHudSolidQuad(cx - borderZoneHalfPx - sideW * 0.5f, cy, sideW, mapSize, westTint);
+        DrawHudSolidQuad(cx + borderZoneHalfPx + sideW * 0.5f, cy, sideW, mapSize, eastTint);
+    }
+
     DrawHudSolidQuad(cx, cy, borderZoneHalfPx * 2.0f, mapSize, zoneCol);
-    DrawHudSolidQuad(cx - borderZoneHalfPx, cy, fmaxf(1.0f, 1.3f * uiScale), mapSize, westEdgeCol);
-    DrawHudSolidQuad(cx + borderZoneHalfPx, cy, fmaxf(1.0f, 1.3f * uiScale), mapSize, eastEdgeCol);
-    DrawHudSolidQuad(cx, cy, fmaxf(2.0f, 2.6f * uiScale), mapSize, brdRedCol);
-    DrawHudSolidQuad(cx, cy, fmaxf(1.0f, 1.2f * uiScale), mapSize, brdGoldCol);
+    DrawHudSolidQuad(cx - borderZoneHalfPx, cy, fmaxf(1.0f, 1.2f * uiScale), mapSize, westEdgeCol);
+    DrawHudSolidQuad(cx + borderZoneHalfPx, cy, fmaxf(1.0f, 1.2f * uiScale), mapSize, eastEdgeCol);
+    DrawHudSolidQuad(cx, cy, fmaxf(2.0f, 2.4f * uiScale), mapSize, brdRedCol);
+    DrawHudSolidQuad(cx, cy, fmaxf(1.0f, 1.1f * uiScale), mapSize, brdGoldCol);
 
-    float ownCx = (myState == 1) ? (cx - half * 0.5f) : (cx + half * 0.5f);
-    DrawHudHollowRect(ownCx, cy, half, mapSize, fmaxf(1.5f, 2.0f * uiScale), ownFrameCol);
+    // Outer 3-edge highlight on player's own half (no duplicate vertical line on the X=0 center border)
+    float frameT  = fmaxf(1.5f, 2.0f * uiScale);
+    float halfT   = frameT * 0.5f;
+    float ownCx   = (myState == 1) ? (cx - half * 0.5f) : (cx + half * 0.5f);
+    float outerX  = (myState == 1) ? (cx - half + halfT) : (cx + half - halfT);
+    DrawHudSolidQuad(ownCx, cy - half + halfT, half, frameT, ownFrameCol);
+    DrawHudSolidQuad(ownCx, cy + half - halfT, half, frameT, ownFrameCol);
+    DrawHudSolidQuad(outerX, cy, frameT, mapSize - frameT * 2.0f, ownFrameCol);
 
     const float ownBg[4]      = { 0.06f, 0.20f, 0.09f, 0.90f };
     const float ownBrd[4]     = { 0.31f, 0.94f, 0.49f, 0.96f };
@@ -6762,7 +6892,7 @@ static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize,
         ? TrW(L"ВОСТОК (ВЫ)", L"EAST (YOU)")
         : TrW(L"ВОСТОК", L"EAST");
 
-    float pillY    = (cy - half) + 15.0f * uiScale;
+    float pillY    = (cy - half) + 14.0f * uiScale;
     float maxPillW = half - 10.0f * uiScale;
     if (maxPillW > 40.0f) {
         DrawHudMinimapTextPill(cx - half * 0.5f, pillY, maxPillW, uiScale, westLbl,
@@ -6892,41 +7022,25 @@ static void DrawNativeMinimapSplitIcon(float btnX, float btnY, float iconSz, flo
     DrawHudSolidQuad(btnX, btnY, fmaxf(2.0f, iconSz * 0.08f), innerSz * 0.92f, brdCol);
 }
 
-static void DrawNativeMinimapBordersButton(BYTE* mm)
+static void DrawNativeMinimapBordersButton(BYTE* mm, float btnX, float btnY, float btnStep, float hitScale)
 {
     if (!g_exeBase || !IsPointerLikeX64((uintptr_t)mm) || mm[0] == 0) return;
-    float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
-    if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
-
-    float rightX  = *(float*)(mm + 0x48);
-    float bottomY = *(float*)(mm + 0x4C);
-    float panelH  = *(float*)(mm + 0x58);
-    if (!isfinite(rightX) || !isfinite(bottomY) || !isfinite(panelH)) return;
-
-    float topY    = bottomY - panelH;
-    float btnStep = 55.0f * uiScale;
-    float iconSz  = btnStep * 0.70f;
-    float btnX    = rightX - 27.5f * uiScale;
-    float btnY    = topY + (86.0f + 5.0f * 55.0f) * uiScale;
-    float maxBtnY = bottomY - 130.0f * uiScale;
-    if (btnY > maxBtnY) btnY = maxBtnY;
+    float iconSz = btnStep * 0.70f;
 
     const float halfWhite[4] = { 1.0f, 1.0f, 1.0f, 0.5f };
     const float fullWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
     BindHudTexture(HUD_BTN_FRAME_TEX_PTR_RVA);
     SetHudQuadStage(btnX, btnY, btnStep, btnStep, halfWhite);
-    FnHudDrawBtnFrame drawBtnFrame = (FnHudDrawBtnFrame)(g_exeBase + RVA_HUD_DRAW_BTN_FRAME);
-    drawBtnFrame(g_exeBase + HUD_STYLE_BLOCK_RVA, btnX, btnY, 3);
 
     bool hovered = false;
     if (IsMinimapMouseInputAllowed(mm)) {
         FnHudGetMousePos getMousePos = *(FnHudGetMousePos*)(g_exeBase + RVA_IAT_HUD_GET_MOUSE_POS);
         FnHudHitTestQuad hitTestQuad = *(FnHudHitTestQuad*)(g_exeBase + RVA_IAT_HUD_HIT_TEST_QUAD);
         if (IsPointerLikeX64((uintptr_t)getMousePos) && IsPointerLikeX64((uintptr_t)hitTestQuad)) {
-            float mousePt[2] = {};
+            float mousePt[4] = {};
             float* mp = getMousePos(g_exeBase + HUD_MOUSE_STATE_RVA, mousePt);
-            float hitPad = 5.0f * uiScale;
+            float hitPad = 5.0f * hitScale;
             hovered = (hitTestQuad(g_exeBase + HUD_QUAD_STAGE_RVA, mp, hitPad, hitPad) != 0);
         }
     }
@@ -6942,16 +7056,14 @@ static void DrawNativeMinimapBordersButton(BYTE* mm)
         wcsncpy_s((wchar_t*)(g_exeBase + MINIMAP_TOOLTIP_WSTR_RVA), 2048, tip, _TRUNCATE);
     }
 
-    bool lit = hovered || g_showMinimapBorders;
-    DrawHudSolidQuad(btnX, btnY, btnStep, btnStep, lit ? fullWhite : halfWhite, true);
+    const float* btnCol = hovered ? fullWhite : halfWhite;
+    DrawHudSolidQuad(btnX, btnY, btnStep, btnStep, btnCol, true);
 
-    SetHudQuadStage(btnX, btnY, iconSz, iconSz, lit ? fullWhite : halfWhite);
-    drawBtnFrame(g_exeBase + HUD_STYLE_BLOCK_RVA, btnX, btnY, 3);
     void* iconTex = GetOrLoadMinimapBordersIconTex();
     if (iconTex && BindHudTexturePtr(iconTex)) {
-        DrawHudSolidQuad(btnX, btnY, iconSz, iconSz, lit ? fullWhite : halfWhite, true);
+        DrawHudSolidQuad(btnX, btnY, iconSz, iconSz, btnCol, true);
     } else {
-        DrawNativeMinimapSplitIcon(btnX, btnY, iconSz, lit ? 1.0f : 0.55f);
+        DrawNativeMinimapSplitIcon(btnX, btnY, iconSz, hovered ? 1.0f : 0.55f);
     }
 
     if (g_showMinimapBorders && BindHudTexture(HUD_PIN_ICON_TEX_PTR_RVA)) {
@@ -6963,13 +7075,10 @@ static void DrawNativeMinimapBordersButton(BYTE* mm)
 
 static void __fastcall H_MinimapDrawContent(BYTE* mm)
 {
-    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
-    if (inCoop && TwoStates_IsActive()) {
-        EnsureTwoStatesMinimapSize(mm);
-    }
     if (o_minimapDrawContent) {
         o_minimapDrawContent(mm);
     }
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
     if (!inCoop || !SaveSync_IsWorldLoaded()) return;
     DiagLog_BeginSafeSeh();
     __try {
@@ -6981,14 +7090,50 @@ static void __fastcall H_MinimapDrawContent(BYTE* mm)
 
 static void __fastcall H_MinimapDrawButtons(BYTE* mm)
 {
-    if (o_minimapDrawButtons) {
-        o_minimapDrawButtons(mm);
-    }
     const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
-    if (!inCoop || !TwoStates_IsActive() || !SaveSync_IsWorldLoaded()) return;
+    const bool activeTwoStates = inCoop && TwoStates_IsActive() && SaveSync_IsWorldLoaded() &&
+                                 g_exeBase && IsPointerLikeX64((uintptr_t)mm);
+    if (!activeTwoStates) {
+        if (o_minimapDrawButtons) {
+            o_minimapDrawButtons(mm);
+        }
+        return;
+    }
+
     DiagLog_BeginSafeSeh();
     __try {
-        DrawNativeMinimapBordersButton(mm);
+        float uiScale = *(float*)(g_exeBase + HUD_UI_SCALE_RVA);
+        if (!isfinite(uiScale) || uiScale < 0.5f || uiScale > 3.0f) uiScale = 1.0f;
+        float rightX  = *(float*)(mm + 0x48);
+        float bottomY = *(float*)(mm + 0x4C);
+        float panelH  = *(float*)(mm + 0x58);
+
+        if (isfinite(rightX) && isfinite(bottomY) && isfinite(panelH) && panelH > 180.0f * uiScale) {
+            float availH    = panelH - 165.0f * uiScale;
+            float btnFactor = fminf(1.0f, fmaxf(0.80f, availH / (6.0f * 55.0f * uiScale)));
+            float effScale  = uiScale * btnFactor;
+            float topY      = bottomY - panelH;
+            float startOff  = (78.0f + 8.0f * (btnFactor - 0.80f) / 0.20f) * uiScale;
+
+            *(float*)(g_exeBase + HUD_UI_SCALE_RVA) = effScale;
+            *(float*)(mm + 0x48) = rightX - 27.5f * uiScale * (1.0f - btnFactor);
+            *(float*)(mm + 0x58) = panelH + 86.0f * effScale - startOff;
+
+            if (o_minimapDrawButtons) {
+                o_minimapDrawButtons(mm);
+            }
+
+            *(float*)(g_exeBase + HUD_UI_SCALE_RVA) = uiScale;
+            *(float*)(mm + 0x48) = rightX;
+            *(float*)(mm + 0x58) = panelH;
+
+            float btnStep = 55.0f * effScale;
+            float btnX    = rightX - 27.5f * uiScale;
+            float btnY    = topY + startOff + 5.0f * btnStep;
+            DrawNativeMinimapBordersButton(mm, btnX, btnY, btnStep, effScale);
+        } else if (o_minimapDrawButtons) {
+            o_minimapDrawButtons(mm);
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     DiagLog_EndSafeSeh();
@@ -7224,9 +7369,6 @@ void TwoStates_DrawOverlay()
     // and its toggle button inside H_MinimapDrawButtons (0x4BFF40), respecting HUD hide (G) and window Z-order.
     if (worldLoaded) {
         DrawPartnerCursorAndPing(bg, displaySize);
-        if (TwoStates_IsActive()) {
-            EnsureTwoStatesMinimapSize(nullptr);
-        }
     }
 
     // Draw Toast notifications (top-center below the game's resource bar)
