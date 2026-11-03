@@ -757,7 +757,6 @@ void ImGuiHook_NewFrameAndRender()
     NativeMenu_DrawOverlay();
     SyncBlock_Draw();
     DrawWindowControlPill();
-    PresentHook_DrawPlacementBadgeForeground();
 
     ImGui::Render();
     g_pd3dContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
