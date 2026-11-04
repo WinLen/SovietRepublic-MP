@@ -15,7 +15,7 @@
 // slot+0x18 is a vector of 16-byte entries {Resource*, float share,
 // float enabled}; a changed slot is sent whole.
 //
-// Not synced on purpose: the personal "notify me" checkboxes.
+//
 //
 // A change is only sent if the local player clicked (or held the button)
 // within SETTINGS_CLICK_WINDOW_MS - a field the simulation changes by itself
@@ -44,7 +44,9 @@ struct SettingWire {
     int count;      // SETTINGS_FIELD_SLOT: entries
     float data[SETTINGS_MAX_SLOT_ENTRIES * 2]; // share, enabled per entry
 };
-#define SETTINGS_FIELD_SLOT 1000
+#define SETTINGS_FIELD_SLOT        1000
+#define SETTINGS_FIELD_UPBRINGING  1002
+#define SETTINGS_FIELD_BROADCAST   1003
 
 void SettingsSync_Bind(const TsmHost* host);
 

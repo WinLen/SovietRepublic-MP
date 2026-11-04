@@ -24,6 +24,7 @@ void DiagLog_FrameTick(void);
 // Suppresses VectoredExceptionHandler crash logging inside guarded __try/__except probes.
 void DiagLog_BeginSafeSeh(void);
 void DiagLog_EndSafeSeh(void);
+int  DiagLog_GetSafeSehDepthForTest(void);
 
 // Remote client log upload to Host (<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\)
 #include <vector>

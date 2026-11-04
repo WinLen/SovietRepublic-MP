@@ -2,6 +2,8 @@
 // See settings_sync.h.
 #include "settings_sync.h"
 #include "two_states.h"
+#include "../core/engine_rva.h"
+#include "../core/diag_log.h"
 #include "../world_sync/citizens/citizen_destinations.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../ui/sync_block.h"
@@ -11,11 +13,6 @@
 #include <math.h>
 #include <string.h>
 
-#define WORLD_RVA 0x9D4F10
-#define VEC_BUILDINGS_BEGIN_RVA 0x9E6A18
-#define VEC_BUILDINGS_END_RVA 0x9E6A20
-#define VEC_CONSTRUCTIONS_BEGIN_RVA 0x9E6B38
-#define VEC_CONSTRUCTIONS_END_RVA 0x9E6B40
 #define BLD_TYPE_OFFSET 0x318
 #define TYPE_CATEGORY_OFFSET 0x360
 #define BLD_POS_OFFSET 0x350
@@ -54,22 +51,29 @@ static const WatchedField kFields[] = {
     { "workers / visitors",      0xDEC,  8, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "construction workers",    0x630,  4, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "auto purchase",           0x11B8, 4, FIELD_BYTES, FOLLOW_AUTO_PURCHASE, { ANY, -1 } },
-    { "collect from vehicles",   0x1272, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
-    { "mechanisms only by truck", 0xE11, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
-    { "prefer students",         0x11BE, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
-    { "no waste disposal",       0x11BF, 1, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
+    { "collect from vehicles",   BLD_COLLECT_FLAGS_OFFSET,          2, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "mechanisms only by truck", 0xE11,                            1, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "reconstruction thresholds", BLD_RECONSTRUCT_THRESHOLDS_OFFSET, 8, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "auto-search / building flags", BLD_AUTOSEARCH_FLAGS_OFFSET,  8, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "auto-search wires flag",  BLD_AUTOSEARCH_WIRES_OFFSET,       1, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
     // Who may move in: 8 flags read together by FUN_14083c590 (and saved /
     // copied as one block, FUN_1401edc40 / 0x1402D576E): +0x1414 nobody,
     // +0x1415..+0x1417 by the citizen's education (citizen+0xA8 = 0/1/2),
     // +0x1418..+0x141B by a second citizen trait in four ranges (citizen+0xE4).
-    { "moving in restrictions",  0x1414, 8, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
-    { "allow repair",            0x11C0, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
-    { "repair cancel when idle", 0x11C1, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
-    { "repair threshold",        0xFC8,  4, FIELD_BYTES, FOLLOW_NONE,          { 0x6C, -1 } },
-    { "closed above temperature", 0xE00, 1, FIELD_BYTES, FOLLOW_NONE,          { 0x46, -1 } },
-    { "water quality",           0x1340, 4, FIELD_BYTES, FOLLOW_NONE,          { 0x61, 0x62, -1 } },
+    { "moving in restrictions",  0x1414,                            8, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "search range / threshold", BLD_SEARCH_RANGE_OFFSET,          4, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "closed above temperature", 0xE00,                            1, FIELD_BYTES, FOLLOW_NONE, { 0x46, -1 } },
+    { "water quality",           0x1340,                            4, FIELD_BYTES, FOLLOW_NONE, { 0x61, 0x62, -1 } },
+    { "employee min loyalty",    BLD_MIN_LOYALTY_EMPLOYEES_OFFSET,  4, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "notify goods missing",    BLD_ALERT_GOODS_MISSING_OFFSET,    1, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "main alert toggle",       BLD_ALERT_MAIN_TOGGLE_OFFSET,      1, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "notify finished alert",   BLD_ALERT_FINISHED_OFFSET,         1, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
+    { "pollution alert toggle",  BLD_POLLUTION_ALERT_TOGGLE_OFFSET, 4, FIELD_BYTES, FOLLOW_NONE, { 0x24, -1 } },
+    { "pollution alert thresh",  BLD_POLLUTION_ALERT_THRESH_OFFSET, 4, FIELD_BYTES, FOLLOW_NONE, { 0x24, -1 } },
+    { "citizen min loyalty",     BLD_MIN_LOYALTY_CITIZENS_OFFSET,   4, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
 };
 static const int kFieldCount = sizeof(kFields) / sizeof(kFields[0]);
+static_assert(kFieldCount <= 32, "kFields count must fit within 32-bit hasMask");
 
 void SettingsSync_Bind(const TsmHost* host)
 {
@@ -108,51 +112,69 @@ static BYTE* FieldAddress(BYTE* b, const WatchedField& f)
 
 static bool ReadField(BYTE* b, const WatchedField& f, unsigned long long* out)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* p = FieldAddress(b, f);
-        if (!p) return false;
-        *out = 0;
-        memcpy(out, p, f.size);
-        return true;
+        if (p) {
+            *out = 0;
+            memcpy(out, p, f.size);
+            ok = true;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 // Storage slot settings of one slot: count and (share, enabled) pairs.
 static int ReadSlot(BYTE* b, int slot, float* data)
 {
+    int ret = -1;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
         BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
-        if (!slots || (slotsEnd - slots) / STORAGE_SLOT_SIZE <= slot) return -1;
-        BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
-        BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
-        BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
-        if (!e || ee < e) return 0;
-        int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
-        if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
-        for (int i = 0; i < n; i++) {
-            data[i * 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
-            data[i * 2 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
+        if (slots && (slotsEnd - slots) / STORAGE_SLOT_SIZE > slot) {
+            BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
+            BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
+            BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
+            if (e && ee >= e) {
+                int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
+                if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
+                for (int i = 0; i < n; i++) {
+                    data[i * 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
+                    data[i * 2 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
+                }
+                ret = n;
+            } else {
+                ret = 0;
+            }
         }
-        return n;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return -1;
+        ret = -1;
     }
+    DiagLog_EndSafeSeh();
+    return ret;
 }
 
 static int SlotCount(BYTE* b)
 {
+    int ret = 0;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
         BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
-        if (!slots || slotsEnd < slots) return 0;
-        int n = (int)((slotsEnd - slots) / STORAGE_SLOT_SIZE);
-        return n > MAX_SLOTS ? MAX_SLOTS : n;
+        if (slots && slotsEnd >= slots) {
+            int n = (int)((slotsEnd - slots) / STORAGE_SLOT_SIZE);
+            ret = n > MAX_SLOTS ? MAX_SLOTS : n;
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
+        ret = 0;
     }
+    DiagLog_EndSafeSeh();
+    return ret;
 }
 
 static unsigned long long HashSlot(const float* data, int n)
@@ -167,30 +189,50 @@ static unsigned long long HashSlot(const float* data, int n)
 static int CopyBuildings(BYTE** out, int max)
 {
     int n = 0;
-    __try {
-        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
-        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
-        for (int v = 0; v < 2; ++v) {
-            BYTE** it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
-            BYTE** end = *(BYTE***)(g_exeBase + kEndRvas[v]);
-            if (!it || end < it) continue;
-            for (; it < end && n < max; ++it) if (*it) out[n++] = *it;
+    const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+    const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+    for (int v = 0; v < 2; ++v) {
+        BYTE** it = nullptr;
+        BYTE** end = nullptr;
+        DiagLog_BeginSafeSeh();
+        __try {
+            it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
+            end = *(BYTE***)(g_exeBase + kEndRvas[v]);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            it = nullptr;
+            end = nullptr;
         }
-        return n;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return n;
+        DiagLog_EndSafeSeh();
+        if (!it || !end || end < it || (size_t)(end - it) > 200000) continue;
+
+        for (; it < end && n < max; ++it) {
+            BYTE* b = nullptr;
+            DiagLog_BeginSafeSeh();
+            __try {
+                b = *it;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                b = nullptr;
+            }
+            DiagLog_EndSafeSeh();
+            if (b) out[n++] = b;
+        }
     }
+    return n;
 }
 
 static bool ReadIdentity(BYTE* b, int* category, float pos[3])
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         *category = CategoryOf(b);
         memcpy(pos, b + BLD_POS_OFFSET, 12);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 // The local building at pos with this category (0.5 m in x/z, 1 m in y), nearest first.
@@ -198,24 +240,41 @@ static BYTE* FindBuilding(const float pos[3], int category)
 {
     BYTE* found = nullptr;
     float best = 1e30f;
-    __try {
-        const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
-        const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
-        for (int v = 0; v < 2; ++v) {
-            BYTE** it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
-            BYTE** end = *(BYTE***)(g_exeBase + kEndRvas[v]);
-            for (; it && it < end; ++it) {
-                BYTE* b = *it;
-                if (!b || CategoryOf(b) != category) continue;
-                const float* p = (const float*)(b + BLD_POS_OFFSET);
-                float dx = p[0] - pos[0], dz = p[2] - pos[2];
-                if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(p[1] - pos[1]) >= 1.0f) continue;
-                float d = dx * dx + dz * dz;
-                if (d < best) { best = d; found = b; }
-            }
+    const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+    const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+    for (int v = 0; v < 2; ++v) {
+        BYTE** it = nullptr;
+        BYTE** end = nullptr;
+        DiagLog_BeginSafeSeh();
+        __try {
+            it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
+            end = *(BYTE***)(g_exeBase + kEndRvas[v]);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            it = nullptr;
+            end = nullptr;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return nullptr;
+        DiagLog_EndSafeSeh();
+        if (!it || !end || end < it || (size_t)(end - it) > 200000) continue;
+
+        for (; it < end; ++it) {
+            BYTE* b = nullptr;
+            DiagLog_BeginSafeSeh();
+            __try {
+                b = *it;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                b = nullptr;
+            }
+            DiagLog_EndSafeSeh();
+            if (!b) continue;
+
+            int bCat = -1;
+            float bPos[3] = {};
+            if (!ReadIdentity(b, &bCat, bPos) || bCat != category) continue;
+            float dx = bPos[0] - pos[0], dz = bPos[2] - pos[2];
+            if (fabsf(dx) >= 0.5f || fabsf(dz) >= 0.5f || fabsf(bPos[1] - pos[1]) >= 1.0f) continue;
+            float d = dx * dx + dz * dz;
+            if (d < best) { best = d; found = b; }
+        }
     }
     return found;
 }
@@ -226,41 +285,180 @@ typedef void (*AutoPurchaseFn)(__int64 world, __int64 bld, int value);
 static bool WriteField(BYTE* b, const WatchedField& f, unsigned long long value)
 {
     __int64 world = (__int64)(g_exeBase + WORLD_RVA);
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* p = FieldAddress(b, f);
-        if (!p) return false;
-        memcpy(p, &value, f.size);
-        if (f.followUp == FOLLOW_PIPELINE && CategoryOf(b) == 0x6B) {
-            // As the window does after a mode or resource change.
-            if (*(int*)(b + 0x9EC)) ((BuildingFn)(g_exeBase + PIPELINE_TO_EXPORT_RVA))(world, (__int64)b);
-            else if (*(int*)(b + 0x9E8)) ((BuildingFn)(g_exeBase + PIPELINE_TO_IMPORT_RVA))(world, (__int64)b);
-        } else if (f.followUp == FOLLOW_AUTO_PURCHASE) {
-            ((AutoPurchaseFn)(g_exeBase + AUTO_PURCHASE_RVA))(world, (__int64)b, (int)value);
+        if (p) {
+            if (f.offset == BLD_MIN_LOYALTY_EMPLOYEES_OFFSET || f.offset == BLD_MIN_LOYALTY_CITIZENS_OFFSET) {
+                float v = 0.0f;
+                memcpy(&v, &value, sizeof(float));
+                if (isnan(v) || fabsf(v) < 1e-7f || v < 0.0f) v = 0.0f;
+                else if (v > 1.0f) v = 1.0f;
+                memcpy(p, &v, sizeof(float));
+            } else if (f.offset == BLD_POLLUTION_ALERT_THRESH_OFFSET) {
+                float v = 0.0f;
+                memcpy(&v, &value, sizeof(float));
+                if (isnan(v) || fabsf(v) < 1e-7f || v < 0.0f) v = 0.0f;
+                else if (v > 100.0f) v = 100.0f;
+                memcpy(p, &v, sizeof(float));
+            } else if (f.offset == 0x1340) {
+                float v = 0.0f;
+                memcpy(&v, &value, sizeof(float));
+                if (isnan(v) || fabsf(v) < 1e-7f || v < 0.0f) v = 0.0f;
+                else if (v > 1.0f) v = 1.0f;
+                memcpy(p, &v, sizeof(float));
+            } else {
+                memcpy(p, &value, f.size);
+            }
+            if (f.followUp == FOLLOW_PIPELINE && CategoryOf(b) == 0x6B) {
+                // As the window does after a mode or resource change.
+                if (*(int*)(b + 0x9EC)) ((BuildingFn)(g_exeBase + PIPELINE_TO_EXPORT_RVA))(world, (__int64)b);
+                else if (*(int*)(b + 0x9E8)) ((BuildingFn)(g_exeBase + PIPELINE_TO_IMPORT_RVA))(world, (__int64)b);
+            } else if (f.followUp == FOLLOW_AUTO_PURCHASE) {
+                ((AutoPurchaseFn)(g_exeBase + AUTO_PURCHASE_RVA))(world, (__int64)b, (int)value);
+            }
+            ok = true;
         }
-        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool WriteSlot(BYTE* b, int slot, const float* data, int n)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
         BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
-        if (!slots || (slotsEnd - slots) / STORAGE_SLOT_SIZE <= slot) return false;
-        BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
-        BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
-        BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
-        if (!e || (int)((ee - e) / SLOT_ENTRY_SIZE) != n) return false; // other resource list - skip
-        for (int i = 0; i < n; i++) {
-            *(float*)(e + i * SLOT_ENTRY_SIZE + 8) = data[i * 2];
-            *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC) = data[i * 2 + 1];
+        if (slots && (slotsEnd - slots) / STORAGE_SLOT_SIZE > slot) {
+            BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
+            BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
+            BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
+            if (e && (int)((ee - e) / SLOT_ENTRY_SIZE) == n) {
+                for (int i = 0; i < n; i++) {
+                    *(float*)(e + i * SLOT_ENTRY_SIZE + 8) = data[i * 2];
+                    *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC) = data[i * 2 + 1];
+                }
+                ok = true;
+            }
         }
-        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// TV/Radio Broadcast & Orphanage/Prison Upbringing Composite Settings
+// ---------------------------------------------------------------------------
+
+static BYTE* FindStudioForBuilding(BYTE* building)
+{
+    if (!building) return nullptr;
+    BYTE* studioFound = nullptr;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE* world = g_exeBase + WORLD_RVA;
+        BYTE** it = *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET);
+        BYTE** end = *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET);
+        if (it && end && end >= it && (size_t)(end - it) <= 50000) {
+            for (; it < end; ++it) {
+                BYTE* studio = *it;
+                if (!studio) continue;
+                BYTE* bld = *(BYTE**)(studio + STUDIO_BUILDING_OFFSET);
+                if (bld == building) {
+                    studioFound = studio;
+                    break;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        studioFound = nullptr;
+    }
+    DiagLog_EndSafeSeh();
+    return studioFound;
+}
+
+static bool ReadUpbringing(BYTE* b, float out[6])
+{
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (b) {
+            memcpy(out, b + BLD_UPBRINGING_SLIDERS_OFFSET, 6 * sizeof(float));
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool WriteUpbringing(BYTE* b, const float in[6])
+{
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        if (b) {
+            memcpy(b + BLD_UPBRINGING_SLIDERS_OFFSET, in, 6 * sizeof(float));
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool ReadBroadcast(BYTE* b, float out[6])
+{
+    BYTE* studio = FindStudioForBuilding(b);
+    if (!studio) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        memcpy(out, studio + STUDIO_BROADCAST_SLIDERS_OFFSET, 6 * sizeof(float));
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool WriteBroadcast(BYTE* b, const float in[6])
+{
+    BYTE* studio = FindStudioForBuilding(b);
+    if (!studio) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        memcpy(studio + STUDIO_BROADCAST_SLIDERS_OFFSET, in, 6 * sizeof(float));
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool SanitizeFloats6(const float* in, float* out)
+{
+    if (!in || !out) return false;
+    for (int i = 0; i < 6; i++) {
+        float v = in[i];
+        if (isnan(v) || isinf(v)) return false;
+        if (fabsf(v) < 1e-7f || v < 0.0f) v = 0.0f;
+        else if (v > 1.0f) v = 1.0f;
+        out[i] = v;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +477,9 @@ struct BuildingState {
     unsigned long long slotHash[MAX_SLOTS] = {};
     bool slotKnown[MAX_SLOTS] = {};
     FieldState slotFlood[MAX_SLOTS];
+    float composite[6] = {};
+    bool compositeKnown = false;
+    FieldState compositeFlood;
     bool seen = false;           // in this scan's building list
     bool scanned = false;        // went through a scan before
 };
@@ -301,11 +502,21 @@ static void Send(BYTE* b, int field, unsigned long long value, int slot, const f
     w.value = value;
     w.slot = slot;
     w.count = count;
-    if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+    if (field == SETTINGS_FIELD_UPBRINGING || field == SETTINGS_FIELD_BROADCAST) {
+        if (data && count > 0) memcpy(w.data, data, count * sizeof(float));
+    } else {
+        if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+    }
     BuildSync_SendSetting(w);
     if (field == SETTINGS_FIELD_SLOT)
         Logf("republicmp  SETTINGS: sending storage slot %d (%d entries) of category 0x%X at (%.1f,%.1f)", slot,
              count, w.category, w.pos[0], w.pos[2]);
+    else if (field == SETTINGS_FIELD_UPBRINGING)
+        Logf("republicmp  SETTINGS: sending upbringing (6 sliders) of category 0x%X at (%.1f,%.1f)",
+             w.category, w.pos[0], w.pos[2]);
+    else if (field == SETTINGS_FIELD_BROADCAST)
+        Logf("republicmp  SETTINGS: sending broadcast (6 sliders) of category 0x%X at (%.1f,%.1f)",
+             w.category, w.pos[0], w.pos[2]);
     else
         Logf("republicmp  SETTINGS: sending [%s] = 0x%llx of category 0x%X at (%.1f,%.1f)", kFields[field].name,
              value, w.category, w.pos[0], w.pos[2]);
@@ -342,7 +553,9 @@ static bool CountChange(FieldState& st, int field, ULONGLONG now)
     if (++st.changes > SETTINGS_FLOOD_LIMIT) {
         st.muted = true;
         Logf("republicmp  SETTINGS: [%s] changes too often on a building - no longer synced there",
-             field == SETTINGS_FIELD_SLOT ? "storage slot" : kFields[field].name);
+             field == SETTINGS_FIELD_SLOT ? "storage slot" :
+             field == SETTINGS_FIELD_UPBRINGING ? "upbringing" :
+             field == SETTINGS_FIELD_BROADCAST ? "broadcast" : kFields[field].name);
         return false;
     }
     return true;
@@ -393,6 +606,32 @@ static void Scan(bool sendChanges)
             st.slotHash[s] = h;
             st.slotKnown[s] = true;
         }
+
+        if (category == 0x4A || category == 0x4C) {
+            float cur[6];
+            if (ReadUpbringing(b, cur)) {
+                if (st.compositeKnown && memcmp(cur, st.composite, sizeof(cur)) != 0 &&
+                    sendChanges && !fresh && byPlayer &&
+                    CountChange(st.compositeFlood, SETTINGS_FIELD_UPBRINGING, now))
+                {
+                    Send(b, SETTINGS_FIELD_UPBRINGING, 0, 0, cur, 6);
+                }
+                memcpy(st.composite, cur, sizeof(cur));
+                st.compositeKnown = true;
+            }
+        } else if (category == 0x25) {
+            float cur[6];
+            if (ReadBroadcast(b, cur)) {
+                if (st.compositeKnown && memcmp(cur, st.composite, sizeof(cur)) != 0 &&
+                    sendChanges && !fresh && byPlayer &&
+                    CountChange(st.compositeFlood, SETTINGS_FIELD_BROADCAST, now))
+                {
+                    Send(b, SETTINGS_FIELD_BROADCAST, 0, 0, cur, 6);
+                }
+                memcpy(st.composite, cur, sizeof(cur));
+                st.compositeKnown = true;
+            }
+        }
     }
     CitizenDestinations_Scan(g_scanList.data(), n, sendChanges, byPlayer);
     // Forget demolished buildings (their address may be reused).
@@ -423,6 +662,8 @@ struct LsBuilding {
     int slots;
     int slotCount[MAX_SLOTS];
     size_t slotAt;              // first float of slot 0 in g_lsSlotData
+    float composite[6];
+    bool hasComposite;
 };
 static std::vector<LsBuilding> g_lsBuildings;
 static std::vector<float> g_lsSlotData;
@@ -430,13 +671,17 @@ static std::vector<BYTE*> g_lsList;
 
 static bool ReadConstruction(BYTE* b, unsigned short* pay, unsigned char* stopped)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         *pay = *(unsigned short*)(b + BLD_PAY_OFFSET);
         *stopped = *(b + BLD_STOPPED_OFFSET);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static void ReadLsBuilding(BYTE* b, LsBuilding& s)
@@ -444,6 +689,8 @@ static void ReadLsBuilding(BYTE* b, LsBuilding& s)
     s.b = b;
     s.hasMask = 0;
     s.slots = 0;
+    s.hasComposite = false;
+    memset(s.composite, 0, sizeof(s.composite));
     if (!ReadIdentity(b, &s.category, s.pos)) return;
     for (int f = 0; f < kFieldCount; f++)
         if (FieldApplies(kFields[f], s.category) && ReadField(b, kFields[f], &s.values[f])) s.hasMask |= 1u << f;
@@ -455,6 +702,11 @@ static void ReadLsBuilding(BYTE* b, LsBuilding& s)
         int n = ReadSlot(b, i, data);
         s.slotCount[i] = n < 0 ? -1 : n;
         if (n > 0) g_lsSlotData.insert(g_lsSlotData.end(), data, data + n * 2);
+    }
+    if (s.category == 0x4A || s.category == 0x4C) {
+        if (ReadUpbringing(b, s.composite)) s.hasComposite = true;
+    } else if (s.category == 0x25) {
+        if (ReadBroadcast(b, s.composite)) s.hasComposite = true;
     }
 }
 
@@ -478,6 +730,9 @@ bool SettingsSync_OwnsBuildingWord(const BYTE* building, unsigned offset)
     for (int f = 0; f < kFieldCount; f++)
         if (kFields[f].kind == FIELD_BYTES && FieldApplies(kFields[f], category) && Overlaps(offset, kFields[f].offset, kFields[f].size))
             return true;
+    if (category == 0x4A || category == 0x4C) {
+        if (Overlaps(offset, BLD_UPBRINGING_SLIDERS_OFFSET, 24)) return true;
+    }
     return Overlaps(offset, BLD_PAY_OFFSET, 2) || Overlaps(offset, BLD_STOPPED_OFFSET, 1);
 }
 
@@ -521,16 +776,22 @@ static void SubmitSetting(const LsBuilding& s, int field, unsigned long long val
     w.value = value;
     w.slot = slot;
     w.count = count;
-    if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+    if (field == SETTINGS_FIELD_UPBRINGING || field == SETTINGS_FIELD_BROADCAST) {
+        if (data && count > 0) memcpy(w.data, data, count * sizeof(float));
+    } else {
+        if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+    }
     Commands_Submit(LS_CMD_SETTING, &w, sizeof(w));
 }
 
 static void RawWrite(BYTE* p, const void* v, int size)
 {
+    DiagLog_BeginSafeSeh();
     __try {
         memcpy(p, v, size);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 void SettingsSync_LockstepDetect()
@@ -582,6 +843,26 @@ void SettingsSync_LockstepDetect()
                 SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
             WriteSlot(b, i, before, n);
         }
+        if (old.hasComposite) {
+            float cur[6];
+            bool ok = false;
+            int field = 0;
+            if (old.category == 0x4A || old.category == 0x4C) {
+                ok = ReadUpbringing(b, cur);
+                field = SETTINGS_FIELD_UPBRINGING;
+            } else if (old.category == 0x25) {
+                ok = ReadBroadcast(b, cur);
+                field = SETTINGS_FIELD_BROADCAST;
+            }
+            if (ok && memcmp(cur, old.composite, sizeof(cur)) != 0) {
+                if (TwoStates_CheckBuildingControlAllowed(b))
+                    SubmitSetting(old, field, 0, 0, cur, 6);
+                if (field == SETTINGS_FIELD_UPBRINGING)
+                    WriteUpbringing(b, old.composite);
+                else
+                    WriteBroadcast(b, old.composite);
+            }
+        }
     }
     CitizenDestinations_LockstepDetect();
 }
@@ -618,7 +899,7 @@ bool SettingsSync_ApplyCommand(const SettingWire& w)
         return ok;
     }
     if (w.field == CITIZEN_DESTINATIONS_FIELD) return CitizenDestinations_ApplyLockstep(w);
-    return FindBuilding(w.pos, w.category) && Apply(w);
+    return Apply(w);
 }
 
 // Applies one received setting; false if its building is not there (yet).
@@ -635,6 +916,32 @@ static bool Apply(const SettingWire& w)
         st.slotKnown[w.slot] = true;
         Logf("republicmp  SETTINGS: storage slot %d of category 0x%X at (%.1f,%.1f) %s", w.slot, w.category,
              w.pos[0], w.pos[2], ok ? "applied" : "NOT applied (different resource list)");
+        return true;
+    }
+    if (w.field == SETTINGS_FIELD_UPBRINGING) {
+        if (w.count != 6) return true;
+        float clean[6];
+        if (!SanitizeFloats6(w.data, clean)) return true;
+        bool ok = WriteUpbringing(b, clean);
+        if (ok) {
+            memcpy(st.composite, clean, sizeof(clean));
+            st.compositeKnown = true;
+        }
+        Logf("republicmp  SETTINGS: upbringing (6 sliders) of category 0x%X at (%.1f,%.1f) %s",
+             w.category, w.pos[0], w.pos[2], ok ? "applied" : "FAILED");
+        return true;
+    }
+    if (w.field == SETTINGS_FIELD_BROADCAST) {
+        if (w.count != 6) return true;
+        float clean[6];
+        if (!SanitizeFloats6(w.data, clean)) return true;
+        bool ok = WriteBroadcast(b, clean);
+        if (ok) {
+            memcpy(st.composite, clean, sizeof(clean));
+            st.compositeKnown = true;
+        }
+        Logf("republicmp  SETTINGS: broadcast (6 sliders) of category 0x%X at (%.1f,%.1f) %s",
+             w.category, w.pos[0], w.pos[2], ok ? "applied" : "FAILED");
         return true;
     }
     if (w.field < 0 || w.field >= kFieldCount || !FieldApplies(kFields[w.field], w.category)) return true;

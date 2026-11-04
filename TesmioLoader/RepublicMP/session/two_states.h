@@ -134,11 +134,20 @@ bool TwoStates_GetCameraPos(float* outX, float* outY, float* outZ);
 bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ);
 bool TwoStates_GetCameraView(float pos[3], float lookAt[3]);
 bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3]);
-void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates);
+void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates, float outPos[3] = nullptr, float outLook[3] = nullptr);
 void TwoStates_CapturePreResyncCamera();
 bool TwoStates_HasCapturedResyncCamera();
 bool TwoStates_JumpCameraTo(float wx, float wz);
 bool TwoStates_JumpCameraToPartner();
+void TwoStates_TickPendingCameraRestore();
+bool TwoStates_GetPendingCameraRestoreForTest(float outPos[3], float outLook[3], int* outRemaining, int* outFrameCount);
+bool TwoStates_TestMinimapRotResetForTest();
+
+// Minimap geometry & camera yaw helpers (shared between HUD minimap & camera view)
+float MinimapCameraYaw(float posX, float posZ, float lookX, float lookZ);
+float MinimapCameraYaw(const float pos[3], const float look[3]);
+bool  MinimapWorldToPx(float worldX, float worldZ, float cx, float cy, float mapSize,
+                       float* outPx, float* outPy, float margin = 2.0f);
 
 // 3D World Overlays, Native Minimap Borders & Toast notifications:
 void TwoStates_SetShow3DBorder(bool on);
@@ -188,6 +197,8 @@ void   TwoStates_ResetEconStatsForTest(BYTE* world);
 void   TwoStates_LedgerAddForTest(BYTE* world, const SovietStatResEntry* row, BYTE* ledgerVec, float mult = 1.0f);
 void   TwoStates_ConstructStepBatchForTest(BYTE* world, BYTE* building, const SovietStatResEntry* entries,
                                            const int* vecIdxs, int count);
+void   TwoStates_ForeignPowerTradeForTest(BYTE* world, BYTE* building, uintptr_t elEnergyResPtr,
+                                          float mwh, float costVal, bool isUsd, bool isExport);
 void   TwoStates_StatRecordClearForTest(BYTE* world, BYTE* rec);
 bool   TwoStates_GetStateEconResEntry(int state, int vecIdx, uintptr_t resourcePtr, float* outTons, float* outValue);
 void   TwoStates_GetStateEconFloat4ForTest(int state, bool loansSlice, float outVals[4]);

@@ -46,6 +46,11 @@ void DiagLog_EndSafeSeh(void)
     if (t_safeSehDepth > 0) --t_safeSehDepth;
 }
 
+int DiagLog_GetSafeSehDepthForTest(void)
+{
+    return t_safeSehDepth;
+}
+
 static void EnsureDiagLock()
 {
     TsmEnsureCriticalSection(&g_diagLockOnce, &g_diagLock);

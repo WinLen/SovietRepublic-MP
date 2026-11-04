@@ -56,7 +56,7 @@ static const WorldRange kViewWords[] = {
     { 0x5B8, 0x18 },  { 0x600, 8 },     { 0x610, 0x150 }, { 0x848, 0x50 },
     { 0x970, 0x78 },  { 0x9F8, 0x60 },  { 0xB78, 0x18 },  { 0xBC0, 0x78 },
     { 0xC70, 0x68 },  { 0xD38, 0xA0 },  { 0xE60, 0x48 },  { 0xEE0, 0x30 },
-    { 0xF18, 0x108 }, { 0x1030, 0x18 }, { 0x1090, 0x18 }, { 0x10C8, 0x18 },
+    { 0xF18, 0xB0 },  { 0xFCC, 0x54 },  { 0x1030, 0x18 }, { 0x1090, 0x18 }, { 0x10C8, 0x18 },
     { 0x1140, 0x18 }, { 0x1158, 8 },    { 0x1168, 0x30 }, { 0x11D8, 0x18 },
     { 0x1238, 0x30 }, { 0x1320, 0x18 }, { 0x1344, 4 },    { 0x137C, 4 },
     { 0x1388, 0x18 },
@@ -237,7 +237,8 @@ void BuildingSwitches_RevertBuildingName(unsigned long long building)
 static bool IsNonPointerBuildingWord(int kind, unsigned offset)
 {
     if (kind != KIND_BUILDING) return false;
-    return (offset >= NAME_AT && offset < NAME_END) ||
+    return offset == BLD_SEARCH_RANGE_OFFSET ||
+           (offset >= NAME_AT && offset < NAME_END) ||
            (offset >= BLD_CITIZEN_FILTER_AT && offset < BLD_CITIZEN_FILTER_END);
 }
 
@@ -245,7 +246,8 @@ static bool IsNeverNoiseWord(const Range& r, unsigned offset)
 {
     if (r.kind == KIND_BUILDING)
         return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET ||
-               offset == BLD_UNIV_STAFF_RATIO_OFFSET || IsNonPointerBuildingWord(r.kind, offset);
+               offset == BLD_UNIV_STAFF_RATIO_OFFSET || offset == BLD_SEARCH_RANGE_OFFSET ||
+               IsNonPointerBuildingWord(r.kind, offset);
     if (r.kind == KIND_SLOT)
         return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) && ((offset % 16) == 0x0C);
     return false;

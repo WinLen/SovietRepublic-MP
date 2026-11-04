@@ -53,6 +53,7 @@
 #include "../lockstep/brush_tools.h"
 #include "../transport/steam_p2p.h"
 #include "../transport/network.h"
+#include "../session/settings_sync.h"
 
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
@@ -203,6 +204,9 @@ static void ResetMockWorldMemory()
     g_mockExeBuffer[0x542900] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
     g_mockExeBuffer[0x542A30] = 0xC3; // ret for MANAGER_RESET_RVA
     g_mockExeBuffer[0x5434C0] = 0xC3; // ret for CANCEL_SEG_RVA
+    g_mockExeBuffer[0x1754D0] = 0xC3; // ret for AUTO_PURCHASE_RVA
+    g_mockExeBuffer[0x1B7AF0] = 0xC3; // ret for PIPELINE_TO_EXPORT_RVA
+    g_mockExeBuffer[0x1B7C00] = 0xC3; // ret for PIPELINE_TO_IMPORT_RVA
 }
 
 // Helper to write a fake MSVC std::vector<T> header { begin, end, cap } at a target address
@@ -265,6 +269,10 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(HUD_QUAD_STAGE_RVA == 0x9BE060);
     TEST_CHECK(HUD_SOLID_TEX_PTR_RVA == 0x9E0B38);
     TEST_CHECK(HUD_PIN_ICON_TEX_PTR_RVA == 0x9E03E8);
+    TEST_CHECK(HUD_MAP_CAMERA_TEX_PTR_RVA == 0x9E07C0);
+    TEST_CHECK_NEAR(MINIMAP_CAMERA_ICON_MAP_FRACTION, 0.15f, 1e-4f);
+    TEST_CHECK_NEAR(MINIMAP_CAMERA_ICON_MAX_PX, 70.0f, 1e-4f);
+    TEST_CHECK(HUD_QUAD_ROT_RVA == 0x9BE308);
     TEST_CHECK(HUD_MIDDLEPOINT_OBJ_RVA == 0x9EACD0);
     TEST_CHECK(HUD_FMT_WSTR_RVA == 0x8B5528);
     TEST_CHECK(HUD_BASIC_PASS_STR_RVA == 0x8D8464);
@@ -276,6 +284,20 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(RVA_IAT_TEXT_DRAW_W == 0x86C880);
     TEST_CHECK(RVA_IAT_HUD_END_DRAW == 0x86C8F8);
     TEST_CHECK(RVA_IAT_HUD_BEGIN_DRAW == 0x86C918);
+    TEST_CHECK(WORLD_STUDIOS_BEGIN_OFFSET == 0xD230u);
+    TEST_CHECK(WORLD_STUDIOS_END_OFFSET == 0xD238u);
+    TEST_CHECK(STUDIO_BUILDING_OFFSET == 0x150u);
+    TEST_CHECK(STUDIO_BROADCAST_SLIDERS_OFFSET == 0x138u);
+    TEST_CHECK(BLD_UPBRINGING_SLIDERS_OFFSET == 0x13A0u);
+    TEST_CHECK(BLD_MIN_LOYALTY_EMPLOYEES_OFFSET == 0x13D8u);
+    TEST_CHECK(BLD_MIN_LOYALTY_CITIZENS_OFFSET == 0x13E0u);
+    TEST_CHECK(BLD_ALERT_GOODS_MISSING_OFFSET == 0x126Du);
+    TEST_CHECK(BLD_ALERT_MAIN_TOGGLE_OFFSET == 0x1270u);
+    TEST_CHECK(BLD_ALERT_FINISHED_OFFSET == 0x0E10u);
+    TEST_CHECK(BLD_POLLUTION_ALERT_TOGGLE_OFFSET == 0x0DFCu);
+    TEST_CHECK(BLD_POLLUTION_ALERT_THRESH_OFFSET == 0x0E3Cu);
+    TEST_CHECK(SETTINGS_FIELD_UPBRINGING == 1002);
+    TEST_CHECK(SETTINGS_FIELD_BROADCAST == 1003);
 
     TEST_CHECK(TwoStates_GetShowMinimapBorders() == true);
     TwoStates_SetShowMinimapBorders(false);
@@ -1759,6 +1781,111 @@ static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
     return true;
 }
 
+static bool SubTest_BuildingRangeAndAutoSearchSettingsSync()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    SettingsSync_LockstepReset();
+    Commands_SetSession(COMMANDS_OFF);
+
+    // 1. Verify SettingsSync_OwnsBuildingWord covers BLD_SEARCH_RANGE_OFFSET (0xFC8),
+    //    BLD_AUTOSEARCH_FLAGS_OFFSET (0x11BC..0x11C3), BLD_AUTOSEARCH_WIRES_OFFSET (0x11C4),
+    //    and BLD_RECONSTRUCT_THRESHOLDS_OFFSET (0xE50..0xE57) for all range-bearing categories:
+    //    Construction Office (0x31), Demolition Office (0x6A), Technical Services (0x36),
+    //    Hospital (0x1C), Fire Station (0x09), Secret Police (0x70), Repair Station (0x6C).
+    const int kCategories[] = { 0x31, 0x6A, 0x36, 0x1C, 0x09, 0x70, 0x6C };
+    for (int cat : kCategories) {
+        std::vector<BYTE> bldType(0x400, 0);
+        std::vector<BYTE> bld(0x1600, 0);
+        *(int*)(bldType.data() + 0x360) = cat;
+        *(BYTE**)(bld.data() + 0x318) = bldType.data();
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_SEARCH_RANGE_OFFSET));
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_AUTOSEARCH_FLAGS_OFFSET));
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_AUTOSEARCH_FLAGS_OFFSET + 4));
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_AUTOSEARCH_WIRES_OFFSET));
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_RECONSTRUCT_THRESHOLDS_OFFSET));
+        TEST_CHECK(SettingsSync_OwnsBuildingWord(bld.data(), BLD_RECONSTRUCT_THRESHOLDS_OFFSET + 4));
+    }
+
+    // 2. Full Lockstep round-trip for working range (+0xFC8) and auto-search flags (+0x11BC..+0x11C4):
+    std::vector<BYTE> typeCo(0x400, 0), typeHosp(0x400, 0), typeFire(0x400, 0);
+    *(int*)(typeCo.data() + 0x360) = 0x31;   // Construction Office
+    *(int*)(typeHosp.data() + 0x360) = 0x1C; // Hospital
+    *(int*)(typeFire.data() + 0x360) = 0x09; // Fire Station
+
+    std::vector<BYTE> bldCo(0x1600, 0), bldHosp(0x1600, 0), bldFire(0x1600, 0);
+    *(int*)bldCo.data() = 701;
+    *(BYTE**)(bldCo.data() + 0x318) = typeCo.data();
+    *(float*)(bldCo.data() + 0x350) = -500.0f;
+    *(float*)(bldCo.data() + 0x354) = 10.0f;
+    *(float*)(bldCo.data() + 0x358) = -200.0f;
+    *(int*)(bldCo.data() + BLD_SEARCH_RANGE_OFFSET) = 1000;
+    *(float*)(bldCo.data() + BLD_RECONSTRUCT_THRESHOLDS_OFFSET) = 0.5f;
+    *(float*)(bldCo.data() + BLD_RECONSTRUCT_THRESHOLDS_OFFSET + 4) = 0.5f;
+
+    *(int*)bldHosp.data() = 702;
+    *(BYTE**)(bldHosp.data() + 0x318) = typeHosp.data();
+    *(float*)(bldHosp.data() + 0x350) = -400.0f;
+    *(float*)(bldHosp.data() + 0x354) = 10.0f;
+    *(float*)(bldHosp.data() + 0x358) = -150.0f;
+    *(int*)(bldHosp.data() + BLD_SEARCH_RANGE_OFFSET) = 1000;
+
+    *(int*)bldFire.data() = 703;
+    *(BYTE**)(bldFire.data() + 0x318) = typeFire.data();
+    *(float*)(bldFire.data() + 0x350) = -300.0f;
+    *(float*)(bldFire.data() + 0x354) = 10.0f;
+    *(float*)(bldFire.data() + 0x358) = -100.0f;
+    *(int*)(bldFire.data() + BLD_SEARCH_RANGE_OFFSET) = 1000;
+
+    BYTE* bldList[3] = { bldCo.data(), bldHosp.data(), bldFire.data() };
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldList;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA) = bldList + 3;
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    Commands_SetSession(COMMANDS_HOST);
+
+    SettingsSync_LockstepBaseline();
+
+    // Player changes working range on Construction Office, Hospital, Fire Station, plus auto-search flags
+    *(int*)(bldCo.data() + BLD_SEARCH_RANGE_OFFSET) = 3000;
+    *(int*)(bldHosp.data() + BLD_SEARCH_RANGE_OFFSET) = 2500;
+    *(int*)(bldFire.data() + BLD_SEARCH_RANGE_OFFSET) = 2200;
+    bldCo[BLD_AUTOSEARCH_FLAGS_OFFSET + 0] = 1; // machine reconstruction disabled
+    bldCo[BLD_AUTOSEARCH_FLAGS_OFFSET + 5] = 1; // roads auto-search disabled
+    bldCo[BLD_AUTOSEARCH_WIRES_OFFSET] = 1;     // wires auto-search disabled
+    *(float*)(bldCo.data() + BLD_RECONSTRUCT_THRESHOLDS_OFFSET) = 0.75f;
+
+    SettingsSync_LockstepDetect();
+
+    // Local memory is reverted until Lockstep command boundary executes
+    TEST_CHECK(*(int*)(bldCo.data() + BLD_SEARCH_RANGE_OFFSET) == 1000);
+    TEST_CHECK(*(int*)(bldHosp.data() + BLD_SEARCH_RANGE_OFFSET) == 1000);
+    TEST_CHECK(*(int*)(bldFire.data() + BLD_SEARCH_RANGE_OFFSET) == 1000);
+    TEST_CHECK(bldCo[BLD_AUTOSEARCH_FLAGS_OFFSET + 0] == 0);
+    TEST_CHECK(bldCo[BLD_AUTOSEARCH_WIRES_OFFSET] == 0);
+
+    // Execute queued LS_CMD_SETTING commands at tick boundary
+    TEST_CHECK(Commands_Due(1));
+    Commands_Boundary(1);
+
+    TEST_CHECK(*(int*)(bldCo.data() + BLD_SEARCH_RANGE_OFFSET) == 3000);
+    TEST_CHECK(*(int*)(bldHosp.data() + BLD_SEARCH_RANGE_OFFSET) == 2500);
+    TEST_CHECK(*(int*)(bldFire.data() + BLD_SEARCH_RANGE_OFFSET) == 2200);
+    TEST_CHECK(bldCo[BLD_AUTOSEARCH_FLAGS_OFFSET + 0] == 1);
+    TEST_CHECK(bldCo[BLD_AUTOSEARCH_FLAGS_OFFSET + 5] == 1);
+    TEST_CHECK(bldCo[BLD_AUTOSEARCH_WIRES_OFFSET] == 1);
+    TEST_CHECK_NEAR(*(float*)(bldCo.data() + BLD_RECONSTRUCT_THRESHOLDS_OFFSET), 0.75f, 1e-4f);
+
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA) = nullptr;
+    SettingsSync_LockstepReset();
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -1771,11 +1898,14 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0x970)); // Storage slots vector
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0x9F8)); // Post-0x9E8 pointer block
     TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0xF18)); // Citizen destinations vector
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(0xFD0)); // Post-0xFC8 vector block
 
     // Legitimate building settings offsets must NOT be excluded
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x114)); // Building custom name
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x500)); // Setting word
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x9E8)); // Water reservoir / heating plant setting word
+    TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(BLD_SEARCH_RANGE_OFFSET)); // Working range / search distance (+0xFC8)
+    TEST_CHECK(SubTest_BuildingRangeAndAutoSearchSettingsSync());
 
     // 1b. RoadSync_ClearCategoryPreview & RoadSync_CancelLocalDrag state cleanup
     {
@@ -3036,6 +3166,25 @@ static bool TestEconStats_BatchConstructionAndDemographics()
     TEST_CHECK_NEAR(tons, 80.0f, 1e-3f);
     TEST_CHECK(TwoStates_GetStateEconResEntry(2, 8, resBricks, &tons, &val));
     TEST_CHECK_NEAR(tons, 25.0f, 1e-3f);
+
+    // Foreign Power Connection (0x1B9A40, category 0x1F) electricity import/export step runs outside
+    // RVA_BLD_SIM_LOOP_HEAD..TAIL (at 0x13A4E4 and 0x13E5EA). Verify that State 2 (Client) importing
+    // electricity in RUB deducts 100% of cost from State 2 and records 100% of R0 ledger in State 2
+    // without charging State 1 (Host). Also verify unmapped 64-bit integer pairs (0x0000000A00000000)
+    // do not falsely classify as pointers or raise access violations.
+    TEST_CHECK(!IsPointerLikeX64(0x0000000A00000000ULL));
+    uintptr_t resElEnergy = (uintptr_t)(resTable.data() + 3 * WORLD_RESOURCE_STRIDE);
+    double rub1BeforePower = TwoStates_GetRubles(1);
+    double rub2BeforePower = TwoStates_GetRubles(2);
+    TwoStates_BeforeStep(world);
+    TwoStates_ForeignPowerTradeForTest(world, bldEast.data(), resElEnergy, 61.1f, 87.47f, false /*RUB*/, false /*Import*/);
+    TwoStates_AfterStep(world);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), rub1BeforePower, 1e-4);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), rub2BeforePower - 87.47, 1e-2);
+    TEST_CHECK(!TwoStates_GetStateEconResEntry(1, 0, resElEnergy, &tons, &val));
+    TEST_CHECK(TwoStates_GetStateEconResEntry(2, 0, resElEnergy, &tons, &val));
+    TEST_CHECK_NEAR(tons, 61.1f, 1e-2f);
+    TEST_CHECK_NEAR(val, 87.47f, 1e-2f);
 
     // Record 3 births ($Citizens_Born at +0x248) and 2 university graduates (+0x2EC) for State 1
     TwoStates_BeginCommand(1);
@@ -4697,7 +4846,147 @@ static bool Test_CameraPersistenceAndFraming()
     TEST_CHECK_NEAR(clientLook[2], resyncLook[2], 1e-2f);
 
     *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = nullptr;
+
+    // 4. Pending Camera Restore: re-apply client target over first 10 frames against engine overwrite, then unlock
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+
+    const float clientSavedTargetPos[3]  = { 4500.0f, 220.0f, -3200.0f };
+    const float clientSavedTargetLook[3] = { 4800.0f,  40.0f, -3500.0f };
+    TwoStates_SetSavedCameraForTest(2, clientSavedTargetPos, clientSavedTargetLook);
+
+    TwoStates_RestoreOrFrameCameraForTest(false);
+
+    float pendPos[3] = {}, pendLook[3] = {};
+    int remFrames = 0, checkFrames = 0;
+    TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(pendPos, pendLook, &remFrames, &checkFrames));
+    TEST_CHECK(remFrames == 10);
+    TEST_CHECK(checkFrames == 0);
+    TEST_CHECK_NEAR(pendPos[0], clientSavedTargetPos[0], 1e-2f);
+
+    // Overwrite with host's camera (simulate engine late initialization overwriting camera)
+    const float hostOverwritePos[3]  = { -5000.0f, 300.0f, 1000.0f };
+    const float hostOverwriteLook[3] = { -5200.0f,  50.0f, 1200.0f };
+
+    for (int frame = 1; frame <= 10; ++frame) {
+        TEST_CHECK(TwoStates_ApplyCameraView(hostOverwritePos, hostOverwriteLook));
+        TwoStates_TickPendingCameraRestore();
+        float curP[3] = {}, curL[3] = {};
+        TEST_CHECK(TwoStates_GetCameraView(curP, curL));
+        TEST_CHECK_NEAR(curP[0], clientSavedTargetPos[0], 1e-2f);
+        TEST_CHECK_NEAR(curL[2], clientSavedTargetLook[2], 1e-2f);
+
+        int curRem = 0, curCnt = 0;
+        TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, &curRem, &curCnt));
+        TEST_CHECK(curRem == 10 - frame);
+        TEST_CHECK(curCnt == frame);
+    }
+
+    // After 10 frames, camera is unlocked for player input
+    const float playerMovedPos[3]  = { 5555.0f, 250.0f, -2222.0f };
+    const float playerMovedLook[3] = { 5800.0f,  30.0f, -2400.0f };
+    TEST_CHECK(TwoStates_ApplyCameraView(playerMovedPos, playerMovedLook));
+
+    TwoStates_TickPendingCameraRestore(); // Frame 11
+    float afterUnlockPos[3] = {}, afterUnlockLook[3] = {};
+    TEST_CHECK(TwoStates_GetCameraView(afterUnlockPos, afterUnlockLook));
+    TEST_CHECK_NEAR(afterUnlockPos[0], playerMovedPos[0], 1e-2f);
+    TEST_CHECK_NEAR(afterUnlockLook[2], playerMovedLook[2], 1e-2f);
+
+    // Advance to frame 60 verification check
+    for (int frame = 12; frame <= 60; ++frame) {
+        TwoStates_TickPendingCameraRestore();
+    }
+    TEST_CHECK(!TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
+
+    // 5. Yaw calculation helper & edge cases
+    const float p0[3] = { 0.0f, 0.0f, 0.0f };
+    const float lNorth[3] = { 0.0f, 0.0f, 100.0f };
+    const float lEast[3]  = { 100.0f, 0.0f, 0.0f };
+    const float lSouth[3] = { 0.0f, 0.0f, -100.0f };
+    const float lWest[3]  = { -100.0f, 0.0f, 0.0f };
+    TEST_CHECK_NEAR(MinimapCameraYaw(p0, lNorth), 0.0f, 1e-4f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(p0, lEast), 1.570796f, 1e-4f);
+    TEST_CHECK_NEAR(fabsf(MinimapCameraYaw(p0, lSouth)), 3.141592f, 1e-4f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(p0, lWest), -1.570796f, 1e-4f);
+
+    // Degenerate vectors
+    TEST_CHECK_NEAR(MinimapCameraYaw(p0, p0), 0.0f, 1e-5f);
+    const float pNaN[3] = { NAN, 0.0f, 0.0f };
+    TEST_CHECK_NEAR(MinimapCameraYaw(pNaN, lNorth), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(nullptr, lNorth), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(p0, nullptr), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(nullptr, nullptr), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(1e38f, 0.0f, -1e38f, 0.0f), -1.570796f, 1e-4f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(3e38f, 0.0f, -3e38f, 0.0f), 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(MinimapCameraYaw(0.0f, 0.0f, 1e20f, 1e20f), 0.785398f, 1e-4f);
+
+    // 6. World-to-minimap pixel coordinate mapping and bounding checks
+    float outPx = 0.0f, outPy = 0.0f;
+    TEST_CHECK(MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK_NEAR(outPx, 100.0f, 1e-2f);
+    TEST_CHECK_NEAR(outPy, 100.0f, 1e-2f);
+
+    // Positive X goes right, Positive Z goes North (up on screen => py decreases)
+    TEST_CHECK(MinimapWorldToPx(5000.0f, 5000.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK_NEAR(outPx, 150.0f, 1e-2f);
+    TEST_CHECK_NEAR(outPy, 50.0f, 1e-2f);
+
+    // Boundary check with default margin 2.0f:
+    // map bounds: cx +/- half = 100 +/- 100 => [0..200]. Visible interior: [2..198].
+    TEST_CHECK(!MinimapWorldToPx(10000.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(-10000.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(25000.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, -50.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, nullptr, &outPy));
+    // Additional adversarial edge cases: NaN cx/cy/margin, negative margin, and margin >= half
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, NAN, 100.0f, 200.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, NAN, 200.0f, &outPx, &outPy));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy, NAN));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy, -5.0f));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy, 100.0f));
+    TEST_CHECK(!MinimapWorldToPx(0.0f, 0.0f, 100.0f, 100.0f, 200.0f, &outPx, &outPy, 150.0f));
+
+    // Output pointer preservation check on failed boundary
+    float untouchedPx = 1234.5f, untouchedPy = 6789.0f;
+    TEST_CHECK(!MinimapWorldToPx(50000.0f, 0.0f, 100.0f, 100.0f, 200.0f, &untouchedPx, &untouchedPy));
+    TEST_CHECK_NEAR(untouchedPx, 1234.5f, 1e-4f);
+    TEST_CHECK_NEAR(untouchedPy, 6789.0f, 1e-4f);
+    TEST_CHECK(!MinimapWorldToPx(1e38f, 0.0f, 100.0f, 100.0f, 200.0f, &untouchedPx, &untouchedPy));
+    TEST_CHECK(!MinimapWorldToPx(-1e38f, 0.0f, 100.0f, 100.0f, 200.0f, &untouchedPx, &untouchedPy));
+
+    // 7. Verify HUD_QUAD_ROT_RVA is reset to 0 after rendering
+    TEST_CHECK(TwoStates_TestMinimapRotResetForTest());
+
+    // 8. Verify pending camera restore reset on BeforeAnyWorldLoad and OnSessionEnded
+    TwoStates_RestoreOrFrameCameraForTest(false);
+    TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
+    TwoStates_BeforeAnyWorldLoad();
+    TEST_CHECK(!TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
+
+    TwoStates_RestoreOrFrameCameraForTest(false);
+    TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
     TwoStates_OnSessionEnded();
+    TEST_CHECK(!TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
+
+    // 9. Verify SEH depth balance across Camera/Cursor access functions
+    int initialSehDepth = DiagLog_GetSafeSehDepthForTest();
+    TEST_CHECK(initialSehDepth == 0);
+
+    float probePos[3] = { 1200.0f, 180.0f, -800.0f };
+    float probeLook[3] = { 1500.0f, 50.0f, -1100.0f };
+    TEST_CHECK(TwoStates_ApplyCameraView(probePos, probeLook));
+    TEST_CHECK(DiagLog_GetSafeSehDepthForTest() == initialSehDepth);
+
+    float readBackPos[3] = {}, readBackLook[3] = {};
+    TEST_CHECK(TwoStates_GetCameraView(readBackPos, readBackLook));
+    TEST_CHECK(DiagLog_GetSafeSehDepthForTest() == initialSehDepth);
+
+    float curWx = 0.0f, curWy = 0.0f, curWz = 0.0f;
+    TwoStates_GetCursorWorldPos(&curWx, &curWy, &curWz);
+    TEST_CHECK(DiagLog_GetSafeSehDepthForTest() == initialSehDepth);
+
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
     std::filesystem::remove_all(camSaveDir, ec);
     return true;
 }
@@ -7969,6 +8258,1183 @@ static bool Test_Stress_M4_Challenger_R3_R10_R11_R17()
 #include "m6_challenger2_stress.cpp"
 
 // ---------------------------------------------------------------------------
+// Test 36: SettingsSync for TV/Radio Broadcast, Prison/Orphanage Upbringing, and Building Alerts
+// ---------------------------------------------------------------------------
+
+static bool SubTest_SettingsSync_OwnsBuildingWord()
+{
+    std::vector<BYTE> typeOrph(0x400, 0), typeSite(0x400, 0), typePoll(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typeSite.data() + 0x360) = 0x01;
+    *(int*)(typePoll.data() + 0x360) = 0x24;
+
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldSite(BUILDING_STRUCT_BYTES, 0), bldPoll(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    *(BYTE**)(bldSite.data() + BLD_TYPE_OFFSET) = typeSite.data();
+    *(BYTE**)(bldPoll.data() + BLD_TYPE_OFFSET) = typePoll.data();
+
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_UPBRINGING_SLIDERS_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_UPBRINGING_SLIDERS_OFFSET + 20));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_MIN_LOYALTY_EMPLOYEES_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_MIN_LOYALTY_CITIZENS_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_ALERT_GOODS_MISSING_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_ALERT_MAIN_TOGGLE_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldSite.data(), BLD_ALERT_FINISHED_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldPoll.data(), BLD_POLLUTION_ALERT_TOGGLE_OFFSET));
+    TEST_CHECK(SettingsSync_OwnsBuildingWord(bldPoll.data(), BLD_POLLUTION_ALERT_THRESH_OFFSET));
+    TEST_CHECK(!SettingsSync_OwnsBuildingWord(bldOrph.data(), BLD_POLLUTION_ALERT_TOGGLE_OFFSET));
+    TEST_CHECK(!SettingsSync_OwnsBuildingWord(bldOrph.data(), 0x500));
+    return true;
+}
+
+static bool SubTest_SettingsSync_UpbringingComposite()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeOrph(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    float posOrph[3] = { 100.0f, 20.0f, 200.0f };
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+
+    std::vector<BYTE*> mockBlds = { bldOrph.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_UPBRINGING;
+    w.category = 0x4A;
+    memcpy(w.pos, posOrph, sizeof(posOrph));
+    w.count = 6;
+    float target[6] = { 0.15f, 0.20f, 0.10f, 0.25f, 0.20f, 0.10f };
+    memcpy(w.data, target, sizeof(target));
+
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    const float* applied = (const float*)(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+    for (int i = 0; i < 6; i++) {
+        TEST_CHECK_NEAR(applied[i], target[i], 1e-5f);
+    }
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_SettingsSync_BroadcastComposite()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeMedia(0x400, 0);
+    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+    float posMedia[3] = { 300.0f, 10.0f, 400.0f };
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    std::vector<BYTE> studioObj(0x180, 0);
+    *(BYTE**)(studioObj.data() + STUDIO_BUILDING_OFFSET) = bldMedia.data();
+    std::vector<BYTE*> mockStudios = { studioObj.data() };
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_BROADCAST;
+    w.category = 0x25;
+    memcpy(w.pos, posMedia, sizeof(posMedia));
+    w.count = 6;
+    float target[6] = { 0.05f, 0.15f, 0.30f, 0.20f, 0.20f, 0.10f };
+    memcpy(w.data, target, sizeof(target));
+
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    const float* applied = (const float*)(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET);
+    for (int i = 0; i < 6; i++) {
+        TEST_CHECK_NEAR(applied[i], target[i], 1e-5f);
+    }
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    mockStudios.clear();
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+    return true;
+}
+
+static bool SubTest_SettingsSync_CompositeSanitizationAndClamping()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeOrph(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    float posOrph[3] = { 100.0f, 20.0f, 200.0f };
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+
+    std::vector<BYTE*> mockBlds = { bldOrph.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    // Out of range clamped
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_UPBRINGING;
+    w.category = 0x4A;
+    memcpy(w.pos, posOrph, sizeof(posOrph));
+    w.count = 6;
+    float clampedFloats[6] = { -0.5f, 1.5f, 0.4f, -10.0f, 10.0f, 0.2f };
+    memcpy(w.data, clampedFloats, sizeof(clampedFloats));
+
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    const float* applied = (const float*)(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+    TEST_CHECK_NEAR(applied[0], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(applied[1], 1.0f, 1e-5f);
+    TEST_CHECK_NEAR(applied[2], 0.4f, 1e-5f);
+    TEST_CHECK_NEAR(applied[3], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(applied[4], 1.0f, 1e-5f);
+    TEST_CHECK_NEAR(applied[5], 0.2f, 1e-5f);
+
+    // NaN rejected
+    float beforeNan[6];
+    memcpy(beforeNan, applied, sizeof(beforeNan));
+    float nanFloats[6] = { 0.1f, NAN, 0.2f, 0.3f, 0.2f, 0.2f };
+    memcpy(w.data, nanFloats, sizeof(nanFloats));
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    for (int i = 0; i < 6; i++) {
+        TEST_CHECK_NEAR(applied[i], beforeNan[i], 1e-5f);
+    }
+
+    // Inf rejected
+    float infFloats[6] = { 0.1f, INFINITY, 0.2f, 0.3f, 0.2f, 0.2f };
+    memcpy(w.data, infFloats, sizeof(infFloats));
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    for (int i = 0; i < 6; i++) {
+        TEST_CHECK_NEAR(applied[i], beforeNan[i], 1e-5f);
+    }
+
+    // Wrong count rejected
+    w.count = 3;
+    float wrongCount[6] = { 0.2f, 0.2f, 0.2f, 0.2f, 0.1f, 0.1f };
+    memcpy(w.data, wrongCount, sizeof(wrongCount));
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    for (int i = 0; i < 6; i++) {
+        TEST_CHECK_NEAR(applied[i], beforeNan[i], 1e-5f);
+    }
+
+    // Negative zero & subnormal normalized to clean +0.0f (sign bit 0)
+    w.count = 6;
+    float negZeroFloats[6] = { -0.0f, 1e-40f, 0.5f, 0.2f, 0.1f, 0.2f };
+    memcpy(w.data, negZeroFloats, sizeof(negZeroFloats));
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    TEST_CHECK_NEAR(applied[0], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(applied[1], 0.0f, 1e-5f);
+    uint32_t bit0 = 0, bit1 = 0;
+    memcpy(&bit0, &applied[0], sizeof(uint32_t));
+    memcpy(&bit1, &applied[1], sizeof(uint32_t));
+    TEST_CHECK(bit0 == 0);
+    TEST_CHECK(bit1 == 0);
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_SettingsSync_ScalarAlertsAndLoyalty()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeOrph(0x400, 0), typeSite(0x400, 0), typePoll(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typeSite.data() + 0x360) = 0x01;
+    *(int*)(typePoll.data() + 0x360) = 0x24;
+
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldSite(BUILDING_STRUCT_BYTES, 0), bldPoll(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    *(BYTE**)(bldSite.data() + BLD_TYPE_OFFSET) = typeSite.data();
+    *(BYTE**)(bldPoll.data() + BLD_TYPE_OFFSET) = typePoll.data();
+
+    float posOrph[3] = { 100.0f, 20.0f, 200.0f };
+    float posSite[3] = { 700.0f, 5.0f, 800.0f };
+    float posPoll[3] = { 500.0f, 15.0f, 600.0f };
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+    memcpy(bldSite.data() + OBJ_POS_OFFSET, posSite, sizeof(posSite));
+    memcpy(bldPoll.data() + OBJ_POS_OFFSET, posPoll, sizeof(posPoll));
+
+    std::vector<BYTE*> mockBlds = { bldOrph.data(), bldSite.data(), bldPoll.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    int fMain = -1, fGoods = -1, fFin = -1, fPolTog = -1, fPolThr = -1, fLoyal = -1;
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x4A;
+        memcpy(tw.pos, posOrph, sizeof(posOrph));
+        tw.field = f;
+        tw.value = 1;
+        bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] == 1) {
+            fMain = f;
+            bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] = 0;
+        }
+        bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] == 1) {
+            fGoods = f;
+            bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] = 0;
+        }
+    }
+    TEST_CHECK(fMain >= 0 && fGoods >= 0);
+
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x01;
+        memcpy(tw.pos, posSite, sizeof(posSite));
+        tw.field = f;
+        tw.value = 1;
+        bldSite[BLD_ALERT_FINISHED_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldSite[BLD_ALERT_FINISHED_OFFSET] == 1) {
+            fFin = f;
+            bldSite[BLD_ALERT_FINISHED_OFFSET] = 0;
+            break;
+        }
+    }
+    TEST_CHECK(fFin >= 0);
+
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x24;
+        memcpy(tw.pos, posPoll, sizeof(posPoll));
+        tw.field = f;
+        tw.value = 1;
+        *(int32_t*)(bldPoll.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) = 0;
+        if (SettingsSync_ApplyCommand(tw) && *(int32_t*)(bldPoll.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) == 1) {
+            fPolTog = f;
+            break;
+        }
+    }
+    TEST_CHECK(fPolTog >= 0);
+
+    float testThresh = 45.5f;
+    unsigned long long rawThresh = 0;
+    memcpy(&rawThresh, &testThresh, sizeof(float));
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x24;
+        memcpy(tw.pos, posPoll, sizeof(posPoll));
+        tw.field = f;
+        tw.value = rawThresh;
+        *(float*)(bldPoll.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) = 0.0f;
+        if (SettingsSync_ApplyCommand(tw) && *(float*)(bldPoll.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) == 45.5f) {
+            fPolThr = f;
+            break;
+        }
+    }
+    TEST_CHECK(fPolThr >= 0);
+
+    float testLoyal = 0.65f;
+    unsigned long long rawLoyal = 0;
+    memcpy(&rawLoyal, &testLoyal, sizeof(float));
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x4A;
+        memcpy(tw.pos, posOrph, sizeof(posOrph));
+        tw.field = f;
+        tw.value = rawLoyal;
+        *(float*)(bldOrph.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.0f;
+        if (SettingsSync_ApplyCommand(tw) && *(float*)(bldOrph.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) == 0.65f) {
+            fLoyal = f;
+            break;
+        }
+    }
+    TEST_CHECK(fLoyal >= 0);
+
+    SettingWire w = {};
+    w.category = 0x4A;
+    memcpy(w.pos, posOrph, sizeof(posOrph));
+    w.field = fMain;
+    w.value = 2;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    TEST_CHECK(bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] == 2);
+
+    w.field = fGoods;
+    w.value = 1;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    TEST_CHECK(bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] == 1);
+
+    w.category = 0x01;
+    memcpy(w.pos, posSite, sizeof(posSite));
+    w.field = fFin;
+    w.value = 1;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    TEST_CHECK(bldSite[BLD_ALERT_FINISHED_OFFSET] == 1);
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_SettingsSync_EdgeCases()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeMedia(0x400, 0);
+    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+    float posMedia[3] = { 300.0f, 10.0f, 400.0f };
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_UPBRINGING;
+    w.category = 0x4A;
+    w.pos[0] = 9999.0f; w.pos[1] = 0.0f; w.pos[2] = 9999.0f;
+    w.count = 6;
+    float data[6] = { 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.5f };
+    memcpy(w.data, data, sizeof(data));
+    TEST_CHECK(!SettingsSync_ApplyCommand(w));
+
+    w.pos[0] = posMedia[0]; w.pos[1] = posMedia[1]; w.pos[2] = posMedia[2];
+    w.category = 0x4A;
+    TEST_CHECK(!SettingsSync_ApplyCommand(w));
+
+    w.field = SETTINGS_FIELD_BROADCAST;
+    w.category = 0x25;
+    std::vector<BYTE*> emptyStudios;
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, emptyStudios);
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_SettingsSync_LoyaltySerializationAndBoundaries()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeBld(0x400, 0);
+    *(int*)(typeBld.data() + 0x360) = 0x4A;
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bld.data() + BLD_TYPE_OFFSET) = typeBld.data();
+    float pos[3] = { 250.0f, 15.0f, 350.0f };
+    memcpy(bld.data() + OBJ_POS_OFFSET, pos, sizeof(pos));
+
+    std::vector<BYTE*> mockBlds = { bld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    // Locate field indices for employee loyalty and citizen loyalty
+    int fEmp = -1;
+    int fCit = -1;
+    for (int f = 0; f < 32; ++f) {
+        float probe = 0.77f;
+        unsigned long long rawProbe = 0;
+        memcpy(&rawProbe, &probe, sizeof(float));
+
+        SettingWire tw = {};
+        tw.category = 0x4A;
+        memcpy(tw.pos, pos, sizeof(pos));
+        tw.field = f;
+        tw.value = rawProbe;
+
+        *(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.0f;
+        *(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) = 0.0f;
+
+        if (SettingsSync_ApplyCommand(tw)) {
+            if (fabsf(*(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) - 0.77f) < 1e-4f) {
+                fEmp = f;
+            }
+            if (fabsf(*(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) - 0.77f) < 1e-4f) {
+                fCit = f;
+            }
+        }
+    }
+    TEST_CHECK(fEmp >= 0);
+    TEST_CHECK(fCit >= 0);
+    TEST_CHECK(fEmp != fCit);
+
+    // 1. Test normal values serialization & deserialization round-trip
+    const float kValidValues[] = { 0.0f, 0.15f, 0.33f, 0.50f, 0.85f, 1.0f };
+    for (float val : kValidValues) {
+        unsigned long long rawVal = 0;
+        memcpy(&rawVal, &val, sizeof(float));
+
+        SettingWire w = {};
+        w.category = 0x4A;
+        memcpy(w.pos, pos, sizeof(pos));
+        w.field = fEmp;
+        w.value = rawVal;
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+        float appliedEmp = *(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET);
+        TEST_CHECK_NEAR(appliedEmp, val, 1e-5f);
+
+        w.field = fCit;
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+        float appliedCit = *(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET);
+        TEST_CHECK_NEAR(appliedCit, val, 1e-5f);
+    }
+
+    // 2. Test boundary handling & clamping: negative, > 1.0f, NaN, +Inf, -Inf, -0.0f
+    struct BoundaryCase {
+        float input;
+        float expected;
+    };
+    BoundaryCase cases[] = {
+        { -0.0f, 0.0f },
+        { -0.5f, 0.0f },
+        { -100.0f, 0.0f },
+        { 1.05f, 1.0f },
+        { 2.5f, 1.0f },
+        { 100.0f, 1.0f },
+        { NAN, 0.0f },
+        { (float)INFINITY, 1.0f },
+        { (float)(-INFINITY), 0.0f }
+    };
+    for (const auto& bc : cases) {
+        unsigned long long rawVal = 0;
+        memcpy(&rawVal, &bc.input, sizeof(float));
+
+        SettingWire w = {};
+        w.category = 0x4A;
+        memcpy(w.pos, pos, sizeof(pos));
+        w.field = fEmp;
+        w.value = rawVal;
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+        float appliedEmp = *(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET);
+        TEST_CHECK_NEAR(appliedEmp, bc.expected, 1e-5f);
+        if (bc.expected == 0.0f) {
+            uint32_t empBits = 0;
+            memcpy(&empBits, &appliedEmp, sizeof(uint32_t));
+            TEST_CHECK(empBits == 0); // Must be clean +0.0f with sign bit cleared
+        }
+
+        w.field = fCit;
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+        float appliedCit = *(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET);
+        TEST_CHECK_NEAR(appliedCit, bc.expected, 1e-5f);
+        if (bc.expected == 0.0f) {
+            uint32_t citBits = 0;
+            memcpy(&citBits, &appliedCit, sizeof(uint32_t));
+            TEST_CHECK(citBits == 0); // Must be clean +0.0f with sign bit cleared
+        }
+    }
+
+    // 3. Engine buildings_game.bin binary serialization/deserialization simulation
+    // Building::Save (RVA 0x1EDC40) packs BLD_MIN_LOYALTY_EMPLOYEES_OFFSET into chunk 2 offset +0x68
+    // and BLD_MIN_LOYALTY_CITIZENS_OFFSET into chunk 2 offset +0xA0.
+    // Building::Load (RVA 0x1F0BE0) reads 0x190 bytes for version >= 109 and unpacks back.
+    const size_t kChunk2Size = 0x190;
+    const size_t kSaveEmpLoyaltyOffset = 0x68;
+    const size_t kSaveCitLoyaltyOffset = 0xA0;
+    std::vector<BYTE> saveChunk(kChunk2Size, 0);
+
+    float sourceEmpLoyalty = 0.72f;
+    float sourceCitLoyalty = 0.48f;
+    *(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = sourceEmpLoyalty;
+    *(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) = sourceCitLoyalty;
+
+    memcpy(saveChunk.data() + kSaveEmpLoyaltyOffset, bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET, sizeof(float));
+    memcpy(saveChunk.data() + kSaveCitLoyaltyOffset, bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET, sizeof(float));
+
+    *(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.0f;
+    *(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) = 0.0f;
+
+    memcpy(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET, saveChunk.data() + kSaveEmpLoyaltyOffset, sizeof(float));
+    memcpy(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET, saveChunk.data() + kSaveCitLoyaltyOffset, sizeof(float));
+
+    TEST_CHECK_NEAR(*(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET), sourceEmpLoyalty, 1e-6f);
+    TEST_CHECK_NEAR(*(float*)(bld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET), sourceCitLoyalty, 1e-6f);
+
+    // 4. Demolished / Corrupted building pointers resilience
+    BYTE* badBld = (BYTE*)0xBAADF00DDEADBEEFull;
+    std::vector<BYTE*> corruptedBlds = { badBld, nullptr, bld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, corruptedBlds);
+
+    SettingWire wBad = {};
+    wBad.category = 0x4A;
+    memcpy(wBad.pos, pos, sizeof(pos));
+    wBad.field = fEmp;
+    float testVal = 0.62f;
+    memcpy(&wBad.value, &testVal, sizeof(float));
+
+    // Applying must safely skip invalid pointers without throwing SEH or crashing,
+    // find the valid building, and apply the setting cleanly.
+    TEST_CHECK(SettingsSync_ApplyCommand(wBad));
+    TEST_CHECK_NEAR(*(float*)(bld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET), 0.62f, 1e-5f);
+
+    // Querying a non-existent building coordinates with corrupted vector entries must return false cleanly
+    float nonExistentPos[3] = { 9999.0f, 0.0f, 9999.0f };
+    memcpy(wBad.pos, nonExistentPos, sizeof(nonExistentPos));
+    TEST_CHECK(!SettingsSync_ApplyCommand(wBad));
+
+    // 5. Legacy save version (< 109) compatibility simulation
+    // In SOVIET64.exe (0x1F0D28), save version is checked against version 109 (0x6D).
+    // Pre-109 legacy saves did not contain Chunk 2; the engine skipped reading Chunk 2
+    // and left fields at their constructor defaults (0.0f, i.e. unrestricted).
+    std::vector<BYTE> legacyBld(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(legacyBld.data() + BLD_TYPE_OFFSET) = typeBld.data();
+    *(float*)(legacyBld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.0f;
+    *(float*)(legacyBld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) = 0.0f;
+
+    TEST_CHECK(*(float*)(legacyBld.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) == 0.0f);
+    TEST_CHECK(*(float*)(legacyBld.data() + BLD_MIN_LOYALTY_CITIZENS_OFFSET) == 0.0f);
+
+    // 6. Pollution alert threshold & water quality float clamping & negative-zero checks
+    std::vector<BYTE> pollBld(BUILDING_STRUCT_BYTES, 0), waterBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> typePoll(0x400, 0), typeWater(0x400, 0);
+    *(int*)(typePoll.data() + 0x360) = 0x24;
+    *(int*)(typeWater.data() + 0x360) = 0x61;
+    *(BYTE**)(pollBld.data() + BLD_TYPE_OFFSET) = typePoll.data();
+    *(BYTE**)(waterBld.data() + BLD_TYPE_OFFSET) = typeWater.data();
+    float pollPos[3] = { 400.0f, 10.0f, 400.0f };
+    float waterPos[3] = { 500.0f, 10.0f, 500.0f };
+    memcpy(pollBld.data() + OBJ_POS_OFFSET, pollPos, sizeof(pollPos));
+    memcpy(waterBld.data() + OBJ_POS_OFFSET, waterPos, sizeof(waterPos));
+    std::vector<BYTE*> extraBlds = { pollBld.data(), waterBld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, extraBlds);
+
+    int fPoll = -1, fWater = -1;
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x24;
+        memcpy(tw.pos, pollPos, sizeof(pollPos));
+        tw.field = f;
+        float probeVal = 55.0f;
+        memcpy(&tw.value, &probeVal, sizeof(float));
+        *(float*)(pollBld.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) = 0.0f;
+        if (SettingsSync_ApplyCommand(tw) && *(float*)(pollBld.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) == 55.0f) {
+            fPoll = f;
+            break;
+        }
+    }
+    for (int f = 0; f < 32; f++) {
+        SettingWire tw = {};
+        tw.category = 0x61;
+        memcpy(tw.pos, waterPos, sizeof(waterPos));
+        tw.field = f;
+        float probeVal = 0.75f;
+        memcpy(&tw.value, &probeVal, sizeof(float));
+        *(float*)(waterBld.data() + 0x1340) = 0.0f;
+        if (SettingsSync_ApplyCommand(tw) && *(float*)(waterBld.data() + 0x1340) == 0.75f) {
+            fWater = f;
+            break;
+        }
+    }
+    TEST_CHECK(fPoll >= 0);
+    TEST_CHECK(fWater >= 0);
+
+    // Negative zero & boundary clamping on pollution & water quality
+    SettingWire wPoll = {};
+    wPoll.category = 0x24;
+    memcpy(wPoll.pos, pollPos, sizeof(pollPos));
+    wPoll.field = fPoll;
+    float badPoll = -0.0f;
+    memcpy(&wPoll.value, &badPoll, sizeof(float));
+    TEST_CHECK(SettingsSync_ApplyCommand(wPoll));
+    float polRes = *(float*)(pollBld.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET);
+    TEST_CHECK_NEAR(polRes, 0.0f, 1e-5f);
+    uint32_t polBits = 0;
+    memcpy(&polBits, &polRes, sizeof(uint32_t));
+    TEST_CHECK(polBits == 0); // Sign bit cleared
+
+    badPoll = 250.0f; // Exceeds 100.0f cap
+    memcpy(&wPoll.value, &badPoll, sizeof(float));
+    TEST_CHECK(SettingsSync_ApplyCommand(wPoll));
+    TEST_CHECK_NEAR(*(float*)(pollBld.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET), 100.0f, 1e-5f);
+
+    SettingWire wWater = {};
+    wWater.category = 0x61;
+    memcpy(wWater.pos, waterPos, sizeof(waterPos));
+    wWater.field = fWater;
+    float badWater = -0.0f;
+    memcpy(&wWater.value, &badWater, sizeof(float));
+    TEST_CHECK(SettingsSync_ApplyCommand(wWater));
+    float watRes = *(float*)(waterBld.data() + 0x1340);
+    TEST_CHECK_NEAR(watRes, 0.0f, 1e-5f);
+    uint32_t watBits = 0;
+    memcpy(&watBits, &watRes, sizeof(uint32_t));
+    TEST_CHECK(watBits == 0); // Sign bit cleared
+
+    badWater = 1.5f; // Exceeds 1.0f cap
+    memcpy(&wWater.value, &badWater, sizeof(float));
+    TEST_CHECK(SettingsSync_ApplyCommand(wWater));
+    TEST_CHECK_NEAR(*(float*)(waterBld.data() + 0x1340), 1.0f, 1e-5f);
+
+    // 7. CopyBuildings resilience during Lockstep Baseline & Detect:
+    // Place a corrupted pointer between valid bld1 and bld2.
+    // Verify that SettingsSync_LockstepBaseline skips the bad pointer,
+    // continues scanning, tracks bld2, and detects loyalty modifications on bld2.
+    std::vector<BYTE> bld1(BUILDING_STRUCT_BYTES, 0), bld2(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bld1.data() + BLD_TYPE_OFFSET) = typeBld.data();
+    *(BYTE**)(bld2.data() + BLD_TYPE_OFFSET) = typeBld.data();
+    float pos1[3] = { -100.0f, 10.0f, -100.0f };
+    float pos2[3] = { -200.0f, 10.0f, -200.0f };
+    memcpy(bld1.data() + OBJ_POS_OFFSET, pos1, sizeof(pos1));
+    memcpy(bld2.data() + OBJ_POS_OFFSET, pos2, sizeof(pos2));
+    *(float*)(bld1.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.20f;
+    *(float*)(bld2.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.30f;
+
+    std::vector<BYTE*> mixedBlds = { bld1.data(), badBld, nullptr, bld2.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mixedBlds);
+
+    double testRub[2] = { 500000.0, 500000.0 };
+    double testUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, testRub, testUsd);
+    Commands_SetSession(COMMANDS_HOST);
+    SettingsSync_LockstepBaseline();
+
+    // Modify loyalty on bld2 (located after bad pointer)
+    *(float*)(bld2.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET) = 0.85f;
+    SettingsSync_LockstepDetect();
+
+    // Local memory should be reverted to baseline (0.30f) until tick boundary
+    TEST_CHECK_NEAR(*(float*)(bld2.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET), 0.30f, 1e-5f);
+
+    // Execute boundary
+    TEST_CHECK(Commands_Due(1));
+    Commands_Boundary(1);
+
+    // After command boundary, bld2 must have 0.85f applied
+    TEST_CHECK_NEAR(*(float*)(bld2.data() + BLD_MIN_LOYALTY_EMPLOYEES_OFFSET), 0.85f, 1e-5f);
+
+    SettingsSync_LockstepReset();
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool Test_SettingsSync_MediaPrisonOrphanageAlerts()
+{
+    printf("    [SubTest 1: SettingsSync_OwnsBuildingWord boundaries] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_OwnsBuildingWord()) return false;
+    printf("    [SubTest 2: Upbringing Composite 6-Float Sync] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_UpbringingComposite()) return false;
+    printf("    [SubTest 3: Broadcast Composite 6-Float Sync] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_BroadcastComposite()) return false;
+    printf("    [SubTest 4: Composite Sanitization & Clamping] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_CompositeSanitizationAndClamping()) return false;
+    printf("    [SubTest 5: Scalar Alerts & Employee Loyalty Sync] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_ScalarAlertsAndLoyalty()) return false;
+    printf("    [SubTest 6: Loyalty Serialization & Boundary Clamping] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_LoyaltySerializationAndBoundaries()) return false;
+    printf("    [SubTest 7: SettingsSync Edge Cases & Rejections] ...\n"); fflush(stdout);
+    if (!SubTest_SettingsSync_EdgeCases()) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Challenger Gen6: Empirical Stress Testing & Adversarial Verification
+// ---------------------------------------------------------------------------
+
+static bool SubTest_Gen6_FloatFuzzingUpbringingAndBroadcast()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeOrph(0x400, 0), typePrison(0x400, 0), typeMedia(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typePrison.data() + 0x360) = 0x4C;
+    *(int*)(typeMedia.data() + 0x360) = 0x25;
+
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldPrison(BUILDING_STRUCT_BYTES, 0), bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    *(BYTE**)(bldPrison.data() + BLD_TYPE_OFFSET) = typePrison.data();
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+
+    float posOrph[3] = { 100.0f, 20.0f, 200.0f };
+    float posPrison[3] = { 200.0f, 20.0f, 300.0f };
+    float posMedia[3] = { 300.0f, 20.0f, 400.0f };
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+    memcpy(bldPrison.data() + OBJ_POS_OFFSET, posPrison, sizeof(posPrison));
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldOrph.data(), bldPrison.data(), bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    std::vector<BYTE> studioObj(0x180, 0);
+    *(BYTE**)(studioObj.data() + STUDIO_BUILDING_OFFSET) = bldMedia.data();
+    std::vector<BYTE*> mockStudios = { studioObj.data() };
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+
+    float baseUpbringing[6] = { 0.2f, 0.2f, 0.2f, 0.2f, 0.1f, 0.1f };
+    memcpy(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET, baseUpbringing, sizeof(baseUpbringing));
+    memcpy(bldPrison.data() + BLD_UPBRINGING_SLIDERS_OFFSET, baseUpbringing, sizeof(baseUpbringing));
+    memcpy(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET, baseUpbringing, sizeof(baseUpbringing));
+
+    // 1. Fuzzing with quiet NaN, signaling NaN, -NaN across all 6 positions
+    float qnan = std::numeric_limits<float>::quiet_NaN();
+    float snan = std::numeric_limits<float>::signaling_NaN();
+    float negNan = -qnan;
+    const float nanVariants[] = { qnan, snan, negNan };
+
+    for (float badNan : nanVariants) {
+        for (int posIdx = 0; posIdx < 6; ++posIdx) {
+            SettingWire w = {};
+            w.field = SETTINGS_FIELD_UPBRINGING;
+            w.category = 0x4A;
+            memcpy(w.pos, posOrph, sizeof(posOrph));
+            w.count = 6;
+            for (int i = 0; i < 6; ++i) w.data[i] = (i == posIdx) ? badNan : 0.3f;
+
+            TEST_CHECK(SettingsSync_ApplyCommand(w));
+            const float* mem = (const float*)(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+            for (int i = 0; i < 6; ++i) {
+                TEST_CHECK_NEAR(mem[i], baseUpbringing[i], 1e-5f);
+            }
+
+            w.field = SETTINGS_FIELD_BROADCAST;
+            w.category = 0x25;
+            memcpy(w.pos, posMedia, sizeof(posMedia));
+            TEST_CHECK(SettingsSync_ApplyCommand(w));
+            const float* smem = (const float*)(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET);
+            for (int i = 0; i < 6; ++i) {
+                TEST_CHECK_NEAR(smem[i], baseUpbringing[i], 1e-5f);
+            }
+        }
+    }
+
+    // 2. Fuzzing with +Infinity and -Infinity across all positions
+    const float infVariants[] = { (float)INFINITY, (float)(-INFINITY) };
+    for (float badInf : infVariants) {
+        for (int posIdx = 0; posIdx < 6; ++posIdx) {
+            SettingWire w = {};
+            w.field = SETTINGS_FIELD_UPBRINGING;
+            w.category = 0x4C; // Prison
+            memcpy(w.pos, posPrison, sizeof(posPrison));
+            w.count = 6;
+            for (int i = 0; i < 6; ++i) w.data[i] = (i == posIdx) ? badInf : 0.25f;
+
+            TEST_CHECK(SettingsSync_ApplyCommand(w));
+            const float* mem = (const float*)(bldPrison.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+            for (int i = 0; i < 6; ++i) {
+                TEST_CHECK_NEAR(mem[i], baseUpbringing[i], 1e-5f);
+            }
+        }
+    }
+
+    // 3. Fuzzing with denormals / subnormals
+    float denormMin = std::numeric_limits<float>::denorm_min();
+    float negDenorm = -denormMin;
+    SettingWire wDenorm = {};
+    wDenorm.field = SETTINGS_FIELD_UPBRINGING;
+    wDenorm.category = 0x4A;
+    memcpy(wDenorm.pos, posOrph, sizeof(posOrph));
+    wDenorm.count = 6;
+    wDenorm.data[0] = denormMin;
+    wDenorm.data[1] = negDenorm;
+    wDenorm.data[2] = 0.5f;
+    wDenorm.data[3] = 0.0f;
+    wDenorm.data[4] = 1.0f;
+    wDenorm.data[5] = denormMin * 2.0f;
+
+    TEST_CHECK(SettingsSync_ApplyCommand(wDenorm));
+    const float* appliedDenorm = (const float*)(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+    TEST_CHECK_NEAR(appliedDenorm[0], denormMin, 1e-20f);
+    TEST_CHECK_NEAR(appliedDenorm[1], 0.0f, 1e-5f); // Negative denorm clamped to 0.0f
+    TEST_CHECK_NEAR(appliedDenorm[2], 0.5f, 1e-5f);
+    TEST_CHECK_NEAR(appliedDenorm[3], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedDenorm[4], 1.0f, 1e-5f);
+
+    // 4. Extreme out-of-range clamping (-1000.0f, +1000.0f, etc.)
+    SettingWire wClamp = {};
+    wClamp.field = SETTINGS_FIELD_BROADCAST;
+    wClamp.category = 0x25;
+    memcpy(wClamp.pos, posMedia, sizeof(posMedia));
+    wClamp.count = 6;
+    float extremeFloats[6] = { -1000.0f, 1000.0f, -1e20f, 1e20f, -0.00001f, 1.00001f };
+    memcpy(wClamp.data, extremeFloats, sizeof(extremeFloats));
+
+    TEST_CHECK(SettingsSync_ApplyCommand(wClamp));
+    const float* appliedClamp = (const float*)(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET);
+    TEST_CHECK_NEAR(appliedClamp[0], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedClamp[1], 1.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedClamp[2], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedClamp[3], 1.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedClamp[4], 0.0f, 1e-5f);
+    TEST_CHECK_NEAR(appliedClamp[5], 1.0f, 1e-5f);
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    mockStudios.clear();
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+    return true;
+}
+
+static bool SubTest_Gen6_MalformedPacketPayloads()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeOrph(0x400, 0);
+    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+    float posOrph[3] = { 100.0f, 20.0f, 200.0f };
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+
+    std::vector<BYTE*> mockBlds = { bldOrph.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    float baseUpbringing[6] = { 0.3f, 0.3f, 0.1f, 0.1f, 0.1f, 0.1f };
+    memcpy(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET, baseUpbringing, sizeof(baseUpbringing));
+
+    // 1. Invalid counts: count != 6
+    const int badCounts[] = { -9999, -1, 0, 1, 2, 3, 4, 5, 7, 8, 16, 64, 1000, 0x7FFFFFFF };
+    for (int count : badCounts) {
+        SettingWire w = {};
+        w.field = SETTINGS_FIELD_UPBRINGING;
+        w.category = 0x4A;
+        memcpy(w.pos, posOrph, sizeof(posOrph));
+        w.count = count;
+        for (int i = 0; i < 6; ++i) w.data[i] = 0.5f;
+
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+        const float* mem = (const float*)(bldOrph.data() + BLD_UPBRINGING_SLIDERS_OFFSET);
+        for (int i = 0; i < 6; ++i) {
+            TEST_CHECK_NEAR(mem[i], baseUpbringing[i], 1e-5f);
+        }
+    }
+
+    // 2. Out of bounds field IDs
+    const int badFields[] = { -100, -1, 999, 1004, 1005, 50000, 0x7FFFFFFF };
+    for (int field : badFields) {
+        SettingWire w = {};
+        w.field = field;
+        w.category = 0x4A;
+        memcpy(w.pos, posOrph, sizeof(posOrph));
+        w.value = 1;
+        TEST_CHECK(SettingsSync_ApplyCommand(w));
+    }
+
+    // 3. Corrupted position coordinates: NaN, Inf, extreme
+    const float badCoords[4][3] = {
+        { std::numeric_limits<float>::quiet_NaN(), 20.0f, 200.0f },
+        { 100.0f, (float)INFINITY, 200.0f },
+        { 100.0f, 20.0f, (float)(-INFINITY) },
+        { 1e30f, 1e30f, 1e30f }
+    };
+    for (const auto& coords : badCoords) {
+        SettingWire w = {};
+        w.field = SETTINGS_FIELD_UPBRINGING;
+        w.category = 0x4A;
+        memcpy(w.pos, coords, sizeof(coords));
+        w.count = 6;
+        for (int i = 0; i < 6; ++i) w.data[i] = 0.5f;
+
+        TEST_CHECK(!SettingsSync_ApplyCommand(w));
+    }
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_Gen6_CheckboxBoundariesAndAdjacentIntegrity()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeSite(0x400, 0), typePoll(0x400, 0), typeOrph(0x400, 0);
+    *(int*)(typeSite.data() + 0x360) = 0x01; // Construction site
+    *(int*)(typePoll.data() + 0x360) = 0x24; // Water treatment
+    *(int*)(typeOrph.data() + 0x360) = 0x4A; // Orphanage
+
+    std::vector<BYTE> bldSite(BUILDING_STRUCT_BYTES, 0xCC);
+    std::vector<BYTE> bldPoll(BUILDING_STRUCT_BYTES, 0xCC);
+    std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0xCC);
+
+    *(BYTE**)(bldSite.data() + BLD_TYPE_OFFSET) = typeSite.data();
+    *(BYTE**)(bldPoll.data() + BLD_TYPE_OFFSET) = typePoll.data();
+    *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
+
+    float posSite[3] = { 100.0f, 10.0f, 100.0f };
+    float posPoll[3] = { 200.0f, 10.0f, 200.0f };
+    float posOrph[3] = { 300.0f, 10.0f, 300.0f };
+    memcpy(bldSite.data() + OBJ_POS_OFFSET, posSite, sizeof(posSite));
+    memcpy(bldPoll.data() + OBJ_POS_OFFSET, posPoll, sizeof(posPoll));
+    memcpy(bldOrph.data() + OBJ_POS_OFFSET, posOrph, sizeof(posOrph));
+
+    std::vector<BYTE*> mockBlds = { bldSite.data(), bldPoll.data(), bldOrph.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    int fMain = -1, fGoods = -1, fFin = -1, fPolTog = -1, fPolThr = -1;
+    for (int f = 0; f < 32; ++f) {
+        SettingWire tw = {};
+        tw.category = 0x4A;
+        memcpy(tw.pos, posOrph, sizeof(posOrph));
+        tw.field = f;
+        tw.value = 0x55;
+        bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] == 0x55) fMain = f;
+
+        bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] == 0x55) fGoods = f;
+    }
+    for (int f = 0; f < 32; ++f) {
+        SettingWire tw = {};
+        tw.category = 0x01;
+        memcpy(tw.pos, posSite, sizeof(posSite));
+        tw.field = f;
+        tw.value = 0x55;
+        bldSite[BLD_ALERT_FINISHED_OFFSET] = 0;
+        if (SettingsSync_ApplyCommand(tw) && bldSite[BLD_ALERT_FINISHED_OFFSET] == 0x55) fFin = f;
+    }
+    for (int f = 0; f < 32; ++f) {
+        SettingWire tw = {};
+        tw.category = 0x24;
+        memcpy(tw.pos, posPoll, sizeof(posPoll));
+        tw.field = f;
+        tw.value = 0x55;
+        *(int32_t*)(bldPoll.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) = 0;
+        if (SettingsSync_ApplyCommand(tw) && *(int32_t*)(bldPoll.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) == 0x55) fPolTog = f;
+
+        float pval = 77.0f;
+        unsigned long long rval = 0;
+        memcpy(&rval, &pval, sizeof(float));
+        tw.value = rval;
+        *(float*)(bldPoll.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) = 0.0f;
+        if (SettingsSync_ApplyCommand(tw) && fabsf(*(float*)(bldPoll.data() + BLD_POLLUTION_ALERT_THRESH_OFFSET) - 77.0f) < 1e-4f) fPolThr = f;
+    }
+
+    TEST_CHECK(fMain >= 0 && fGoods >= 0 && fFin >= 0 && fPolTog >= 0 && fPolThr >= 0);
+
+    // 1. Verify 1-byte main alert toggle: only offset +0x1270 modified, +0x126F and +0x1271 untouched
+    bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET - 1] = 0xAA;
+    bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] = 0x00;
+    bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET + 1] = 0xBB;
+
+    SettingWire wMain = {};
+    wMain.category = 0x4A;
+    memcpy(wMain.pos, posOrph, sizeof(posOrph));
+    wMain.field = fMain;
+    wMain.value = 0x12345678; // Upper bytes must be truncated for 1-byte field
+    TEST_CHECK(SettingsSync_ApplyCommand(wMain));
+    TEST_CHECK(bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET] == 0x78);
+    TEST_CHECK(bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET - 1] == 0xAA);
+    TEST_CHECK(bldOrph[BLD_ALERT_MAIN_TOGGLE_OFFSET + 1] == 0xBB);
+
+    // 2. Verify 1-byte goods missing: only offset +0x126D modified
+    bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET - 1] = 0x11;
+    bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] = 0x00;
+    bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET + 1] = 0x22;
+
+    SettingWire wGoods = {};
+    wGoods.category = 0x4A;
+    memcpy(wGoods.pos, posOrph, sizeof(posOrph));
+    wGoods.field = fGoods;
+    wGoods.value = 0x99;
+    TEST_CHECK(SettingsSync_ApplyCommand(wGoods));
+    TEST_CHECK(bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET] == 0x99);
+    TEST_CHECK(bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET - 1] == 0x11);
+    TEST_CHECK(bldOrph[BLD_ALERT_GOODS_MISSING_OFFSET + 1] == 0x22);
+
+    // 3. Verify 1-byte construction finished alert: only offset +0x0E10 modified
+    bldSite[BLD_ALERT_FINISHED_OFFSET - 1] = 0x33;
+    bldSite[BLD_ALERT_FINISHED_OFFSET] = 0x00;
+    bldSite[BLD_ALERT_FINISHED_OFFSET + 1] = 0x44;
+
+    SettingWire wFin = {};
+    wFin.category = 0x01;
+    memcpy(wFin.pos, posSite, sizeof(posSite));
+    wFin.field = fFin;
+    wFin.value = 1;
+    TEST_CHECK(SettingsSync_ApplyCommand(wFin));
+    TEST_CHECK(bldSite[BLD_ALERT_FINISHED_OFFSET] == 1);
+    TEST_CHECK(bldSite[BLD_ALERT_FINISHED_OFFSET - 1] == 0x33);
+    TEST_CHECK(bldSite[BLD_ALERT_FINISHED_OFFSET + 1] == 0x44);
+
+    // 4. Verify 4-byte pollution alert toggle: offsets +0x0DFC..+0x0DFF modified, adjacent preserved
+    bldPoll[BLD_POLLUTION_ALERT_TOGGLE_OFFSET - 1] = 0x55;
+    bldPoll[BLD_POLLUTION_ALERT_TOGGLE_OFFSET + 4] = 0x66;
+    SettingWire wPolTog = {};
+    wPolTog.category = 0x24;
+    memcpy(wPolTog.pos, posPoll, sizeof(posPoll));
+    wPolTog.field = fPolTog;
+    wPolTog.value = 1;
+    TEST_CHECK(SettingsSync_ApplyCommand(wPolTog));
+    TEST_CHECK(*(int32_t*)(bldPoll.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) == 1);
+    TEST_CHECK(bldPoll[BLD_POLLUTION_ALERT_TOGGLE_OFFSET - 1] == 0x55);
+    TEST_CHECK(bldPoll[BLD_POLLUTION_ALERT_TOGGLE_OFFSET + 4] == 0x66);
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_Gen6_StudioLookupResilienceAndCorruptedPointers()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeMedia(0x400, 0);
+    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+    float posMedia[3] = { 500.0f, 10.0f, 600.0f };
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_BROADCAST;
+    w.category = 0x25;
+    memcpy(w.pos, posMedia, sizeof(posMedia));
+    w.count = 6;
+    for (int i = 0; i < 6; ++i) w.data[i] = 0.4f;
+
+    // 1. Studio vector pointers are null
+    *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET) = nullptr;
+    *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET) = nullptr;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+
+    // 2. Studio vector corrupted: end < begin
+    BYTE* dummy = (BYTE*)0x1000;
+    *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET) = (BYTE**)&dummy;
+    *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET) = (BYTE**)&dummy - 10;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+
+    // 3. Studio vector excessively huge (> 50,000 entries)
+    *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET) = (BYTE**)&dummy + 100000;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+
+    // 4. Studio vector contains null entries and corrupted pointer
+    BYTE* badStudio = (BYTE*)0xBAADF00DDEADBEEFull;
+    std::vector<BYTE*> badStudioList = { nullptr, badStudio, nullptr };
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, badStudioList);
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+
+    // 5. Studio exists but points to different building
+    std::vector<BYTE> otherBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> studioObj(0x180, 0);
+    *(BYTE**)(studioObj.data() + STUDIO_BUILDING_OFFSET) = otherBld.data();
+    std::vector<BYTE*> studioList = { studioObj.data() };
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, studioList);
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    const float* smem = (const float*)(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET);
+    for (int i = 0; i < 6; ++i) {
+        TEST_CHECK_NEAR(smem[i], 0.0f, 1e-5f);
+    }
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    badStudioList.clear();
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, badStudioList);
+    return true;
+}
+
+static bool SubTest_Gen6_CategoryMismatchAndInjection()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> typeHosp(0x400, 0), typeMedia(0x400, 0);
+    *(int*)(typeHosp.data() + 0x360) = 0x1C; // Hospital
+    *(int*)(typeMedia.data() + 0x360) = 0x25; // TV/Radio
+    std::vector<BYTE> bldHosp(BUILDING_STRUCT_BYTES, 0), bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldHosp.data() + BLD_TYPE_OFFSET) = typeHosp.data();
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+    float posHosp[3] = { 400.0f, 10.0f, 400.0f };
+    float posMedia[3] = { 600.0f, 10.0f, 600.0f };
+    memcpy(bldHosp.data() + OBJ_POS_OFFSET, posHosp, sizeof(posHosp));
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldHosp.data(), bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    // 1. Send upbringing to TV station with mismatched category (0x4A in packet vs 0x25 building)
+    SettingWire w = {};
+    w.field = SETTINGS_FIELD_UPBRINGING;
+    w.category = 0x4A;
+    memcpy(w.pos, posMedia, sizeof(posMedia));
+    w.count = 6;
+    for (int i = 0; i < 6; ++i) w.data[i] = 0.5f;
+
+    // Must be rejected because FindBuilding fails to find building with category 0x4A at posMedia
+    TEST_CHECK(!SettingsSync_ApplyCommand(w));
+
+    // 2. Send broadcast to Hospital with mismatched category (0x25 in packet vs 0x1C building)
+    w.field = SETTINGS_FIELD_BROADCAST;
+    w.category = 0x25;
+    memcpy(w.pos, posHosp, sizeof(posHosp));
+    TEST_CHECK(!SettingsSync_ApplyCommand(w));
+
+    // 3. Send pollution alert toggle to Hospital with category 0x1C (FieldApplies must reject)
+    int fPolTog = -1;
+    for (int f = 0; f < 32; ++f) {
+        if (f == 20) { fPolTog = f; break; }
+    }
+    w.field = fPolTog;
+    w.category = 0x1C;
+    w.value = 1;
+    TEST_CHECK(SettingsSync_ApplyCommand(w));
+    TEST_CHECK(*(int32_t*)(bldHosp.data() + BLD_POLLUTION_ALERT_TOGGLE_OFFSET) == 0);
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_Gen6_RapidPacketBurst()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeMedia(0x400, 0);
+    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
+    float posMedia[3] = { 600.0f, 10.0f, 700.0f };
+    memcpy(bldMedia.data() + OBJ_POS_OFFSET, posMedia, sizeof(posMedia));
+
+    std::vector<BYTE*> mockBlds = { bldMedia.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    std::vector<BYTE> studioObj(0x180, 0);
+    *(BYTE**)(studioObj.data() + STUDIO_BUILDING_OFFSET) = bldMedia.data();
+    std::vector<BYTE*> mockStudios = { studioObj.data() };
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+
+    // Rapid burst of 100 alternating valid and invalid broadcast packets
+    for (int burst = 0; burst < 100; ++burst) {
+        SettingWire w = {};
+        w.field = SETTINGS_FIELD_BROADCAST;
+        w.category = 0x25;
+        memcpy(w.pos, posMedia, sizeof(posMedia));
+        if (burst % 2 == 0) {
+            w.count = 6;
+            float val = (float)(burst % 10) / 10.0f;
+            for (int i = 0; i < 6; ++i) w.data[i] = val;
+        } else {
+            w.count = (burst % 5);
+            for (int i = 0; i < 6; ++i) w.data[i] = std::numeric_limits<float>::quiet_NaN();
+        }
+        SettingsSync_ApplyCommand(w);
+    }
+
+    const float* smem = (const float*)(studioObj.data() + STUDIO_BROADCAST_SLIDERS_OFFSET);
+    for (int i = 0; i < 6; ++i) {
+        TEST_CHECK_NEAR(smem[i], 0.8f, 1e-5f);
+    }
+
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    mockStudios.clear();
+    WriteMockVectorHeader(world + WORLD_STUDIOS_BEGIN_OFFSET, mockStudios);
+    return true;
+}
+
+static bool Test_Stress_Gen6_Challenger1()
+{
+    printf("    [SubTest 1: Float Fuzzing Upbringing & Broadcast] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_FloatFuzzingUpbringingAndBroadcast()) return false;
+    printf("    [SubTest 2: Malformed Packet Payloads] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_MalformedPacketPayloads()) return false;
+    printf("    [SubTest 3: Checkbox Boundaries & Adjacent Integrity] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_CheckboxBoundariesAndAdjacentIntegrity()) return false;
+    printf("    [SubTest 4: Studio & Building Lookup Resilience] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_StudioLookupResilienceAndCorruptedPointers()) return false;
+    printf("    [SubTest 5: Category Mismatch & Cross-Category Injection] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_CategoryMismatchAndInjection()) return false;
+    printf("    [SubTest 6: Rapid Packet Burst & Concurrency Integrity] ...\n"); fflush(stdout);
+    if (!SubTest_Gen6_RapidPacketBurst()) return false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -8023,6 +9489,8 @@ int main()
         { "Stress_M5_Challenger1_R6_R7_R14_R15_R18 (TechIsolation, AsymmetricProgress, CityBounds, Telemetry)", &Test_Stress_M5_Challenger1_R6_R7_R14_R15_R18 },
         { "Stress_M6_Challenger1_R13 (TeardownSafety, MaterialValidation, BrushThrottling)", &Test_Stress_M6_Challenger1_R13 },
         { "Stress_M6_Challenger2 (TeardownConcurrency, MaterialBoundaryFuzz, BrushRecovery)", &Test_Stress_M6_Challenger2 },
+        { "SettingsSync_MediaPrisonOrphanageAlerts (R2/R3 Broadcast, Upbringing, Alerts, Clamping)", &Test_SettingsSync_MediaPrisonOrphanageAlerts },
+        { "Stress_Gen6_Challenger1 (FloatFuzzing, MalformedPackets, CheckboxBoundaries, StudioResilience)", &Test_Stress_Gen6_Challenger1 },
     };
 
     for (const auto& tc : kTests) {

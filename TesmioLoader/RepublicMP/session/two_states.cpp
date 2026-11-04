@@ -105,6 +105,15 @@ static bool  g_hasSavedCam2 = false;
 static float g_savedCam2Pos[3] = { 0.0f, 0.0f, 0.0f };
 static float g_savedCam2Look[3] = { 0.0f, 0.0f, 0.0f };
 
+struct PendingCameraRestore {
+    volatile bool active;
+    float pos[3];
+    float look[3];
+    int framesRemaining;
+    int checkFrameCounter;
+};
+static PendingCameraRestore g_pendingCamRestore = {};
+
 static void ResetSavedCameraState()
 {
     g_hasSavedCam1 = false;
@@ -113,6 +122,9 @@ static void ResetSavedCameraState()
     g_hasSavedCam2 = false;
     memset(g_savedCam2Pos, 0, sizeof(g_savedCam2Pos));
     memset(g_savedCam2Look, 0, sizeof(g_savedCam2Look));
+    g_pendingCamRestore.active = false;
+    MemoryBarrier();
+    g_pendingCamRestore = {};
 }
 
 static bool  g_hasResyncCam = false;
@@ -1201,7 +1213,7 @@ static float __fastcall H_GetTerrainBoundaryZMax(BYTE* terrain)
 // --- Fair Customs, Building, Vehicle & Statistics Attribution Hooks (SOVIET64.exe PE 6A3EB6AD) ---
 // 1. 0x173320(world, building): building auto-purchase of resources & utility border trade
 // 2. 0x1B7D50(world, building): customs / border trade (category 0x6B)
-// 3. 0x1B9A40(world, building): customs / port vehicle loading & unloading export/import
+// 3. 0x1B9A40(world, building): foreign power connection (category 0x1F) electricity import/export step
 // 4. 0x159070(world, building, float dt, unsigned char flag): construction resource/groundwork payment
 // 5. 0x143710(world, building): groundwork / initial construction auto-purchase & crane/train step
 // 6. 0x1856F0(world, building): tourist hotel/attraction/restaurant spending & shop consumption
@@ -1862,10 +1874,12 @@ static __int64 __fastcall H_CustomsBorder(BYTE* world, BYTE* building, uintptr_t
 static __int64 __fastcall H_CustomsVehicle(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                            uintptr_t a5, uintptr_t a6)
 {
-    // Customs vehicle operations (loading, unloading, export, import) belong to the vehicles,
-    // not to the customs building owner. Run the engine handler directly without wrapping in
-    // CallBuildingEconHook, so inner vehicle hooks attribute directly to vehicle owners.
-    return o_customsVehicle ? o_customsVehicle(world, building, a3, a4, a5, a6) : 0;
+    // 0x1B9A40(world, building) is the Foreign Power Connection (category 0x1F) electricity
+    // import (+0x9E8) and export (+0x9EC) step, called at 0x13A4E4 and 0x13E5EA outside
+    // RVA_BLD_SIM_LOOP_HEAD..TAIL (where g_simLoopCurrentBuilding is nullptr). Wrapping it
+    // in CallBuildingEconHook attributes 100% of electricity import/export RUB/USD and
+    // R0..R3 ledger entries to the Foreign Power Connection's owner state.
+    return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_customsVehicle);
 }
 
 static void EnsureStateEconInitialized(const BYTE* world);
@@ -4414,6 +4428,41 @@ void TwoStates_ConstructStepBatchForTest(BYTE* world, BYTE* building, const Sovi
     }
 }
 
+struct ForeignPowerTradeMockCtx {
+    uintptr_t resPtr = 0;
+    float mwh = 0.0f;
+    float costVal = 0.0f;
+    bool isUsd = false;
+    bool isExport = false;
+};
+static ForeignPowerTradeMockCtx g_foreignPowerMockCtx = {};
+
+static __int64 __fastcall MockForeignPowerStep(BYTE* world, BYTE* /*building*/, uintptr_t, uintptr_t, uintptr_t, uintptr_t)
+{
+    double delta = g_foreignPowerMockCtx.isExport ? (double)g_foreignPowerMockCtx.costVal : -(double)g_foreignPowerMockCtx.costVal;
+    if (g_foreignPowerMockCtx.isUsd) {
+        *WorldDollars() += delta;
+    } else {
+        *WorldRubles() += delta;
+    }
+    int vecIdx = (g_foreignPowerMockCtx.isUsd ? 2 : 0) + (g_foreignPowerMockCtx.isExport ? 1 : 0);
+    SovietStatResEntry row = { g_foreignPowerMockCtx.resPtr, g_foreignPowerMockCtx.mwh, g_foreignPowerMockCtx.costVal };
+    BYTE* ledgerVec = world + WORLD_STAT_CURRENT_OFFSET + STAT_RES_VEC_BASE_OFF + (size_t)vecIdx * STAT_RES_VEC_STRIDE;
+    H_LedgerAdd(world, &row, ledgerVec, 0.0f, 0, 1.0f, 0);
+    return 0;
+}
+
+void TwoStates_ForeignPowerTradeForTest(BYTE* world, BYTE* building, uintptr_t elEnergyResPtr,
+                                        float mwh, float costVal, bool isUsd, bool isExport)
+{
+    if (!world || !building) return;
+    g_foreignPowerMockCtx = { elEnergyResPtr, mwh, costVal, isUsd, isExport };
+    BldEconFn prev = o_customsVehicle;
+    o_customsVehicle = &MockForeignPowerStep;
+    H_CustomsVehicle(world, building, 0, 0, 0, 0);
+    o_customsVehicle = prev;
+}
+
 void TwoStates_StatRecordClearForTest(BYTE* world, BYTE* rec)
 {
     g_inStatClearTest = true;
@@ -4909,7 +4958,13 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_BIRTH, (void*)&H_CitizenBirth,
                                 (void**)&o_citizenBirth, kCitizenBirthExpect,
                                 sizeof(kCitizenBirthExpect), "republicmp two_states citizen_birth");
-    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STARVE_STEP, (void*)&H_CitizenStarveStep,
+    // 0x834DE0 / 0x83C590 / 0x83CA50 are LTCG leaf-convention callees: callers such as 0x830720 keep live
+    // values in volatile registers across the call (r10 = citizen at 0x830729), so the C++ hooks run behind
+    // register-preserving relay stubs (rax/al result is kept, rcx/rdx/r8..r11/xmm0..xmm5 are restored).
+    void* stubStarveStep = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenStarveStep, false, false);
+    void* stubCanMoveBld = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenCanMoveToBld, false, false);
+    void* stubMoveToBld  = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenMoveToBld, false, false);
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STARVE_STEP, stubStarveStep,
                                 (void**)&o_citizenStarveStep, kCitizenStarveStepExpect,
                                 sizeof(kCitizenStarveStepExpect), "republicmp two_states citizen_starve_step");
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_REMOVE, (void*)&H_CitizenRemove,
@@ -4918,10 +4973,10 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_EVAL_NEEDS, (void*)&H_CitizenEvalNeeds,
                                 (void**)&o_citizenEvalNeeds, kCitizenEvalNeedsExpect,
                                 sizeof(kCitizenEvalNeedsExpect), "republicmp two_states citizen_eval_needs");
-    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_CAN_MOVE_TO_BLD, (void*)&H_CitizenCanMoveToBld,
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_CAN_MOVE_TO_BLD, stubCanMoveBld,
                                 (void**)&o_citizenCanMoveToBld, kCitizenCanMoveToBldExpect,
                                 sizeof(kCitizenCanMoveToBldExpect), "republicmp two_states citizen_can_move_to_bld");
-    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_MOVE_TO_BLD, (void*)&H_CitizenMoveToBld,
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_MOVE_TO_BLD, stubMoveToBld,
                                 (void**)&o_citizenMoveToBld, kCitizenMoveToBldExpect,
                                 sizeof(kCitizenMoveToBldExpect), "republicmp two_states citizen_move_to_bld");
     econOk += InstallInlineHook(g_exeBase + RVA_CALC_STORED_RESOURCES, (void*)&H_CalcStoredResources,
@@ -5295,6 +5350,9 @@ void TwoStates_OnSessionEnded()
 {
     TwoStates_RestoreUiMoneySwap();
     ResetStateHudPopCache();
+    g_pendingCamRestore.active = false;
+    MemoryBarrier();
+    g_pendingCamRestore = {};
     g_inSession = false;
     g_inSimStep = false;
     if (!SaveSync_IsWorldLoaded()) {
@@ -6356,13 +6414,17 @@ bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* ac
 
 bool TwoStates_GetCursorWorldPos(float* outX, float* outY, float* outZ)
 {
+    if (!g_exeBase) return false;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE* world = g_exeBase + WORLD_RVA;
         if (outX) *outX = *(float*)(world + CURSOR_X_OFFSET);
         if (outY) *outY = *(float*)(world + CURSOR_Y_OFFSET);
         if (outZ) *outZ = *(float*)(world + CURSOR_Z_OFFSET);
+        DiagLog_EndSafeSeh();
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
         return false;
     }
 }
@@ -6390,13 +6452,16 @@ bool TwoStates_GetCameraLookAt(float* outX, float* outY, float* outZ)
 bool TwoStates_GetCameraView(float pos[3], float lookAt[3])
 {
     if (!g_exeBase) return false;
+    DiagLog_BeginSafeSeh();
     __try {
         const float* p = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_POS_OFFSET);
         const float* l = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_LOOKAT_OFFSET);
         if (pos) { pos[0] = p[0]; pos[1] = p[1]; pos[2] = p[2]; }
         if (lookAt) { lookAt[0] = l[0]; lookAt[1] = l[1]; lookAt[2] = l[2]; }
+        DiagLog_EndSafeSeh();
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DiagLog_EndSafeSeh();
         return false;
     }
 }
@@ -6434,6 +6499,43 @@ static bool IsValidCameraPair(const float pos[3], const float look[3])
     return (dx * dx + dy * dy + dz * dz) > 0.01f;
 }
 
+float MinimapCameraYaw(float posX, float posZ, float lookX, float lookZ)
+{
+    float dx = lookX - posX;
+    float dz = lookZ - posZ;
+    if (!isfinite(dx) || !isfinite(dz)) return 0.0f;
+    if (dx * dx + dz * dz < 0.0001f) return 0.0f;
+    return atan2f(dx, dz);
+}
+
+float MinimapCameraYaw(const float pos[3], const float look[3])
+{
+    if (!pos || !look) return 0.0f;
+    return MinimapCameraYaw(pos[0], pos[2], look[0], look[2]);
+}
+
+bool MinimapWorldToPx(float worldX, float worldZ, float cx, float cy, float mapSize,
+                      float* outPx, float* outPy, float margin)
+{
+    if (!outPx || !outPy) return false;
+    if (!isfinite(worldX) || !isfinite(worldZ) || !isfinite(cx) || !isfinite(cy) ||
+        !isfinite(mapSize) || !isfinite(margin) || mapSize <= 0.0f || margin < 0.0f) {
+        return false;
+    }
+    float half = mapSize * 0.5f;
+    if (margin >= half) return false;
+    float px = cx + (worldX / 20000.0f) * mapSize;
+    float py = cy - (worldZ / 20000.0f) * mapSize;
+    if (!isfinite(px) || !isfinite(py)) return false;
+    if (px < cx - half + margin || px > cx + half - margin ||
+        py < cy - half + margin || py > cy + half - margin) {
+        return false;
+    }
+    *outPx = px;
+    *outPy = py;
+    return true;
+}
+
 bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
 {
     if (!g_exeBase || !IsValidCameraPair(pos, lookAt)) return false;
@@ -6442,7 +6544,7 @@ bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
     float dy = lookAt[1] - pos[1];
     float dz = lookAt[2] - pos[2];
     float distXZ = sqrtf(dx * dx + dz * dz);
-    float yaw = atan2f(dx, dz);
+    float yaw = MinimapCameraYaw(pos, lookAt);
     float pitch = (distXZ > 0.001f) ? atan2f(-dy, distXZ) : 0.0f;
     float roll = 0.0f;
 
@@ -6523,7 +6625,8 @@ bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
     return true;
 }
 
-static bool ApplyInitialCoopCamera(float posX, float posZ, float lookX, float lookZ)
+static bool ApplyInitialCoopCamera(float posX, float posZ, float lookX, float lookZ,
+                                   float outPos[3] = nullptr, float outLook[3] = nullptr)
 {
     float groundPos = SampleTerrainHeight(posX, posZ);
     float groundLook = SampleTerrainHeight(lookX, lookZ);
@@ -6532,16 +6635,19 @@ static bool ApplyInitialCoopCamera(float posX, float posZ, float lookX, float lo
 
     float pos[3] = { posX, groundPos + 160.0f, posZ };
     float lookAt[3] = { lookX, groundLook + 10.0f, lookZ };
+    if (outPos) memcpy(outPos, pos, sizeof(pos));
+    if (outLook) memcpy(outLook, lookAt, sizeof(lookAt));
     return TwoStates_ApplyCameraView(pos, lookAt);
 }
 
-void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates)
+void TwoStates_ApplyInitialFraming(bool isHost, bool isTwoStates,
+                                   float outPos[3], float outLook[3])
 {
     if (isTwoStates) {
         float sign = isHost ? -1.0f : 1.0f;
-        ApplyInitialCoopCamera(sign * 80.0f, 0.0f, sign * 450.0f, 0.0f);
+        ApplyInitialCoopCamera(sign * 80.0f, 0.0f, sign * 450.0f, 0.0f, outPos, outLook);
     } else {
-        ApplyInitialCoopCamera(0.0f, 370.0f, 0.0f, 0.0f);
+        ApplyInitialCoopCamera(0.0f, 370.0f, 0.0f, 0.0f, outPos, outLook);
     }
 }
 
@@ -6556,6 +6662,43 @@ void TwoStates_CapturePreResyncCamera()
         Logf("republicmp  CAMERA: captured pre-resync camera (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
              pos[0], pos[1], pos[2], look[0], look[1], look[2]);
     }
+}
+
+void TwoStates_TickPendingCameraRestore()
+{
+    if (!g_pendingCamRestore.active) return;
+    if (!SaveSync_IsWorldLoaded() || Determinism_WorldLoading()) return;
+
+    if (g_pendingCamRestore.framesRemaining > 0) {
+        TwoStates_ApplyCameraView(g_pendingCamRestore.pos, g_pendingCamRestore.look);
+        --g_pendingCamRestore.framesRemaining;
+    }
+
+    ++g_pendingCamRestore.checkFrameCounter;
+    if (g_pendingCamRestore.checkFrameCounter >= 60) {
+        float curPos[3] = {};
+        float curLook[3] = {};
+        if (TwoStates_GetCameraView(curPos, curLook)) {
+            float dx = curPos[0] - g_pendingCamRestore.pos[0];
+            float dy = curPos[1] - g_pendingCamRestore.pos[1];
+            float dz = curPos[2] - g_pendingCamRestore.pos[2];
+            float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+            Logf("republicmp  CAMERA: post-load check frame 60 (curPos=[%.1f, %.1f, %.1f], targetPos=[%.1f, %.1f, %.1f], diff=%.2f)",
+                 curPos[0], curPos[1], curPos[2],
+                 g_pendingCamRestore.pos[0], g_pendingCamRestore.pos[1], g_pendingCamRestore.pos[2],
+                 dist);
+        }
+        g_pendingCamRestore.active = false;
+    }
+}
+
+bool TwoStates_GetPendingCameraRestoreForTest(float outPos[3], float outLook[3], int* outRemaining, int* outFrameCount)
+{
+    if (outPos) memcpy(outPos, g_pendingCamRestore.pos, sizeof(g_pendingCamRestore.pos));
+    if (outLook) memcpy(outLook, g_pendingCamRestore.look, sizeof(g_pendingCamRestore.look));
+    if (outRemaining) *outRemaining = g_pendingCamRestore.framesRemaining;
+    if (outFrameCount) *outFrameCount = g_pendingCamRestore.checkFrameCounter;
+    return g_pendingCamRestore.active;
 }
 
 bool TwoStates_HasCapturedResyncCamera()
@@ -6702,20 +6845,29 @@ static bool      g_minimapBordersIconAttempted = false;
 static bool BindHudTexturePtr(void* tex)
 {
     if (!g_exeBase || !IsPointerLikeX64((uintptr_t)tex)) return false;
-    void* renderer = *(void**)(g_exeBase + HUD_RENDERER_PTR_RVA);
-    if (!IsPointerLikeX64((uintptr_t)renderer)) return false;
-    uintptr_t vtbl = *(uintptr_t*)tex;
-    if (!IsPointerLikeX64(vtbl)) return false;
-    FnTexBind bindFn = *(FnTexBind*)(vtbl + HUD_TEX_BIND_VTABLE_OFF);
-    if (!IsPointerLikeX64((uintptr_t)bindFn)) return false;
-    bindFn(tex, 0, renderer);
-    return true;
+    void* renderer = nullptr;
+    if (!SafeReadPod<void*>((const void*)(g_exeBase + HUD_RENDERER_PTR_RVA), &renderer) ||
+        !IsPointerLikeX64((uintptr_t)renderer)) return false;
+    uintptr_t vtbl = 0;
+    if (!SafeReadPod<uintptr_t>((const void*)tex, &vtbl) ||
+        !IsPointerLikeX64(vtbl)) return false;
+    FnTexBind bindFn = nullptr;
+    if (!SafeReadPod<FnTexBind>((const void*)(vtbl + HUD_TEX_BIND_VTABLE_OFF), &bindFn) ||
+        !IsPointerLikeX64((uintptr_t)bindFn)) return false;
+    __try {
+        bindFn(tex, 0, renderer);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 static bool BindHudTexture(uintptr_t texPtrRva)
 {
     if (!g_exeBase) return false;
-    return BindHudTexturePtr(*(void**)(g_exeBase + texPtrRva));
+    void* tex = nullptr;
+    if (!SafeReadPod<void*>((const void*)(g_exeBase + texPtrRva), &tex)) return false;
+    return BindHudTexturePtr(tex);
 }
 
 static void* GetOrLoadMinimapBordersIconTex()
@@ -6754,32 +6906,72 @@ static void* GetOrLoadMinimapBordersIconTex()
     return g_minimapBordersIconTex;
 }
 
-static void SetHudQuadStage(float cx, float cy, float w, float h, const float rgba[4])
+static void SetHudQuadStage(float cx, float cy, float w, float h, const float rgba[4], float rotRad = 0.0f)
 {
     *(float*)(g_exeBase + HUD_QUAD_SIZE_X_RVA) = w;
     *(float*)(g_exeBase + HUD_QUAD_SIZE_Y_RVA) = h;
     *(float*)(g_exeBase + HUD_QUAD_POS_X_RVA)  = cx;
     *(float*)(g_exeBase + HUD_QUAD_POS_Y_RVA)  = cy;
     *(uint32_t*)(g_exeBase + HUD_QUAD_Z_RVA)   = 0;
-    *(float*)(g_exeBase + HUD_QUAD_ROT_RVA)    = 0.0f;
-    memcpy(g_exeBase + HUD_QUAD_COLOR_RVA, rgba, 4 * sizeof(float));
+    *(float*)(g_exeBase + HUD_QUAD_ROT_RVA)    = rotRad;
+    if (rgba) {
+        memcpy(g_exeBase + HUD_QUAD_COLOR_RVA, rgba, 4 * sizeof(float));
+    }
+}
+
+static void DrawHudRotatedQuad(float cx, float cy, float w, float h, float rotRad,
+                               const float rgba[4], bool fullTexUv = false)
+{
+    if (!g_exeBase || !rgba || !isfinite(cx) || !isfinite(cy) || !isfinite(w) || !isfinite(h) ||
+        !isfinite(rotRad) || w <= 0.0f || h <= 0.0f) return;
+    SetHudQuadStage(cx, cy, w, h, rgba, rotRad);
+    __try {
+        FnHudDrawQuad drawFn = nullptr;
+        if (SafeReadPod<FnHudDrawQuad>((const void*)(g_exeBase + RVA_IAT_HUD_DRAW_QUAD), &drawFn) &&
+            IsPointerLikeX64((uintptr_t)drawFn)) {
+            float u0 = fullTexUv ? 0.0f : 0.25f;
+            float u1 = fullTexUv ? 1.0f : 0.75f;
+            drawFn(g_exeBase + HUD_QUAD_STAGE_RVA, u0, u0, u1, u1, 0.0f, 1);
+        }
+    } __finally {
+        *(float*)(g_exeBase + HUD_QUAD_ROT_RVA) = 0.0f;
+    }
 }
 
 static void DrawHudSolidQuad(float cx, float cy, float w, float h, const float rgba[4], bool fullTexUv = false)
 {
-    if (w <= 0.0f || h <= 0.0f) return;
-    SetHudQuadStage(cx, cy, w, h, rgba);
-    FnHudDrawQuad drawFn = *(FnHudDrawQuad*)(g_exeBase + RVA_IAT_HUD_DRAW_QUAD);
-    if (IsPointerLikeX64((uintptr_t)drawFn)) {
-        float u0 = fullTexUv ? 0.0f : 0.25f;
-        float u1 = fullTexUv ? 1.0f : 0.75f;
-        drawFn(g_exeBase + HUD_QUAD_STAGE_RVA, u0, u0, u1, u1, 0.0f, 1);
+    DrawHudRotatedQuad(cx, cy, w, h, 0.0f, rgba, fullTexUv);
+}
+
+static void DrawHudDisk(float cx, float cy, float radius, const float rgba[4])
+{
+    if (!rgba || !isfinite(cx) || !isfinite(cy) || !isfinite(radius) || radius <= 0.0f) return;
+    float sz = radius * 2.0f;
+    for (int i = 0; i < 4; ++i) {
+        float rotRad = (float)i * (3.14159265f / 8.0f);
+        DrawHudRotatedQuad(cx, cy, sz, sz, rotRad, rgba, false);
+    }
+}
+
+static void DrawHudRing(float cx, float cy, float radius, float thick, const float rgba[4])
+{
+    if (!rgba || !isfinite(cx) || !isfinite(cy) || !isfinite(radius) || !isfinite(thick) ||
+        radius <= 0.0f || thick <= 0.0f) return;
+    const int n = 16;
+    float chord = 2.0f * 3.14159265f * radius / (float)n * 1.15f;
+    for (int i = 0; i < n; ++i) {
+        float ang = (float)i * (2.0f * 3.14159265f / (float)n);
+        float sx = cx + radius * cosf(ang);
+        float sy = cy + radius * sinf(ang);
+        float rot = ang + (3.14159265f * 0.5f);
+        DrawHudRotatedQuad(sx, sy, chord, thick, rot, rgba, false);
     }
 }
 
 static void DrawHudHollowRect(float cx, float cy, float w, float h, float thickness, const float rgba[4])
 {
-    if (w <= thickness * 2.0f || h <= thickness * 2.0f) return;
+    if (!rgba || !isfinite(cx) || !isfinite(cy) || !isfinite(w) || !isfinite(h) || !isfinite(thickness) ||
+        thickness <= 0.0f || w <= thickness * 2.0f || h <= thickness * 2.0f) return;
     float halfW = w * 0.5f;
     float halfH = h * 0.5f;
     float halfT = thickness * 0.5f;
@@ -6907,15 +7099,43 @@ static void DrawNativeMinimapTwoStatesBorders(float cx, float cy, float mapSize,
 }
 
 static void DrawHudPulsingMarker(float px, float py, float cx, float cy, float half,
-                                 float innerSz, float outerSz, float thickness,
+                                 float innerRadius, float outerRadius, float thickness,
                                  const float innerCol[4], const float outerCol[4])
 {
+    if (!innerCol || !outerCol || !isfinite(px) || !isfinite(py) || !isfinite(cx) || !isfinite(cy) || !isfinite(half)) return;
     if (px < cx - half + 2.0f || px > cx + half - 2.0f ||
         py < cy - half + 2.0f || py > cy + half - 2.0f) {
         return;
     }
-    DrawHudHollowRect(px, py, outerSz, outerSz, thickness, outerCol);
-    DrawHudSolidQuad(px, py, innerSz, innerSz, innerCol);
+    DrawHudRing(px, py, outerRadius, thickness, outerCol);
+    DrawHudDisk(px, py, innerRadius, innerCol);
+}
+
+static void DrawNativeMinimapPartner(const PartnerCursorInfo& pc, float cx, float cy, float mapSize, float uiScale)
+{
+    if (!pc.valid) return;
+    ULONGLONG now = GetTickCount64();
+    if (now - pc.lastUpdateMs >= 10000) return;
+    if (!isfinite(pc.camPos[0]) || !isfinite(pc.camPos[2])) return;
+
+    float px = 0.0f, py = 0.0f;
+    if (!MinimapWorldToPx(pc.camPos[0], pc.camPos[2], cx, cy, mapSize, &px, &py)) {
+        return;
+    }
+
+    float yaw = MinimapCameraYaw(pc.camPos, pc.camLookAt);
+    float coneSz = fminf(mapSize * MINIMAP_CAMERA_ICON_MAP_FRACTION, uiScale * MINIMAP_CAMERA_ICON_MAX_PX) * 0.85f;
+
+    if (BindHudTexture(HUD_MAP_CAMERA_TEX_PTR_RVA)) {
+        const float cyanConeCol[4] = { 0.24f, 0.84f, 1.00f, 0.92f };
+        DrawHudRotatedQuad(px, py, coneSz, coneSz, yaw, cyanConeCol, true);
+        BindHudTexture(HUD_SOLID_TEX_PTR_RVA);
+    }
+
+    const float whiteCol[4]    = { 1.00f, 1.00f, 1.00f, 0.95f };
+    const float cyanDiskCol[4] = { 0.24f, 0.84f, 1.00f, 1.00f };
+    DrawHudDisk(px, py, 5.5f * uiScale, whiteCol);
+    DrawHudDisk(px, py, 3.8f * uiScale, cyanDiskCol);
 }
 
 static void DrawNativeMinimapMarkers(float cx, float cy, float mapSize, float uiScale)
@@ -6926,34 +7146,30 @@ static void DrawNativeMinimapMarkers(float cx, float cy, float mapSize, float ui
     if (g_localPingActive && now - g_localPingSentMs < PING_LIFETIME_MS) {
         float ageSec = (float)(now - g_localPingSentMs) * 0.001f;
         float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
-        float px = cx + (g_localPingX / 20000.0f) * mapSize;
-        float py = cy - (g_localPingZ / 20000.0f) * mapSize;
-        const float inCol[4]  = { 0.31f, 1.00f, 0.47f, 1.00f };
-        const float outCol[4] = { 0.43f, 0.96f, 0.51f, 0.92f };
-        DrawHudPulsingMarker(px, py, cx, cy, half, 6.5f * uiScale, (10.0f + pulse * 14.0f) * uiScale,
-                             2.0f * uiScale, inCol, outCol);
+        float px = 0.0f, py = 0.0f;
+        if (MinimapWorldToPx(g_localPingX, g_localPingZ, cx, cy, mapSize, &px, &py)) {
+            const float inCol[4]  = { 0.31f, 1.00f, 0.47f, 1.00f };
+            const float outCol[4] = { 0.43f, 0.96f, 0.51f, 0.92f };
+            DrawHudPulsingMarker(px, py, cx, cy, half, 3.8f * uiScale, (5.0f + pulse * 7.0f) * uiScale,
+                                 1.8f * uiScale, inCol, outCol);
+        }
     }
 
     if (LockstepNet_IsConnected()) {
         PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
         if (pc.valid) {
-            if (now - pc.lastUpdateMs < 10000 && (fabsf(pc.x) > 0.01f || fabsf(pc.z) > 0.01f)) {
-                float px = cx + (pc.x / 20000.0f) * mapSize;
-                float py = cy - (pc.z / 20000.0f) * mapSize;
-                const float inCol[4]  = { 0.24f, 0.84f, 1.00f, 0.95f };
-                const float outCol[4] = { 1.00f, 1.00f, 1.00f, 0.80f };
-                DrawHudPulsingMarker(px, py, cx, cy, half, 6.5f * uiScale, 12.5f * uiScale,
-                                     1.6f * uiScale, inCol, outCol);
-            }
+            DrawNativeMinimapPartner(pc, cx, cy, mapSize, uiScale);
+
             if (pc.hasPing && now - pc.pingReceivedMs < PING_LIFETIME_MS) {
                 float ageSec = (float)(now - pc.pingReceivedMs) * 0.001f;
                 float pulse = 0.5f + 0.5f * sinf(ageSec * 8.0f);
-                float px = cx + (pc.pingX / 20000.0f) * mapSize;
-                float py = cy - (pc.pingZ / 20000.0f) * mapSize;
-                const float inCol[4]  = { 1.00f, 0.33f, 0.16f, 1.00f };
-                const float outCol[4] = { 1.00f, 0.84f, 0.20f, 0.96f };
-                DrawHudPulsingMarker(px, py, cx, cy, half, 7.5f * uiScale, (12.0f + pulse * 16.0f) * uiScale,
-                                     2.2f * uiScale, inCol, outCol);
+                float px = 0.0f, py = 0.0f;
+                if (MinimapWorldToPx(pc.pingX, pc.pingZ, cx, cy, mapSize, &px, &py)) {
+                    const float inCol[4]  = { 1.00f, 0.33f, 0.16f, 1.00f };
+                    const float outCol[4] = { 1.00f, 0.84f, 0.20f, 0.96f };
+                    DrawHudPulsingMarker(px, py, cx, cy, half, 4.2f * uiScale, (6.0f + pulse * 8.0f) * uiScale,
+                                         2.0f * uiScale, inCol, outCol);
+                }
             }
         }
     }
@@ -6990,6 +7206,16 @@ static void DrawNativeMinimapOverlay(BYTE* mm)
     // Restore C3D_HUD quad stage to full map square (cx, cy, mapSize, mapSize) as expected by 0x4BEB10 at 0x4BECFE
     const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     SetHudQuadStage(cx, cy, mapSize, mapSize, white);
+}
+
+bool TwoStates_TestMinimapRotResetForTest()
+{
+    if (!g_exeBase) return false;
+    *(float*)(g_exeBase + HUD_QUAD_ROT_RVA) = 2.5f;
+    const float col[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    DrawHudRotatedQuad(100.0f, 100.0f, 20.0f, 20.0f, 1.2f, col, true);
+    float rot = *(float*)(g_exeBase + HUD_QUAD_ROT_RVA);
+    return (rot == 0.0f);
 }
 
 static bool IsMinimapMouseInputAllowed(const BYTE* mm)
@@ -7084,6 +7310,9 @@ static void __fastcall H_MinimapDrawContent(BYTE* mm)
     __try {
         DrawNativeMinimapOverlay(mm);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (g_exeBase) {
+            *(float*)(g_exeBase + HUD_QUAD_ROT_RVA) = 0.0f;
+        }
     }
     DiagLog_EndSafeSeh();
 }
@@ -7301,6 +7530,8 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
 
 void TwoStates_DrawOverlay()
 {
+    TwoStates_TickPendingCameraRestore();
+
     const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
     if (!inCoop) return;
 
@@ -9077,6 +9308,9 @@ bool TwoStates_ReadSaveMetaFromDir(const char* fullSaveDir, bool updateBudgetsAn
 
 void TwoStates_BeforeAnyWorldLoad()
 {
+    g_pendingCamRestore.active = false;
+    MemoryBarrier();
+    g_pendingCamRestore = {};
     if (!g_exeBase) return;
     if (g_beforeLoadPrepared) return;
     g_beforeLoadPrepared = true;
@@ -9166,26 +9400,49 @@ void TwoStates_BeforeAnyWorldLoad()
 static void RestoreOrFrameCoopCamera(bool isHost)
 {
     bool twoStates = (g_inSession ? g_sessionMode : g_chosenMode) == COOP_MODE_TWO_STATES;
+    float targetPos[3] = {};
+    float targetLook[3] = {};
+    bool hasTarget = false;
+
     if (g_hasResyncCam) {
-        TwoStates_ApplyCameraView(g_resyncCamPos, g_resyncCamLook);
+        memcpy(targetPos, g_resyncCamPos, sizeof(targetPos));
+        memcpy(targetLook, g_resyncCamLook, sizeof(targetLook));
+        hasTarget = true;
         g_hasResyncCam = false;
+        TwoStates_ApplyCameraView(targetPos, targetLook);
         Logf("republicmp  CAMERA: restored pre-resync view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
-             g_resyncCamPos[0], g_resyncCamPos[1], g_resyncCamPos[2],
-             g_resyncCamLook[0], g_resyncCamLook[1], g_resyncCamLook[2]);
+             targetPos[0], targetPos[1], targetPos[2],
+             targetLook[0], targetLook[1], targetLook[2]);
     } else if (isHost && g_hasSavedCam1) {
-        TwoStates_ApplyCameraView(g_savedCam1Pos, g_savedCam1Look);
+        memcpy(targetPos, g_savedCam1Pos, sizeof(targetPos));
+        memcpy(targetLook, g_savedCam1Look, sizeof(targetLook));
+        hasTarget = true;
+        TwoStates_ApplyCameraView(targetPos, targetLook);
         Logf("republicmp  CAMERA: restored saved Host view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
-             g_savedCam1Pos[0], g_savedCam1Pos[1], g_savedCam1Pos[2],
-             g_savedCam1Look[0], g_savedCam1Look[1], g_savedCam1Look[2]);
+             targetPos[0], targetPos[1], targetPos[2],
+             targetLook[0], targetLook[1], targetLook[2]);
     } else if (!isHost && g_hasSavedCam2) {
-        TwoStates_ApplyCameraView(g_savedCam2Pos, g_savedCam2Look);
+        memcpy(targetPos, g_savedCam2Pos, sizeof(targetPos));
+        memcpy(targetLook, g_savedCam2Look, sizeof(targetLook));
+        hasTarget = true;
+        TwoStates_ApplyCameraView(targetPos, targetLook);
         Logf("republicmp  CAMERA: restored saved Client view (pos=[%.1f, %.1f, %.1f], look=[%.1f, %.1f, %.1f])",
-             g_savedCam2Pos[0], g_savedCam2Pos[1], g_savedCam2Pos[2],
-             g_savedCam2Look[0], g_savedCam2Look[1], g_savedCam2Look[2]);
+             targetPos[0], targetPos[1], targetPos[2],
+             targetLook[0], targetLook[1], targetLook[2]);
     } else {
-        TwoStates_ApplyInitialFraming(isHost, twoStates);
+        TwoStates_ApplyInitialFraming(isHost, twoStates, targetPos, targetLook);
+        hasTarget = true;
         Logf("republicmp  CAMERA: applied initial %s framing (mode=%s)",
              isHost ? "Host (West)" : "Client (East)", twoStates ? "TwoStates" : "OneState");
+    }
+
+    if (hasTarget) {
+        memcpy(g_pendingCamRestore.pos, targetPos, sizeof(targetPos));
+        memcpy(g_pendingCamRestore.look, targetLook, sizeof(targetLook));
+        g_pendingCamRestore.framesRemaining = 10;
+        g_pendingCamRestore.checkFrameCounter = 0;
+        MemoryBarrier();
+        g_pendingCamRestore.active = true;
     }
 }
 

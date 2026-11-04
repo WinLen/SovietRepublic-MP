@@ -1344,6 +1344,15 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #ifndef HUD_PIN_ICON_TEX_PTR_RVA
 #define HUD_PIN_ICON_TEX_PTR_RVA            0x9E03E8u
 #endif
+#ifndef HUD_MAP_CAMERA_TEX_PTR_RVA
+#define HUD_MAP_CAMERA_TEX_PTR_RVA          0x9E07C0u
+#endif
+#ifndef MINIMAP_CAMERA_ICON_MAP_FRACTION
+#define MINIMAP_CAMERA_ICON_MAP_FRACTION    0.15f   // exe+0x909CA0
+#endif
+#ifndef MINIMAP_CAMERA_ICON_MAX_PX
+#define MINIMAP_CAMERA_ICON_MAX_PX          70.0f   // exe+0x90AAB8 (x uiScale)
+#endif
 #ifndef HUD_FONT_MAIN_PTR_RVA
 #define HUD_FONT_MAIN_PTR_RVA               0x994208u
 #endif
@@ -1395,10 +1404,89 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 
 static_assert(RVA_MINIMAP_DRAW_BUTTONS == RVA_MINIMAP_DRAW_CONTENT + 0x20C0u &&
               HUD_SOLID_TEX_PTR_RVA == 0x9E0B38u &&
+              HUD_MAP_CAMERA_TEX_PTR_RVA == WORLD_RVA + 0xB8B0u &&
               HUD_QUAD_POS_X_RVA == HUD_QUAD_SIZE_X_RVA + 8u &&
               HUD_QUAD_COLOR_RVA == HUD_QUAD_SIZE_X_RVA + 0x24u &&
               RVA_IAT_HUD_DRAW_QUAD == RVA_IAT_HUD_HIT_TEST_QUAD + 0x10u,
-              "Minimap DrawContent/DrawButtons RVAs (0x4BDE80, 0x4BFF40) and C3D_HUD quad offsets must match 1.1.1.9 layout");
+              "Minimap DrawContent/DrawButtons RVAs (0x4BDE80, 0x4BFF40), camera texture and C3D_HUD quad offsets must match 1.1.1.9 layout");
+
+// Building working range & auto-search settings (FUN_1401edc40 / FUN_140581080 / FUN_14074e040)
+#ifndef BLD_RECONSTRUCT_THRESHOLDS_OFFSET
+#define BLD_RECONSTRUCT_THRESHOLDS_OFFSET   0xE50u  // 8 bytes: float bld_thresh (+0xE50), float mach_thresh (+0xE54)
+#endif
+#ifndef BLD_SEARCH_RANGE_OFFSET
+#define BLD_SEARCH_RANGE_OFFSET             0xFC8u  // 4 bytes: int32_t working range / auto-search distance / repair threshold
+#endif
+#ifndef BLD_AUTOSEARCH_FLAGS_OFFSET
+#define BLD_AUTOSEARCH_FLAGS_OFFSET         0x11BCu // 8 bytes (0x11BC..0x11C3): auto-search / residence / crop / repair flags
+#endif
+#ifndef BLD_AUTOSEARCH_WIRES_OFFSET
+#define BLD_AUTOSEARCH_WIRES_OFFSET         0x11C4u // 1 byte: auto-search power/wires flag
+#endif
+#ifndef BLD_COLLECT_FLAGS_OFFSET
+#define BLD_COLLECT_FLAGS_OFFSET            0x1271u // 2 bytes (0x1271..0x1272): container/vehicle collection flags
+#endif
+
+static_assert(BLD_RECONSTRUCT_THRESHOLDS_OFFSET == 0xE50u &&
+              BLD_SEARCH_RANGE_OFFSET == 0xFC8u &&
+              BLD_AUTOSEARCH_FLAGS_OFFSET == 0x11BCu &&
+              BLD_AUTOSEARCH_WIRES_OFFSET == BLD_AUTOSEARCH_FLAGS_OFFSET + 8u &&
+              BLD_COLLECT_FLAGS_OFFSET == 0x1271u,
+              "Building search range and auto-search flag offsets must match 1.1.1.9 BUILDING layout");
+
+// Building TV/Radio studio, Upbringing/Rehabilitation, staff loyalty, and notification alert offsets
+#ifndef WORLD_STUDIOS_BEGIN_OFFSET
+#define WORLD_STUDIOS_BEGIN_OFFSET          0xD230u // std::vector<Studio*> begin pointer
+#endif
+#ifndef WORLD_STUDIOS_END_OFFSET
+#define WORLD_STUDIOS_END_OFFSET            0xD238u // std::vector<Studio*> end pointer
+#endif
+#ifndef STUDIO_BUILDING_OFFSET
+#define STUDIO_BUILDING_OFFSET              0x150u  // Studio->building back-pointer
+#endif
+#ifndef STUDIO_BROADCAST_SLIDERS_OFFSET
+#define STUDIO_BROADCAST_SLIDERS_OFFSET     0x138u  // 6 floats (24 bytes): alcohol, sports, culture, education, propaganda, anti-religion
+#endif
+#ifndef BLD_UPBRINGING_SLIDERS_OFFSET
+#define BLD_UPBRINGING_SLIDERS_OFFSET       0x13A0u // 6 floats (24 bytes): orphanage / prison rehabilitation sliders
+#endif
+#ifndef BLD_MIN_LOYALTY_EMPLOYEES_OFFSET
+#define BLD_MIN_LOYALTY_EMPLOYEES_OFFSET    0x13D8u // 4 bytes: float minimum employee / warden / tutor loyalty
+#endif
+#ifndef BLD_MIN_LOYALTY_CITIZENS_OFFSET
+#define BLD_MIN_LOYALTY_CITIZENS_OFFSET     0x13E0u // 4 bytes: float minimum student / citizen / visitor loyalty
+#endif
+#ifndef BLD_ALERT_GOODS_MISSING_OFFSET
+#define BLD_ALERT_GOODS_MISSING_OFFSET      0x126Du // 1 byte: uint8_t notify goods missing
+#endif
+#ifndef BLD_ALERT_MAIN_TOGGLE_OFFSET
+#define BLD_ALERT_MAIN_TOGGLE_OFFSET        0x1270u // 1 byte: uint8_t main alert toggle (production stop, tutors, wardens, police, court)
+#endif
+#ifndef BLD_ALERT_FINISHED_OFFSET
+#define BLD_ALERT_FINISHED_OFFSET           0x0E10u // 1 byte: uint8_t notify finished (construction office / site)
+#endif
+#ifndef BLD_POLLUTION_ALERT_TOGGLE_OFFSET
+#define BLD_POLLUTION_ALERT_TOGGLE_OFFSET   0x0DFCu // 4 bytes: int32_t pollution monitoring alert toggle ("Notify if above")
+#endif
+#ifndef BLD_POLLUTION_ALERT_THRESH_OFFSET
+#define BLD_POLLUTION_ALERT_THRESH_OFFSET   0x0E3Cu // 4 bytes: float pollution monitoring alert threshold slider
+#endif
+
+static_assert(WORLD_STUDIOS_BEGIN_OFFSET == 0xD230u &&
+              WORLD_STUDIOS_END_OFFSET == 0xD238u &&
+              STUDIO_BUILDING_OFFSET == 0x150u &&
+              STUDIO_BROADCAST_SLIDERS_OFFSET == 0x138u &&
+              BLD_UPBRINGING_SLIDERS_OFFSET == 0x13A0u &&
+              BLD_MIN_LOYALTY_EMPLOYEES_OFFSET == 0x13D8u &&
+              BLD_MIN_LOYALTY_CITIZENS_OFFSET == 0x13E0u &&
+              BLD_ALERT_GOODS_MISSING_OFFSET == 0x126Du &&
+              BLD_ALERT_MAIN_TOGGLE_OFFSET == 0x1270u &&
+              BLD_ALERT_FINISHED_OFFSET == 0x0E10u &&
+              BLD_POLLUTION_ALERT_TOGGLE_OFFSET == 0x0DFCu &&
+              BLD_POLLUTION_ALERT_THRESH_OFFSET == 0x0E3Cu,
+              "Studio broadcast, upbringing sliders, staff loyalty, and alert checkbox offsets must match 1.1.1.9 layout");
+
+
 
 
 
