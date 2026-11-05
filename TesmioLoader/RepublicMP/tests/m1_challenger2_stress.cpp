@@ -113,9 +113,11 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
             return false;
         }
 
-        // 3. Start node must remain preserved
-        if (*(__int64*)(roadMgr.data() + 0x428) != (__int64)dragStartNode.data()) {
+        // 3. Start node and End node (+0x428 and +0x430) must remain preserved (0x4FD008 crash guard)
+        if (*(__int64*)(roadMgr.data() + 0x428) != (__int64)dragStartNode.data() ||
+            *(__int64*)(roadMgr.data() + 0x430) != (__int64)dragEndNode.data()) {
             TEST_CHECK(*(__int64*)(roadMgr.data() + 0x428) == (__int64)dragStartNode.data());
+            TEST_CHECK(*(__int64*)(roadMgr.data() + 0x430) == (__int64)dragEndNode.data());
             return false;
         }
 

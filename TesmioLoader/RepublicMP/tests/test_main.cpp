@@ -344,7 +344,17 @@ static bool Test_RvaAndSafeMem()
     // Unmapped low-heap address (high == 2, but not committed) -> must return false
     TEST_CHECK(!IsPointerLikeX64(0x00000002deadbeefULL & ~3ULL));
 
-    // Try allocating a real page in low x64 address space (high in 1..0xFF) to verify low segment detection
+    // Try allocating a real page in low x64 address space (both < 4 GB and high in 1..0xFF) to verify low segment detection
+    void* lowSub4GbPage = nullptr;
+    for (uintptr_t addr = 0x10000000ULL; addr < 0xF0000000ULL && !lowSub4GbPage; addr += 0x04000000ULL) {
+        lowSub4GbPage = VirtualAlloc((LPVOID)addr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    }
+    if (lowSub4GbPage) {
+        *(uint64_t*)lowSub4GbPage = 0xCAFEBABE12345678ULL;
+        TEST_CHECK(IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage));
+        TEST_CHECK(!IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage | 1ULL)); // unaligned low pointer rejected
+        VirtualFree(lowSub4GbPage, 0, MEM_RELEASE);
+    }
     void* lowPage = nullptr;
     for (uintptr_t hi = 1; hi < 0x100 && !lowPage; ++hi) {
         lowPage = VirtualAlloc((LPVOID)(hi << 32), 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);

@@ -459,12 +459,12 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Waste truck (SKD 706R) toxic/hazardous waste stop filters & 9-component cargo sync, local full-FPS building animations",
+                "v%s (Protocol %d) - Fix Client road connections to customs houses on desert maps, fix Client minimap button & overlay (<4 GB heap), fix 0x4FD008 road drag crash",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, defaultNote);
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, updateMeta ? defaultNote : nullptr);
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;
