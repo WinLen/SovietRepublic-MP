@@ -21,9 +21,9 @@
 #define CARGO_AMOUNT_OFFSET 0x08
 
 #define SOFT_SYNC_BATCH_MAX 20
-#define SOFT_SYNC_BLD_BATCH_MAX 8
-#define SOFT_SYNC_BLD_SLOTS_MAX 6
-#define SOFT_SYNC_BLD_SLOT_ENTRIES_MAX 16
+#define SOFT_SYNC_BLD_BATCH_MAX 3
+#define SOFT_SYNC_BLD_SLOTS_MAX 16
+#define SOFT_SYNC_BLD_SLOT_ENTRIES_MAX 12
 #define SOFT_SYNC_INTERVAL_TICKS 180 // every 6 seconds of game simulation
 #define MAX_VEHICLES_SCAN 65536
 #define MAX_BUILDINGS_SCAN 131072
@@ -40,8 +40,8 @@ struct VehicleSoftSyncEntry {
     float pos[3];
     unsigned short cargoCount;
     unsigned short flags;
-    unsigned cargoResHash[2];
-    float cargoAmount[2];
+    unsigned cargoResHash[SOFT_SYNC_VEH_CARGO_MAX];
+    float cargoAmount[SOFT_SYNC_VEH_CARGO_MAX];
     float passengers;
 };
 
@@ -154,12 +154,27 @@ static const char* FindResourceByHash(const BYTE* w, unsigned resHash)
     if (!w || !resHash) return nullptr;
     const BYTE* resBegin = *(const BYTE* const*)(w + WORLD_RESOURCES_OFFSET);
     const BYTE* resEnd = *(const BYTE* const*)(w + WORLD_RESOURCES_OFFSET + 8);
-    if (!resBegin || resEnd <= resBegin) return nullptr;
-    size_t count = (size_t)((resEnd - resBegin) / WORLD_RESOURCE_STRIDE);
-    if (count > 512) count = 512;
-    for (size_t i = 0; i < count; i++) {
-        const char* candidate = (const char*)(resBegin + i * WORLD_RESOURCE_STRIDE);
-        if (HashResourceName(candidate) == resHash) return candidate;
+    if (resBegin && resEnd > resBegin) {
+        size_t count = (size_t)((resEnd - resBegin) / WORLD_RESOURCE_STRIDE);
+        if (count > 512) count = 512;
+        for (size_t i = 0; i < count; i++) {
+            const char* candidate = (const char*)(resBegin + i * WORLD_RESOURCE_STRIDE);
+            if (HashResourceName(candidate) == resHash) return candidate;
+        }
+    }
+    for (unsigned off = WORLD_RES_PTR_SLOTS_BEGIN_OFF; off < WORLD_RES_PTR_SLOTS_END_OFF; off += 8) {
+        const char* candidate = *(const char* const*)(w + off);
+        if (candidate && HashResourceName(candidate) == resHash) return candidate;
+    }
+    const char* const* wBeg = *(const char* const* const*)(w + WORLD_WASTE_RESOURCES_OFFSET);
+    const char* const* wEnd = *(const char* const* const*)(w + WORLD_WASTE_RESOURCES_OFFSET + 8);
+    if (wBeg && wEnd > wBeg) {
+        size_t wCount = (size_t)(wEnd - wBeg);
+        if (wCount > 32) wCount = 32;
+        for (size_t i = 0; i < wCount; i++) {
+            const char* candidate = wBeg[i];
+            if (candidate && HashResourceName(candidate) == resHash) return candidate;
+        }
     }
     return nullptr;
 }
@@ -264,7 +279,7 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
             size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
             if (cn <= 256) {
                 out.cargoCount = (unsigned short)cn;
-                for (size_t k = 0; k < cn && k < 2; k++) {
+                for (size_t k = 0; k < cn && k < SOFT_SYNC_VEH_CARGO_MAX; k++) {
                     BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
                     const char* resName = *(const char**)entry;
                     out.cargoResHash[k] = HashResourceName(resName);
@@ -641,7 +656,7 @@ static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppe
     if (!cBegin || cEnd < cBegin || (cEnd - cBegin) % CARGO_ENTRY_SIZE != 0) return;
     size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
     if (cn != e.cargoCount) return;
-    for (size_t k = 0; k < cn && k < 2; k++) {
+    for (size_t k = 0; k < cn && k < SOFT_SYNC_VEH_CARGO_MAX; k++) {
         BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
         const char* resName = *(const char**)entry;
         if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {

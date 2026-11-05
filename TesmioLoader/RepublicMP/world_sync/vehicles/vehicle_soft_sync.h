@@ -11,6 +11,10 @@
 
 #include "tesmio_plugin.h"
 
+#ifndef SOFT_SYNC_VEH_CARGO_MAX
+#define SOFT_SYNC_VEH_CARGO_MAX 10
+#endif
+
 void VehicleSoftSync_Bind(const TsmHost* host);
 void VehicleSoftSync_Reset();
 

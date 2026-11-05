@@ -150,9 +150,17 @@ void HeldFrame_SetHighlightCaptureForTest(void (*cb)(BYTE* veh, bool isExtraPass
     g_testHighlightUd = ud;
 }
 
+struct BuildingAnimState {
+    float visualFrame;
+    float stepPerTick;
+    bool hasMeasuredStep;
+};
+static std::unordered_map<BYTE*, BuildingAnimState> g_buildingAnimState;
+
 void HeldFrame_Reset()
 {
     g_vehicleInterp.clear();
+    g_buildingAnimState.clear();
     g_interpTick = 0;
     memset(&g_hfDiag, 0, sizeof(g_hfDiag));
     g_camPrepModified.clear();
@@ -1078,6 +1086,7 @@ void HeldFrame_BeginCameraPrepare(float fps)
     if (!Determinism_IsActive() || !Determinism_SessionRunning() || Probe_IsRunning() || Determinism_WorldLoading()) {
         return;
     }
+    HeldFrame_StepBuildingAnimations(fps);
     std::vector<BYTE*> targets;
     CollectFollowCameraSubgraph(targets);
     if (targets.empty()) return;
@@ -1501,9 +1510,185 @@ static void DrawCitizens()
     }
 }
 
+static bool ReadBuildingAnimInfo(const BYTE* b, float* outMaxFrames, float* outTypeSpeed)
+{
+    if (!b) return false;
+    float progress = 0.0f;
+    void* site = nullptr;
+    const BYTE* type = nullptr;
+    const BYTE* mesh = nullptr;
+    if (!Read(b + BLD_PROGRESS_OFFSET, &progress, sizeof(progress)) || progress < 1.0f ||
+        !Read(b + BLD_CONSTRUCTION_SITE_OFFSET, &site, sizeof(site)) || site != nullptr ||
+        !Read(b + BLD_TYPE_OFFSET, &type, sizeof(type)) || !type ||
+        !Read(b + BLD_ANIM_SUBMESH_OFFSET, &mesh, sizeof(mesh)) || !mesh) {
+        return false;
+    }
+    const BYTE* typeMesh = nullptr;
+    float typeSpeed = 0.0f;
+    const BYTE* animCtrl = nullptr;
+    if (!Read(type + BLD_TYPE_ANIM_SUBMESH_OFFSET, &typeMesh, sizeof(typeMesh)) || typeMesh != mesh ||
+        !Read(type + BLD_TYPE_ANIM_SPEED_OFFSET, &typeSpeed, sizeof(typeSpeed)) ||
+        !isfinite(typeSpeed) || typeSpeed <= 0.0f ||
+        !Read(mesh + MESH_ANIM_CTRL_OFFSET, &animCtrl, sizeof(animCtrl)) || !animCtrl) {
+        return false;
+    }
+    int32_t maxFramesInt = 0;
+    if (!Read(animCtrl + ANIM_CTRL_MAX_FRAMES_OFFSET, &maxFramesInt, sizeof(maxFramesInt)) ||
+        maxFramesInt <= 0 || maxFramesInt > 100000) {
+        return false;
+    }
+    *outMaxFrames = (float)maxFramesInt;
+    *outTypeSpeed = typeSpeed;
+    return true;
+}
+
+static float ComputeFallbackAnimStepPerTick(const BYTE* b, float typeSpeed)
+{
+    float effCap = 0.0f;
+    float util = 0.0f;
+    float prod = 0.0f;
+    Read(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET, &effCap, sizeof(effCap));
+    Read(b + BLD_UTILIZATION_RATIO_OFFSET, &util, sizeof(util));
+    Read(b + BLD_PRODUCED_OFFSET, &prod, sizeof(prod));
+    bool hasEff = isfinite(effCap) && effCap >= 0.0001f;
+    bool hasUtil = isfinite(util) && util >= 0.0001f;
+    bool hasProd = isfinite(prod) && prod >= 0.0001f;
+    if (!hasEff && !hasUtil && !hasProd) return 0.0f;
+    float factor = (hasUtil && util <= 1.0f) ? util : ((hasEff && effCap <= 1.0f) ? effCap : 1.0f);
+    return (typeSpeed * factor) / DETERMINISM_FIXED_FPS;
+}
+
+float HeldFrame_StepBuildingAnimFrame(float currentFrame, float maxFrames, float stepPerTick, float fps, bool paused)
+{
+    if (!isfinite(maxFrames) || maxFrames <= 0.0f) return 0.0f;
+    float safeCurrent = (isfinite(currentFrame) && currentFrame >= 0.0f) ? currentFrame : 0.0f;
+    if (safeCurrent >= maxFrames) {
+        safeCurrent = fmodf(safeCurrent, maxFrames);
+    }
+    if (paused || !isfinite(stepPerTick) || stepPerTick <= 0.0f || !isfinite(fps) || fps <= 0.0f) {
+        return safeCurrent;
+    }
+    float clampedFps = fps < 4.0f ? 4.0f : (fps > 1000.0f ? 1000.0f : fps);
+    float ticksInFrame = DETERMINISM_FIXED_FPS / clampedFps;
+    float next = safeCurrent + stepPerTick * ticksInFrame;
+    if (next >= maxFrames) {
+        next = fmodf(next, maxFrames);
+    }
+    return next;
+}
+
+void HeldFrame_BeforeEarly()
+{
+    if (!g_exeBase || !Determinism_IsActive() || Probe_IsRunning() || Determinism_WorldLoading()) return;
+    BYTE** it = nullptr;
+    BYTE** end = nullptr;
+    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
+        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
+        return;
+    }
+    size_t count = (size_t)(end - it);
+    if (count > 1000000) return;
+    for (size_t i = 0; i < count; ++i) {
+        BYTE* b = nullptr;
+        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
+        float maxFrames = 0.0f, typeSpeed = 0.0f;
+        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
+        float curFrame = 0.0f;
+        Read(b + BLD_ANIM_FRAME_OFFSET, &curFrame, sizeof(curFrame));
+        if (!isfinite(curFrame) || curFrame < 0.0f || curFrame >= maxFrames) {
+            curFrame = (isfinite(curFrame) && curFrame > 0.0f) ? fmodf(curFrame, maxFrames) : 0.0f;
+        }
+        BuildingAnimState& st = g_buildingAnimState[b];
+        st.visualFrame = curFrame;
+        float zero = 0.0f;
+        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, zero);
+    }
+}
+
+static void RestoreBuildingAnimationsAfterEarly()
+{
+    if (!g_exeBase || !Determinism_IsActive() || Probe_IsRunning() || Determinism_WorldLoading()) return;
+    BYTE** it = nullptr;
+    BYTE** end = nullptr;
+    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
+        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
+        return;
+    }
+    size_t count = (size_t)(end - it);
+    if (count > 1000000) return;
+    int bucketCounter = 0;
+    Read(g_exeBase + BLD_PASS_BUCKET_COUNTER_RVA, &bucketCounter, sizeof(bucketCounter));
+    int activeBucket = bucketCounter % 3;
+    size_t liveAnimated = 0;
+    for (size_t i = 0; i < count; ++i) {
+        BYTE* b = nullptr;
+        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
+        float maxFrames = 0.0f, typeSpeed = 0.0f;
+        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
+        ++liveAnimated;
+        float delta3 = 0.0f;
+        Read(b + BLD_ANIM_FRAME_OFFSET, &delta3, sizeof(delta3));
+        BuildingAnimState& st = g_buildingAnimState[b];
+        bool inBucket = (((int)i % 3) == activeBucket);
+        if (inBucket || (isfinite(delta3) && delta3 > 0.0f)) {
+            if (isfinite(delta3) && delta3 >= 0.0f && delta3 < maxFrames) {
+                st.stepPerTick = delta3 / 3.0f;
+                st.hasMeasuredStep = true;
+            }
+        }
+        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, st.visualFrame);
+    }
+    if (g_buildingAnimState.size() > liveAnimated + 64) {
+        std::unordered_set<BYTE*> still(it, end);
+        for (auto mapIt = g_buildingAnimState.begin(); mapIt != g_buildingAnimState.end();) {
+            if (!still.count(mapIt->first)) mapIt = g_buildingAnimState.erase(mapIt);
+            else ++mapIt;
+        }
+    }
+}
+
+void HeldFrame_StepBuildingAnimations(float fps)
+{
+    if (!g_exeBase || !Determinism_IsActive() || Probe_IsRunning() || Determinism_WorldLoading()) return;
+    bool paused = false;
+    int speed = 1;
+    Determinism_SessionSpeed(&paused, &speed);
+    BYTE menuByte = 0;
+    Read(g_exeBase + 0x9D4EE0 + 13, &menuByte, sizeof(menuByte));
+    if (paused || menuByte != 0 || !isfinite(fps) || fps <= 0.0f) return;
+
+    BYTE** it = nullptr;
+    BYTE** end = nullptr;
+    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
+        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
+        return;
+    }
+    size_t count = (size_t)(end - it);
+    if (count > 1000000) return;
+    for (size_t i = 0; i < count; ++i) {
+        BYTE* b = nullptr;
+        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
+        float maxFrames = 0.0f, typeSpeed = 0.0f;
+        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
+        BuildingAnimState& st = g_buildingAnimState[b];
+        float fallbackStep = ComputeFallbackAnimStepPerTick(b, typeSpeed);
+        float stepPerTick = 0.0f;
+        if (fallbackStep > 0.0f) {
+            stepPerTick = (st.hasMeasuredStep && st.stepPerTick > 0.0f) ? st.stepPerTick : fallbackStep;
+        }
+        if (stepPerTick <= 0.0f) continue;
+        float curFrame = 0.0f;
+        Read(b + BLD_ANIM_FRAME_OFFSET, &curFrame, sizeof(curFrame));
+        float nextFrame = HeldFrame_StepBuildingAnimFrame(curFrame, maxFrames, stepPerTick, fps, false);
+        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, nextFrame);
+        st.visualFrame = nextFrame;
+    }
+}
+
 void HeldFrame_AfterEarly()
 {
     Determinism_PrivateScope privateRng;
+    RestoreBuildingAnimationsAfterEarly();
     DrawDoors();
     DrawCitizens();
 }

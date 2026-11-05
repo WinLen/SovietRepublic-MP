@@ -366,6 +366,9 @@
 #ifndef WORLD_ELENERGY_RES_PTR_OFF
 #define WORLD_ELENERGY_RES_PTR_OFF    0xC3B8
 #endif
+#ifndef WORLD_WASTE_RESOURCES_OFFSET
+#define WORLD_WASTE_RESOURCES_OFFSET  0x12060u
+#endif
 
 #ifndef RVA_BLD_SIM_LOOP_HEAD
 #define RVA_BLD_SIM_LOOP_HEAD       0x13CCFE
@@ -1636,6 +1639,45 @@ static_assert(CAM_MGR_PID_PTRS_OFFSET + CAM_MGR_PID_COUNT * sizeof(void*) == 0x1
               RVA_VEH_ARRIVAL_STEP == 0x6CD1E0 &&
               RVA_VEH_ASSIGN_BAY_PATH == 0x6B2A60,
               "Camera manager PID pointers (+0xF8..+0x128) and vehicle trail buffer/axle offsets (+0x1168..+0x130C) must match 1.1.1.9 layout");
+
+// Building animated sub-mesh (oil pumpjack / excavator / mine hoist / wind turbine / factory rotor) offsets
+#ifndef BLD_CONSTRUCTION_SITE_OFFSET
+#define BLD_CONSTRUCTION_SITE_OFFSET        0x628u   // BUILDING::constructionSite pointer (non-null while under construction)
+#endif
+#ifndef BLD_ANIM_SUBMESH_OFFSET
+#define BLD_ANIM_SUBMESH_OFFSET             0x5E0u   // C3D_MESH* animated sub-mesh pointer on BUILDING (matches TYPE+0x420)
+#endif
+#ifndef BLD_ANIM_FRAME_OFFSET
+#define BLD_ANIM_FRAME_OFFSET               0x5F0u   // float current animation frame [0.0f .. maxFrames)
+#endif
+#ifndef BLD_UTILIZATION_RATIO_OFFSET
+#define BLD_UTILIZATION_RATIO_OFFSET        0xDE0u   // float current production / load utilization ratio
+#endif
+#ifndef BLD_TYPE_ANIM_SUBMESH_OFFSET
+#define BLD_TYPE_ANIM_SUBMESH_OFFSET        0x420u   // C3D_MESH* animated sub-mesh pointer in BUILDING::TYPE
+#endif
+#ifndef BLD_TYPE_ANIM_SPEED_OFFSET
+#define BLD_TYPE_ANIM_SPEED_OFFSET          0x428u   // float animation speed multiplier in BUILDING::TYPE
+#endif
+#ifndef MESH_ANIM_CTRL_OFFSET
+#define MESH_ANIM_CTRL_OFFSET               0x1B0u   // C3D_MESH animation controller pointer
+#endif
+#ifndef ANIM_CTRL_MAX_FRAMES_OFFSET
+#define ANIM_CTRL_MAX_FRAMES_OFFSET         0x09Cu   // int32_t total animation frames in controller
+#endif
+#ifndef BLD_PASS_BUCKET_COUNTER_RVA
+#define BLD_PASS_BUCKET_COUNTER_RVA         0x9962A8u // int32_t 1-in-3 building pass bucket counter (incremented at 0x13CB52)
+#endif
+
+static_assert(BLD_CONSTRUCTION_SITE_OFFSET == 0x628u &&
+              BLD_ANIM_FRAME_OFFSET == BLD_ANIM_SUBMESH_OFFSET + 0x10u &&
+              BLD_UTILIZATION_RATIO_OFFSET == BLD_PRODUCED_OFFSET - 4u &&
+              BLD_TYPE_ANIM_SPEED_OFFSET == BLD_TYPE_ANIM_SUBMESH_OFFSET + 8u &&
+              MESH_ANIM_CTRL_OFFSET == 0x1B0u &&
+              ANIM_CTRL_MAX_FRAMES_OFFSET == 0x09Cu &&
+              BLD_PASS_BUCKET_COUNTER_RVA == 0x9962A8u,
+              "Building animated sub-mesh (+0x5E0/+0x5F0), type speed (+0x428), and mesh anim controller (+0x1B0/+0x9C) offsets must match 1.1.1.9 layout");
+
 
 
 

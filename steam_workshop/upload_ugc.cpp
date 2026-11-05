@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Sync construction office copy-source tool & tower crane dispatch, preserve Client waiting tourists & tourism stats across save/load, and fix train/wagon soft-sync flickering",
+                "v%s (Protocol %d) - Fix waste truck (SKD 706R) toxic/hazardous waste stop filters & 9-component cargo sync, and local full-FPS oil pumpjack / building animations",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

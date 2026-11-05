@@ -83,6 +83,21 @@ bool Ref_DefPtr(U64 p, unsigned char& tag, unsigned& index)
             return true;
         }
     }
+    const unsigned slotCount = (WORLD_RES_PTR_SLOTS_END_OFF - WORLD_RES_PTR_SLOTS_BEGIN_OFF) / 8u;
+    for (unsigned i = 0; i < slotCount; i++) {
+        U64 slotPtr = 0;
+        if (SafeMemcpyPod(&slotPtr, World() + WORLD_RES_PTR_SLOTS_BEGIN_OFF + (size_t)i * 8u, 8) && slotPtr == p) {
+            tag = 3;
+            index = i;
+            return true;
+        }
+    }
+    unsigned wasteIdx = Ref_IndexInVector((U64)(World() + WORLD_WASTE_RESOURCES_OFFSET), p);
+    if (wasteIdx != 0xFFFFFFFFu) {
+        tag = 4;
+        index = wasteIdx;
+        return true;
+    }
     return false;
 }
 
@@ -90,6 +105,19 @@ bool Ref_DefPtrAt(unsigned char tag, unsigned index, U64& p)
 {
     p = 0;
     if (tag == 0) return index == 0;
+    if (tag == 3) {
+        const unsigned slotCount = (WORLD_RES_PTR_SLOTS_END_OFF - WORLD_RES_PTR_SLOTS_BEGIN_OFF) / 8u;
+        if (index >= slotCount) return false;
+        U64 slotPtr = 0;
+        if (!SafeMemcpyPod(&slotPtr, World() + WORLD_RES_PTR_SLOTS_BEGIN_OFF + (size_t)index * 8u, 8) || !slotPtr)
+            return false;
+        p = slotPtr;
+        return true;
+    }
+    if (tag == 4) {
+        p = Ref_AtVectorIndex((U64)(World() + WORLD_WASTE_RESOURCES_OFFSET), index);
+        return p != 0;
+    }
     if (tag > 2) return false;
     unsigned table = tag == 1 ? WORLD_RESOURCES_OFFSET : WORLD_VEHICLE_TYPES_OFFSET;
     unsigned stride = tag == 1 ? WORLD_RESOURCE_STRIDE : WORLD_VEHICLE_TYPE_STRIDE;

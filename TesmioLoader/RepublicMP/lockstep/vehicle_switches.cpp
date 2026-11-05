@@ -151,6 +151,7 @@ static bool PointerLike(U64 v)
 
 static bool TextWord(int kind, unsigned offset)
 {
+    if (kind == KIND_CARGO) return (offset % CARGO_BYTES) == 0x0Cu;
     return kind == KIND_VEHICLE && offset >= NAME_FLAG && offset < NAME_END;
 }
 
@@ -183,7 +184,7 @@ static bool ListWord(int kind, unsigned offset)
                (offset >= 0x1A7C && offset < 0x1A84) ||
                (offset >= 0x1AD0 && offset < 0x1AD8);
     }
-    if (kind == KIND_CARGO) return offset < 8; // Resource* pointer at cargo entry +0x00
+    if (kind == KIND_CARGO) return (offset % CARGO_BYTES) < 0x0Cu; // Resource* (+0x00) and dynamic amountTons (+0x08); only filterFlag (+0x0C) is a UI switch
     if (kind != KIND_STOP || offset >= 2 * HALF_BYTES) return false;
     unsigned l = offset % HALF_BYTES;
     return (l >= 0x8 && l < 0x20) || l >= 0x38;
@@ -223,7 +224,7 @@ static void Compare(const Snap& s, int kind, bool click)
         U64 a = *(const U64*)(old + q), b = *(const U64*)(cur.data() + q);
         if (a == b) continue;
         unsigned inRecord = (unsigned)(q % kRecordBytes[kind]);
-        bool heap = (PointerLike(a) || PointerLike(b)) && !TextWord(kind, inRecord);
+        bool heap = (PointerLike(a) || PointerLike(b)) && !TextWord(kind, inRecord) && !(kind == KIND_CARGO && inRecord == 8);
         for (unsigned h = 0; h < 8; h += 4) {
             unsigned wa = *(const unsigned*)(old + q + h), wb = *(const unsigned*)(cur.data() + q + h);
             if (wa == wb) continue;

@@ -1039,7 +1039,10 @@ static bool InstallToolStubs()
 void SimPatches_BeforeEarly(__int64 world)
 {
     g_simThread = GetCurrentThreadId();
-    if (g_on) RecountPopulation(world);
+    if (g_on) {
+        RecountPopulation(world);
+        HeldFrame_BeforeEarly();
+    }
     g_inPhase = true;
 }
 

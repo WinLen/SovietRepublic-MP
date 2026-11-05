@@ -23,8 +23,11 @@ void HeldFrame_SubmitVehicleHighlight(void* vehicle, unsigned char a2, unsigned 
 void HeldFrame_SetHighlightCaptureForTest(void (*cb)(BYTE* veh, bool isExtraPass, void* ud), void* ud = nullptr);
 // Main thread, under the renderer lock. False stops the probe on a guard fault.
 bool HeldFrame_Draw(bool entitiesReady);
-// Main thread, right after Early: the doors and the citizens this PC sees.
+// Main thread, right before and after Early: local full-FPS building sub-mesh animations, doors, and citizens.
+void HeldFrame_BeforeEarly();
 void HeldFrame_AfterEarly();
+float HeldFrame_StepBuildingAnimFrame(float currentFrame, float maxFrames, float stepPerTick, float fps, bool paused);
+void HeldFrame_StepBuildingAnimations(float fps);
 // Unit test harness for VehicleGuard Begin / End lifecycle
 bool HeldFrame_RunVehicleGuardForTest(BYTE* listAt, float alpha, void (*modifyFn)(void* ud) = nullptr, void* ud = nullptr);
 

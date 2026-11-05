@@ -519,9 +519,30 @@ static bool Test_WorldRefs()
     TEST_CHECK(!Ref_DefPtr(res2Ptr + 4, defTag, defIdx));
     TEST_CHECK(!Ref_DefPtrAt(1, 10, resolvedDef));
 
-    bldVec.clear(); conVec.clear();
+    // Tag 3: Heap-allocated utility & waste Resource* pointer slots at WORLD_RES_PTR_SLOTS_BEGIN_OFF .. END_OFF
+    // (e.g. waste_toxic at world + 0xC400 -> slot index (0xC400 - 0xC2C8) / 8 = 39)
+    std::vector<BYTE> fakeWasteToxic(WORLD_RESOURCE_STRIDE, 0);
+    strcpy_s((char*)fakeWasteToxic.data(), 32, "waste_toxic");
+    const unsigned kToxicSlotIdx = (0xC400u - WORLD_RES_PTR_SLOTS_BEGIN_OFF) / 8u;
+    *(U64*)(world + WORLD_RES_PTR_SLOTS_BEGIN_OFF + (size_t)kToxicSlotIdx * 8u) = (U64)fakeWasteToxic.data();
+    TEST_CHECK(Ref_DefPtr((U64)fakeWasteToxic.data(), defTag, defIdx) && defTag == 3 && defIdx == kToxicSlotIdx);
+    TEST_CHECK(Ref_DefPtrAt(defTag, defIdx, resolvedDef) && resolvedDef == (U64)fakeWasteToxic.data());
+    TEST_CHECK(!Ref_DefPtrAt(3, 999, resolvedDef));
+
+    // Tag 4: Waste resource vector at WORLD_WASTE_RESOURCES_OFFSET (world + 0x12060)
+    std::vector<BYTE> fakeWasteOther(WORLD_RESOURCE_STRIDE, 0);
+    strcpy_s((char*)fakeWasteOther.data(), 32, "waste_other");
+    std::vector<BYTE*> wasteVec = { fakeWasteToxic.data(), fakeWasteOther.data() };
+    WriteMockVectorHeader(world + WORLD_WASTE_RESOURCES_OFFSET, wasteVec);
+    TEST_CHECK(Ref_DefPtr((U64)fakeWasteOther.data(), defTag, defIdx) && defTag == 4 && defIdx == 1u);
+    TEST_CHECK(Ref_DefPtrAt(defTag, defIdx, resolvedDef) && resolvedDef == (U64)fakeWasteOther.data());
+    TEST_CHECK(!Ref_DefPtrAt(4, 10, resolvedDef));
+
+    bldVec.clear(); conVec.clear(); wasteVec.clear();
     WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
     WriteMockVectorHeader(world + WORLD_CONSTRUCTIONS_OFFSET, conVec);
+    WriteMockVectorHeader(world + WORLD_WASTE_RESOURCES_OFFSET, wasteVec);
+    *(U64*)(world + WORLD_RES_PTR_SLOTS_BEGIN_OFF + (size_t)kToxicSlotIdx * 8u) = 0;
     *(BYTE**)(world + 0xFA28) = nullptr;
     *(U64*)(world + WORLD_RESOURCES_OFFSET) = 0;
     *(U64*)(world + WORLD_RESOURCES_OFFSET + 8) = 0;
@@ -4806,6 +4827,15 @@ static bool SubTest_StoppedTrainAndWagonEffectiveBld()
 
     // Verify VehicleSwitches excludes +0x4C8..+0x4E8 (+0x4D0 runtime state) from UI switch detection
     TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, 0x4D0));
+
+    // Verify VehicleSwitches KIND_CARGO (2) excludes Resource* (+0x00/+0x04) and dynamic amountTons (+0x08, +0x18),
+    // while allowing UI cargo filterFlag (+0x0C, +0x1C)
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x00));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x04));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x08));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x0C));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x18)); // entry[1].amountTons (waste_aluminum)
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(2 /*KIND_CARGO*/, 0x1C)); // entry[1].filterFlag
     return true;
 }
 
@@ -5097,6 +5127,53 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
     TEST_CHECK_NEAR(*(float*)(entriesBuf.data() + 2 * 0x10 + 0x08),  5.0f, 1e-4f);
     TEST_CHECK(*(int*)(bld88.data() + BLD_EXPORT_MODE_OFFSET) == 0);
     TEST_CHECK_NEAR(*(double*)(world + WORLD_RUB_OFFSET), 99300.0, 1e-2);
+
+    // 6. Verify 9-component waste container truck (SKD 706R) cargo soft-sync & heap waste Resource* lookup:
+    //    Ensures entry[7] (waste_toxic at world + 0xC400) is synced alongside entry[0..1] (waste_metal / waste_aluminum)
+    //    so 0x14019CD70 never misclassifies hospital toxic waste as aluminum/metal scrap on the Client!
+    const char* const kWasteNames[9] = {
+        "waste_metal", "waste_aluminum", "waste_plastic", "waste_bio", "waste_burnable",
+        "waste_construction", "waste_ash", "waste_toxic", "waste_other"
+    };
+    const float kWasteTons[9] = { 0.0f, 0.25f, 0.0f, 0.0f, 0.40f, 0.0f, 0.10f, 1.75f, 0.0f };
+    std::vector<BYTE> wasteResPool(WORLD_RESOURCE_STRIDE * 9, 0);
+    for (int i = 0; i < 9; ++i) {
+        BYTE* wr = wasteResPool.data() + (size_t)i * WORLD_RESOURCE_STRIDE;
+        strcpy_s((char*)wr, 32, kWasteNames[i]);
+        *(BYTE**)(world + 0xC3C8 + (size_t)i * 8u) = wr;
+    }
+    std::vector<BYTE> skdTruck(0x1B00, 0);
+    *(unsigned*)(skdTruck.data() + VEH_ID_OFFSET) = 121;
+    *(float*)(skdTruck.data() + 0xD24) = 25.0f; // moving
+    std::vector<BYTE> skdCargo(0x10 * 9, 0);
+    for (int i = 0; i < 9; ++i) {
+        BYTE* ce = skdCargo.data() + (size_t)i * 0x10;
+        *(const char**)ce = (const char*)(wasteResPool.data() + (size_t)i * WORLD_RESOURCE_STRIDE);
+        *(float*)(ce + 0x08) = kWasteTons[i];
+    }
+    *(BYTE**)(skdTruck.data() + VEH_CARGO_OFFSET)     = skdCargo.data();
+    *(BYTE**)(skdTruck.data() + VEH_CARGO_OFFSET + 8) = skdCargo.data() + skdCargo.size();
+    BYTE* skdList[1] = { skdTruck.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET)     = skdList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = skdList + 1;
+
+    // Also populate slot 0 on bld88 with heap-allocated waste_toxic (entry 0) to verify FindResourceByHash via 0xC2C8..0xC430
+    *(const char**)(entriesBuf.data() + 0 * 0x10) = (const char*)(wasteResPool.data() + 7 * WORLD_RESOURCE_STRIDE);
+    *(float*)(entriesBuf.data() + 0 * 0x10 + 0x08) = 3.25f;
+    *(BYTE**)(slotBuf.data() + 0x08) = entriesBuf.data() + 0x10;
+
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(wire.data(), wire.size(), &wireBytes, true));
+
+    // Simulate Client having zeroed entry[7] (waste_toxic) and empty slot 0 (sEnd == sBeg)
+    *(float*)(skdCargo.data() + 7 * 0x10 + 0x08) = 0.0f;
+    *(BYTE**)(slotBuf.data() + 0x08) = entriesBuf.data();
+    memset(entriesBuf.data(), 0, 0x10);
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(wire.data(), wireBytes));
+
+    TEST_CHECK_NEAR(*(float*)(skdCargo.data() + 1 * 0x10 + 0x08), 0.25f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(skdCargo.data() + 7 * 0x10 + 0x08), 1.75f, 1e-4f);
+    TEST_CHECK(*(const char**)(entriesBuf.data() + 0 * 0x10) == (const char*)(wasteResPool.data() + 7 * WORLD_RESOURCE_STRIDE));
+    TEST_CHECK_NEAR(*(float*)(entriesBuf.data() + 0 * 0x10 + 0x08), 3.25f, 1e-4f);
 
     return true;
 }
@@ -6605,8 +6682,23 @@ static bool SubTest_T1_R17_OilPumpModelAndAnimation()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
+    std::vector<BYTE> animCtrl(0x100, 0);
+    *(int32_t*)(animCtrl.data() + ANIM_CTRL_MAX_FRAMES_OFFSET) = 100; // 100 animation frames
+
+    std::vector<BYTE> mesh(0x200, 0);
+    *(BYTE**)(mesh.data() + MESH_ANIM_CTRL_OFFSET) = animCtrl.data();
+
+    std::vector<BYTE> bldType(0x800, 0);
+    *(BYTE**)(bldType.data() + BLD_TYPE_ANIM_SUBMESH_OFFSET) = mesh.data();
+    *(float*)(bldType.data() + BLD_TYPE_ANIM_SPEED_OFFSET) = 30.0f; // 30 frames/sec (1.0 frame/tick at 30 Hz)
+
     std::vector<BYTE> pump(BUILDING_STRUCT_BYTES, 0);
     *(int*)pump.data() = 701;
+    *(BYTE**)(pump.data() + BLD_TYPE_OFFSET) = bldType.data();
+    *(BYTE**)(pump.data() + BLD_ANIM_SUBMESH_OFFSET) = mesh.data();
+    *(float*)(pump.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(pump.data() + BLD_PRODUCED_OFFSET) = 4.2f; // producing oil
+    *(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET) = 12.5f;
     pump[0x115A] = 1;
     *(float*)(pump.data() + 0x115C) = 150.0f;
 
@@ -6614,33 +6706,56 @@ static bool SubTest_T1_R17_OilPumpModelAndAnimation()
     TEST_CHECK(pump[0x115A] == 1);
     TEST_CHECK_NEAR(*(float*)(pump.data() + 0x115C), 150.0f, 1e-4f);
 
-    // 2. Nodding animation angle advances
-    float animAngle0 = 0.0f;
-    float animAngle1 = 0.52f;
-    TEST_CHECK(animAngle1 > animAngle0);
+    // 2. Smooth per-frame progression at 144 FPS and 60 FPS with wrap-around and pause freeze
+    float f0 = 0.0f;
+    for (int i = 0; i < 144; ++i) {
+        f0 = HeldFrame_StepBuildingAnimFrame(f0, 100.0f, 1.0f, 144.0f, false);
+    }
+    TEST_CHECK_NEAR(f0, 30.0f, 1e-3f); // 1.0 second at 30 frames/sec
 
-    // 3. Working pump with power animates
-    bool hasPower = true;
-    TEST_CHECK(hasPower);
+    float fWrap = HeldFrame_StepBuildingAnimFrame(99.5f, 100.0f, 1.0f, 30.0f, false);
+    TEST_CHECK_NEAR(fWrap, 0.5f, 1e-4f); // preserves fractional overshoot across wrap
 
-    // 4. Advancing render frames does NOT change simulation state hash
+    float fPaused = HeldFrame_StepBuildingAnimFrame(42.0f, 100.0f, 1.0f, 144.0f, true);
+    TEST_CHECK_NEAR(fPaused, 42.0f, 1e-5f);
+
+    // 3. BeforeEarly / AfterEarly suppresses Early's 5 Hz 3-tick jump while capturing rate
     std::vector<BYTE*> bldList = { pump.data() };
     WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldList);
+    Determinism_SetActiveForTest(true);
+    HeldFrame_Reset();
+
+    HeldFrame_BeforeEarly();
+    TEST_CHECK_NEAR(*(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET), 0.0f, 1e-5f);
+    // Simulate Early's 1-in-3 bucket step adding 3.0 frames
+    *(int*)(g_mockExeBuffer + BLD_PASS_BUCKET_COUNTER_RVA) = 0;
+    *(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET) = 3.0f;
+    HeldFrame_AfterEarly();
+    // Visual frame must be restored to 12.5f (no 3.0f jump!)
+    TEST_CHECK_NEAR(*(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET), 12.5f, 1e-4f);
+
+    // Step one rendered frame at 60 FPS (0.5 tick -> +0.5 frame)
+    HeldFrame_StepBuildingAnimations(60.0f);
+    TEST_CHECK_NEAR(*(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET), 13.0f, 1e-4f);
+
+    // 4. Advancing render frames does NOT change simulation state hash
     StateSummary summary1 = {};
     TEST_CHECK(StateHash_Compute(&summary1));
     U64 hash1 = StateHash_All(summary1);
-    animAngle0 = 1.05f;
-    (void)animAngle0;
+    HeldFrame_StepBuildingAnimations(144.0f);
     StateSummary summary2 = {};
     TEST_CHECK(StateHash_Compute(&summary2));
     U64 hash2 = StateHash_All(summary2);
     TEST_CHECK(hash1 == hash2);
 
-    // 5. Multiple oil pumps animate independently
-    std::vector<BYTE> pump2(BUILDING_STRUCT_BYTES, 0);
-    pump2[0x115A] = 1;
-    TEST_CHECK(pump[0x115A] == 1 && pump2[0x115A] == 1);
+    // 5. Idle pumpjack (produced == 0) stops advancing
+    *(float*)(pump.data() + BLD_PRODUCED_OFFSET) = 0.0f;
+    float beforeIdle = *(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET);
+    HeldFrame_StepBuildingAnimations(144.0f);
+    TEST_CHECK_NEAR(*(float*)(pump.data() + BLD_ANIM_FRAME_OFFSET), beforeIdle, 1e-5f);
 
+    Determinism_SetActiveForTest(false);
+    HeldFrame_Reset();
     bldList.clear();
     WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldList);
     return true;
@@ -8238,8 +8353,8 @@ struct VehicleSoftSyncEntry_M4 {
     float pos[3];
     unsigned short cargoCount;
     unsigned short flags;
-    unsigned cargoResHash[2];
-    float cargoAmount[2];
+    unsigned cargoResHash[SOFT_SYNC_VEH_CARGO_MAX];
+    float cargoAmount[SOFT_SYNC_VEH_CARGO_MAX];
     float passengers;
 };
 
