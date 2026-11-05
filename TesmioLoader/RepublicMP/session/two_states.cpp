@@ -11,6 +11,7 @@
 #include "../lockstep/building_switches.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
+#include "../world_sync/buildings/build_sync.h"
 #include "../determinism/determinism.h"
 #include "../ui/lang.h"
 #include "../ui/native_menu.h"
@@ -1508,6 +1509,15 @@ static const BYTE kMinimapDrawContentExpect[16] = {
 static const BYTE kMinimapDrawButtonsExpect[15] = {
     0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xA1,
     0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00
+};
+static const BYTE kBldCountLimitCheckExpect[15] = {
+    0x4C, 0x8B, 0xCA, 0x48, 0x85, 0xD2, 0x0F, 0x84,
+    0x8D, 0x00, 0x00, 0x00, 0x4C, 0x8B, 0x11
+};
+static const BYTE kBldCountLimitGetExpect[21] = {
+    0x4C, 0x8B, 0xD2, 0x4D, 0x85, 0xC0, 0x74, 0x45,
+    0x4C, 0x8B, 0x19, 0x48, 0xB8, 0xAB, 0xAA, 0xAA,
+    0xAA, 0xAA, 0xAA, 0xAA, 0x2A
 };
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
@@ -3724,6 +3734,157 @@ bool TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYT
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Per-State Free / Limited Building Quota ($COUNT_LIMIT, world + 0x58)
+// ---------------------------------------------------------------------------
+
+#pragma pack(push, 1)
+struct SovietCountLimitEntry {
+    const BYTE* primaryType;         // +0x00
+    const BYTE* mirroredType;        // +0x08 (_mirror variant)
+    int32_t     currentCount;        // +0x10
+    int32_t     customLimitOverride; // +0x14 (-1 = use *(int32_t*)(primaryType + 0x208))
+};
+#pragma pack(pop)
+static_assert(sizeof(SovietCountLimitEntry) == 24, "SovietCountLimitEntry must be 24 bytes");
+
+static bool LookupCountLimitEntry(const BYTE* limitTableVec, const BYTE* btype, SovietCountLimitEntry* outEntry)
+{
+    if (!limitTableVec || !btype || !outEntry) return false;
+    uintptr_t ptrs[2] = {};
+    if (!SafeMemcpyPod(ptrs, limitTableVec, sizeof(ptrs))) return false;
+    const SovietCountLimitEntry* b = (const SovietCountLimitEntry*)ptrs[0];
+    const SovietCountLimitEntry* e = (const SovietCountLimitEntry*)ptrs[1];
+    if (!b || e <= b) return false;
+    ptrdiff_t byteLen = (const BYTE*)e - (const BYTE*)b;
+    if (byteLen <= 0 || (byteLen % (ptrdiff_t)sizeof(SovietCountLimitEntry)) != 0) return false;
+    int count = (int)(byteLen / (ptrdiff_t)sizeof(SovietCountLimitEntry));
+    if (count <= 0 || count > 4096) return false;
+
+    bool found = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (int i = 0; i < count; ++i) {
+            if (b[i].primaryType == btype || b[i].mirroredType == btype) {
+                *outEntry = b[i];
+                found = true;
+                break;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        found = false;
+    }
+    DiagLog_EndSafeSeh();
+    return found;
+}
+
+static int32_t CountStateBuildingsForLimitEntry(const BYTE* world, const SovietCountLimitEntry& entry, int stateOwner)
+{
+    if (!world || (stateOwner != 1 && stateOwner != 2)) return entry.currentCount;
+    int32_t matched = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* const* b = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
+        const BYTE* const* e = *(const BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        if (b && e > b && (e - b) <= 200000) {
+            for (const BYTE* const* it = b; it < e; ++it) {
+                const BYTE* bld = *it;
+                if (!bld) continue;
+                const BYTE* bldType = *(const BYTE* const*)(bld + BLD_TYPE_OFFSET);
+                if (!bldType) continue;
+                if ((entry.primaryType && bldType == entry.primaryType) ||
+                    (entry.mirroredType && bldType == entry.mirroredType)) {
+                    float x = *(const float*)(bld + OBJ_POS_OFFSET);
+                    float z = *(const float*)(bld + OBJ_POS_OFFSET + 8);
+                    if (TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(x, z), x, z) == stateOwner) {
+                        matched++;
+                    }
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        matched = entry.currentCount;
+    }
+    DiagLog_EndSafeSeh();
+    return matched;
+}
+
+static int ResolveActiveCountLimitState(int stateOverride)
+{
+    if (stateOverride == 1 || stateOverride == 2) return stateOverride;
+    if (!IsTwoStatesResearchOrLicenseActive()) return 0;
+    int st = g_inCommand
+        ? g_cmdOwner
+        : (BuildSync_IsApplyingRemote() ? (3 - TwoStates_LocalState()) : TwoStates_LocalState());
+    return (st == 1 || st == 2) ? st : 1;
+}
+
+static bool ResolveEffectiveCountLimitEntry(const BYTE* world, const BYTE* limitTableVec,
+                                            const BYTE* btype, int stateOverride,
+                                            SovietCountLimitEntry* outEntry)
+{
+    if (!outEntry) return false;
+    outEntry->primaryType = nullptr;
+    outEntry->mirroredType = nullptr;
+    outEntry->currentCount = 0;
+    outEntry->customLimitOverride = -1;
+    if (!LookupCountLimitEntry(limitTableVec, btype, outEntry)) return false;
+
+    if (outEntry->customLimitOverride == -1) {
+        const BYTE* limType = outEntry->primaryType ? outEntry->primaryType : outEntry->mirroredType;
+        int32_t typeLim = -1;
+        if (limType && SafeReadPod((const int32_t*)(limType + BLD_TYPE_COUNT_LIMIT_OFFSET), &typeLim)) {
+            outEntry->customLimitOverride = typeLim;
+        }
+    }
+
+    int activeState = ResolveActiveCountLimitState(stateOverride);
+    if (activeState == 1 || activeState == 2) {
+        const BYTE* effWorld = world ? world : (g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr);
+        if (effWorld) {
+            outEntry->currentCount = CountStateBuildingsForLimitEntry(effWorld, *outEntry, activeState);
+        }
+    }
+    return true;
+}
+
+bool TwoStates_CheckBuildingCountLimitForTest(const BYTE* world, const BYTE* limitTableVec,
+                                              const BYTE* btype, int stateOverride)
+{
+    if (!btype) return false;
+    SovietCountLimitEntry entry = {};
+    if (!ResolveEffectiveCountLimitEntry(world, limitTableVec, btype, stateOverride, &entry)) {
+        return true;
+    }
+    if (entry.customLimitOverride == -1) return true;
+    return entry.currentCount < entry.customLimitOverride;
+}
+
+bool TwoStates_GetBuildingCountLimitEntryForTest(const BYTE* world, const BYTE* limitTableVec,
+                                                 const BYTE* btype, int stateOverride,
+                                                 int32_t* outCur, int32_t* outMax)
+{
+    SovietCountLimitEntry entry = {};
+    bool found = ResolveEffectiveCountLimitEntry(world, limitTableVec, btype, stateOverride, &entry);
+    if (outCur) *outCur = entry.currentCount;
+    if (outMax) *outMax = entry.customLimitOverride;
+    return found;
+}
+
+static unsigned char __fastcall H_BldCountLimitCheck(const BYTE* limitTableVec, const BYTE* btype)
+{
+    return TwoStates_CheckBuildingCountLimitForTest(nullptr, limitTableVec, btype, 0) ? 1 : 0;
+}
+
+static SovietCountLimitEntry* __fastcall H_BldCountLimitGet(const BYTE* limitTableVec,
+                                                            SovietCountLimitEntry* outEntry,
+                                                            const BYTE* btype)
+{
+    if (!outEntry) return nullptr;
+    ResolveEffectiveCountLimitEntry(nullptr, limitTableVec, btype, 0, outEntry);
+    return outEntry;
+}
+
 static void __fastcall H_CalcStoredResources(BYTE* world, uintptr_t a2, uintptr_t a3, uintptr_t a4,
                                              uintptr_t a5, uintptr_t a6, uintptr_t a7, uintptr_t a8)
 {
@@ -5369,6 +5530,30 @@ static int InstallCitSevereIllnessHook()
                               "cit_severe_illness_tick") ? 1 : 0;
 }
 
+static int InstallBldCountLimitHooks()
+{
+    if (!g_exeBase) return 0;
+    void* stubCheck = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitCheck, false, false);
+    void* stubGet   = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitGet, false, false);
+    if (!stubCheck || !stubGet) return 0;
+    int patched = 0;
+    if (PatchJmp14WithNops(g_exeBase + RVA_BLD_COUNT_LIMIT_CHECK,
+                           sizeof(kBldCountLimitCheckExpect),
+                           kBldCountLimitCheckExpect,
+                           stubCheck,
+                           "bld_count_limit_check")) {
+        patched++;
+    }
+    if (PatchJmp14WithNops(g_exeBase + RVA_BLD_COUNT_LIMIT_GET,
+                           sizeof(kBldCountLimitGetExpect),
+                           kBldCountLimitGetExpect,
+                           stubGet,
+                           "bld_count_limit_get")) {
+        patched++;
+    }
+    return patched;
+}
+
 bool TwoStates_Install()
 {
     EnsureOwnerLock();
@@ -5578,10 +5763,11 @@ bool TwoStates_Install()
                                 sizeof(kMinimapDrawButtonsExpect), "republicmp two_states minimap_draw_buttons");
     econOk += InstallBldSimLoopHooks();
     econOk += InstallCitSevereIllnessHook();
+    econOk += InstallBldCountLimitHooks();
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/61), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/63), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }

@@ -459,7 +459,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix Client road connections to customs houses on desert maps, fix Client minimap button & overlay (<4 GB heap), fix 0x4FD008 road drag crash",
+                "v%s (Protocol %d) - Separate per-state free building limits ($COUNT_LIMIT) & deterministic 3D trailer/semi-trailer surface animation",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

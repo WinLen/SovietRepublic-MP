@@ -687,6 +687,35 @@ bool VehicleSoftSync_HasActiveEnginePathForTest(const BYTE* v)
     return HasActiveEnginePath(v);
 }
 
+static void ApplySingleVehicleTranslation(BYTE* v, float dx, float dy, float dz, bool smoothBlend)
+{
+    TranslateVehicleNodes(v, dx, dy, dz);
+    HeldFrame_OnVehicleSoftSynced(v);
+    if (smoothBlend) {
+        HeldFrame_AddVehicleSmoothOffset(v, -dx, -dy, -dz);
+    }
+}
+
+static void ApplyVehicleTranslationWithChildren(BYTE* v, float dx, float dy, float dz, bool smoothBlend)
+{
+    if (!v) return;
+    ApplySingleVehicleTranslation(v, dx, dy, dz, smoothBlend);
+    BYTE* const* cBegin = *(BYTE* const* const*)(v + VEH_CHILDREN_BEGIN_OFFSET);
+    BYTE* const* cEnd = *(BYTE* const* const*)(v + VEH_CHILDREN_END_OFFSET);
+    if (!cBegin || cEnd <= cBegin || (cEnd - cBegin) > 16) return;
+    for (BYTE* const* it = cBegin; it < cEnd; ++it) {
+        BYTE* child = *it;
+        if (child && child != v) {
+            ApplySingleVehicleTranslation(child, dx, dy, dz, smoothBlend);
+        }
+    }
+}
+
+void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, float dz, bool smoothBlend)
+{
+    ApplyVehicleTranslationWithChildren(v, dx, dy, dz, smoothBlend);
+}
+
 static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
     g_vssDiag.vehiclesSynced++;
@@ -715,21 +744,17 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
 
     if (e.currentBldId >= 0 && localBldId == e.currentBldId) {
         if (distSq > 0.0f && distSq < 400.0f && !HasActiveEnginePath(v)) {
-            TranslateVehicleNodes(v, dx, dy, dz);
-            HeldFrame_OnVehicleSoftSynced(v);
+            ApplyVehicleTranslationWithChildren(v, dx, dy, dz, false);
             g_vssDiag.posSnapped++;
         }
         return;
     }
     if (e.currentBldId < 0 && localBldId < 0 && !HasActiveEnginePath(v)) {
         if (distSq > 1e-4f && distSq < 2500.0f) {
-            TranslateVehicleNodes(v, dx, dy, dz);
-            HeldFrame_OnVehicleSoftSynced(v);
-            HeldFrame_AddVehicleSmoothOffset(v, -dx, -dy, -dz);
+            ApplyVehicleTranslationWithChildren(v, dx, dy, dz, true);
             g_vssDiag.posBlended++;
         } else if (distSq >= 2500.0f) {
-            TranslateVehicleNodes(v, dx, dy, dz);
-            HeldFrame_OnVehicleSoftSynced(v);
+            ApplyVehicleTranslationWithChildren(v, dx, dy, dz, false);
             g_vssDiag.posSnapped++;
         }
     }

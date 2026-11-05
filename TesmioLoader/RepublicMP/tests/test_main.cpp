@@ -5265,13 +5265,119 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
     return true;
 }
 
+static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Setup free construction office primary + mirrored types with $COUNT_LIMIT = 7 at +0x208
+    std::vector<BYTE> typeMuddyCo(0x400, 0), typeMuddyCoMirror(0x400, 0), typeRegular(0x400, 0);
+    *(int32_t*)(typeMuddyCo.data() + BLD_TYPE_COUNT_LIMIT_OFFSET) = 7;
+    *(int32_t*)(typeMuddyCoMirror.data() + BLD_TYPE_COUNT_LIMIT_OFFSET) = 7;
+    *(int32_t*)(typeRegular.data() + BLD_TYPE_COUNT_LIMIT_OFFSET) = -1;
+
+    struct RawLimitEntry {
+        const BYTE* primaryType;
+        const BYTE* mirroredType;
+        int32_t     currentCount;
+        int32_t     customLimitOverride;
+    };
+    RawLimitEntry rawEntry = { typeMuddyCo.data(), typeMuddyCoMirror.data(), 7, -1 };
+    BYTE limitVecHdr[24] = {};
+    *(RawLimitEntry**)(limitVecHdr + 0)  = &rawEntry;
+    *(RawLimitEntry**)(limitVecHdr + 8)  = &rawEntry + 1;
+    *(RawLimitEntry**)(limitVecHdr + 16) = &rawEntry + 1;
+
+    // Create 7 free offices on State 1 territory (West, X < 0): 5 primary + 2 mirrored
+    std::vector<std::vector<BYTE>> blds(10, std::vector<BYTE>(BUILDING_STRUCT_BYTES, 0));
+    std::vector<BYTE*> bldPtrs;
+    for (int i = 0; i < 7; ++i) {
+        *(BYTE**)(blds[(size_t)i].data() + BLD_TYPE_OFFSET) =
+            (i < 5) ? typeMuddyCo.data() : typeMuddyCoMirror.data();
+        *(float*)(blds[(size_t)i].data() + OBJ_POS_OFFSET)     = -500.0f - (float)i * 20.0f;
+        *(float*)(blds[(size_t)i].data() + OBJ_POS_OFFSET + 8) = 100.0f;
+        bldPtrs.push_back(blds[(size_t)i].data());
+    }
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET)     = bldPtrs.data();
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = bldPtrs.data() + bldPtrs.size();
+
+    double initRub[2] = { 100000.0, 100000.0 }, initUsd[2] = { 50000.0, 50000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+
+    // State 1 has 7/7 -> blocked; State 2 has 0/7 -> allowed!
+    int32_t cur1 = -1, max1 = -1, cur2 = -1, max2 = -1;
+    TEST_CHECK(TwoStates_GetBuildingCountLimitEntryForTest(world, limitVecHdr, typeMuddyCo.data(), 1, &cur1, &max1));
+    TEST_CHECK(cur1 == 7 && max1 == 7);
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 1));
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 1));
+
+    TEST_CHECK(TwoStates_GetBuildingCountLimitEntryForTest(world, limitVecHdr, typeMuddyCo.data(), 2, &cur2, &max2));
+    TEST_CHECK(cur2 == 0 && max2 == 7);
+    TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 2));
+    TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 2));
+
+    // Add 3 free offices on State 2 territory (East, X > 0) -> State 2 now has 3/7 (still allowed)
+    for (int i = 7; i < 10; ++i) {
+        *(BYTE**)(blds[(size_t)i].data() + BLD_TYPE_OFFSET) =
+            (i == 9) ? typeMuddyCoMirror.data() : typeMuddyCo.data();
+        *(float*)(blds[(size_t)i].data() + OBJ_POS_OFFSET)     = 500.0f + (float)i * 20.0f;
+        *(float*)(blds[(size_t)i].data() + OBJ_POS_OFFSET + 8) = 100.0f;
+        bldPtrs.push_back(blds[(size_t)i].data());
+    }
+    rawEntry.currentCount = 10;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET)     = bldPtrs.data();
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = bldPtrs.data() + bldPtrs.size();
+
+    TEST_CHECK(TwoStates_GetBuildingCountLimitEntryForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 2, &cur2, &max2));
+    TEST_CHECK(cur2 == 3 && max2 == 7);
+    TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 2));
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 1));
+    TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeRegular.data(), 1));
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, nullptr, 1));
+
+    // Singleplayer / One State fallback uses global currentCount from limitTableVec
+    TwoStates_OnSessionEnded();
+    rawEntry.currentCount = 6;
+    TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 0));
+    rawEntry.currentCount = 7;
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 0));
+
+    // 2. Verify towed child trailer (+0x3A0..+0x3A8) is translated together with parent vehicle during SoftSync
+    HeldFrame_Reset();
+    std::vector<BYTE> parentTruck(0x1AD8, 0), childTrailer(0x1AD8, 0);
+    *(int32_t*)(parentTruck.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+    *(int32_t*)(childTrailer.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
+    const unsigned nodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+    for (int k = 0; k < 5; ++k) {
+        float* np = (float*)(parentTruck.data() + nodeOffsets[k]);
+        float* nc = (float*)(childTrailer.data() + nodeOffsets[k]);
+        np[0] = np[5] = np[10] = np[15] = 1.0f;
+        nc[0] = nc[5] = nc[10] = nc[15] = 1.0f;
+        np[32] = 100.0f; np[33] = 10.0f; np[34] = 200.0f;
+        nc[32] =  90.0f; nc[33] = 10.0f; nc[34] = 200.0f;
+    }
+    BYTE* childList[1] = { childTrailer.data() };
+    *(BYTE***)(parentTruck.data() + VEH_CHILDREN_BEGIN_OFFSET) = childList;
+    *(BYTE***)(parentTruck.data() + VEH_CHILDREN_END_OFFSET)   = childList + 1;
+    *(BYTE**)(childTrailer.data() + VEH_PARENT_PTR_OFFSET)     = parentTruck.data();
+
+    VehicleSoftSync_TranslateWithChildrenForTest(parentTruck.data(), 5.0f, 1.5f, -3.0f, true);
+    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xD60 + 0x80), 105.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xED8 + 0x84),  11.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x80), 95.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x84), 11.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x88), 197.0f, 1e-4f);
+    return true;
+}
+
 static bool Test_VehicleCargoAndScheduleSync()
 {
     return SubTest_StoppedTrainAndWagonEffectiveBld() &&
            SubTest_BuildingStorageAndWagonLoadingSoftSync() &&
            SubTest_VehicleWindowScheduleAndLaunchCommands() &&
            SubTest_MultiResourceStorageSoftSyncAndManualBuy() &&
-           SubTest_CoopGameSpeedAndTimerScaling();
+           SubTest_CoopGameSpeedAndTimerScaling() &&
+           SubTest_BuildingCountLimitPerStateAndTrailerSoftSync();
 }
 
 // ---------------------------------------------------------------------------
