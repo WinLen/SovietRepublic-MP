@@ -13,6 +13,12 @@
 #include "../TesmioLoader/RepublicMP/core/version.h"
 
 #pragma pack(push, 8)
+struct CreateItemResult_t {
+    int32_t  m_eResult;
+    uint64_t m_nPublishedFileId;
+    bool     m_bUserNeedsToAcceptWorkshopLegalAgreement;
+};
+
 struct SubmitItemUpdateResult_t {
     int32_t  m_eResult;
     bool     m_bUserNeedsToAcceptWorkshopLegalAgreement;
@@ -23,6 +29,46 @@ struct DeleteItemResult_t {
     int32_t  m_eResult;
     uint64_t m_nPublishedFileId;
 };
+
+struct SteamUGCQueryCompleted_t {
+    uint64_t m_handle;
+    int32_t  m_eResult;
+    uint32_t m_unNumResultsReturned;
+    uint32_t m_unTotalMatchingResults;
+    bool     m_bCachedData;
+    char     m_rgchNextCursor[256];
+};
+
+struct SteamUGCDetails_t {
+    uint64_t m_nPublishedFileId;
+    int32_t  m_eResult;
+    int32_t  m_eFileType;
+    uint32_t m_nCreatorAppID;
+    uint32_t m_nConsumerAppID;
+    char     m_rgchTitle[129];
+    char     m_rgchDescription[8000];
+    uint64_t m_ulSteamIDOwner;
+    uint32_t m_rtimeCreated;
+    uint32_t m_rtimeUpdated;
+    uint32_t m_rtimeAddedToUserList;
+    int32_t  m_eVisibility;
+    bool     m_bBanned;
+    bool     m_bAcceptedForUse;
+    bool     m_bTagsTruncated;
+    char     m_rgchTags[1025];
+    uint64_t m_hFile;
+    uint64_t m_hPreviewFile;
+    char     m_pchFileName[260];
+    int32_t  m_nFileSize;
+    int32_t  m_nPreviewFileSize;
+    char     m_rgchURL[256];
+    uint32_t m_unVotesUp;
+    uint32_t m_unVotesDown;
+    float    m_flScore;
+    uint32_t m_unNumChildren;
+    uint64_t m_ulTotalFilesSize;
+    char     m_pad[4096];
+};
 #pragma pack(pop)
 
 typedef int32_t HSteamUser;
@@ -32,6 +78,7 @@ typedef void (*Fn_SteamAPI_RunCallbacks)();
 typedef HSteamUser (*Fn_SteamAPI_GetHSteamUser)();
 typedef void* (*Fn_SteamInternal_FindOrCreateUserInterface)(HSteamUser hSteamUser, const char* pszVersion);
 
+typedef uint64_t (*Fn_ISteamUGC_CreateItem)(void* self, uint32_t nConsumerAppId, int32_t eFileType);
 typedef uint64_t (*Fn_ISteamUGC_StartItemUpdate)(void* self, uint32_t nConsumerAppId, uint64_t nPublishedFileID);
 typedef bool (*Fn_ISteamUGC_SetItemTitle)(void* self, uint64_t handle, const char* pchTitle);
 typedef bool (*Fn_ISteamUGC_SetItemDescription)(void* self, uint64_t handle, const char* pchDescription);
@@ -41,11 +88,25 @@ typedef bool (*Fn_ISteamUGC_SetItemPreview)(void* self, uint64_t handle, const c
 typedef uint64_t (*Fn_ISteamUGC_SubmitItemUpdate)(void* self, uint64_t handle, const char* pchChangeNote);
 typedef int32_t (*Fn_ISteamUGC_GetItemUpdateProgress)(void* self, uint64_t handle, uint64_t* punBytesProcessed, uint64_t* punBytesTotal);
 typedef uint64_t (*Fn_ISteamUGC_DeleteItem)(void* self, uint64_t nPublishedFileID);
+typedef uint64_t (*Fn_ISteamUGC_SubscribeItem)(void* self, uint64_t nPublishedFileID);
+typedef bool (*Fn_ISteamUGC_DownloadItem)(void* self, uint64_t nPublishedFileID, bool bHighPriority);
+typedef uint64_t (*Fn_ISteamUGC_CreateQueryUGCDetailsRequest)(void* self, uint64_t* pvecPublishedFileID, uint32_t unNumPublishedFileIDs);
+typedef uint64_t (*Fn_ISteamUGC_SendQueryUGCRequest)(void* self, uint64_t handle);
+typedef bool (*Fn_ISteamUGC_GetQueryUGCResult)(void* self, uint64_t handle, uint32_t index, SteamUGCDetails_t* pDetails);
+typedef bool (*Fn_ISteamUGC_ReleaseQueryUGCRequest)(void* self, uint64_t handle);
 
+typedef void (*CreateItemCallbackFn)(CreateItemResult_t* pParam, bool bIOFailure);
 typedef void (*SubmitItemCallbackFn)(SubmitItemUpdateResult_t* pParam, bool bIOFailure);
 typedef void (*DeleteItemCallbackFn)(DeleteItemResult_t* pParam, bool bIOFailure);
+typedef void (*QueryCompletedCallbackFn)(SteamUGCQueryCompleted_t* pParam, bool bIOFailure);
+typedef void* (*Fn_CCreateItemResult_t_SetCallResult)(uint64_t hAPICall, CreateItemCallbackFn fn);
 typedef void* (*Fn_CSubmitItemUpdateResult_t_SetCallResult)(uint64_t hAPICall, SubmitItemCallbackFn fn);
 typedef void* (*Fn_CDeleteItemResult_t_SetCallResult)(uint64_t hAPICall, DeleteItemCallbackFn fn);
+typedef void* (*Fn_CSteamUGCQueryCompleted_t_SetCallResult)(uint64_t hAPICall, QueryCompletedCallbackFn fn);
+
+static volatile bool g_createDone = false;
+static CreateItemResult_t g_createResult = {};
+static volatile bool g_createIOFail = false;
 
 static volatile bool g_submitDone = false;
 static SubmitItemUpdateResult_t g_submitResult = {};
@@ -54,6 +115,24 @@ static volatile bool g_submitIOFail = false;
 static volatile bool g_deleteDone = false;
 static DeleteItemResult_t g_deleteResult = {};
 static volatile bool g_deleteIOFail = false;
+
+static volatile bool g_queryDone = false;
+static SteamUGCQueryCompleted_t g_queryResult = {};
+static volatile bool g_queryIOFail = false;
+
+static void OnQueryCompleted(SteamUGCQueryCompleted_t* pParam, bool bIOFailure)
+{
+    if (pParam) g_queryResult = *pParam;
+    g_queryIOFail = bIOFailure;
+    g_queryDone = true;
+}
+
+static void OnCreateItem(CreateItemResult_t* pParam, bool bIOFailure)
+{
+    if (pParam) g_createResult = *pParam;
+    g_createIOFail = bIOFailure;
+    g_createDone = true;
+}
 
 static void OnDeleteItem(DeleteItemResult_t* pParam, bool bIOFailure)
 {
@@ -94,7 +173,30 @@ static bool SafeReplaceDll(const std::string& srcPath, const std::string& dstPat
     return CopyFileA(srcPath.c_str(), dstPath.c_str(), FALSE) != 0;
 }
 
-static void SyncLatestModBinaries(const std::string& repoRoot, const std::string& wsDir, const std::string& contentDir)
+static void SyncLocalWorkshopFolder(const std::string& lws,
+                                    const std::string& srcRepublicMp,
+                                    const std::string& srcLoader,
+                                    const std::string& srcLauncher,
+                                    const std::string& srcDinput8)
+{
+    if (GetFileAttributesA(lws.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    DeleteFileA((lws + "\\RepublicMP.dll").c_str());
+    DeleteFileA((lws + "\\update_mod.ps1").c_str());
+    DeleteFileA((lws + "\\CREATE-DESKTOP-SHORTCUT.bat").c_str());
+    CreateDirectoryA((lws + "\\TesmioLoader").c_str(), nullptr);
+    CreateDirectoryA((lws + "\\TesmioLoader\\build").c_str(), nullptr);
+    CreateDirectoryA((lws + "\\TesmioLoader\\build\\plugins").c_str(), nullptr);
+    SafeReplaceDll(srcRepublicMp, lws + "\\TesmioLoader\\build\\plugins\\RepublicMP.dll");
+    SafeReplaceDll(srcLoader,     lws + "\\TesmioLoader\\build\\tesmioloader.dll");
+    SafeReplaceDll(srcLauncher,   lws + "\\TesmioLoader\\build\\tesmiolauncher.exe");
+    SafeReplaceDll(srcDinput8,    lws + "\\dinput8.dll");
+    std::string localIni = lws + "\\TesmioLoader\\build\\plugins\\republicmp_updater.ini";
+    WritePrivateProfileStringA("updater", "github_repo", REPUBLICMP_GITHUB_REPO, localIni.c_str());
+    WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, localIni.c_str());
+    printf("[UGC] Synced latest v%s DLLs into local Steam Workshop folder (%s)\n", REPUBLICMP_VERSION, lws.c_str());
+}
+
+static void SyncLatestModBinaries(const std::string& repoRoot, const std::string& wsDir, const std::string& contentDir, uint64_t activeId)
 {
     std::string buildDir = repoRoot + "\\TesmioLoader\\build";
     std::string srcRepublicMp = buildDir + "\\plugins\\RepublicMP.dll";
@@ -123,22 +225,17 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
     WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, iniPath.c_str());
     printf("[UGC] Synced latest v%s DLLs into %s\n", REPUBLICMP_VERSION, contentDir.c_str());
 
-    // 2. Also sync into local subscribed Steam Workshop folder (3823543010) and Steam game dir if present
-    const char* localWs3823543010 = "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3823543010";
-    if (GetFileAttributesA(localWs3823543010) != INVALID_FILE_ATTRIBUTES) {
-        std::string lws(localWs3823543010);
-        DeleteFileA((lws + "\\RepublicMP.dll").c_str());
-        DeleteFileA((lws + "\\update_mod.ps1").c_str());
-        DeleteFileA((lws + "\\CREATE-DESKTOP-SHORTCUT.bat").c_str());
-        SafeReplaceDll(srcRepublicMp, lws + "\\TesmioLoader\\build\\plugins\\RepublicMP.dll");
-        SafeReplaceDll(srcLoader,     lws + "\\TesmioLoader\\build\\tesmioloader.dll");
-        SafeReplaceDll(srcLauncher,   lws + "\\TesmioLoader\\build\\tesmiolauncher.exe");
-        SafeReplaceDll(srcDinput8,    lws + "\\dinput8.dll");
-        std::string localIni = lws + "\\TesmioLoader\\build\\plugins\\republicmp_updater.ini";
-        WritePrivateProfileStringA("updater", "github_repo", REPUBLICMP_GITHUB_REPO, localIni.c_str());
-        WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, localIni.c_str());
-        printf("[UGC] Synced latest v%s DLLs into local Steam Workshop folder (%s)\n", REPUBLICMP_VERSION, localWs3823543010);
+    // 2. Also sync into local subscribed Steam Workshop folders and Steam game dir if present
+    SyncLocalWorkshopFolder("C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3823543010",
+                            srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
+    if (activeId > 0 && activeId != 3823543010ULL) {
+        char activeDir[MAX_PATH] = {};
+        _snprintf_s(activeDir, sizeof(activeDir), _TRUNCATE,
+                    "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\%llu",
+                    (unsigned long long)activeId);
+        SyncLocalWorkshopFolder(activeDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
     }
+
     const char* steamGameDir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SovietRepublic";
     if (GetFileAttributesA(steamGameDir) != INVALID_FILE_ATTRIBUTES) {
         SafeReplaceDll(srcDinput8, std::string(steamGameDir) + "\\dinput8.dll");
@@ -182,6 +279,7 @@ int main(int argc, char** argv)
     auto pGetHSteamUser = (Fn_SteamAPI_GetHSteamUser)GetProcAddress(hDll, "SteamAPI_GetHSteamUser");
     auto pFindIface = (Fn_SteamInternal_FindOrCreateUserInterface)GetProcAddress(hDll, "SteamInternal_FindOrCreateUserInterface");
 
+    auto pCreateItem = (Fn_ISteamUGC_CreateItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_CreateItem");
     auto pStartUpdate = (Fn_ISteamUGC_StartItemUpdate)GetProcAddress(hDll, "SteamAPI_ISteamUGC_StartItemUpdate");
     auto pSetTitle = (Fn_ISteamUGC_SetItemTitle)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemTitle");
     auto pSetDesc = (Fn_ISteamUGC_SetItemDescription)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemDescription");
@@ -191,9 +289,17 @@ int main(int argc, char** argv)
     auto pSubmitUpdate = (Fn_ISteamUGC_SubmitItemUpdate)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SubmitItemUpdate");
     auto pGetProgress = (Fn_ISteamUGC_GetItemUpdateProgress)GetProcAddress(hDll, "SteamAPI_ISteamUGC_GetItemUpdateProgress");
 
+    auto pSetCreateCall = (Fn_CCreateItemResult_t_SetCallResult)GetProcAddress(hDll, "CCreateItemResult_t_SetCallResult");
     auto pSetSubmitCall = (Fn_CSubmitItemUpdateResult_t_SetCallResult)GetProcAddress(hDll, "CSubmitItemUpdateResult_t_SetCallResult");
     auto pDeleteItem = (Fn_ISteamUGC_DeleteItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_DeleteItem");
     auto pSetDeleteCall = (Fn_CDeleteItemResult_t_SetCallResult)GetProcAddress(hDll, "CDeleteItemResult_t_SetCallResult");
+    auto pSubscribeItem = (Fn_ISteamUGC_SubscribeItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SubscribeItem");
+    auto pDownloadItem = (Fn_ISteamUGC_DownloadItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_DownloadItem");
+    auto pCreateQuery = (Fn_ISteamUGC_CreateQueryUGCDetailsRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest");
+    auto pSendQuery = (Fn_ISteamUGC_SendQueryUGCRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SendQueryUGCRequest");
+    auto pGetQueryRes = (Fn_ISteamUGC_GetQueryUGCResult)GetProcAddress(hDll, "SteamAPI_ISteamUGC_GetQueryUGCResult");
+    auto pReleaseQuery = (Fn_ISteamUGC_ReleaseQueryUGCRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_ReleaseQueryUGCRequest");
+    auto pSetQueryCall = (Fn_CSteamUGCQueryCompleted_t_SetCallResult)GetProcAddress(hDll, "CSteamUGCQueryCompleted_t_SetCallResult");
 
     if (!pInit || !pInit()) {
         printf("[ERROR] SteamAPI_Init() failed! Make sure Steam desktop client is running and logged in.\n");
@@ -206,13 +312,56 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (argc >= 3 && strcmp(argv[1], "--subscribe") == 0) {
+        uint64_t subId = _strtoui64(argv[2], nullptr, 10);
+        printf("[UGC] Subscribing and downloading Workshop item %llu...\n", (unsigned long long)subId);
+        if (pSubscribeItem) pSubscribeItem(pUGC, subId);
+        if (pDownloadItem) pDownloadItem(pUGC, subId, true);
+        for (int i = 0; i < 60; ++i) {
+            pRunCallbacks();
+            Sleep(100);
+        }
+        DeleteFileA("steam_appid.txt");
+        if (pShutdown) pShutdown();
+        return 0;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "--query") == 0) {
+        uint64_t qId = _strtoui64(argv[2], nullptr, 10);
+        uint64_t hQuery = pCreateQuery(pUGC, &qId, 1);
+        g_queryDone = false;
+        uint64_t hCall = pSendQuery(pUGC, hQuery);
+        pSetQueryCall(hCall, OnQueryCompleted);
+        while (!g_queryDone) {
+            pRunCallbacks();
+            Sleep(50);
+        }
+        printf("[UGC] Query(%llu): queryResult=%d numResults=%u ioFail=%d\n",
+               (unsigned long long)qId, (int)g_queryResult.m_eResult,
+               g_queryResult.m_unNumResultsReturned, (int)g_queryIOFail);
+        if (g_queryResult.m_unNumResultsReturned > 0) {
+            static SteamUGCDetails_t det = {};
+            memset(&det, 0, sizeof(det));
+            if (pGetQueryRes(pUGC, hQuery, 0, &det)) {
+                printf("  itemResult=%d fileType=%d creatorApp=%u consumerApp=%u\n",
+                       (int)det.m_eResult, (int)det.m_eFileType, det.m_nCreatorAppID, det.m_nConsumerAppID);
+                printf("  title='%s'\n", det.m_rgchTitle);
+                printf("  owner=%llu created=%u updated=%u vis=%d banned=%d accepted=%d fileSize=%d prevSize=%d\n",
+                       (unsigned long long)det.m_ulSteamIDOwner, det.m_rtimeCreated, det.m_rtimeUpdated,
+                       (int)det.m_eVisibility, (int)det.m_bBanned, (int)det.m_bAcceptedForUse,
+                       (int)det.m_nFileSize, (int)det.m_nPreviewFileSize);
+                printf("  desc='%.120s'\n", det.m_rgchDescription);
+            }
+        }
+        pReleaseQuery(pUGC, hQuery);
+        DeleteFileA("steam_appid.txt");
+        if (pShutdown) pShutdown();
+        return 0;
+    }
+
     if (argc >= 3 && strcmp(argv[1], "--delete") == 0) {
         uint64_t delId = _strtoui64(argv[2], nullptr, 10);
-        if (delId == 3823543010ULL) {
-            printf("[ERROR] Refusing to delete the main RepublicMP Workshop item 3823543010!\n");
-            return 1;
-        }
-        printf("[UGC] Deleting duplicate Workshop item %llu...\n", (unsigned long long)delId);
+        printf("[UGC] Deleting Workshop item %llu...\n", (unsigned long long)delId);
         g_deleteDone = false;
         uint64_t hDelCall = pDeleteItem(pUGC, delId);
         pSetDeleteCall(hDelCall, OnDeleteItem);
@@ -240,41 +389,77 @@ int main(int argc, char** argv)
     std::string previewFile = wsDir + "\\preview.png";
     std::string descFile = wsDir + "\\description_ru.txt";
 
-    SyncLatestModBinaries(repoRoot, wsDir, contentDir);
+    bool createFriendsItem = (argc > 1 && strcmp(argv[1], "--create-friends") == 0);
+    uint64_t publishedId = 0;
 
-    // Always default to the existing RepublicMP Workshop item 3823543010 — NEVER create a duplicate item!
-    uint64_t publishedId = 3823543010ULL;
-    std::string existingIdStr = ReadFileUtf8(idFile.c_str());
-    if (!existingIdStr.empty()) {
-        uint64_t parsedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
-        if (parsedId > 0) publishedId = parsedId;
-    }
-    if (argc > 1 && argv[1][0] != '-') {
-        uint64_t argId = _strtoui64(argv[1], nullptr, 10);
-        if (argId > 0) publishedId = argId;
+    if (createFriendsItem) {
+        printf("[UGC] Creating new Friends-Only Steam Workshop item for AppID 784150...\n");
+        g_createDone = false;
+        uint64_t hCreateCall = pCreateItem(pUGC, 784150, 0 /* k_EWorkshopFileTypeCommunity */);
+        pSetCreateCall(hCreateCall, OnCreateItem);
+        while (!g_createDone) {
+            pRunCallbacks();
+            Sleep(50);
+        }
+        if (g_createIOFail || g_createResult.m_eResult != 1 || g_createResult.m_nPublishedFileId == 0) {
+            DeleteFileA("steam_appid.txt");
+            if (pShutdown) pShutdown();
+            printf("[ERROR] CreateItem failed! EResult=%d, IOFail=%d\n",
+                   (int)g_createResult.m_eResult, (int)g_createIOFail);
+            return 1;
+        }
+        publishedId = g_createResult.m_nPublishedFileId;
+        FILE* fid = nullptr;
+        if (fopen_s(&fid, idFile.c_str(), "wb") == 0 && fid) {
+            char idBuf[64] = {};
+            int len = _snprintf_s(idBuf, sizeof(idBuf), _TRUNCATE, "%llu\n", (unsigned long long)publishedId);
+            if (len > 0) fwrite(idBuf, 1, (size_t)len, fid);
+            fclose(fid);
+        }
+        printf("[UGC] Created new Workshop item ID: %llu (saved to %s)\n",
+               (unsigned long long)publishedId, idFile.c_str());
+    } else {
+        std::string existingIdStr = ReadFileUtf8(idFile.c_str());
+        if (!existingIdStr.empty()) {
+            uint64_t parsedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
+            if (parsedId > 0) publishedId = parsedId;
+        }
+        if (argc > 1 && argv[1][0] != '-') {
+            uint64_t argId = _strtoui64(argv[1], nullptr, 10);
+            if (argId > 0) publishedId = argId;
+        }
     }
 
-    printf("[UGC] Updating existing Steam Workshop item: %llu\n", (unsigned long long)publishedId);
+    SyncLatestModBinaries(repoRoot, wsDir, contentDir, publishedId);
+
+    printf("[UGC] Updating Friends-Only Steam Workshop item: %llu\n", (unsigned long long)publishedId);
 
     std::string desc = ReadFileUtf8(descFile.c_str());
     if (desc.empty()) {
         desc = "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep, Steam P2P, One State & Two States modes, 30x30 km maps, Auto-Updater).";
     }
 
-        bool updateMeta = (argc > 1 && (strcmp(argv[1], "--meta") == 0 || strcmp(argv[1], "--preview") == 0));
-    bool updatePreview = (argc > 1 && strcmp(argv[1], "--preview") == 0);
+    bool updateMeta = createFriendsItem || (argc > 1 && strcmp(argv[1], "--meta") == 0);
+    bool updatePreview = createFriendsItem || (argc > 1 && strcmp(argv[1], "--preview") == 0);
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
-    bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (One State & Two States)") : true;
-    bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, desc.c_str()) : true;
-    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 0 /* k_ERemoteStoragePublishedFileVisibilityPublic */) : true;
+    bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer") : true;
+    const char* shortDesc =
+        "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (Friends-Only).\n"
+        "- Lockstep + 1-click Steam P2P\n"
+        "- One State / Two States on One Map\n"
+        "- Automatic Steam Workshop Mod Sync & DLC Guard";
+    bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, shortDesc) : true;
+    // Visibility is set to 1 (Friends-Only) on creation / --meta; do not re-set on content-only updates
+    // because Steam returns k_EResultAccessDenied (15) on SetItemVisibility while automated content scan is active.
+    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */) : true;
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
     bool bPreview = updatePreview ? pSetPreview(pUGC, hUpdate, previewFile.c_str()) : true;
-    printf("[UGC] SetItem: title=%d desc=%d vis=%d content=%d preview=%d (uploadPreview=%d)\n",
+    printf("[UGC] SetItem (Friends-Only): title=%d desc=%d vis=%d content=%d preview=%d (uploadPreview=%d)\n",
            (int)bTitle, (int)bDesc, (int)bVis, (int)bContent, (int)bPreview, (int)updatePreview);
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix waste truck (SKD 706R) toxic/hazardous waste stop filters & 9-component cargo sync, and local full-FPS oil pumpjack / building animations",
+                "v%s (Protocol %d) - Waste truck (SKD 706R) toxic/hazardous waste stop filters & 9-component cargo sync, local full-FPS building animations",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
@@ -306,7 +491,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("[SUCCESS] Published to Steam Workshop!\n");
+    printf("[SUCCESS] Published to Steam Workshop (Friends-Only)!\n");
     printf("Workshop URL: https://steamcommunity.com/sharedfiles/filedetails/?id=%llu\n",
            (unsigned long long)publishedId);
     return 0;

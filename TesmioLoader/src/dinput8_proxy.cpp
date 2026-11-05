@@ -117,7 +117,11 @@ static void EnsureTesmioLoaderLoaded()
     char candidateBuildDirs[8][MAX_PATH] = {};
     int numCandidates = 0;
 
-    // 1. Subscribed Steam Workshop item 3823543010 (steamapps\workshop\content\784150\3823543010\TesmioLoader\build)
+    // 1. Subscribed Friends-Only Steam Workshop item 3834234182 (steamapps\workshop\content\784150\3834234182\TesmioLoader\build)
+    _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
+                "%s\\..\\..\\workshop\\content\\784150\\3834234182\\TesmioLoader\\build", gameDir);
+
+    // 2. Previous Steam Workshop item 3823543010
     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
                 "%s\\..\\..\\workshop\\content\\784150\\3823543010\\TesmioLoader\\build", gameDir);
 

@@ -178,13 +178,22 @@ if exist "..\local\test-client\plugins" (
     copy /y "build\tesmiolauncher.exe" "..\local\test-client\tesmiolauncher.exe" >nul 2>&1
     copy /y "build\dinput8.dll" "..\local\test-client\dinput8.dll" >nul 2>&1
 )
-set "WS_DIR=C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010"
+set "WS_DIR=C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3834234182"
 if exist "%WS_DIR%\TesmioLoader\build\plugins" (
     if exist "%WS_DIR%\RepublicMP.dll" del /q "%WS_DIR%\RepublicMP.dll" >nul 2>&1
     copy /y "build\plugins\RepublicMP.dll" "%WS_DIR%\TesmioLoader\build\plugins\RepublicMP.dll" >nul 2>&1
     copy /y "build\tesmioloader.dll" "%WS_DIR%\TesmioLoader\build\tesmioloader.dll" >nul 2>&1
     copy /y "build\tesmiolauncher.exe" "%WS_DIR%\TesmioLoader\build\tesmiolauncher.exe" >nul 2>&1
     copy /y "build\dinput8.dll" "%WS_DIR%\dinput8.dll" >nul 2>&1
+    echo [build] synced DLLs -^> Steam Workshop 3834234182
+)
+set "WS_DIR_OLD=C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010"
+if exist "%WS_DIR_OLD%\TesmioLoader\build\plugins" (
+    if exist "%WS_DIR_OLD%\RepublicMP.dll" del /q "%WS_DIR_OLD%\RepublicMP.dll" >nul 2>&1
+    copy /y "build\plugins\RepublicMP.dll" "%WS_DIR_OLD%\TesmioLoader\build\plugins\RepublicMP.dll" >nul 2>&1
+    copy /y "build\tesmioloader.dll" "%WS_DIR_OLD%\TesmioLoader\build\tesmioloader.dll" >nul 2>&1
+    copy /y "build\tesmiolauncher.exe" "%WS_DIR_OLD%\TesmioLoader\build\tesmiolauncher.exe" >nul 2>&1
+    copy /y "build\dinput8.dll" "%WS_DIR_OLD%\dinput8.dll" >nul 2>&1
     echo [build] synced DLLs -^> Steam Workshop 3823543010
 )
 set "GAME_DIR=C:\Program Files (x86)\Steam\steamapps\common\SovietRepublic"

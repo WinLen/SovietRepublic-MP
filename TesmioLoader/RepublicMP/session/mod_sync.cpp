@@ -171,7 +171,7 @@ static bool InitSteamUGC()
 
 static bool IsRepublicMpSelfId(uint64_t id)
 {
-    return id == 3823543010ULL || id == 3822972914ULL;
+    return id == 3834234182ULL || id == 3823543010ULL || id == 3822972914ULL;
 }
 
 static void* SafeGetEngineWorkshopMgr()
