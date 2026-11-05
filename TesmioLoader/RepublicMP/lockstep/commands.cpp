@@ -465,7 +465,7 @@ static const char* const kCarriedTools[] = {
     "second_road_cancel"
 };
 static const char* const kUncarriedTools[] = {
-    "vehicle_", "worker_relocate", "building_addsource", "line_addstop", "second_road", "water_square",
+    "vehicle_", "worker_relocate", "building_addsource", "building_copysource", "line_addstop", "second_road", "water_square",
     "bojka", "christmas_", "join_hub", "terrain_go_there",
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
@@ -485,7 +485,7 @@ static void PutAwayUncarriedTool()
     }
     for (const char* carried : kCarriedTools)
         if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
-    if (strcmp(name, "building_addsource") == 0 && SourceSlots_Ready()) return; // source_slots.cpp
+    if ((strcmp(name, "building_addsource") == 0 || strcmp(name, "building_copysource") == 0) && SourceSlots_Ready()) return; // source_slots.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
     if ((trees && !BrushTools_Ready(3)) || (strcmp(name, "terrain_demolish_trees") == 0 && !BrushTools_Ready(1))) {

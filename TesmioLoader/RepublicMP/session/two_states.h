@@ -243,6 +243,9 @@ void    TwoStates_CitizenSevereIllnessTickForTest(BYTE* world, float delta, BYTE
 void    TwoStates_CitizenRemoveDeathForTest(BYTE* world, BYTE* citizen, float orphanHappyDelta, float parentGriefDelta);
 BYTE*   TwoStates_CitizenStudioSelectForTest(BYTE* world, BYTE* citizen);
 void    TwoStates_CitizenStudioEffectForTest(BYTE* world, BYTE* studio, BYTE* citizen, float happyDelta);
+void    TwoStates_CalcCustomsTouristSpawnForTest(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount);
+void    TwoStates_BldCustomsTouristStepForTest(BYTE* world, BYTE* customsBld);
+int     TwoStates_ResolveCitizenOwnerForTest(const BYTE* citizen);
 
 
 

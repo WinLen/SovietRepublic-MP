@@ -25,3 +25,4 @@ void VehicleSwitches_After(bool simBusy);
 
 // The command (lockstep/commands).
 bool VehicleSwitches_ApplyCommand(const void* data, size_t size);
+bool VehicleSwitches_IsListWordForTest(int kind, unsigned offset);

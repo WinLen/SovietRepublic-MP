@@ -657,11 +657,19 @@ static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppe
 static bool HasActiveEnginePath(const BYTE* v)
 {
     if (!v) return false;
+    if (*(const void* const*)(v + VEH_PARENT_PTR_OFFSET) != nullptr) return true;
     if (*(const void* const*)(v + 0x528) != nullptr) return true;
     if (*(const void* const*)(v + 0x650) != nullptr) return true;
     if (*(const uintptr_t*)(v + 0x680) != *(const uintptr_t*)(v + 0x688)) return true;
+    if (*(const uintptr_t*)(v + 0x6A0) != *(const uintptr_t*)(v + 0x6A8)) return true;
     if (*(const uintptr_t*)(v + 0x738) != *(const uintptr_t*)(v + 0x740)) return true;
+    if (*(const void* const*)(v + 0x798) != nullptr) return true;
     return false;
+}
+
+bool VehicleSoftSync_HasActiveEnginePathForTest(const BYTE* v)
+{
+    return HasActiveEnginePath(v);
 }
 
 static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)

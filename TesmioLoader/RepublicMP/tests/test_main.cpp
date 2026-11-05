@@ -54,6 +54,8 @@
 #include "../transport/steam_p2p.h"
 #include "../transport/network.h"
 #include "../session/settings_sync.h"
+#include "../lockstep/source_slots.h"
+#include "../lockstep/vehicle_switches.h"
 
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
@@ -1982,6 +1984,103 @@ static bool SubTest_BuildingRangeAndAutoSearchSettingsSync()
     return true;
 }
 
+static BYTE* g_testCopySrcBld = nullptr;
+static BYTE* g_testCopyDstBld = nullptr;
+static unsigned __int64 MockCopySourceToolCallback(unsigned __int64 /*world*/, unsigned __int64 /*a2*/)
+{
+    if (g_testCopySrcBld && g_testCopyDstBld) {
+        BYTE* srcSlotBegin = *(BYTE**)(g_testCopySrcBld + 0xF78);
+        BYTE* srcSlotEnd   = *(BYTE**)(g_testCopySrcBld + 0xF80);
+        BYTE* dstSlotBegin = *(BYTE**)(g_testCopyDstBld + 0xF78);
+        BYTE* dstSlotEnd   = *(BYTE**)(g_testCopyDstBld + 0xF80);
+        size_t n = (size_t)((srcSlotEnd - srcSlotBegin) / 0x10);
+        if ((size_t)((dstSlotEnd - dstSlotBegin) / 0x10) == n) {
+            for (size_t i = 0; i < n; ++i) {
+                *(unsigned __int64*)(dstSlotBegin + i * 0x10) = *(const unsigned __int64*)(srcSlotBegin + i * 0x10);
+            }
+        }
+    }
+    return 1;
+}
+
+static bool SubTest_SourceSlotsAddAndCopySourceSync()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> typeCo(0x400, 0), typeSupply(0x400, 0);
+    strcpy_s((char*)typeCo.data(), 64, "construction_office4");
+    strcpy_s((char*)typeSupply.data(), 64, "storage_gravel");
+
+    std::vector<BYTE> coSrc(0x1400, 0), coDst(0x1400, 0), coWest(0x1400, 0);
+    std::vector<BYTE> supWorkers(0x1400, 0), supGravel(0x1400, 0), supAsphalt(0x1400, 0), supSteel(0x1400, 0);
+    auto initBld = [&](std::vector<BYTE>& b, BYTE* t, float x, float z) {
+        *(BYTE**)(b.data() + BLD_TYPE_OFFSET) = t;
+        *(float*)(b.data() + OBJ_POS_OFFSET + 0) = x;
+        *(float*)(b.data() + OBJ_POS_OFFSET + 4) = 10.0f;
+        *(float*)(b.data() + OBJ_POS_OFFSET + 8) = z;
+    };
+    initBld(coSrc,      typeCo.data(),     +6284.0f, -5629.0f);
+    initBld(coDst,      typeCo.data(),     +6221.0f, -5467.0f);
+    initBld(coWest,     typeCo.data(),     -5000.0f, +1200.0f);
+    initBld(supWorkers, typeSupply.data(), +5928.0f, -5528.0f);
+    initBld(supGravel,  typeSupply.data(), +6287.0f, -5545.0f);
+    initBld(supAsphalt, typeSupply.data(), +6426.0f, -5791.0f);
+    initBld(supSteel,   typeSupply.data(), +6034.0f, -5339.0f);
+
+    std::vector<BYTE> slotsSrc(4 * 0x10, 0), slotsDst(4 * 0x10, 0), slotsWest(4 * 0x10, 0);
+    *(BYTE**)(coSrc.data()  + 0xF78) = slotsSrc.data();
+    *(BYTE**)(coSrc.data()  + 0xF80) = slotsSrc.data() + slotsSrc.size();
+    *(BYTE**)(coDst.data()  + 0xF78) = slotsDst.data();
+    *(BYTE**)(coDst.data()  + 0xF80) = slotsDst.data() + slotsDst.size();
+    *(BYTE**)(coWest.data() + 0xF78) = slotsWest.data();
+    *(BYTE**)(coWest.data() + 0xF80) = slotsWest.data() + slotsWest.size();
+
+    *(BYTE**)(slotsSrc.data() + 0 * 0x10) = supWorkers.data();
+    *(BYTE**)(slotsSrc.data() + 1 * 0x10) = supGravel.data();
+    *(BYTE**)(slotsSrc.data() + 2 * 0x10) = supAsphalt.data();
+    *(BYTE**)(slotsSrc.data() + 3 * 0x10) = supSteel.data();
+
+    BYTE* bldList[7] = { coSrc.data(), coDst.data(), coWest.data(), supWorkers.data(), supGravel.data(), supAsphalt.data(), supSteel.data() };
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldList;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldList + 7;
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(false /*Client = East SSR (State 2)*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    Commands_SetSession(COMMANDS_HOST);
+    SourceSlots_SetToolCallbackForTest(&MockCopySourceToolCallback);
+
+    // 1. Client uses building_copysource (0x1D6820) to copy all 4 supply sources from coSrc (#193) to coDst (#201):
+    g_testCopySrcBld = coSrc.data();
+    g_testCopyDstBld = coDst.data();
+    SourceSlots_CopySourceTool((unsigned __int64)world, 0);
+
+    // Local slots on coDst must be reverted before Lockstep tick boundary, then applied on Commands_Boundary(1)
+    TEST_CHECK(*(BYTE**)(slotsDst.data() + 0 * 0x10) == nullptr);
+    TEST_CHECK(Commands_Due(1));
+    Commands_Boundary(1);
+    TEST_CHECK(*(BYTE**)(slotsDst.data() + 0 * 0x10) == supWorkers.data());
+    TEST_CHECK(*(BYTE**)(slotsDst.data() + 1 * 0x10) == supGravel.data());
+    TEST_CHECK(*(BYTE**)(slotsDst.data() + 2 * 0x10) == supAsphalt.data());
+    TEST_CHECK(*(BYTE**)(slotsDst.data() + 3 * 0x10) == supSteel.data());
+
+    // 2. Client attempting to copy supply sources onto Host's foreign coWest must be blocked and reverted:
+    g_testCopyDstBld = coWest.data();
+    SourceSlots_CopySourceTool((unsigned __int64)world, 0);
+    TEST_CHECK(*(BYTE**)(slotsWest.data() + 0 * 0x10) == nullptr);
+    TEST_CHECK(!Commands_Due(2));
+
+    SourceSlots_SetToolCallbackForTest(nullptr);
+    g_testCopySrcBld = nullptr;
+    g_testCopyDstBld = nullptr;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = nullptr;
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool Test_BuildingSwitches_Commands_SaveZip()
 {
     ResetMockWorldMemory();
@@ -2002,6 +2101,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x9E8)); // Water reservoir / heating plant setting word
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(BLD_SEARCH_RANGE_OFFSET)); // Working range / search distance (+0xFC8)
     TEST_CHECK(SubTest_BuildingRangeAndAutoSearchSettingsSync());
+    TEST_CHECK(SubTest_SourceSlotsAddAndCopySourceSync());
 
     // 1b. RoadSync_ClearCategoryPreview & RoadSync_CancelLocalDrag state cleanup
     {
@@ -4032,6 +4132,100 @@ static bool TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation()
     return true;
 }
 
+static bool TestEconStats_CustomsTouristSpawnAndVehicleTouristOwner()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    // Set up 39 research items at WORLD_RESEARCH_VEC_BEGIN_OFFSET (matching SOVIET64.exe)
+    std::vector<BYTE> researchItems(39 * RESEARCH_ITEM_STRIDE, 0);
+    for (int i = 0; i < 39; ++i) {
+        BYTE* item = researchItems.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        item[RESEARCH_ITEM_INITIAL_OFFSET]   = 1;
+        item[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        *(int32_t*)(item + RESEARCH_ITEM_REQ_WORK_OFFSET) = 10; // 1 step = +1.0f progress
+    }
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET)     = researchItems.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)       = researchItems.data() + researchItems.size();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET + 8)   = researchItems.data() + researchItems.size();
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true /*Host = State 1*/, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // State 2 (Client) university at X = +600 completes Soviet Tourism Visa (unlock[12]) and Marketing (unlock[14]),
+    // while State 1 (Host) has NOT researched tourism (unlock[12] == 0, unlock[14] == 0).
+    std::vector<BYTE> univEast(0x1420, 0);
+    *(float*)(univEast.data() + OBJ_POS_OFFSET) = +600.0f;
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univEast.data(), 2, 12));
+    TwoStates_BldUnivStepForTest(world, univEast.data());
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univEast.data(), 2, 14));
+    TwoStates_BldUnivStepForTest(world, univEast.data());
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 12) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 14) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 12) == 0);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 14) == 0);
+
+    // Verify Host's live world unlocks at WORLD_RESEARCH_UNLOCKS_OFFSET are still 0 (State 1 has not unlocked tourism)
+    TEST_CHECK(*(const uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + 12) == 0);
+    TEST_CHECK(*(const uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + 14) == 0);
+
+    // Record 4 completed Soviet tourist trips for State 2 with total rating sum 16.0f (avgRating = 4.0f)
+    TwoStates_BeginCommand(2);
+    {
+        *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 5 * sizeof(int32_t)) += 4;
+        float ratingSum = 16.0f;
+        memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 9 * sizeof(int32_t), &ratingSum, sizeof(float));
+    }
+    TwoStates_EndCommand(2);
+
+    // Create a Soviet Beyond-the-Borders / Customs House (category 0x14, subtype 0 = Soviet)
+    // Even if placed at X = -800 (airspace border point on West side), ResolveCustomsTourismOwner
+    // must attribute it to State 2 because only State 2 has unlocked Soviet tourism visa (unlock[12] != 0)!
+    std::vector<BYTE> bldTypeSovietBorder(0x600, 0);
+    *(uint8_t*)(bldTypeSovietBorder.data() + 0x360) = 0x14; // Beyond the Borders (Air/Sea)
+    *(uint8_t*)(bldTypeSovietBorder.data() + 0x528) = 0;    // 0 = Soviet border
+
+    std::vector<BYTE> customsEast(0x1420, 0);
+    *(BYTE**)(customsEast.data() + 0x318) = bldTypeSovietBorder.data();
+    *(float*)(customsEast.data() + OBJ_POS_OFFSET) = -800.0f;
+
+    float avgRating = 0.0f;
+    int32_t spawnCount = 0;
+    TwoStates_CalcCustomsTouristSpawnForTest(world, customsEast.data(), &avgRating, &spawnCount);
+    TEST_CHECK_NEAR(avgRating, 4.0f, 1e-3f);
+    TEST_CHECK(spawnCount == 8); // 2 base + 2 marketing + 4 rating = 8 waiting tourists!
+
+    // Verify first tick of H_BldCustomsTouristStep primes BLD_CUSTOMS_TOURISTS_SPAWNED_OFF (+0x1234) and spawns immediately
+    *(int32_t*)(customsEast.data() + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF) = 0;
+    *(float*)(customsEast.data() + BLD_CUSTOMS_TOURIST_TIMER_OFFSET)   = 0.0f;
+    TwoStates_BldCustomsTouristStepForTest(world, customsEast.data());
+    TEST_CHECK(*(int32_t*)(customsEast.data() + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF) == 1 + spawnCount);
+    TEST_CHECK_NEAR(*(float*)(customsEast.data() + BLD_CUSTOMS_TOURIST_TIMER_OFFSET), 0.0f, 1e-3f);
+
+    // Verify ResolveCitizenOwnerFast for a tourist waiting at customsEast or riding a State 2 airplane/bus (cit + 0x60)
+    std::vector<BYTE> touristCit(0x800, 0);
+    *(int32_t*)(touristCit.data() + CIT_INFANT_FLAG_OFFSET) = 1; // Soviet tourist
+    *(BYTE**)(touristCit.data() + 0x58) = customsEast.data();
+    TEST_CHECK(TwoStates_ResolveCitizenOwnerForTest(touristCit.data()) == 2);
+
+    // When the tourist boards a State 2 airplane (0x831120 clears cit+0x58 = nullptr and sets cit+0x60 = vehicle),
+    // ResolveCitizenOwnerFast must still resolve to State 2 via cit + 0x60!
+    std::vector<BYTE> planeEast(0x1400, 0);
+    *(int32_t*)(planeEast.data() + VEH_ID_OFFSET) = 777;
+    TwoStates_RegisterVehicleOwner(777, 2);
+    *(BYTE**)(touristCit.data() + 0x58) = nullptr;
+    *(BYTE**)(touristCit.data() + 0x60) = planeEast.data();
+    *(float*)(touristCit.data() + CIT_POS_OFFSET) = -1200.0f; // flying over West airspace
+    TEST_CHECK(TwoStates_ResolveCitizenOwnerForTest(touristCit.data()) == 2);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool Test_TwoStates_EconomyStats()
 {
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
@@ -4042,7 +4236,8 @@ static bool Test_TwoStates_EconomyStats()
            TestEconStats_PosKeyAndPoisonedSaveHeal() &&
            TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches() &&
            TestEconStats_HealthAndHappinessTrackerIsolation() &&
-           TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation();
+           TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation() &&
+           TestEconStats_CustomsTouristSpawnAndVehicleTouristOwner();
 }
 
 // ---------------------------------------------------------------------------
@@ -4596,6 +4791,21 @@ static bool SubTest_StoppedTrainAndWagonEffectiveBld()
 
     *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = nullptr;
     TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(wagon.data()) == nullptr);
+
+    // Verify coupled wagons/mechanisms (+0x398) and moving rail locomotives (+0x6A0..+0x6A8, +0x798)
+    // are recognized as having an active engine path so VehicleSoftSync never snaps individual wagons mid-motion.
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(wagon.data())); // +0x398 == loco
+    TEST_CHECK(!VehicleSoftSync_HasActiveEnginePathForTest(loco.data()));
+    *(uintptr_t*)(loco.data() + 0x6A0) = 0x1000;
+    *(uintptr_t*)(loco.data() + 0x6A8) = 0x1020;
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(loco.data()));
+    *(uintptr_t*)(loco.data() + 0x6A0) = 0;
+    *(uintptr_t*)(loco.data() + 0x6A8) = 0;
+    *(void**)(loco.data() + 0x798) = (void*)0x2000;
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(loco.data()));
+
+    // Verify VehicleSwitches excludes +0x4C8..+0x4E8 (+0x4D0 runtime state) from UI switch detection
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, 0x4D0));
     return true;
 }
 

@@ -14,11 +14,6 @@
 #define WORLD_RVA 0x9D4F10
 #define WINDOW_BUILDING 0xD298   // the building of the window the tool serves
 #define BUILDINGS_OFFSET 0x11B08
-#define WINDOWS_RVA 0x9E19D0     // the open windows
-#define WINDOW_OBJECT 0x240
-#define WINDOW_KIND 0x248
-#define WINDOW_PARENT 0x5C8      // a selection window's parent window
-#define PICKER_WINDOW 0xD
 #define DOWN_RVA 0xA54E90
 #define PRESS_RVA 0xA54E91
 #define ENTER_RVA 0xA54CAC
@@ -26,15 +21,19 @@
 #define SLOTS_OFFSET 0xF78
 #define SLOT_BYTES 0x10
 #define MAX_SLOTS 64
-#define MAX_BUILDINGS 8
-#define MAX_WINDOWS 4096
+#define MAX_BUILDINGS 2048
 #define MAX_LIST 1000000
 #define ADD_SOURCE_RVA 0x1D51A0
+#define COPY_SOURCE_RVA 0x1D6820
 #define MAGIC 0x31535253
 
 static const unsigned char kToolEntry[16] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x48, 0x08, 0x55,
                                               0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41 };
+static const unsigned char kCopyToolEntry[16] = { 0x4c, 0x8b, 0xdc, 0x53, 0x48, 0x81, 0xec, 0xc0,
+                                                  0x00, 0x00, 0x00, 0x80, 0xb9, 0xbc, 0x0f, 0x00 };
 static int g_ready = -1;
+typedef U64 (*ToolFn)(U64 world, U64 a2);
+static ToolFn g_testToolOverride = nullptr;
 
 #pragma pack(push, 1)
 struct SlotEntry {
@@ -56,11 +55,21 @@ void SourceSlots_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
+void SourceSlots_SetToolCallbackForTest(ToolFn fn)
+{
+    g_testToolOverride = fn;
+    g_ready = -1;
+}
+
 bool SourceSlots_Ready()
 {
-    if (g_ready < 0) {
-        g_ready = memcmp(g_exeBase + ADD_SOURCE_RVA, kToolEntry, sizeof(kToolEntry)) == 0 ? 1 : 0;
-        if (!g_ready) Logf("republicmp  SOURCES: the add-source tool's routine differs - the tool is put away in a session");
+    if (g_testToolOverride) return true;
+    if (g_ready != 1) {
+        bool ok = memcmp(g_exeBase + ADD_SOURCE_RVA, kToolEntry, sizeof(kToolEntry)) == 0 &&
+                  memcmp(g_exeBase + COPY_SOURCE_RVA, kCopyToolEntry, sizeof(kCopyToolEntry)) == 0;
+        if (!ok && g_ready < 0)
+            Logf("republicmp  SOURCES: the add/copy-source tool's routine differs - the tool is put away in a session");
+        g_ready = ok ? 1 : 0;
     }
     return g_ready == 1;
 }
@@ -143,14 +152,31 @@ static void Take(const Slots& before, const char* where)
 }
 
 // ---------------------------------------------------------------------------
-// The clicking PC: the tool
+// The clicking PC: the tool and the windows
 // ---------------------------------------------------------------------------
 
-typedef U64 (*ToolFn)(U64 world, U64 a2);
+static void CollectSlotBuildings(std::vector<Slots>& out)
+{
+    out.clear();
+    U64 v[2] = {};
+    if (!SafeMemcpyPod(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return;
+    std::vector<U64> buildings((size_t)((v[1] - v[0]) / 8));
+    if (buildings.empty() || !SafeMemcpyPod(buildings.data(), (const void*)v[0], buildings.size() * 8)) return;
+    U64 winBld = 0;
+    if (SafeMemcpyPod(&winBld, World() + WINDOW_BUILDING, 8) && winBld) {
+        Slots s;
+        if (ReadSlots(winBld, s) && s.count) out.push_back(s);
+    }
+    for (U64 b : buildings) {
+        if (!b || b == winBld || out.size() >= MAX_BUILDINGS) continue;
+        Slots s;
+        if (ReadSlots(b, s) && s.count) out.push_back(s);
+    }
+}
 
 U64 SourceSlots_AddSourceTool(U64 world, U64 a2)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + ADD_SOURCE_RVA);
+    ToolFn tool = g_testToolOverride ? g_testToolOverride : (ToolFn)(g_exeBase + ADD_SOURCE_RVA);
     if (!Commands_TakeLocal() || !SourceSlots_Ready()) return tool(world, a2);
     Slots before;
     U64 building = 0;
@@ -160,9 +186,17 @@ U64 SourceSlots_AddSourceTool(U64 world, U64 a2)
     return r;
 }
 
-// ---------------------------------------------------------------------------
-// The clicking PC: the windows
-// ---------------------------------------------------------------------------
+U64 SourceSlots_CopySourceTool(U64 world, U64 a2)
+{
+    ToolFn tool = g_testToolOverride ? g_testToolOverride : (ToolFn)(g_exeBase + COPY_SOURCE_RVA);
+    if (!Commands_TakeLocal() || !SourceSlots_Ready()) return tool(world, a2);
+    std::vector<Slots> beforeList;
+    CollectSlotBuildings(beforeList);
+    U64 r = tool(world, a2);
+    for (const Slots& b : beforeList)
+        Take(b, "the copy-source tool");
+    return r;
+}
 
 static std::vector<Slots> g_held;
 static bool g_taken = false;
@@ -173,47 +207,12 @@ static bool Clicked()
     return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA];
 }
 
-static void Hold(U64 building, const std::vector<U64>& buildings)
-{
-    if (!building || g_held.size() >= MAX_BUILDINGS || !std::binary_search(buildings.begin(), buildings.end(), building)) return;
-    for (const Slots& s : g_held)
-        if (s.building == building) return;
-    Slots s;
-    if (ReadSlots(building, s) && s.count) g_held.push_back(s);
-}
-
-// The window's building and the buildings of open windows (a selection window counts as its parent).
-static void Shown()
-{
-    U64 v[2] = {};
-    std::vector<U64> buildings;
-    if (!SafeMemcpyPod(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return;
-    buildings.resize((size_t)((v[1] - v[0]) / 8));
-    if (buildings.empty() || !SafeMemcpyPod(buildings.data(), (const void*)v[0], buildings.size() * 8)) return;
-    std::sort(buildings.begin(), buildings.end());
-    U64 building = 0;
-    if (SafeMemcpyPod(&building, World() + WINDOW_BUILDING, 8)) Hold(building, buildings);
-    U64 w[2] = {};
-    if (!SafeMemcpyPod(w, g_exeBase + WINDOWS_RVA, 16) || !w[0] || w[1] < w[0] || (w[1] - w[0]) / 8 > MAX_WINDOWS) return;
-    std::vector<U64> windows((size_t)((w[1] - w[0]) / 8));
-    if (windows.empty() || !SafeMemcpyPod(windows.data(), (const void*)w[0], windows.size() * 8)) return;
-    for (U64 win : windows) {
-        U64 object = 0, parent = 0;
-        unsigned kind = 0;
-        if (!win || !SafeMemcpyPod(&kind, (const void*)(win + WINDOW_KIND), 4) || !SafeMemcpyPod(&object, (const void*)(win + WINDOW_OBJECT), 8)) continue;
-        Hold(object, buildings);
-        if (kind == PICKER_WINDOW && SafeMemcpyPod(&parent, (const void*)(win + WINDOW_PARENT), 8) && parent &&
-            SafeMemcpyPod(&object, (const void*)(parent + WINDOW_OBJECT), 8))
-            Hold(object, buildings);
-    }
-}
-
 void SourceSlots_Before(bool simBusy)
 {
     g_taken = false;
     g_held.clear();
     if (simBusy || !Commands_TakeUi() || !Clicked()) return;
-    Shown();
+    CollectSlotBuildings(g_held);
     g_epoch = Commands_ApplyEpoch();
     g_taken = !g_held.empty();
 }

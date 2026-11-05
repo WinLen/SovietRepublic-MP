@@ -7,10 +7,10 @@
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include "../core/diag_log.h"
+#include "../core/safe_mem.h"
 #include <string.h>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
 #define VEHICLES_OFFSET 0x12810
 #define DOWN_RVA 0xA54E90        // the left button held, as the interface reads it
 #define PRESS_RVA 0xA54E91       // the left button pressed this frame
@@ -146,15 +146,7 @@ static bool GuardedRef(U64 vehicle, RouteRef& r)
 
 static bool PointerLike(U64 v)
 {
-    unsigned high = (unsigned)(v >> 32);
-    if (high >= 0x100 && high <= 0x7FFF) return true;
-    // Windows x64 low-heap segments (4 GB .. 1 TB): any 4-byte aligned value
-    // with high in 1..0xFF that points to readable memory is a heap pointer.
-    if (high >= 1 && high < 0x100 && (v & 3) == 0) {
-        U64 probe = 0;
-        if (Copy(&probe, (const void*)v, 8)) return true;
-    }
-    return false;
+    return IsPointerLikeX64(v);
 }
 
 static bool TextWord(int kind, unsigned offset)
@@ -164,7 +156,7 @@ static bool TextWord(int kind, unsigned offset)
 
 // A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
 // their contents are cargo_settings.cpp's. The vehicle's internal vectors and
-// object pointers (+3a0..+3d0, +458..+4a0, +4f0..+500, +600..+608, +638..+658,
+// object pointers (+3a0..+3d0, +458..+4a0, +4c8..+4e8, +4f0..+500, +600..+608, +638..+658,
 // +680..+6b8, +738..+750, +1708..+1710, +1ad0..+1ad8) and dynamic simulation/render
 // fields (+770, +d24, +d60..+1140, +17e8..+17f0, +1a54..+1a5c, +1a7c..+1a84)
 // must never be overwritten as switches.
@@ -174,6 +166,7 @@ static bool ListWord(int kind, unsigned offset)
     if (kind == KIND_VEHICLE) {
         return (offset >= 0x3A0 && offset < 0x3D0) ||
                (offset >= 0x458 && offset < 0x4A0) ||
+               (offset >= 0x4C8 && offset < 0x4E8) ||
                (offset >= 0x4F0 && offset < 0x500) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
@@ -194,6 +187,11 @@ static bool ListWord(int kind, unsigned offset)
     if (kind != KIND_STOP || offset >= 2 * HALF_BYTES) return false;
     unsigned l = offset % HALF_BYTES;
     return (l >= 0x8 && l < 0x20) || l >= 0x38;
+}
+
+bool VehicleSwitches_IsListWordForTest(int kind, unsigned offset)
+{
+    return ListWord(kind, offset);
 }
 
 static void Submit(const SwitchMsg& m)

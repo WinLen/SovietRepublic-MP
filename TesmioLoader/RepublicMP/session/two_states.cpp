@@ -1454,6 +1454,10 @@ static const BYTE kBldAttraction2StepExpect[22] = {
     0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x81, 0xEC, 0xF0, 0x00,
     0x00, 0x00
 };
+static const BYTE kCalcCustomsTouristSpawnExpect[18] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x48, 0x89, 0x70,
+    0x20, 0x55, 0x57, 0x41, 0x56, 0x48, 0x8D, 0x68
+};
 static const BYTE kBldCustomsTouristStepExpect[15] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x56,
     0x48, 0x81, 0xEC, 0x90, 0x00, 0x00, 0x00
@@ -1525,6 +1529,7 @@ typedef void (__fastcall* AssignConstructionOfficeFn)(BYTE* world, BYTE* officeB
 typedef void (__fastcall* MinimapDrawFn)(BYTE* mm);
 
 typedef __int64 (__fastcall* BldEconFn)(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
+typedef __int64 (__fastcall* CalcCustomsTouristSpawnFn)(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount);
 typedef float (__fastcall* WaterHealthStepFn)(BYTE* world, BYTE* building, float waterNeeded,
                                               unsigned char flag4, BYTE* citizen,
                                               unsigned char flag6, float factor7);
@@ -1608,6 +1613,7 @@ static BldEconFn o_bldPoliceStep = nullptr;
 static BldEconFn o_bldHotelStep = nullptr;
 static BldEconFn o_bldAttraction1Step = nullptr;
 static BldEconFn o_bldAttraction2Step = nullptr;
+static CalcCustomsTouristSpawnFn o_calcCustomsTouristSpawn = nullptr;
 static BldEconFn o_bldCustomsTouristStep = nullptr;
 static CitizenCommitCrimeFn o_citizenCommitCrime = nullptr;
 static CrimeExpireCaseFn o_crimeExpireCase = nullptr;
@@ -1745,6 +1751,9 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
     }
 }
 
+static bool IsTwoStatesResearchOrLicenseActive();
+static void EnsureEngineResearchInitialized(BYTE* world);
+
 static int ResolveBuildingOwnerFast(const BYTE* b)
 {
     if (!b) return 1;
@@ -1759,6 +1768,43 @@ static int ResolveBuildingOwnerFast(const BYTE* b)
     }
     DiagLog_EndSafeSeh();
     return owner;
+}
+
+static int ReadCustomsBorderVisaUnlockIdx(const BYTE* customsBld)
+{
+    if (!customsBld) return -1;
+    int visaIdx = -1;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const BYTE* bldType = *(const BYTE* const*)(customsBld + 0x318);
+        if (IsPointerLikeX64((uintptr_t)bldType)) {
+            uint8_t cat = *(const uint8_t*)(bldType + 0x360);
+            if (cat == 0x13 || cat == 0x14) {
+                uint8_t subtype = *(const uint8_t*)(bldType + 0x528);
+                visaIdx = (subtype == 1) ? 11 : 12;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        visaIdx = -1;
+    }
+    DiagLog_EndSafeSeh();
+    return visaIdx;
+}
+
+static int ResolveCustomsTourismOwner(const BYTE* customsBld)
+{
+    int posOwner = ResolveBuildingOwnerFast(customsBld);
+    if (!IsTwoStatesResearchOrLicenseActive()) return posOwner;
+    int visaIdx = ReadCustomsBorderVisaUnlockIdx(customsBld);
+    if (visaIdx < 0 || visaIdx >= (int)WORLD_RESEARCH_UNLOCKS_BYTES) return posOwner;
+    int otherOwner = (posOwner == 1) ? 2 : 1;
+    if (g_engineResearch[posOwner - 1].initialized && g_engineResearch[otherOwner - 1].initialized) {
+        if (g_engineResearch[posOwner - 1].unlocks[visaIdx] == 0 &&
+            g_engineResearch[otherOwner - 1].unlocks[visaIdx] != 0) {
+            return otherOwner;
+        }
+    }
+    return posOwner;
 }
 
 static int ResolveVehicleOwnerFast(const BYTE* v)
@@ -1776,6 +1822,36 @@ static int ResolveVehicleOwnerFast(const BYTE* v)
     return owner;
 }
 
+static int ResolveUnhousedCitizenOwner(const BYTE* cit)
+{
+    bool isTourist = (*(const int32_t*)(cit + CIT_INFANT_FLAG_OFFSET) != 0);
+    static const size_t kCitFallbackBldOffs[7] = { 0x58, 0x28, 0x40, 0x38, 0x78, 0x80, 0x88 };
+    for (size_t i = 0; i < 7; ++i) {
+        const BYTE* b = *(const BYTE* const*)(cit + kCitFallbackBldOffs[i]);
+        if (!IsPointerLikeX64((uintptr_t)b)) continue;
+        float bx = *(const float*)(b + OBJ_POS_OFFSET);
+        float bz = *(const float*)(b + OBJ_POS_OFFSET + 8);
+        if (isfinite(bx) && isfinite(bz) && fabsf(bx) < 50000.0f && fabsf(bz) < 50000.0f) {
+            return isTourist
+                ? ResolveCustomsTourismOwner(b)
+                : TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
+        }
+    }
+    const BYTE* veh = *(const BYTE* const*)(cit + 0x60);
+    if (IsPointerLikeX64((uintptr_t)veh)) {
+        int vehId = *(const int*)(veh + VEH_ID_OFFSET);
+        if (vehId > 0) return TwoStates_GetVehicleOwner(vehId, veh);
+    }
+    if (g_simLoopCurrentBuilding) {
+        return isTourist
+            ? ResolveCustomsTourismOwner(g_simLoopCurrentBuilding)
+            : ResolveBuildingOwnerFast(g_simLoopCurrentBuilding);
+    }
+    float x = *(const float*)(cit + CIT_POS_OFFSET);
+    float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
+    return (isfinite(x) && isfinite(z) && x > 0.0f) ? 2 : 1;
+}
+
 static int ResolveCitizenOwnerFast(const BYTE* cit)
 {
     if (!cit) return 1;
@@ -1788,39 +1864,18 @@ static int ResolveCitizenOwnerFast(const BYTE* cit)
         } else {
             const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
             const BYTE* parentHome = parent ? *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET) : nullptr;
-            if (parentHome) {
-                owner = ResolveBuildingOwnerFast(parentHome);
-            } else {
-                // Tourists and foreign workers have home == nullptr; check hotel/visited/destination/origin building slots first
-                static const size_t kCitFallbackBldOffs[7] = { 0x58, 0x28, 0x40, 0x38, 0x78, 0x80, 0x88 };
-                bool resolvedFromBld = false;
-                for (size_t i = 0; i < 7; ++i) {
-                    const BYTE* b = *(const BYTE* const*)(cit + kCitFallbackBldOffs[i]);
-                    if (!IsPointerLikeX64((uintptr_t)b)) continue;
-                    float bx = *(const float*)(b + OBJ_POS_OFFSET);
-                    float bz = *(const float*)(b + OBJ_POS_OFFSET + 8);
-                    if (isfinite(bx) && isfinite(bz) && fabsf(bx) < 50000.0f && fabsf(bz) < 50000.0f) {
-                        owner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
-                        resolvedFromBld = true;
-                        break;
-                    }
-                }
-                if (!resolvedFromBld && g_simLoopCurrentBuilding) {
-                    owner = ResolveBuildingOwnerFast(g_simLoopCurrentBuilding);
-                    resolvedFromBld = true;
-                }
-                if (!resolvedFromBld) {
-                    float x = *(const float*)(cit + CIT_POS_OFFSET);
-                    float z = *(const float*)(cit + CIT_POS_OFFSET + 8);
-                    if (isfinite(x) && isfinite(z)) owner = (x <= 0.0f) ? 1 : 2;
-                }
-            }
+            owner = parentHome ? ResolveBuildingOwnerFast(parentHome) : ResolveUnhousedCitizenOwner(cit);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         owner = 1;
     }
     DiagLog_EndSafeSeh();
     return owner;
+}
+
+int TwoStates_ResolveCitizenOwnerForTest(const BYTE* citizen)
+{
+    return ResolveCitizenOwnerFast(citizen);
 }
 
 static void SanitizeBuildingEffectiveCapFloat(BYTE* b)
@@ -2623,6 +2678,160 @@ void TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismIdx, 
     g_mockTourismIsUsd = isUsd;
     H_GenericBldEconStep<&o_bldHotelStep>(world, building, 0, 0, 0, 0);
     o_bldHotelStep = prev;
+}
+
+class CustomsTourismWorldSwapScope {
+public:
+    CustomsTourismWorldSwapScope(BYTE* world, const BYTE* customsBld)
+    {
+        if (!world || !customsBld || !IsTwoStatesResearchOrLicenseActive()) return;
+        EnsureEngineResearchInitialized(world);
+        EnsureStateEconInitialized(world);
+        int owner = ResolveCustomsTourismOwner(customsBld);
+        if (owner != 1 && owner != 2) return;
+        int sIdx = owner - 1;
+        m_world = world;
+        m_active = true;
+        SafeMemcpyPod(m_savedUnlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+        SafeMemcpyPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET, g_engineResearch[sIdx].unlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+        SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &m_savedCurScalars);
+        SafeWriteStatScalars(world + WORLD_STAT_CURRENT_OFFSET, g_stateCurEcon[sIdx].scalars);
+        if (SafeReadStatHistHeader(world, &m_histBegin, &m_histCount) &&
+            m_histBegin && m_histCount > 0 && g_stateHistEcon[sIdx].size() == (size_t)m_histCount) {
+            m_histStartIdx = (m_histCount > 365) ? (m_histCount - 365) : 0;
+            size_t swapN = (size_t)(m_histCount - m_histStartIdx);
+            m_savedHistScalars.resize(swapN);
+            for (size_t i = 0; i < swapN; ++i) {
+                int hIdx = m_histStartIdx + (int)i;
+                BYTE* rec = m_histBegin + (size_t)hIdx * STAT_RECORD_SIZE;
+                SafeReadStatScalars(rec, &m_savedHistScalars[i]);
+                SafeWriteStatScalars(rec, g_stateHistEcon[sIdx][(size_t)hIdx].scalars);
+            }
+        }
+    }
+
+    ~CustomsTourismWorldSwapScope()
+    {
+        if (!m_active || !m_world) return;
+        if (m_histBegin && !m_savedHistScalars.empty()) {
+            for (size_t i = 0; i < m_savedHistScalars.size(); ++i) {
+                int hIdx = m_histStartIdx + (int)i;
+                SafeWriteStatScalars(m_histBegin + (size_t)hIdx * STAT_RECORD_SIZE, m_savedHistScalars[i]);
+            }
+        }
+        SafeWriteStatScalars(m_world + WORLD_STAT_CURRENT_OFFSET, m_savedCurScalars);
+        SafeMemcpyPod(m_world + WORLD_RESEARCH_UNLOCKS_OFFSET, m_savedUnlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+    }
+
+    CustomsTourismWorldSwapScope(const CustomsTourismWorldSwapScope&) = delete;
+    CustomsTourismWorldSwapScope& operator=(const CustomsTourismWorldSwapScope&) = delete;
+
+private:
+    BYTE* m_world = nullptr;
+    bool m_active = false;
+    uint8_t m_savedUnlocks[WORLD_RESEARCH_UNLOCKS_BYTES] = {};
+    StateEconScalars m_savedCurScalars = {};
+    BYTE* m_histBegin = nullptr;
+    int m_histCount = 0;
+    int m_histStartIdx = 0;
+    std::vector<StateEconScalars> m_savedHistScalars;
+};
+
+static __int64 CalcCustomsTouristSpawnFallback(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount)
+{
+    if (outAvgRating)  *outAvgRating  = 0.0f;
+    if (outSpawnCount) *outSpawnCount = 0;
+    if (!world || !customsBld) return 0;
+    int visaIdx = ReadCustomsBorderVisaUnlockIdx(customsBld);
+    if (visaIdx < 0) return 0;
+    uint8_t visaUnlocked = 0;
+    SafeReadPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET + (size_t)visaIdx, &visaUnlocked);
+    if (visaUnlocked == 0) return 0;
+    uint8_t mktUnlocked = 0;
+    SafeReadPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET + (size_t)(visaIdx + 2), &mktUnlocked);
+    StateEconScalars cur = {};
+    SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &cur);
+    int tripIdx = (visaIdx == 11) ? 4 : 5;
+    int rateIdx = (visaIdx == 11) ? 8 : 9;
+    int32_t trips = cur.extraCounts[tripIdx];
+    float ratingSum = 0.0f;
+    memcpy(&ratingSum, &cur.extraCounts[rateIdx], sizeof(float));
+    float avg = (trips > 0 && isfinite(ratingSum) && ratingSum > 0.0f) ? (ratingSum / (float)trips) : 3.0f;
+    int32_t spawn = 2 + (mktUnlocked ? 2 : 0) + (int32_t)avg;
+    if (outAvgRating)  *outAvgRating  = avg;
+    if (outSpawnCount) *outSpawnCount = spawn;
+    return 1;
+}
+
+static __int64 __fastcall H_CalcCustomsTouristSpawn(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount)
+{
+    CustomsTourismWorldSwapScope swap(world, customsBld);
+    if (o_calcCustomsTouristSpawn) {
+        return o_calcCustomsTouristSpawn(world, customsBld, outAvgRating, outSpawnCount);
+    }
+    return CalcCustomsTouristSpawnFallback(world, customsBld, outAvgRating, outSpawnCount);
+}
+
+static void PrimeCustomsFirstTouristSpawn(BYTE* world, BYTE* customsBld, int owner)
+{
+    if (!world || !customsBld || (owner != 1 && owner != 2) || !IsTwoStatesResearchOrLicenseActive()) return;
+    EnsureEngineResearchInitialized(world);
+    int visaIdx = ReadCustomsBorderVisaUnlockIdx(customsBld);
+    if (visaIdx < 0 || visaIdx >= (int)WORLD_RESEARCH_UNLOCKS_BYTES) return;
+    if (g_engineResearch[owner - 1].unlocks[visaIdx] == 0) return;
+    int32_t totalSpawned = 0;
+    if (!SafeReadPod((const int32_t*)(customsBld + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF), &totalSpawned) ||
+        totalSpawned != 0) {
+        return;
+    }
+    if (SafeCountStdVector(customsBld + BLD_CUSTOMS_WAITING_TOURISTS_OFF, sizeof(void*)) != 0) return;
+    SafeWritePod((int32_t*)(customsBld + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF), (int32_t)1);
+    SafeWritePod((float*)(customsBld + BLD_CUSTOMS_TOURIST_TIMER_OFFSET), 55.1f);
+}
+
+static __int64 BldCustomsTouristStepFallback(BYTE* world, BYTE* customsBld)
+{
+    if (!world || !customsBld) return 0;
+    float timer = 0.0f;
+    if (!SafeReadPod((const float*)(customsBld + BLD_CUSTOMS_TOURIST_TIMER_OFFSET), &timer) || timer <= 55.0f) {
+        return 0;
+    }
+    SafeWritePod((float*)(customsBld + BLD_CUSTOMS_TOURIST_TIMER_OFFSET), 0.0f);
+    float avgRating = 0.0f;
+    int32_t spawnCount = 0;
+    H_CalcCustomsTouristSpawn(world, customsBld, &avgRating, &spawnCount);
+    int32_t curWaiting = (int32_t)SafeCountStdVector(customsBld + BLD_CUSTOMS_WAITING_TOURISTS_OFF, sizeof(void*));
+    if (spawnCount > curWaiting) {
+        int32_t totalSpawned = 0;
+        SafeReadPod((const int32_t*)(customsBld + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF), &totalSpawned);
+        SafeWritePod((int32_t*)(customsBld + BLD_CUSTOMS_TOURISTS_SPAWNED_OFF),
+                     totalSpawned + (spawnCount - curWaiting));
+    }
+    return 1;
+}
+
+static __int64 __fastcall H_BldCustomsTouristStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
+                                                  uintptr_t a5, uintptr_t a6)
+{
+    int owner = building ? ResolveCustomsTourismOwner(building) : 0;
+    PrimeCustomsFirstTouristSpawn(world, building, owner);
+    bool active = (g_inSimStep && !t_inEconHook && owner) ? BeginEconAttribution(world, owner) : false;
+    __int64 r = o_bldCustomsTouristStep
+        ? o_bldCustomsTouristStep(world, building, a3, a4, a5, a6)
+        : BldCustomsTouristStepFallback(world, building);
+    if (building) SanitizeBuildingEffectiveCapFloat(building);
+    if (active) EndEconAttribution(owner);
+    return r;
+}
+
+void TwoStates_CalcCustomsTouristSpawnForTest(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount)
+{
+    H_CalcCustomsTouristSpawn(world, customsBld, outAvgRating, outSpawnCount);
+}
+
+void TwoStates_BldCustomsTouristStepForTest(BYTE* world, BYTE* customsBld)
+{
+    H_BldCustomsTouristStep(world, customsBld, 0, 0, 0, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -4942,6 +5151,9 @@ static void __fastcall H_MasterSave(BYTE* world)
     if (isCoopSave && fullSaveDir[0]) {
         if (twoStates && world) {
             EnsureStateEconInitialized(world);
+            FlushUnattributedScalarsToStates(world);
+            ComputeStateCitizenDemographics(world, 1, &g_stateCurEcon[0].scalars);
+            ComputeStateCitizenDemographics(world, 2, &g_stateCurEcon[1].scalars);
         }
         if (g_expandBorders) {
             TwoStates_PatchSaveScriptIni(fullSaveDir, 0.0f);
@@ -5328,7 +5540,10 @@ bool TwoStates_Install()
     econOk += InstallInlineHook(g_exeBase + RVA_BLD_ATTRACTION2_STEP, (void*)&H_GenericBldEconStep<&o_bldAttraction2Step>,
                                 (void**)&o_bldAttraction2Step, kBldAttraction2StepExpect,
                                 sizeof(kBldAttraction2StepExpect), "republicmp two_states bld_attraction2_step");
-    econOk += InstallInlineHook(g_exeBase + RVA_BLD_CUSTOMS_TOURIST_STEP, (void*)&H_GenericBldEconStep<&o_bldCustomsTouristStep>,
+    econOk += InstallInlineHook(g_exeBase + RVA_CALC_CUSTOMS_TOURIST_SPAWN, (void*)&H_CalcCustomsTouristSpawn,
+                                (void**)&o_calcCustomsTouristSpawn, kCalcCustomsTouristSpawnExpect,
+                                sizeof(kCalcCustomsTouristSpawnExpect), "republicmp two_states calc_customs_tourist_spawn");
+    econOk += InstallInlineHook(g_exeBase + RVA_BLD_CUSTOMS_TOURIST_STEP, (void*)&H_BldCustomsTouristStep,
                                 (void**)&o_bldCustomsTouristStep, kBldCustomsTouristStepExpect,
                                 sizeof(kBldCustomsTouristStepExpect), "republicmp two_states bld_customs_tourist_step");
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_COMMIT_CRIME, (void*)&H_CitizenCommitCrime,
@@ -5366,7 +5581,7 @@ bool TwoStates_Install()
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/60), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/61), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
