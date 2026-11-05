@@ -239,6 +239,10 @@ float   TwoStates_WaterHealthStepForTest(BYTE* world, BYTE* building, float wate
 void    TwoStates_CitizenStarveStepForTest(BYTE* world, BYTE* citizen);
 bool    TwoStates_CitizenCanMoveToBldForTest(BYTE* world, BYTE* targetBld, BYTE* citizen);
 void    TwoStates_CitizenMoveToBldForTest(BYTE* world, BYTE* citizen, BYTE* targetBld);
+void    TwoStates_CitizenSevereIllnessTickForTest(BYTE* world, float delta, BYTE* citizen);
+void    TwoStates_CitizenRemoveDeathForTest(BYTE* world, BYTE* citizen, float orphanHappyDelta, float parentGriefDelta);
+BYTE*   TwoStates_CitizenStudioSelectForTest(BYTE* world, BYTE* citizen);
+void    TwoStates_CitizenStudioEffectForTest(BYTE* world, BYTE* studio, BYTE* citizen, float happyDelta);
 
 
 

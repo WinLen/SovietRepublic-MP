@@ -63,6 +63,12 @@
 #ifndef WORLD_DEV_MODE_OFFSET
 #define WORLD_DEV_MODE_OFFSET       0x000A
 #endif
+#ifndef WORLD_FAST_RESEARCH_CHEAT_OFFSET
+#define WORLD_FAST_RESEARCH_CHEAT_OFFSET  0x14449u
+#endif
+#ifndef WORLD_FAST_CONSTRUCT_CHEAT_OFFSET
+#define WORLD_FAST_CONSTRUCT_CHEAT_OFFSET 0x1444Au
+#endif
 #ifndef WORLD_CAMERA_MGR_PTR_OFF
 #define WORLD_CAMERA_MGR_PTR_OFF    0x0018
 #endif
@@ -89,6 +95,15 @@
 #endif
 #ifndef CAM_MGR_FOLLOW_WIN_PTR_OFF
 #define CAM_MGR_FOLLOW_WIN_PTR_OFF  0x078
+#endif
+#ifndef CAM_MGR_PID_PTRS_OFFSET
+#define CAM_MGR_PID_PTRS_OFFSET     0x0F8u
+#endif
+#ifndef CAM_MGR_PID_COUNT
+#define CAM_MGR_PID_COUNT           7
+#endif
+#ifndef CAM_MGR_PID_STRUCT_BYTES
+#define CAM_MGR_PID_STRUCT_BYTES    0x38u
 #endif
 #ifndef CAM_MGR_TRANS_STEP_OFFSET
 #define CAM_MGR_TRANS_STEP_OFFSET   0x14C
@@ -493,6 +508,18 @@
 #ifndef RVA_CITIZEN_CHURCH_STEP
 #define RVA_CITIZEN_CHURCH_STEP     0x834520
 #endif
+#ifndef RVA_CITIZEN_STUDIO_EFFECT
+#define RVA_CITIZEN_STUDIO_EFFECT   0x4C21F0
+#endif
+#ifndef RVA_CITIZEN_STUDIO_SELECT
+#define RVA_CITIZEN_STUDIO_SELECT   0x4C2610
+#endif
+#ifndef RVA_CIT_SEVERE_ILLNESS_TICK
+#define RVA_CIT_SEVERE_ILLNESS_TICK 0x833509
+#endif
+#ifndef RVA_CIT_SEVERE_ILLNESS_RESUME
+#define RVA_CIT_SEVERE_ILLNESS_RESUME 0x833523
+#endif
 #ifndef RVA_CITIZEN_BIRTH
 #define RVA_CITIZEN_BIRTH           0x834A20
 #endif
@@ -754,6 +781,99 @@ struct SovietStatResEntry {
 #ifndef VEH_STEER_TARGET_OFFSET
 #define VEH_STEER_TARGET_OFFSET     0x1160
 #endif
+#ifndef VEH_CORNER_CUT_APPLIED_OFFSET
+#define VEH_CORNER_CUT_APPLIED_OFFSET 0x76Cu
+#endif
+#ifndef VEH_CORNER_TURN_ANGLE_OFFSET
+#define VEH_CORNER_TURN_ANGLE_OFFSET  0x770u
+#endif
+#ifndef VEH_TRAIL_DIST_ACCUM_OFFSET
+#define VEH_TRAIL_DIST_ACCUM_OFFSET   0x1164u
+#endif
+#ifndef VEH_TRAIL_BUFFER_OFFSET
+#define VEH_TRAIL_BUFFER_OFFSET       0x1168u
+#endif
+#ifndef VEH_TRAIL_ENTRY_COUNT
+#define VEH_TRAIL_ENTRY_COUNT         25
+#endif
+#ifndef VEH_TRAIL_ENTRY_STRIDE
+#define VEH_TRAIL_ENTRY_STRIDE        0x10u
+#endif
+#ifndef VEH_AXLE_FRONT_POS_OFFSET
+#define VEH_AXLE_FRONT_POS_OFFSET     0x12F8u
+#endif
+#ifndef VEH_AXLE_REAR_POS_OFFSET
+#define VEH_AXLE_REAR_POS_OFFSET      0x1304u
+#endif
+#ifndef RVA_VEC_WAYPOINT_PUSH_BACK
+#define RVA_VEC_WAYPOINT_PUSH_BACK    0x02F2F0
+#endif
+#ifndef RVA_VEH_CLEAR_PATH_NODES
+#define RVA_VEH_CLEAR_PATH_NODES      0x681970
+#endif
+#ifndef RVA_VEH_ASSIGN_BAY_PATH
+#define RVA_VEH_ASSIGN_BAY_PATH       0x6B2A60
+#endif
+#ifndef RVA_VEH_ARRIVAL_STEP
+#define RVA_VEH_ARRIVAL_STEP          0x6CD1E0
+#endif
+#ifndef BLD_ATTACHED_BEGIN_OFFSET
+#define BLD_ATTACHED_BEGIN_OFFSET     0x5B8u
+#endif
+#ifndef BLD_ATTACHED_END_OFFSET
+#define BLD_ATTACHED_END_OFFSET       0x5C0u
+#endif
+#ifndef BLD_BAY_POINTS_BEGIN_OFFSET
+#define BLD_BAY_POINTS_BEGIN_OFFSET   0xA40u
+#endif
+#ifndef BLD_BAY_POINTS_END_OFFSET
+#define BLD_BAY_POINTS_END_OFFSET     0xA48u
+#endif
+#ifndef BLD_BAY_POINT_STRIDE
+#define BLD_BAY_POINT_STRIDE          0x20u
+#endif
+#ifndef BLD_BAY_STATE_BEGIN_OFFSET
+#define BLD_BAY_STATE_BEGIN_OFFSET    0xA58u
+#endif
+#ifndef BLD_BAY_VEH_BEGIN_OFFSET
+#define BLD_BAY_VEH_BEGIN_OFFSET      0xA78u
+#endif
+#ifndef BLD_CORRIDOR_LOCK_VEH_OFFSET
+#define BLD_CORRIDOR_LOCK_VEH_OFFSET  0xBB0u
+#endif
+#ifndef VEH_LINE_SLOT_IDX_OFFSET
+#define VEH_LINE_SLOT_IDX_OFFSET      0x510u
+#endif
+#ifndef VEH_BAY_TARGET_BLD_OFFSET
+#define VEH_BAY_TARGET_BLD_OFFSET     0x528u
+#endif
+#ifndef VEH_BAY_SLOT_IDX_OFFSET
+#define VEH_BAY_SLOT_IDX_OFFSET       0x56Cu
+#endif
+#ifndef VEH_CORRIDOR_LOCK_BLD_OFFSET
+#define VEH_CORRIDOR_LOCK_BLD_OFFSET  0xC80u
+#endif
+#ifndef VEH_WAIT_TIMER_OFFSET
+#define VEH_WAIT_TIMER_OFFSET         0xD0Cu
+#endif
+#ifndef VEH_BAY_WAITING_FLAG_OFFSET
+#define VEH_BAY_WAITING_FLAG_OFFSET   0xD38u
+#endif
+#ifndef VEH_BAY_ARRIVED_FLAG_OFFSET
+#define VEH_BAY_ARRIVED_FLAG_OFFSET   0xD39u
+#endif
+#ifndef VEH_WAYPOINTS_BEGIN_OFFSET
+#define VEH_WAYPOINTS_BEGIN_OFFSET    0x738u
+#endif
+#ifndef VEH_WAYPOINTS_END_OFFSET
+#define VEH_WAYPOINTS_END_OFFSET      0x740u
+#endif
+#ifndef VEH_WAYPOINTS_CAP_OFFSET
+#define VEH_WAYPOINTS_CAP_OFFSET      0x748u
+#endif
+#ifndef VEH_WAYPOINT_INDEX_OFFSET
+#define VEH_WAYPOINT_INDEX_OFFSET     0x768u
+#endif
 #ifndef VEH_RENDER_VISIBLE_OFFSET
 #define VEH_RENDER_VISIBLE_OFFSET   0x13D8
 #endif
@@ -918,8 +1038,10 @@ static_assert(STAT_CITIZEN_SATISFACTION_OFF == STAT_CITIZEN_COUNTS_OFF + 5 * siz
               STAT_EXTRA_COUNTS_OFF == STAT_CITIZEN_BRACKETS_OFF + 9 * sizeof(int32_t),
               "SOVIET_STAT_RECORD citizen satisfaction/averages/demographics/brackets offsets must match 0x2FD2E0");
 static_assert(WORLD_CHEAT_MODE_OFFSET == 0x9 && WORLD_DEV_MODE_OFFSET == 0xA &&
+              WORLD_FAST_RESEARCH_CHEAT_OFFSET == 0x14449u &&
+              WORLD_FAST_CONSTRUCT_CHEAT_OFFSET == WORLD_FAST_RESEARCH_CHEAT_OFFSET + 1u &&
               WORLD_SYSTAB_SUBPAGE_OFFSET == WORLD_ECON_TAB_OFFSET,
-              "Cheat/dev mode byte offsets (0x9, 0xA) and systab subpage offset (0xC65C) must match 0x309D80 / 0x329390");
+              "Cheat/dev mode byte offsets (0x9, 0xA, 0x14449, 0x1444A) and systab subpage offset (0xC65C) must match 0x309D80 / 0x329390 / 0x17E602");
 static_assert(VEH_SIXTH_NODE_OFFSET == VEH_SIXTH_NODE_ACTIVE_OFFSET + 4 && C3D_NODE_BYTE_SIZE == 0xBC,
               "Vehicle 6th C3D_NODE (+0x1318, 0xBC bytes) must follow active index (+0x1314) per 0x66EDD0");
 static_assert(VEH_CHILDREN_END_OFFSET == VEH_CHILDREN_BEGIN_OFFSET + 8,
@@ -1485,6 +1607,18 @@ static_assert(WORLD_STUDIOS_BEGIN_OFFSET == 0xD230u &&
               BLD_POLLUTION_ALERT_TOGGLE_OFFSET == 0x0DFCu &&
               BLD_POLLUTION_ALERT_THRESH_OFFSET == 0x0E3Cu,
               "Studio broadcast, upbringing sliders, staff loyalty, and alert checkbox offsets must match 1.1.1.9 layout");
+
+static_assert(CAM_MGR_PID_PTRS_OFFSET + CAM_MGR_PID_COUNT * sizeof(void*) == 0x130u &&
+              CAM_MGR_PID_STRUCT_BYTES == 0x38u &&
+              VEH_CORNER_TURN_ANGLE_OFFSET == VEH_CORNER_CUT_APPLIED_OFFSET + 4u &&
+              VEH_TRAIL_BUFFER_OFFSET == VEH_TRAIL_DIST_ACCUM_OFFSET + 4u &&
+              VEH_TRAIL_BUFFER_OFFSET + VEH_TRAIL_ENTRY_COUNT * VEH_TRAIL_ENTRY_STRIDE == VEH_AXLE_FRONT_POS_OFFSET &&
+              VEH_AXLE_REAR_POS_OFFSET == VEH_AXLE_FRONT_POS_OFFSET + 3 * sizeof(float) &&
+              BLD_BAY_POINT_STRIDE == 0x20u &&
+              RVA_VEH_ARRIVAL_STEP == 0x6CD1E0 &&
+              RVA_VEH_ASSIGN_BAY_PATH == 0x6B2A60,
+              "Camera manager PID pointers (+0xF8..+0x128) and vehicle trail buffer/axle offsets (+0x1168..+0x130C) must match 1.1.1.9 layout");
+
 
 
 

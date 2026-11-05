@@ -15,6 +15,8 @@ float HeldFrame_LerpAngleRadians(float prevRad, float currRad, float alpha);
 void HeldFrame_BeginCameraPrepare(float fps);
 void HeldFrame_EndCameraPrepare();
 void HeldFrame_UpdateCameraAfterSimStep();
+void HeldFrame_SaveCameraStepStateForTest(BYTE* camMgr, float fps);
+bool HeldFrame_RestoreCameraStepStateForTest(BYTE* camMgr);
 void HeldFrame_DrawStepVehicles(void* world);
 void HeldFrame_SubmitVehicleHighlight(void* vehicle, unsigned char a2, unsigned char a3,
                                       const float* colorRgba, unsigned char flag, bool isExtraPass);

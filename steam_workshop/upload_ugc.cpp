@@ -274,7 +274,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Sync building worker & citizen social rating (loyalty) settings (0x13D8/0x13E0), upbringing sliders (0x13A0..0x13AC), studio broadcast sliders (0x138..0x14C), alert toggles (0x126D/0x1270/0x0E10/0x0DFC/0x0E3C), and fix HUD quad rotation & camera restore",
+                "v%s (Protocol %d) - Fix instant research completion, smooth follow-cam rotation, fix aircraft stand/bus terminal alignment & active-path soft-sync, and isolate citizen severe illness & radio/TV studio happiness trackers per state",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -694,8 +694,12 @@ static const char* ApplyUnivResearch(U64 building, const SwitchMsg& m)
 {
     if (!building) return "the building is gone";
     if (m.count < 2 || (m.shape != 1 && m.shape != 2)) return "invalid university research payload";
+    int oldTechIdx = (int)m.words[0].old - 1;
     int newTechIdx = (int)m.words[0].now - 1;
     *(unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET) = m.words[1].now;
+    if (newTechIdx == oldTechIdx && m.words[1].now != m.words[1].old) {
+        return nullptr;
+    }
     if (!TwoStates_ApplyUnivResearchSelection(World(), (BYTE*)building, (int)m.shape, newTechIdx)) {
         return "university research target invalid";
     }

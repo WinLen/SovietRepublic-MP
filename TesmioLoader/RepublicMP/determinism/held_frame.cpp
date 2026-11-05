@@ -121,11 +121,15 @@ static unsigned long long g_interpTick = 0;
 static HeldFrameDiagStats g_hfDiag = {};
 static std::vector<BYTE*> g_camPrepModified;
 static BYTE g_savedCamMgr[CAM_MGR_STRUCT_BYTES] = {};
+static BYTE g_savedCameraNode[C3D_NODE_BYTE_SIZE] = {};
+static BYTE* g_savedCamPidPtrs[CAM_MGR_PID_COUNT] = {};
+static BYTE g_savedCamPidData[CAM_MGR_PID_COUNT][CAM_MGR_PID_STRUCT_BYTES] = {};
 static BYTE* g_savedCamMgrPtr = nullptr;
 static BYTE* g_savedRideVeh = nullptr;
 static BYTE* g_savedFollowWin = nullptr;
 static float g_savedCamFps = 60.0f;
 static bool g_hasCamSnapshot = false;
+static bool g_hasSavedCameraNode = false;
 
 struct DeferredVehicleHighlight {
     BYTE* vehicle;
@@ -154,11 +158,15 @@ void HeldFrame_Reset()
     g_camPrepModified.clear();
     g_deferredPrepHighlights.clear();
     memset(g_savedCamMgr, 0, sizeof(g_savedCamMgr));
+    memset(g_savedCameraNode, 0, sizeof(g_savedCameraNode));
+    memset(g_savedCamPidPtrs, 0, sizeof(g_savedCamPidPtrs));
+    memset(g_savedCamPidData, 0, sizeof(g_savedCamPidData));
     g_savedCamMgrPtr = nullptr;
     g_savedRideVeh = nullptr;
     g_savedFollowWin = nullptr;
     g_savedCamFps = 60.0f;
     g_hasCamSnapshot = false;
+    g_hasSavedCameraNode = false;
 }
 
 void HeldFrame_GetDiagStats(HeldFrameDiagStats* out)
@@ -196,7 +204,9 @@ void HeldFrame_InterpolateC3DNode(BYTE* node, const float prevNode[47], const fl
     float* ori = (float*)(node + 0xA4);
     float* up = (float*)(node + 0xB0);
 
-    rot[0] = currNode[35]; rot[1] = currNode[36]; rot[2] = currNode[37];
+    rot[0] = HeldFrame_LerpAngleRadians(prevNode[35], currNode[35], alpha);
+    rot[1] = HeldFrame_LerpAngleRadians(prevNode[36], currNode[36], alpha);
+    rot[2] = HeldFrame_LerpAngleRadians(prevNode[37], currNode[37], alpha);
     scale[0] = currNode[38]; scale[1] = currNode[39]; scale[2] = currNode[40];
 
     const float sox = smoothOff ? smoothOff[0] : 0.0f;
@@ -636,10 +646,14 @@ static bool ApplySubTickVisualInterp(BYTE* p, float alpha, bool decaySmooth = tr
                 float dy0 = rec.currNode[0][33] - rec.prevNode[0][33];
                 float dz0 = rec.currNode[0][34] - rec.prevNode[0][34];
                 float distSq0 = dx0 * dx0 + dy0 * dy0 + dz0 * dz0;
+                float rdx0 = rec.currNode[0][35] - rec.prevNode[0][35];
+                float rdy0 = rec.currNode[0][36] - rec.prevNode[0][36];
+                float rdz0 = rec.currNode[0][37] - rec.prevNode[0][37];
+                float rotSq0 = rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0;
                 float smoothSq = rec.smoothOffset[0] * rec.smoothOffset[0] +
                                  rec.smoothOffset[1] * rec.smoothOffset[1] +
                                  rec.smoothOffset[2] * rec.smoothOffset[2];
-                if ((distSq0 > 1e-8f || smoothSq > 1e-8f) && distSq0 < 400.0f && isfinite(distSq0)) {
+                if ((distSq0 > 1e-8f || rotSq0 > 1e-8f || smoothSq > 1e-8f) && distSq0 < 400.0f && isfinite(distSq0)) {
                     int nNodes = GetActiveVehicleNodeCount(p);
                     if (nNodes > rec.nodeCount) nNodes = rec.nodeCount;
                     for (int k = 0; k < nNodes; k++) {
@@ -1007,10 +1021,60 @@ static void CollectFollowCameraSubgraph(std::vector<BYTE*>& targets)
     ExpandVehicleTargetGraph(seen, targets);
 }
 
+static void SaveCameraStepState(BYTE* camMgr, float fps)
+{
+    g_savedCamMgrPtr = camMgr;
+    g_savedRideVeh = *(BYTE**)(g_savedCamMgr + CAM_MGR_RIDE_VEH_PTR_OFF);
+    g_savedFollowWin = *(BYTE**)(g_savedCamMgr + CAM_MGR_FOLLOW_WIN_PTR_OFF);
+    g_savedCamFps = (fps > 1.0f && isfinite(fps)) ? fps : 60.0f;
+    g_hasSavedCameraNode = g_exeBase &&
+                           Read(g_exeBase + CAMERA_RVA, g_savedCameraNode, C3D_NODE_BYTE_SIZE);
+    for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+        g_savedCamPidPtrs[i] = nullptr;
+        BYTE* pidPtr = *(BYTE**)(g_savedCamMgr + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*));
+        if (pidPtr && IsPointerLikeX64((uint64_t)(uintptr_t)pidPtr) &&
+            Read(pidPtr, g_savedCamPidData[i], CAM_MGR_PID_STRUCT_BYTES)) {
+            g_savedCamPidPtrs[i] = pidPtr;
+        }
+    }
+    g_hasCamSnapshot = true;
+}
+
+static bool RestoreCameraStepState(BYTE* camMgr)
+{
+    if (!SafeMemcpyPod(camMgr, g_savedCamMgr, CAM_MGR_STRUCT_BYTES)) return false;
+    if (g_hasSavedCameraNode && g_exeBase) {
+        SafeMemcpyPod(g_exeBase + CAMERA_RVA, g_savedCameraNode, C3D_NODE_BYTE_SIZE);
+    }
+    for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+        BYTE* pidPtr = g_savedCamPidPtrs[i];
+        if (!pidPtr) continue;
+        BYTE* livePidPtr = *(BYTE**)(camMgr + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*));
+        if (livePidPtr == pidPtr && IsPointerLikeX64((uint64_t)(uintptr_t)pidPtr)) {
+            SafeMemcpyPod(pidPtr, g_savedCamPidData[i], CAM_MGR_PID_STRUCT_BYTES);
+        }
+    }
+    return true;
+}
+
+void HeldFrame_SaveCameraStepStateForTest(BYTE* camMgr, float fps)
+{
+    if (!camMgr || !Read(camMgr, g_savedCamMgr, CAM_MGR_STRUCT_BYTES)) return;
+    SaveCameraStepState(camMgr, fps);
+}
+
+bool HeldFrame_RestoreCameraStepStateForTest(BYTE* camMgr)
+{
+    if (!camMgr || !g_hasCamSnapshot) return false;
+    g_hasCamSnapshot = false;
+    return RestoreCameraStepState(camMgr);
+}
+
 void HeldFrame_BeginCameraPrepare(float fps)
 {
     g_camPrepModified.clear();
     g_hasCamSnapshot = false;
+    g_hasSavedCameraNode = false;
     if (!Determinism_IsActive() || !Determinism_SessionRunning() || Probe_IsRunning() || Determinism_WorldLoading()) {
         return;
     }
@@ -1023,11 +1087,7 @@ void HeldFrame_BeginCameraPrepare(float fps)
         if (Read(g_exeBase + WORLD_RVA + WORLD_CAMERA_MGR_PTR_OFF, &camMgr, sizeof(camMgr)) &&
             camMgr && IsPointerLikeX64((uint64_t)(uintptr_t)camMgr) &&
             Read(camMgr, g_savedCamMgr, CAM_MGR_STRUCT_BYTES)) {
-            g_savedCamMgrPtr = camMgr;
-            g_savedRideVeh = *(BYTE**)(g_savedCamMgr + CAM_MGR_RIDE_VEH_PTR_OFF);
-            g_savedFollowWin = *(BYTE**)(g_savedCamMgr + CAM_MGR_FOLLOW_WIN_PTR_OFF);
-            g_savedCamFps = (fps > 1.0f && isfinite(fps)) ? fps : 60.0f;
-            g_hasCamSnapshot = true;
+            SaveCameraStepState(camMgr, fps);
         }
         return;
     }
@@ -1087,7 +1147,7 @@ void HeldFrame_UpdateCameraAfterSimStep()
     CollectFollowCameraSubgraph(targets);
     if (targets.empty()) return;
 
-    if (!SafeMemcpyPod(camMgr, g_savedCamMgr, CAM_MGR_STRUCT_BYTES)) return;
+    if (!RestoreCameraStepState(camMgr)) return;
 
     float alpha = Determinism_RenderAlpha();
     std::vector<BYTE*> modified;

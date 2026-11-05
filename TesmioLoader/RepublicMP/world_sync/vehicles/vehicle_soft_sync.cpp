@@ -11,7 +11,6 @@
 #include <math.h>
 
 #define VEH_CUR_BLD_OFFSET 0x4F0
-#define VEH_FUEL_OFFSET 0x770
 #define VEH_SPEED_OFFSET 0xD24
 #define VEH_NODE0_OFFSET 0xD60
 #define VEH_WEAR0_OFFSET 0x17E8
@@ -188,6 +187,26 @@ static void TranslateVehicleNodes(BYTE* v, float dx, float dy, float dz)
     for (int k = 0; k < nNodes; k++) {
         TranslateNode(v + kVehicleNodeOffsets[k], dx, dy, dz);
     }
+    for (int i = 0; i < VEH_TRAIL_ENTRY_COUNT; ++i) {
+        float* entry = (float*)(v + VEH_TRAIL_BUFFER_OFFSET + (size_t)i * VEH_TRAIL_ENTRY_STRIDE);
+        if (entry[0] != 0.0f || entry[1] != 0.0f || entry[2] != 0.0f || entry[3] != 0.0f) {
+            entry[0] += dx;
+            entry[1] += dy;
+            entry[2] += dz;
+        }
+    }
+    float* frontAxle = (float*)(v + VEH_AXLE_FRONT_POS_OFFSET);
+    if (frontAxle[0] != 0.0f || frontAxle[1] != 0.0f || frontAxle[2] != 0.0f) {
+        frontAxle[0] += dx;
+        frontAxle[1] += dy;
+        frontAxle[2] += dz;
+    }
+    float* rearAxle = (float*)(v + VEH_AXLE_REAR_POS_OFFSET);
+    if (rearAxle[0] != 0.0f || rearAxle[1] != 0.0f || rearAxle[2] != 0.0f) {
+        rearAxle[0] += dx;
+        rearAxle[1] += dy;
+        rearAxle[2] += dz;
+    }
 }
 
 static float ReadVehiclePassengers(const BYTE* v)
@@ -231,7 +250,7 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
         BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
         out.currentBldId = effBld ? *(int*)effBld : -1;
         out.scheduleIdx = *(int*)(v + VEH_SCHED_IDX_OFFSET);
-        out.fuel = *(float*)(v + VEH_FUEL_OFFSET);
+        out.fuel = *(float*)(v + VEH_CORNER_TURN_ANGLE_OFFSET);
         out.speed = *(float*)(v + VEH_SPEED_OFFSET);
         out.wear[0] = *(float*)(v + VEH_WEAR0_OFFSET);
         out.wear[1] = *(float*)(v + VEH_WEAR1_OFFSET);
@@ -648,7 +667,6 @@ static bool HasActiveEnginePath(const BYTE* v)
 static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
     g_vssDiag.vehiclesSynced++;
-    if (isfinite(e.fuel)) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
     if (isfinite(e.wear[0])) *(float*)(v + VEH_WEAR0_OFFSET) = e.wear[0];
     if (isfinite(e.wear[1])) *(float*)(v + VEH_WEAR1_OFFSET) = e.wear[1];
     if (isfinite(e.wear[2])) *(float*)(v + VEH_WEAR2_OFFSET) = e.wear[2];

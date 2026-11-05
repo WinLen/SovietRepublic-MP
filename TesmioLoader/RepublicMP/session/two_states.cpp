@@ -1310,6 +1310,20 @@ static const BYTE kCitizenChurchStepExpect[15] = {
     0x4C, 0x8B, 0xDC, 0x55, 0x49, 0x8D, 0x6B, 0xA1, 0x48, 0x81,
     0xEC, 0x00, 0x01, 0x00, 0x00
 };
+static const BYTE kCitizenStudioEffectExpect[14] = {
+    0x40, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x4C, 0x8B, 0xDA,
+    0x0F, 0x29, 0x7C, 0x24, 0x20
+};
+static const BYTE kCitizenStudioSelectExpect[16] = {
+    0x40, 0x56, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x58,
+    0xF3, 0x0F, 0x10, 0x8A, 0xFC, 0x00, 0x00, 0x00
+};
+static const BYTE kCitSevereIllnessTickExpect[26] = {
+    0xF3, 0x0F, 0x10, 0x05, 0xC3, 0x23, 0x1B, 0x00,
+    0xFF, 0x05, 0xED, 0x23, 0x1B, 0x00,
+    0xF3, 0x0F, 0x58, 0xC1,
+    0xF3, 0x0F, 0x11, 0x05, 0xB1, 0x23, 0x1B, 0x00
+};
 static const BYTE kCitizenBirthExpect[15] = {
     0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18,
     0x57, 0x48, 0x83, 0xEC, 0x50
@@ -1534,6 +1548,8 @@ typedef float (__fastcall* GetMaxAvailableBorrowFn)(BYTE* world, int32_t loanTyp
 typedef void (__fastcall* StepOneLoanDayFn)(BYTE* world, SovietLoan* loan);
 typedef void (__fastcall* CitHomeStepFn)(BYTE* world, BYTE* building, BYTE* citizen, float dt, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* CitizenChurchStepFn)(BYTE* world, BYTE* citizen);
+typedef void (__fastcall* CitizenStudioEffectFn)(BYTE* world, BYTE* studio, BYTE* citizen, float dt);
+typedef BYTE* (__fastcall* CitizenStudioSelectFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenBirthFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
 typedef unsigned char (__fastcall* CitizenStarveStepFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenRemoveFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
@@ -1562,6 +1578,8 @@ static BldEconFn o_bldUtilityBorderStep = nullptr;
 static ForeignLaborStepFn o_foreignLaborStep = nullptr;
 static CitHomeStepFn o_citHomeStep = nullptr;
 static CitizenChurchStepFn o_citizenChurchStep = nullptr;
+static CitizenStudioEffectFn o_citizenStudioEffect = nullptr;
+static CitizenStudioSelectFn o_citizenStudioSelect = nullptr;
 static CitizenBirthFn o_citizenBirth = nullptr;
 static CitizenStarveStepFn o_citizenStarveStep = nullptr;
 static CitizenRemoveFn o_citizenRemove = nullptr;
@@ -2137,6 +2155,51 @@ static void __fastcall H_CitizenEvalNeeds(BYTE* world, BYTE* citizen)
     if (o_citizenEvalNeeds) o_citizenEvalNeeds(world, citizen);
 }
 
+static void AccumulateMockTrackerCause(BYTE* world, size_t sumBaseOff, size_t cntBaseOff,
+                                       int causeIdx, int maxCount, float delta)
+{
+    if (!world || causeIdx < 0 || causeIdx >= maxCount || delta == 0.0f) return;
+    *(float*)(world + sumBaseOff + (size_t)causeIdx * sizeof(float)) += delta;
+    *(int32_t*)(world + cntBaseOff + (size_t)causeIdx * sizeof(int32_t)) += 1;
+}
+
+static void __fastcall H_CitizenSevereIllnessTick(BYTE* world, float delta, BYTE* citizen)
+{
+    if (!world) return;
+    CitizenEconScope scope(world, nullptr, citizen);
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HEALTH_CUR_SUM_OFF,
+                               WORLD_TRACKER_HEALTH_CUR_CNT_OFF, 9, TRACKER_HEALTH_CAUSE_COUNT, delta);
+}
+
+void TwoStates_CitizenSevereIllnessTickForTest(BYTE* world, float delta, BYTE* citizen)
+{
+    H_CitizenSevereIllnessTick(world, delta, citizen);
+}
+
+static float g_mockOrphanHappyDelta = 0.0f;
+static float g_mockParentGriefDelta = 0.0f;
+
+static void __fastcall MockEngineCitizenRemoveDeath(BYTE* world, BYTE* /*citizen*/, unsigned char /*a3*/,
+                                                    unsigned char reason, uintptr_t /*a5*/, uintptr_t /*a6*/)
+{
+    if (!world || reason != 1) return;
+    *(int32_t*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 1 * sizeof(int32_t)) += 1;
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HAPPY_CUR_SUM_OFF, WORLD_TRACKER_HAPPY_CUR_CNT_OFF,
+                               11, TRACKER_HAPPY_CAUSE_COUNT, g_mockOrphanHappyDelta);
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HAPPY_CUR_SUM_OFF, WORLD_TRACKER_HAPPY_CUR_CNT_OFF,
+                               12, TRACKER_HAPPY_CAUSE_COUNT, g_mockParentGriefDelta);
+}
+
+void TwoStates_CitizenRemoveDeathForTest(BYTE* world, BYTE* citizen, float orphanHappyDelta, float parentGriefDelta)
+{
+    CitizenRemoveFn prev = o_citizenRemove;
+    o_citizenRemove = &MockEngineCitizenRemoveDeath;
+    g_mockOrphanHappyDelta = orphanHappyDelta;
+    g_mockParentGriefDelta = parentGriefDelta;
+    H_CitizenRemove(world, citizen, 0, 1, 0, 0);
+    o_citizenRemove = prev;
+}
+
 static int   g_mockHealthCauseIdx = -1;
 static float g_mockHealthDelta = 0.0f;
 static int   g_mockHappyCauseIdx = -1;
@@ -2145,14 +2208,10 @@ static float g_mockHappyDelta = 0.0f;
 static void __fastcall MockEngineCitizenEvalNeeds(BYTE* world, BYTE* /*citizen*/)
 {
     if (!world) return;
-    if (g_mockHealthCauseIdx >= 0 && g_mockHealthCauseIdx < 12) {
-        *(float*)(world + WORLD_TRACKER_HEALTH_CUR_SUM_OFF + (size_t)g_mockHealthCauseIdx * sizeof(float)) += g_mockHealthDelta;
-        *(int32_t*)(world + WORLD_TRACKER_HEALTH_CUR_CNT_OFF + (size_t)g_mockHealthCauseIdx * sizeof(int32_t)) += 1;
-    }
-    if (g_mockHappyCauseIdx >= 0 && g_mockHappyCauseIdx < 23) {
-        *(float*)(world + WORLD_TRACKER_HAPPY_CUR_SUM_OFF + (size_t)g_mockHappyCauseIdx * sizeof(float)) += g_mockHappyDelta;
-        *(int32_t*)(world + WORLD_TRACKER_HAPPY_CUR_CNT_OFF + (size_t)g_mockHappyCauseIdx * sizeof(int32_t)) += 1;
-    }
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HEALTH_CUR_SUM_OFF, WORLD_TRACKER_HEALTH_CUR_CNT_OFF,
+                               g_mockHealthCauseIdx, TRACKER_HEALTH_CAUSE_COUNT, g_mockHealthDelta);
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HAPPY_CUR_SUM_OFF, WORLD_TRACKER_HAPPY_CUR_CNT_OFF,
+                               g_mockHappyCauseIdx, TRACKER_HAPPY_CAUSE_COUNT, g_mockHappyDelta);
 }
 
 void TwoStates_CitizenEvalNeedsForTest(BYTE* world, BYTE* citizen, int healthCauseIdx, float healthDelta,
@@ -2191,17 +2250,21 @@ static const BYTE* ResolveCourtCaseCitizen(const BYTE* caseOrCit)
 class CivicBuildingFilterScope {
 private:
     BYTE* m_world = nullptr;
+    size_t m_vecOff = WORLD_BUILDINGS_OFFSET;
     uintptr_t m_savedHdr[3] = {};
     std::vector<BYTE*> m_filtered;
     bool m_swapped = false;
 
 public:
-    CivicBuildingFilterScope(BYTE* world, int targetState)
+    CivicBuildingFilterScope(BYTE* world, int targetState,
+                             size_t vecOff = WORLD_BUILDINGS_OFFSET,
+                             ResolveEntityOwnerFn resolveFn = &ResolveBuildingOwnerFast)
+        : m_vecOff(vecOff)
     {
         if (TwoStates_IsActive() && world && (targetState == 1 || targetState == 2)) {
             m_world = world;
-            m_swapped = SwapWorldPtrVecForState(world, WORLD_BUILDINGS_OFFSET, targetState,
-                                                &ResolveBuildingOwnerFast, 200000,
+            m_swapped = SwapWorldPtrVecForState(world, vecOff, targetState,
+                                                resolveFn, 200000,
                                                 m_savedHdr, m_filtered);
         }
     }
@@ -2209,12 +2272,35 @@ public:
     ~CivicBuildingFilterScope()
     {
         if (m_swapped && m_world) {
-            SafeMemcpyPod(m_world + WORLD_BUILDINGS_OFFSET, m_savedHdr, sizeof(m_savedHdr));
+            SafeMemcpyPod(m_world + m_vecOff, m_savedHdr, sizeof(m_savedHdr));
         }
     }
 
     bool IsSwapped() const { return m_swapped; }
 };
+
+static int ResolveStudioOwnerFast(const BYTE* studio)
+{
+    if (!studio) return 1;
+    const BYTE* bld = nullptr;
+    if (SafeReadPod((const BYTE* const*)(studio + STUDIO_BUILDING_OFFSET), &bld) && bld) {
+        return ResolveBuildingOwnerFast(bld);
+    }
+    return 1;
+}
+
+static BYTE* __fastcall H_CitizenStudioSelect(BYTE* world, BYTE* citizen)
+{
+    int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(citizen) : 0;
+    CivicBuildingFilterScope studioFilter(world, citOwner, WORLD_STUDIOS_BEGIN_OFFSET, &ResolveStudioOwnerFast);
+    return o_citizenStudioSelect ? o_citizenStudioSelect(world, citizen) : nullptr;
+}
+
+static void __fastcall H_CitizenStudioEffect(BYTE* world, BYTE* studio, BYTE* citizen, float dt)
+{
+    CitizenEconScope scope(world, nullptr, citizen);
+    if (o_citizenStudioEffect) o_citizenStudioEffect(world, studio, citizen, dt);
+}
 
 static int ResolveExistingCitizenHomeOwner(const BYTE* cit)
 {
@@ -2275,23 +2361,30 @@ static unsigned char __fastcall H_CitizenStarveStep(BYTE* world, BYTE* citizen)
     return o_citizenStarveStep ? o_citizenStarveStep(world, citizen) : 0;
 }
 
-static unsigned char __fastcall MockEngineCitizenStarveStep(BYTE* world, BYTE* citizen)
+static BYTE* SelectLastElementFromWorldVec(const BYTE* world, size_t vecOff)
 {
-    if (!world || !citizen) return 0;
-    BYTE* bestBld = nullptr;
+    if (!world) return nullptr;
+    BYTE* bestElem = nullptr;
     DiagLog_BeginSafeSeh();
     __try {
-        BYTE* const* b = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET);
-        BYTE* const* e = *(BYTE* const* const*)(world + WORLD_BUILDINGS_OFFSET + 8);
+        BYTE* const* b = *(BYTE* const* const*)(world + vecOff);
+        BYTE* const* e = *(BYTE* const* const*)(world + vecOff + 8);
         if (b && e > b && (e - b) <= 200000) {
             for (BYTE* const* it = b; it < e; ++it) {
-                if (*it) bestBld = *it;
+                if (*it) bestElem = *it;
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        bestBld = nullptr;
+        bestElem = nullptr;
     }
     DiagLog_EndSafeSeh();
+    return bestElem;
+}
+
+static unsigned char __fastcall MockEngineCitizenStarveStep(BYTE* world, BYTE* citizen)
+{
+    if (!world || !citizen) return 0;
+    BYTE* bestBld = SelectLastElementFromWorldVec(world, WORLD_BUILDINGS_OFFSET);
     if (bestBld) {
         H_CitizenMoveToBld(world, citizen, bestBld);
     }
@@ -2304,6 +2397,37 @@ void TwoStates_CitizenStarveStepForTest(BYTE* world, BYTE* citizen)
     o_citizenStarveStep = &MockEngineCitizenStarveStep;
     H_CitizenStarveStep(world, citizen);
     o_citizenStarveStep = prev;
+}
+
+static BYTE* __fastcall MockEngineCitizenStudioSelect(BYTE* world, BYTE* /*citizen*/)
+{
+    return SelectLastElementFromWorldVec(world, WORLD_STUDIOS_BEGIN_OFFSET);
+}
+
+BYTE* TwoStates_CitizenStudioSelectForTest(BYTE* world, BYTE* citizen)
+{
+    CitizenStudioSelectFn prev = o_citizenStudioSelect;
+    o_citizenStudioSelect = &MockEngineCitizenStudioSelect;
+    BYTE* res = H_CitizenStudioSelect(world, citizen);
+    o_citizenStudioSelect = prev;
+    return res;
+}
+
+static float g_mockStudioHappyDelta = 0.0f;
+
+static void __fastcall MockEngineCitizenStudioEffect(BYTE* world, BYTE* /*studio*/, BYTE* /*citizen*/, float /*dt*/)
+{
+    AccumulateMockTrackerCause(world, WORLD_TRACKER_HAPPY_CUR_SUM_OFF, WORLD_TRACKER_HAPPY_CUR_CNT_OFF,
+                               9, TRACKER_HAPPY_CAUSE_COUNT, g_mockStudioHappyDelta);
+}
+
+void TwoStates_CitizenStudioEffectForTest(BYTE* world, BYTE* studio, BYTE* citizen, float happyDelta)
+{
+    CitizenStudioEffectFn prev = o_citizenStudioEffect;
+    o_citizenStudioEffect = &MockEngineCitizenStudioEffect;
+    g_mockStudioHappyDelta = happyDelta;
+    H_CitizenStudioEffect(world, studio, citizen, 1.0f);
+    o_citizenStudioEffect = prev;
 }
 
 bool TwoStates_CitizenCanMoveToBldForTest(BYTE* world, BYTE* targetBld, BYTE* citizen)
@@ -2610,29 +2734,6 @@ static int FindEngineResearchIdxForBuilding(const BYTE* world, const BYTE* build
     return -1;
 }
 
-static bool SetEngineResearchBuildingAt(BYTE* world, BYTE* building, int techIdx)
-{
-    if (!world || !building) return false;
-    BYTE* begin = nullptr;
-    int count = 0;
-    if (!SafeReadResearchVecHeader(world, &begin, &count)) return false;
-    if (techIdx >= count) return false;
-    for (int i = 0; i < count; ++i) {
-        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
-        BYTE* curBld = nullptr;
-        if (SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld) &&
-            curBld == building) {
-            BYTE* zero = nullptr;
-            SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
-        }
-    }
-    if (techIdx >= 0) {
-        BYTE* targetItem = begin + (size_t)techIdx * RESEARCH_ITEM_STRIDE;
-        SafeWritePod((BYTE**)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), building);
-    }
-    return true;
-}
-
 static void RecomputeEngineResearchFallback(BYTE* world)
 {
     BYTE* begin = nullptr;
@@ -2673,6 +2774,126 @@ static void RecomputeEngineResearch(BYTE* world)
         return;
     }
     RecomputeEngineResearchFallback(world);
+}
+
+static bool SetEngineResearchBuildingAt(BYTE* world, BYTE* building, int techIdx)
+{
+    if (!world || !building) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return false;
+    if (techIdx >= count) return false;
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        BYTE* curBld = nullptr;
+        if (SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld) &&
+            curBld == building) {
+            BYTE* zero = nullptr;
+            SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
+        }
+    }
+    if (techIdx >= 0) {
+        BYTE* targetItem = begin + (size_t)techIdx * RESEARCH_ITEM_STRIDE;
+        SafeWritePod((BYTE**)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), building);
+    }
+    return true;
+}
+
+static void FinalizePreviousBuildingResearch(BYTE* world, BYTE* begin, int count, BYTE* building, int techIdx)
+{
+    bool needRecompute = false;
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        BYTE* curBld = nullptr;
+        if (!SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld) ||
+            curBld != building) {
+            continue;
+        }
+        if (techIdx >= 0 && i != techIdx) {
+            float curProg = 0.0f;
+            if (SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &curProg) &&
+                curProg > 0.0f && curProg < 1.0f) {
+                SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), 1.0f);
+                needRecompute = true;
+            }
+        }
+        BYTE* zero = nullptr;
+        SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
+    }
+    if (needRecompute) {
+        RecomputeEngineResearch(world);
+    }
+}
+
+static bool ApplyEngineResearchSelectionAt(BYTE* world, BYTE* building, int techIdx)
+{
+    if (!world || !building) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return false;
+    if (techIdx >= count) return false;
+
+    FinalizePreviousBuildingResearch(world, begin, count, building, techIdx);
+    if (techIdx < 0) return true;
+
+    BYTE* targetItem = begin + (size_t)techIdx * RESEARCH_ITEM_STRIDE;
+    float targetProg = 0.0f;
+    BYTE* targetBld = nullptr;
+    SafeReadPod((const float*)(targetItem + RESEARCH_ITEM_PROGRESS_OFFSET), &targetProg);
+    SafeReadPod((BYTE* const*)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &targetBld);
+    if (targetProg >= 1.0f || (targetProg >= 0.98f && targetBld == nullptr)) {
+        if (targetProg < 1.0f) {
+            SafeWritePod((float*)(targetItem + RESEARCH_ITEM_PROGRESS_OFFSET), 1.0f);
+        }
+        BYTE* zero = nullptr;
+        SafeWritePod((BYTE**)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
+        RecomputeEngineResearch(world);
+    } else {
+        uint8_t oneAvail = 1;
+        SafeWritePod(targetItem + RESEARCH_ITEM_AVAILABLE_OFFSET, oneAvail);
+        SafeWritePod((BYTE**)(targetItem + RESEARCH_ITEM_BUILDING_PTR_OFFSET), building);
+    }
+    return true;
+}
+
+static bool HealWorldOrphanedNearCompleteResearch(BYTE* world)
+{
+    if (!world) return false;
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (!SafeReadResearchVecHeader(world, &begin, &count)) return false;
+    bool healed = false;
+    for (int i = 0; i < count; ++i) {
+        BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+        float prog = 0.0f;
+        BYTE* curBld = nullptr;
+        SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &prog);
+        SafeReadPod((BYTE* const*)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), &curBld);
+        if (prog >= 0.98f && prog < 1.0f && curBld == nullptr) {
+            SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), 1.0f);
+            healed = true;
+        }
+    }
+    if (healed) {
+        RecomputeEngineResearch(world);
+    }
+    return healed;
+}
+
+static bool HealSliceOrphanedNearCompleteResearch(StateEngineResearch* slice)
+{
+    if (!slice) return false;
+    bool healed = false;
+    for (size_t i = 0; i < slice->items.size(); ++i) {
+        EngineResearchItemSlice& it = slice->items[i];
+        if (it.progress >= 0.98f && it.progress < 1.0f &&
+            it.researchingBld == nullptr && it.bldPosKey <= 0) {
+            it.progress = 1.0f;
+            it.available = 0;
+            healed = true;
+        }
+    }
+    return healed;
 }
 
 static bool IsTwoStatesResearchOrLicenseActive()
@@ -2738,6 +2959,9 @@ static void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* 
         if (s.researchingBld && (filterOwnerState == 1 || filterOwnerState == 2)) {
             if (ResolveBuildingOwnerFast(s.researchingBld) != filterOwnerState) {
                 s.researchingBld = nullptr;
+                if (s.progress < 1.0f) {
+                    s.progress = ((size_t)i < prevItems.size()) ? prevItems[(size_t)i].progress : 0.0f;
+                }
             }
         }
         s.bldPosKey = ComputeBuildingPosKeySafe(s.researchingBld);
@@ -2790,6 +3014,9 @@ static void EnsureEngineResearchInitialized(BYTE* world)
     BYTE* begin = nullptr;
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
+    if (!g_engineResearch[0].initialized || !g_engineResearch[1].initialized) {
+        HealWorldOrphanedNearCompleteResearch(world);
+    }
     for (int s = 0; s < 2; ++s) {
         if (!g_engineResearch[s].initialized) {
             CaptureWorldResearchToSlice(world, &g_engineResearch[s], s + 1);
@@ -2797,13 +3024,14 @@ static void EnsureEngineResearchInitialized(BYTE* world)
     }
     for (int s = 0; s < 2; ++s) {
         int stateOwner = s + 1;
-        if (g_engineResearch[s].loadedFromMeta) {
-            for (size_t i = 0; i < g_engineResearch[s].items.size(); ++i) {
-                EngineResearchItemSlice& it = g_engineResearch[s].items[i];
-                if (!it.researchingBld && it.bldPosKey > 0) {
-                    it.researchingBld = FindWorldBuildingByPosKey(world, it.bldPosKey);
-                }
+        for (size_t i = 0; i < g_engineResearch[s].items.size(); ++i) {
+            EngineResearchItemSlice& it = g_engineResearch[s].items[i];
+            if (!it.researchingBld && it.bldPosKey > 0) {
+                it.researchingBld = FindWorldBuildingByPosKey(world, it.bldPosKey);
             }
+        }
+        bool healed = HealSliceOrphanedNearCompleteResearch(&g_engineResearch[s]);
+        if (g_engineResearch[s].loadedFromMeta || healed) {
             WriteSliceToWorldResearch(world, &g_engineResearch[s]);
             RecomputeEngineResearch(world);
             SafeMemcpyPod(g_engineResearch[s].unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
@@ -2933,6 +3161,8 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[bldOwner - 1]);
+    } else {
+        HealWorldOrphanedNearCompleteResearch(world);
     }
 
     int oldTechIdx = FindEngineResearchIdxForBuilding(world, building);
@@ -2955,15 +3185,15 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
 
     if (newTechIdx != oldTechIdx || newRatioBits != oldRatioBits) {
         if (twoStates && bldOwner != localState) {
-            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            if (newTechIdx != oldTechIdx) SetEngineResearchBuildingAt(world, building, oldTechIdx);
             SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
             TwoStates_CheckBuildingControlAllowed(building,
                 Tr("управление исследованиями чужого ВУЗа", "controlling foreign university research"));
         } else if (SaveSync_IsWaitingLobbyActive()) {
-            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            if (newTechIdx != oldTechIdx) SetEngineResearchBuildingAt(world, building, oldTechIdx);
             SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
         } else if (Commands_Capturing()) {
-            SetEngineResearchBuildingAt(world, building, oldTechIdx);
+            if (newTechIdx != oldTechIdx) SetEngineResearchBuildingAt(world, building, oldTechIdx);
             SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), oldRatioBits);
             BuildingSwitches_CaptureUnivResearch((unsigned long long)building, bldOwner,
                                                  oldTechIdx, newTechIdx, oldRatioBits, newRatioBits);
@@ -2971,7 +3201,9 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
             if (!BuildingSwitches_CaptureUnivResearch((unsigned long long)building, bldOwner,
                                                       oldTechIdx, newTechIdx, oldRatioBits, newRatioBits)) {
                 SafeWritePod((unsigned*)(building + BLD_UNIV_STAFF_RATIO_OFFSET), newRatioBits);
-                TwoStates_ApplyUnivResearchSelection(world, building, bldOwner, newTechIdx);
+                if (newTechIdx != oldTechIdx) {
+                    TwoStates_ApplyUnivResearchSelection(world, building, bldOwner, newTechIdx);
+                }
             }
         }
     }
@@ -2991,7 +3223,7 @@ bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int owner
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[state - 1]);
     }
-    bool ok = SetEngineResearchBuildingAt(world, building, techIdx);
+    bool ok = ApplyEngineResearchSelectionAt(world, building, techIdx);
     if (twoStates && ok) {
         CaptureWorldResearchToSlice(world, &g_engineResearch[state - 1], state);
         int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
@@ -4877,6 +5109,54 @@ static int InstallBldSimLoopHooks()
     return patched;
 }
 
+#pragma pack(push, 1)
+struct CitSevereIllnessPatchStub {
+    uint8_t pushRcx;       // 0x51
+    uint8_t pushR8[2];     // 0x41, 0x50
+    uint8_t movRcxR14[3];  // 0x49, 0x8B, 0xCE
+    uint8_t movR8Rbx[3];   // 0x4C, 0x8B, 0xC3
+    uint8_t movRaxImm[2];  // 0x48, 0xB8
+    void*   relayTarget;
+    uint8_t callRax[2];    // 0xFF, 0xD0
+    uint8_t popR8[2];      // 0x41, 0x58
+    uint8_t popRcx;        // 0x59
+    uint8_t jmpRip0[6];    // 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00
+    void*   resumeTarget;
+};
+#pragma pack(pop)
+static_assert(sizeof(CitSevereIllnessPatchStub) == 38, "CitSevereIllnessPatchStub must be 38 bytes");
+
+static int InstallCitSevereIllnessHook()
+{
+    if (!g_exeBase) return 0;
+    void* stubSevereIllness = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenSevereIllnessTick, false, false);
+    if (!stubSevereIllness || !g_econRelayStubPage || g_econRelayStubUsed + 64 > 4096) return 0;
+
+    CitSevereIllnessPatchStub tmpl = {
+        0x51,
+        { 0x41, 0x50 },
+        { 0x49, 0x8B, 0xCE },
+        { 0x4C, 0x8B, 0xC3 },
+        { 0x48, 0xB8 },
+        stubSevereIllness,
+        { 0xFF, 0xD0 },
+        { 0x41, 0x58 },
+        0x59,
+        { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 },
+        (void*)(g_exeBase + RVA_CIT_SEVERE_ILLNESS_RESUME)
+    };
+    BYTE* patchStub = g_econRelayStubPage + g_econRelayStubUsed;
+    memcpy(patchStub, &tmpl, sizeof(tmpl));
+    FlushInstructionCache(GetCurrentProcess(), patchStub, sizeof(tmpl));
+    g_econRelayStubUsed += ((sizeof(tmpl) + 15) & ~size_t(15));
+
+    return PatchJmp14WithNops(g_exeBase + RVA_CIT_SEVERE_ILLNESS_TICK,
+                              sizeof(kCitSevereIllnessTickExpect),
+                              kCitSevereIllnessTickExpect,
+                              patchStub,
+                              "cit_severe_illness_tick") ? 1 : 0;
+}
+
 bool TwoStates_Install()
 {
     EnsureOwnerLock();
@@ -4961,9 +5241,17 @@ bool TwoStates_Install()
     // 0x834DE0 / 0x83C590 / 0x83CA50 are LTCG leaf-convention callees: callers such as 0x830720 keep live
     // values in volatile registers across the call (r10 = citizen at 0x830729), so the C++ hooks run behind
     // register-preserving relay stubs (rax/al result is kept, rcx/rdx/r8..r11/xmm0..xmm5 are restored).
-    void* stubStarveStep = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenStarveStep, false, false);
-    void* stubCanMoveBld = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenCanMoveToBld, false, false);
-    void* stubMoveToBld  = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenMoveToBld, false, false);
+    void* stubStarveStep   = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenStarveStep, false, false);
+    void* stubCanMoveBld   = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenCanMoveToBld, false, false);
+    void* stubMoveToBld    = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenMoveToBld, false, false);
+    void* stubStudioEffect = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenStudioEffect, false, false);
+    void* stubStudioSelect = TwoStates_BuildRegPreservingRelayStub((void*)&H_CitizenStudioSelect, false, false);
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STUDIO_EFFECT, stubStudioEffect,
+                                (void**)&o_citizenStudioEffect, kCitizenStudioEffectExpect,
+                                sizeof(kCitizenStudioEffectExpect), "republicmp two_states citizen_studio_effect");
+    econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STUDIO_SELECT, stubStudioSelect,
+                                (void**)&o_citizenStudioSelect, kCitizenStudioSelectExpect,
+                                sizeof(kCitizenStudioSelectExpect), "republicmp two_states citizen_studio_select");
     econOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_STARVE_STEP, stubStarveStep,
                                 (void**)&o_citizenStarveStep, kCitizenStarveStepExpect,
                                 sizeof(kCitizenStarveStepExpect), "republicmp two_states citizen_starve_step");
@@ -5074,10 +5362,11 @@ bool TwoStates_Install()
                                 (void**)&o_minimapDrawButtons, kMinimapDrawButtonsExpect,
                                 sizeof(kMinimapDrawButtonsExpect), "republicmp two_states minimap_draw_buttons");
     econOk += InstallBldSimLoopHooks();
+    econOk += InstallCitSevereIllnessHook();
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/57), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/60), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }

@@ -540,6 +540,14 @@ bool Commands_SanitizeCheatState(BYTE* world)
         world[WORLD_DEV_MODE_OFFSET] = 0;
         changed = true;
     }
+    if (world[WORLD_FAST_RESEARCH_CHEAT_OFFSET]) {
+        world[WORLD_FAST_RESEARCH_CHEAT_OFFSET] = 0;
+        changed = true;
+    }
+    if (world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET]) {
+        world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET] = 0;
+        changed = true;
+    }
     int32_t subPage = *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET);
     if (subPage >= 5 && subPage <= 7) {
         const BYTE* tabPtr = nullptr;

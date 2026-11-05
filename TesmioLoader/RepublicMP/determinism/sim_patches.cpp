@@ -60,7 +60,7 @@ static const DetPatch kPatches[] = {
     { 0x6ab9d4, 26, { 0x80, 0xbe, 0xd8, 0x13, 0x00, 0x00, 0x00, 0x0f, 0x84, 0xbf, 0x03, 0x00, 0x00,
                       0x80, 0xbe, 0xd9, 0x13, 0x00, 0x00, 0x00, 0x0f, 0x85, 0xb2, 0x03, 0x00, 0x00 },
       { 0xe9, 0xc7, 0x03, 0x00, 0x00, NOP21 }, "vehicle became visible (6a7520)" },
-    // jne camera branch -> nop6
+    // jne (camera) -> nop
     { 0x6af131, 6, { 0x0f, 0x85, 0x0d, 0x01, 0x00, 0x00 }, { NOP6 }, "road vehicle placement (6af0c0)" },
     { 0x6ada40, 6, { 0x0f, 0x85, 0x16, 0x01, 0x00, 0x00 }, { NOP6 }, "rail vehicle placement (6ad960)" },
     // movzx eax,byte [rbx+13d8] -> xor eax,eax; nop5
@@ -1687,6 +1687,234 @@ void SimPatches_TestC3dRestoreOriginalValues(void* material)
     H_C3dRestoreOriginalValues(material);
 }
 
+// ---------------------------------------------------------------------------
+// Terminal & Attached Aircraft Stand Arrival/Corridor Lock Sanitizer (0x6CD1E0)
+// ---------------------------------------------------------------------------
+
+static const unsigned char kVehArrivalStepExpect[15] = {
+    0x40, 0x53, 0x55, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00
+};
+typedef void (__fastcall* VehicleArrivalStepFn)(void* vehicle);
+static VehicleArrivalStepFn o_vehicleArrivalStep = nullptr;
+
+static int GetVehicleCategory(BYTE* veh)
+{
+    if (!IsPointerLikeX64((uintptr_t)veh)) return -1;
+    BYTE* vtype = *(BYTE**)(veh + VEH_TYPE_PTR_OFFSET);
+    if (!IsPointerLikeX64((uintptr_t)vtype)) return -1;
+    return *(int32_t*)(vtype + VEH_TYPE_CATEGORY_OFFSET);
+}
+
+static int GetBuildingBaySlotCount(BYTE* bld)
+{
+    if (!IsPointerLikeX64((uintptr_t)bld)) return 0;
+    uintptr_t pBegin = *(uintptr_t*)(bld + BLD_BAY_POINTS_BEGIN_OFFSET);
+    uintptr_t pEnd   = *(uintptr_t*)(bld + BLD_BAY_POINTS_END_OFFSET);
+    if (pEnd <= pBegin || !IsPointerLikeX64(pBegin)) return 0;
+    size_t count = (pEnd - pBegin) / BLD_BAY_POINT_STRIDE;
+    return (count <= 32) ? (int)count : 0;
+}
+
+static bool ShouldReleaseCorridorLock(BYTE* bld, BYTE* lockVeh)
+{
+    if (!IsPointerLikeX64((uintptr_t)lockVeh)) return true;
+    if (*(BYTE**)(lockVeh + VEH_CORRIDOR_LOCK_BLD_OFFSET) != bld) return true;
+    if (*(int32_t*)(lockVeh + VEH_HELI_FLIGHT_STATE_OFF) != 0) return true;
+    if (*(float*)(lockVeh + VEH_WAIT_TIMER_OFFSET) > 0.0f) return true;
+    if (GetVehicleCategory(lockVeh) == 8 &&
+        *(uintptr_t*)(bld + BLD_ATTACHED_END_OFFSET) > *(uintptr_t*)(bld + BLD_ATTACHED_BEGIN_OFFSET)) {
+        return true;
+    }
+    return (*(BYTE**)(lockVeh + VEH_BAY_TARGET_BLD_OFFSET) == nullptr &&
+            *(int32_t*)(lockVeh + VEH_BAY_SLOT_IDX_OFFSET) == -1 &&
+            *(int32_t*)(lockVeh + VEH_WAYPOINT_INDEX_OFFSET) >= 3);
+}
+
+static void SanitizeBuildingCorridorLock(BYTE* bld)
+{
+    if (!IsPointerLikeX64((uintptr_t)bld)) return;
+    BYTE* lockVeh = *(BYTE**)(bld + BLD_CORRIDOR_LOCK_VEH_OFFSET);
+    if (!lockVeh || !ShouldReleaseCorridorLock(bld, lockVeh)) return;
+    *(BYTE**)(bld + BLD_CORRIDOR_LOCK_VEH_OFFSET) = nullptr;
+    if (IsPointerLikeX64((uintptr_t)lockVeh) && *(BYTE**)(lockVeh + VEH_CORRIDOR_LOCK_BLD_OFFSET) == bld) {
+        *(BYTE**)(lockVeh + VEH_CORRIDOR_LOCK_BLD_OFFSET) = nullptr;
+    }
+}
+
+static void SanitizeTerminalAndAttachedLocks(BYTE* bld)
+{
+    if (!IsPointerLikeX64((uintptr_t)bld)) return;
+    SanitizeBuildingCorridorLock(bld);
+    BYTE** attBegin = *(BYTE***)(bld + BLD_ATTACHED_BEGIN_OFFSET);
+    BYTE** attEnd   = *(BYTE***)(bld + BLD_ATTACHED_END_OFFSET);
+    if (!IsPointerLikeX64((uintptr_t)attBegin) || attEnd <= attBegin || (attEnd - attBegin) > 32) return;
+    for (BYTE** it = attBegin; it < attEnd; ++it) {
+        SanitizeBuildingCorridorLock(*it);
+    }
+}
+
+struct ReservedStandMatch {
+    BYTE* hostBld;
+    int   localSlot;
+    int   globalSlot;
+    float distSq;
+};
+
+static void ScanHostBldStandReservations(BYTE* hostBld, BYTE* veh, int baseSlotOffset, ReservedStandMatch* best)
+{
+    int slots = GetBuildingBaySlotCount(hostBld);
+    if (slots <= 0) return;
+    BYTE* ptsBase = *(BYTE**)(hostBld + BLD_BAY_POINTS_BEGIN_OFFSET);
+    const float vx = *(const float*)(veh + VEH_POS_OFFSET + 0);
+    const float vz = *(const float*)(veh + VEH_POS_OFFSET + 8);
+    for (int s = 0; s < slots; ++s) {
+        if (hostBld[BLD_BAY_STATE_BEGIN_OFFSET + s] == 0) continue;
+        if (*(BYTE**)(hostBld + BLD_BAY_VEH_BEGIN_OFFSET + (size_t)s * 8) != veh) continue;
+        const float* p2 = (const float*)(ptsBase + (size_t)s * BLD_BAY_POINT_STRIDE + 0x0C);
+        const float dx = p2[0] - vx;
+        const float dz = p2[2] - vz;
+        const float d2 = dx * dx + dz * dz;
+        if (!best->hostBld || d2 < best->distSq) {
+            if (best->hostBld) {
+                best->hostBld[BLD_BAY_STATE_BEGIN_OFFSET + best->localSlot] = 0;
+                *(BYTE**)(best->hostBld + BLD_BAY_VEH_BEGIN_OFFSET + (size_t)best->localSlot * 8) = nullptr;
+            }
+            best->hostBld    = hostBld;
+            best->localSlot  = s;
+            best->globalSlot = baseSlotOffset + s;
+            best->distSq     = d2;
+        } else {
+            hostBld[BLD_BAY_STATE_BEGIN_OFFSET + s] = 0;
+            *(BYTE**)(hostBld + BLD_BAY_VEH_BEGIN_OFFSET + (size_t)s * 8) = nullptr;
+        }
+    }
+}
+
+static void PushVehicleWaypoint3f(BYTE* veh, const float* pt)
+{
+    uintptr_t begin = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
+    uintptr_t end   = *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET);
+    uintptr_t cap   = *(uintptr_t*)(veh + VEH_WAYPOINTS_CAP_OFFSET);
+    if (IsPointerLikeX64(begin) && end >= begin && end + 12 <= cap) {
+        memcpy((void*)end, pt, 12);
+        *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET) = end + 12;
+        return;
+    }
+    if (g_exeBase && g_exeBase[RVA_VEC_WAYPOINT_PUSH_BACK] != 0x00 &&
+        g_exeBase[RVA_VEC_WAYPOINT_PUSH_BACK] != 0xC3) {
+        typedef void(__fastcall* PushWaypointFn)(void* vec, const void* p);
+        ((PushWaypointFn)(g_exeBase + RVA_VEC_WAYPOINT_PUSH_BACK))(veh + VEH_WAYPOINTS_BEGIN_OFFSET, pt);
+    }
+}
+
+static void AssignReservedAircraftStandIfReady(BYTE* veh, BYTE* bld)
+{
+    if (GetVehicleCategory(veh) != 8) return;
+    if (*(int32_t*)(veh + VEH_HELI_FLIGHT_STATE_OFF) != 0) return;
+    if (*(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) != -1) return;
+    if (*(int32_t*)(veh + VEH_LINE_SLOT_IDX_OFFSET) != -1) return;
+
+    ReservedStandMatch best = { nullptr, -1, -1, 1e30f };
+    int runningSlots = GetBuildingBaySlotCount(bld);
+    ScanHostBldStandReservations(bld, veh, 0, &best);
+
+    BYTE** attBegin = *(BYTE***)(bld + BLD_ATTACHED_BEGIN_OFFSET);
+    BYTE** attEnd   = *(BYTE***)(bld + BLD_ATTACHED_END_OFFSET);
+    if (IsPointerLikeX64((uintptr_t)attBegin) && attEnd > attBegin && (attEnd - attBegin) <= 32) {
+        for (BYTE** it = attBegin; it < attEnd; ++it) {
+            BYTE* att = *it;
+            ScanHostBldStandReservations(att, veh, runningSlots, &best);
+            runningSlots += GetBuildingBaySlotCount(att);
+        }
+    }
+    if (!best.hostBld || best.localSlot < 0) return;
+
+    BYTE* hostLock = *(BYTE**)(best.hostBld + BLD_CORRIDOR_LOCK_VEH_OFFSET);
+    BYTE* vehSelf  = *(BYTE**)(veh + 0x390);
+    if (!IsPointerLikeX64((uintptr_t)vehSelf)) vehSelf = veh;
+    if (hostLock != nullptr && hostLock != vehSelf) return;
+
+    BYTE* oldLockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
+    if (IsPointerLikeX64((uintptr_t)oldLockBld) && *(BYTE**)(oldLockBld + BLD_CORRIDOR_LOCK_VEH_OFFSET) == vehSelf) {
+        *(BYTE**)(oldLockBld + BLD_CORRIDOR_LOCK_VEH_OFFSET) = nullptr;
+    }
+    *(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) = best.globalSlot;
+    *(BYTE**)(best.hostBld + BLD_CORRIDOR_LOCK_VEH_OFFSET) = vehSelf;
+    *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET) = best.hostBld;
+    *(uintptr_t*)(veh + 0x798) = 0;
+
+    uintptr_t v7B8 = *(uintptr_t*)(veh + 0x7B8);
+    uintptr_t v7C0 = *(uintptr_t*)(veh + 0x7C0);
+    if (v7C0 > v7B8 && g_exeBase && g_exeBase[RVA_VEH_CLEAR_PATH_NODES] != 0x00 &&
+        g_exeBase[RVA_VEH_CLEAR_PATH_NODES] != 0xC3) {
+        ((void(__fastcall*)(void*))(g_exeBase + RVA_VEH_CLEAR_PATH_NODES))(veh);
+    }
+    *(uintptr_t*)(veh + 0x6A8) = *(uintptr_t*)(veh + 0x6A0);
+    *(uintptr_t*)(veh + 0x6C0) = *(uintptr_t*)(veh + 0x6B8);
+    *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET) = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
+    *(uintptr_t*)(veh + 0x758) = *(uintptr_t*)(veh + 0x750);
+    *(int32_t*)(veh + VEH_WAYPOINT_INDEX_OFFSET) = 0;
+    *(uint8_t*)(veh + VEH_CORNER_CUT_APPLIED_OFFSET) = 0;
+    *(int32_t*)(veh + VEH_CORNER_TURN_ANGLE_OFFSET) = 0;
+    *(float*)(veh + VEH_WAIT_TIMER_OFFSET) = 0.0f;
+    *(uint8_t*)(veh + VEH_BAY_WAITING_FLAG_OFFSET) = 0;
+    *(uint8_t*)(veh + VEH_BAY_ARRIVED_FLAG_OFFSET) = 0;
+
+    BYTE* slotPts = *(BYTE**)(best.hostBld + BLD_BAY_POINTS_BEGIN_OFFSET) +
+                    (size_t)best.localSlot * BLD_BAY_POINT_STRIDE;
+    PushVehicleWaypoint3f(veh, (const float*)(slotPts + 0x0C));
+    PushVehicleWaypoint3f(veh, (const float*)(slotPts + 0x00));
+}
+
+static void SanitizeVehicleArrivalBeforeStep(BYTE* veh)
+{
+    if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    BYTE* lockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
+    if (IsPointerLikeX64((uintptr_t)lockBld)) {
+        SanitizeBuildingCorridorLock(lockBld);
+    }
+    BYTE* targetBld = *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET);
+    if (IsPointerLikeX64((uintptr_t)targetBld)) {
+        SanitizeTerminalAndAttachedLocks(targetBld);
+        AssignReservedAircraftStandIfReady(veh, targetBld);
+    }
+}
+
+static void SanitizeVehicleArrivalAfterStep(BYTE* veh)
+{
+    if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    BYTE* lockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
+    if (IsPointerLikeX64((uintptr_t)lockBld)) {
+        SanitizeBuildingCorridorLock(lockBld);
+    }
+}
+
+static void __fastcall HookedVehicleArrivalStep(void* vehicle)
+{
+    DiagLog_BeginSafeSeh();
+    __try {
+        SanitizeVehicleArrivalBeforeStep((BYTE*)vehicle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+
+    if (o_vehicleArrivalStep) {
+        o_vehicleArrivalStep(vehicle);
+    }
+
+    DiagLog_BeginSafeSeh();
+    __try {
+        SanitizeVehicleArrivalAfterStep((BYTE*)vehicle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+void SimPatches_TestSanitizeVehicleArrival(void* vehicle)
+{
+    HookedVehicleArrivalStep(vehicle);
+}
+
 bool SimPatches_Install()
 {
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
@@ -1694,6 +1922,9 @@ bool SimPatches_Install()
     InstallInlineHook(g_exeBase + BUILDING_RENDER_PASS_RVA, (void*)&HookedBuildingRenderPass,
                       (void**)&o_buildingRenderPass, kBuildingRenderExpect,
                       sizeof(kBuildingRenderExpect), "republicmp building render pass");
+    InstallInlineHook(g_exeBase + RVA_VEH_ARRIVAL_STEP, (void*)&HookedVehicleArrivalStep,
+                      (void**)&o_vehicleArrivalStep, kVehArrivalStepExpect,
+                      sizeof(kVehArrivalStepExpect), "republicmp vehicle arrival step");
 
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&

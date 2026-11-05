@@ -1716,6 +1716,102 @@ static bool SubTest_UnivResearchTwoStatesIsolation()
     return true;
 }
 
+static bool SubTest_UnivResearchNearCompleteAndStaffRatioSync()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    TwoStates_OnSessionEnded();
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_OFF);
+
+    std::vector<BYTE> resBuf(4 * RESEARCH_ITEM_STRIDE, 0);
+    for (int i = 0; i < 4; ++i) {
+        BYTE* it = resBuf.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        it[RESEARCH_ITEM_INITIAL_OFFSET]   = 1;
+        it[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        *(int32_t*)(it + RESEARCH_ITEM_REQ_WORK_OFFSET) = 20;
+    }
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    std::vector<BYTE> univWest(0x1420, 0);
+    *(int*)univWest.data() = 501;
+    *(float*)(univWest.data() + OBJ_POS_OFFSET) = -800.0f;
+    *(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+
+    std::vector<BYTE*> bldVec = { univWest.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldVec.data();
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldVec.data() + bldVec.size();
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    // 1. Slower peer has tech #0 at 0.988447f attached to univWest when player selects new tech #2:
+    //    Tech #0 MUST be finalized to 1.0f & unlocked (not left orphaned at 98.84% to complete in 1 tick later),
+    //    and tech #2 must attach cleanly at 0.0f.
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 0));
+    BYTE* it0 = resBuf.data() + 0 * RESEARCH_ITEM_STRIDE;
+    *(float*)(it0 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.488447f;
+    *(BYTE**)(it0 + RESEARCH_ITEM_BLD_PTR_OFFSET)  = univWest.data();
+    it0[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+    world[WORLD_RESEARCH_UNLOCKS_OFFSET + 0] = 0;
+    TwoStates_ResetResearch();
+    TwoStates_OnWorldLoaded(); // captures 0.488447f attached to univWest into State 1 slice
+    TwoStates_BldUnivStepForTest(world, univWest.data()); // advances by 0.50f -> 0.988447f (< 1.0f, still attached!)
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 0.988447f, 1e-4f);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 0);
+
+    // Now apply selection of new tech #2 on univWest:
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 2));
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 1.0f, 1e-5f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 0) == 1);
+    TEST_CHECK(it0[RESEARCH_ITEM_AVAILABLE_OFFSET] == 0);
+    TEST_CHECK(*(void**)(it0 + RESEARCH_ITEM_BLD_PTR_OFFSET) == nullptr);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 2);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 2), 0.0f, 1e-5f);
+
+    // 2. Staff ratio slider adjustment (oldTechIdx == newTechIdx) must NOT re-attach a completed research:
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TwoStates_BldUnivStepForTest(world, univWest.data()); // tech #2 reaches 1.0f and detaches
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 2), 1.0f, 1e-5f);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == -1);
+
+    unsigned oldBits = 0, newBits = 0;
+    float rOld = 0.50f, rNew = 0.85f;
+    memcpy(&oldBits, &rOld, sizeof(oldBits));
+    memcpy(&newBits, &rNew, sizeof(newBits));
+    TEST_CHECK(BuildingSwitches_CaptureUnivResearch((unsigned long long)univWest.data(), 1, 2, 2, oldBits, newBits));
+    TEST_CHECK_NEAR(*(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET), 0.85f, 1e-5f);
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == -1);
+
+    // Even direct TwoStates_ApplyUnivResearchSelection on an already-completed tech #2 must NOT attach univWest:
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 2));
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == -1);
+
+    // 3. Loading a save with an orphaned near-100% research (e.g. 0.988447f with bldPosKey == 0) heals it to 1.0f:
+    std::filesystem::path saveDir = std::filesystem::path(g_mockBaseDir) / "media_soviet" / "save" / "test_heal_res";
+    std::error_code ec;
+    std::filesystem::create_directories(saveDir, ec);
+    BYTE* it3 = resBuf.data() + 3 * RESEARCH_ITEM_STRIDE;
+    *(float*)(it3 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.988447f;
+    *(BYTE**)(it3 + RESEARCH_ITEM_BLD_PTR_OFFSET)  = nullptr;
+    it3[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+    TwoStates_ResetResearch();
+    TwoStates_OnWorldLoaded();
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 3), 1.0f, 1e-5f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 3) == 1);
+    TEST_CHECK(it3[RESEARCH_ITEM_AVAILABLE_OFFSET] == 0);
+
+    std::filesystem::remove_all(saveDir, ec);
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = nullptr;
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
 static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
 {
     ResetMockWorldMemory();
@@ -1973,10 +2069,14 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         *(const BYTE**)(world + WORLD_SYSTAB_TAB_PTR_OFFSET) = sysTabStruct;
         world[WORLD_CHEAT_MODE_OFFSET] = 1;
         world[WORLD_DEV_MODE_OFFSET]   = 1;
+        world[WORLD_FAST_RESEARCH_CHEAT_OFFSET]  = 1;
+        world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET] = 1;
         *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 6; // "cheatgeneral" under "system"
         TEST_CHECK(Commands_SanitizeCheatState(world));
         TEST_CHECK(world[WORLD_CHEAT_MODE_OFFSET] == 0);
         TEST_CHECK(world[WORLD_DEV_MODE_OFFSET] == 0);
+        TEST_CHECK(world[WORLD_FAST_RESEARCH_CHEAT_OFFSET] == 0);
+        TEST_CHECK(world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET] == 0);
         TEST_CHECK(*(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) == -1);
         // Idempotent when already clean, and preserves normal sub-pages (0..4)
         *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET) = 2;
@@ -2142,8 +2242,8 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         TEST_CHECK_NEAR(pos[2], 24.0f, 1e-4f);
         TEST_CHECK_NEAR(m[12],  16.0f, 1e-4f);
         TEST_CHECK_NEAR(m[14],  24.0f, 1e-4f);
-        // Scale (+0x98) and Euler rotation (+0x8C) must be preserved intact
-        TEST_CHECK_NEAR(rot[1],   0.78539816f, 1e-5f);
+        // Scale (+0x98) must be preserved intact, and Euler rotation (+0x8C) interpolated via HeldFrame_LerpAngleRadians
+        TEST_CHECK_NEAR(rot[1],   0.39269908f, 1e-5f);
         TEST_CHECK_NEAR(scale[0], 1.0f, 1e-5f);
         TEST_CHECK_NEAR(scale[1], 1.0f, 1e-5f);
         TEST_CHECK_NEAR(scale[2], 1.0f, 1e-5f);
@@ -2166,8 +2266,42 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
         HeldFrame_InterpolateC3DNode(nodeBuf, prevNode, currNode, 0.0f, nullptr);
         TEST_CHECK_NEAR(pos[0], 10.0f, 1e-4f);
         TEST_CHECK_NEAR(pos[2], 20.0f, 1e-4f);
+        TEST_CHECK_NEAR(rot[1], 0.0f,  1e-5f);
         TEST_CHECK_NEAR(ori[0], 0.0f,  1e-4f);
         TEST_CHECK_NEAR(ori[2], 1.0f,  1e-4f);
+
+        // Verify Step-Frame follow-camera snapshot/restore saves & restores CAMERA_RVA (0xBC bytes)
+        // and all 7 heap PID damper structs at camMgr + CAM_MGR_PID_PTRS_OFFSET (0x38 bytes each)
+        std::vector<BYTE> stepCamMgr(CAM_MGR_STRUCT_BYTES, 0);
+        std::vector<std::vector<BYTE>> pidBlocks(CAM_MGR_PID_COUNT, std::vector<BYTE>(CAM_MGR_PID_STRUCT_BYTES, 0));
+        for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+            *(float*)(pidBlocks[i].data() + 0x00) = 10.0f + (float)i; // PID curValue
+            *(float*)(pidBlocks[i].data() + 0x08) = 0.25f * (float)(i + 1); // PID velocity
+            *(BYTE**)(stepCamMgr.data() + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*)) = pidBlocks[i].data();
+        }
+        BYTE* globalCam = g_mockExeBuffer + CAMERA_RVA;
+        *(float*)(globalCam + 0x80) = 500.0f; // camera pos.x
+        *(float*)(globalCam + 0x8C) = 0.40f;  // camera pitch
+        *(float*)(globalCam + 0x90) = 1.20f;  // camera yaw
+
+        HeldFrame_SaveCameraStepStateForTest(stepCamMgr.data(), 60.0f);
+
+        // Simulate 1st call to RVA_CAMERA_MGR_UPDATE (0x14250) on a Step Frame mutating CAMERA_RVA and PID dampers
+        *(float*)(globalCam + 0x80) = 512.0f;
+        *(float*)(globalCam + 0x8C) = 0.55f;
+        *(float*)(globalCam + 0x90) = 1.45f;
+        for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+            *(float*)(pidBlocks[i].data() + 0x00) = 999.0f;
+            *(float*)(pidBlocks[i].data() + 0x08) = -99.0f;
+        }
+        TEST_CHECK(HeldFrame_RestoreCameraStepStateForTest(stepCamMgr.data()));
+        TEST_CHECK_NEAR(*(float*)(globalCam + 0x80), 500.0f, 1e-5f);
+        TEST_CHECK_NEAR(*(float*)(globalCam + 0x8C), 0.40f,  1e-5f);
+        TEST_CHECK_NEAR(*(float*)(globalCam + 0x90), 1.20f,  1e-5f);
+        for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+            TEST_CHECK_NEAR(*(float*)(pidBlocks[i].data() + 0x00), 10.0f + (float)i, 1e-5f);
+            TEST_CHECK_NEAR(*(float*)(pidBlocks[i].data() + 0x08), 0.25f * (float)(i + 1), 1e-5f);
+        }
     }
 
     // 2e. HeldFrame OnSimTick & VehicleGuard with +0x1A68 integer counters, graph traversal, and soft-sync smoothing cap
@@ -2284,6 +2418,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     }
 
     TEST_CHECK(SubTest_UnivResearchTwoStatesIsolation());
+    TEST_CHECK(SubTest_UnivResearchNearCompleteAndStaffRatioSync());
     TEST_CHECK(SubTest_ConstructionOfficeTwoStatesAutoAndManual());
     return true;
 }
@@ -3804,6 +3939,99 @@ static bool TestEconStats_HealthAndHappinessTrackerIsolation()
     return true;
 }
 
+static bool TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    std::vector<BYTE> bldWest(0x1420, 0), bldEast(0x1420, 0);
+    *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -700.0f;
+    *(float*)(bldEast.data() + OBJ_POS_OFFSET) = +700.0f;
+    *(float*)(bldWest.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(bldEast.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    BYTE* bldPtrs[2] = { bldWest.data(), bldEast.data() };
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA) = bldPtrs;
+    *(BYTE***)(g_mockExeBuffer + VEC_BUILDINGS_END_RVA)   = bldPtrs + 2;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x00) = bldPtrs;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x08) = bldPtrs + 2;
+    *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 0x10) = bldPtrs + 2;
+
+    std::vector<BYTE> citWest(0x800, 0), citEast(0x800, 0);
+    *(BYTE**)(citWest.data() + CIT_HOME_BUILDING_OFFSET) = bldWest.data();
+    *(BYTE**)(citEast.data() + CIT_HOME_BUILDING_OFFSET) = bldEast.data();
+    *(float*)(citWest.data() + CIT_AGE_OFFSET) = 28.0f;
+    *(float*)(citEast.data() + CIT_AGE_OFFSET) = 34.0f;
+    BYTE* citPtrs[2] = { citWest.data(), citEast.data() };
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x00) = citPtrs;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x08) = citPtrs + 2;
+    *(BYTE***)(world + WORLD_CITIZENS_OFFSET + 0x10) = citPtrs + 2;
+
+    std::vector<BYTE> studioWest(0x200, 0), studioEast(0x200, 0);
+    *(BYTE**)(studioWest.data() + STUDIO_BUILDING_OFFSET) = bldWest.data();
+    *(BYTE**)(studioEast.data() + STUDIO_BUILDING_OFFSET) = bldEast.data();
+    BYTE* studioPtrs[2] = { studioWest.data(), studioEast.data() };
+    *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET) = studioPtrs;
+    *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET)   = studioPtrs + 2;
+    *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET + 0x10) = studioPtrs + 2;
+
+    double initRub[2] = { 300000.0, 300000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_ResetEconStatsForTest(world);
+
+    // 1. Radio/TV studio selection (0x4C2610) filters WORLD_STUDIOS_BEGIN_OFFSET to the citizen's own state
+    TEST_CHECK(TwoStates_CitizenStudioSelectForTest(world, citWest.data()) == studioWest.data());
+    TEST_CHECK(TwoStates_CitizenStudioSelectForTest(world, citEast.data()) == studioEast.data());
+    TEST_CHECK(SafeCountStdVector(world + WORLD_STUDIOS_BEGIN_OFFSET, sizeof(void*)) == 2);
+
+    // 2. Severe illness tick (0x833509, health cause 9), studio broadcast effect (0x4C21F0, happy cause 9),
+    //    and citizen death (0x835D70, $Citizens_Dead + happy causes 11 & 12) on an East SSR citizen followed
+    //    immediately by a West SSR citizen must attribute 100% to East SSR (State 2) and 0% to West SSR (State 1).
+    TwoStates_BeforeStep(world);
+    TwoStates_CitizenSevereIllnessTickForTest(world, 0.35f, citEast.data());
+    TwoStates_CitizenStudioEffectForTest(world, studioEast.data(), citEast.data(), 0.50f);
+    TwoStates_CitizenRemoveDeathForTest(world, citEast.data(), 0.45f, 0.25f);
+    TwoStates_CitizenEvalNeedsForTest(world, citWest.data(), 0 /*alcohol*/, 0.15f, -1, 0.0f);
+    TwoStates_AfterStep(world);
+
+    std::vector<BYTE> histBuf(STAT_RECORD_SIZE, 0);
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x00) = histBuf.data();
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x08) = histBuf.data() + STAT_RECORD_SIZE;
+    *(BYTE**)(world + WORLD_STAT_HISTORY_OFFSET + 0x10) = histBuf.data() + STAT_RECORD_SIZE;
+    TwoStates_StatRecordClearForTest(world, curStat);
+
+    // Host UI (State 1 = West SSR): 0 deaths, 0 severe illness, 0 studio/orphan/grief happiness effects
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(histBuf.data() + STAT_CITIZEN_COUNTS_OFF + 1 * sizeof(int32_t)) == 0);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 9 * 4) == 0);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 9 * 4), 0.0f, 1e-6f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 9 * 4) == 0);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 11 * 4) == 0);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 12 * 4) == 0);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 0 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 0 * 4), 0.15f, 1e-4f);
+    TwoStates_UiEnd();
+
+    // Client UI (State 2 = East SSR): 1 death, 0.35 severe illness, 0.50 studio, 0.45 orphan, 0.25 grief
+    TwoStates_OnSessionJoined(false, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_UiBegin();
+    TEST_CHECK(*(int32_t*)(histBuf.data() + STAT_CITIZEN_COUNTS_OFF + 1 * sizeof(int32_t)) == 1);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HEALTH_OLD_CNT_OFF + 9 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HEALTH_OLD_SUM_OFF + 9 * 4), 0.35f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 9 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 9 * 4), 0.50f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 11 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 11 * 4), 0.45f, 1e-4f);
+    TEST_CHECK(*(int32_t*)(world + WORLD_TRACKER_HAPPY_OLD_CNT_OFF + 12 * 4) == 1);
+    TEST_CHECK_NEAR(*(float*)(world + WORLD_TRACKER_HAPPY_OLD_SUM_OFF + 12 * 4), 0.25f, 1e-4f);
+    TwoStates_UiEnd();
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool Test_TwoStates_EconomyStats()
 {
     return TestEconStats_ResourceLedgerAndScalarsIsolation() &&
@@ -3813,7 +4041,8 @@ static bool Test_TwoStates_EconomyStats()
            TestEconStats_LeafHookRelayStubPreservesRegisters() &&
            TestEconStats_PosKeyAndPoisonedSaveHeal() &&
            TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches() &&
-           TestEconStats_HealthAndHappinessTrackerIsolation();
+           TestEconStats_HealthAndHappinessTrackerIsolation() &&
+           TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation();
 }
 
 // ---------------------------------------------------------------------------
@@ -7933,7 +8162,7 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
     TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
 
     // 6. Vehicle with active road segment (+0x528) or waypoint queue (+0x738..+0x740) ->
-    //    must NOT yank C3D_NODE (+0xD60) off the road spline into fields, while still syncing fuel/passengers
+    //    must NOT yank C3D_NODE (+0xD60) off the road spline into fields, while still syncing passengers
     *(BYTE**)(bus.data() + 0x458) = (BYTE*)passVector.data();
     *(BYTE**)(bus.data() + 0x460) = (BYTE*)(passVector.data() + passVector.size());
     *(void**)(bus.data() + 0x528) = (void*)0x140001000ULL;
@@ -7944,6 +8173,127 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
     TEST_CHECK_NEAR(*(float*)(bus.data() + VEH_POS_OFFSET), splinePosX, 1e-4f);
     TEST_CHECK_NEAR(passVector[0].amount, 42.0f, 1e-4f);
     *(void**)(bus.data() + 0x528) = nullptr;
+
+    // 7. Trail buffer (+0x1168..+0x12E7, 24 entries) + cached front/rear axle positions (+0x12F8, +0x1304)
+    //    co-translation and VEH_CORNER_TURN_ANGLE_OFFSET (+0x770) preservation:
+    //    Ensures airplanes parking on stands (0x6CE180) and buses entering terminals (0x699420 / 0x6AF0C0)
+    //    never twist crookedly from unshifted rear-axle trail history or overwritten corner turn angle.
+    *(float*)(bus.data() + VEH_POS_OFFSET + 0) = 100.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 4) = 10.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 8) = 200.0f;
+    *(float*)(bus.data() + VEH_CORNER_TURN_ANGLE_OFFSET) = 0.5235988f; // 30 deg turn angle
+    float* trail0 = (float*)(bus.data() + VEH_TRAIL_BUFFER_OFFSET + 0 * VEH_TRAIL_ENTRY_STRIDE);
+    float* trail1 = (float*)(bus.data() + VEH_TRAIL_BUFFER_OFFSET + 1 * VEH_TRAIL_ENTRY_STRIDE);
+    float* trail2 = (float*)(bus.data() + VEH_TRAIL_BUFFER_OFFSET + 2 * VEH_TRAIL_ENTRY_STRIDE);
+    trail0[0] = 98.0f; trail0[1] = 10.0f; trail0[2] = 198.0f; trail0[3] = 1.25f;
+    trail1[0] = 96.0f; trail1[1] = 10.0f; trail1[2] = 196.0f; trail1[3] = 1.25f;
+    trail2[0] = 0.0f;  trail2[1] = 0.0f;  trail2[2] = 0.0f;   trail2[3] = 0.0f; // uninitialized slot
+    float* frontAxle = (float*)(bus.data() + VEH_AXLE_FRONT_POS_OFFSET);
+    float* rearAxle  = (float*)(bus.data() + VEH_AXLE_REAR_POS_OFFSET);
+    frontAxle[0] = 103.0f; frontAxle[1] = 10.0f; frontAxle[2] = 203.0f;
+    rearAxle[0]  = 95.0f;  rearAxle[1]  = 10.0f; rearAxle[2]  = 195.0f;
+
+    msg->entries[0].pos[0] = 120.0f; // +20m X
+    msg->entries[0].pos[1] = 12.0f;  // +2m Y
+    msg->entries[0].pos[2] = 215.0f; // +15m Z
+    msg->entries[0].fuel   = 99.0f;  // must NOT overwrite VEH_CORNER_TURN_ANGLE_OFFSET (+0x770)
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(bus.data() + VEH_CORNER_TURN_ANGLE_OFFSET), 0.5235988f, 1e-5f);
+    TEST_CHECK_NEAR(trail0[0], 118.0f, 1e-4f);
+    TEST_CHECK_NEAR(trail0[1], 12.0f,  1e-4f);
+    TEST_CHECK_NEAR(trail0[2], 213.0f, 1e-4f);
+    TEST_CHECK_NEAR(trail0[3], 1.25f,  1e-4f); // heading in trail[3] preserved
+    TEST_CHECK_NEAR(trail1[0], 116.0f, 1e-4f);
+    TEST_CHECK_NEAR(trail1[2], 211.0f, 1e-4f);
+    TEST_CHECK_NEAR(trail2[0], 0.0f,   1e-6f); // uninitialized zero entry untouched
+    TEST_CHECK_NEAR(frontAxle[0], 123.0f, 1e-4f);
+    TEST_CHECK_NEAR(frontAxle[1], 12.0f,  1e-4f);
+    TEST_CHECK_NEAR(frontAxle[2], 218.0f, 1e-4f);
+    TEST_CHECK_NEAR(rearAxle[0],  115.0f, 1e-4f);
+    TEST_CHECK_NEAR(rearAxle[1],  12.0f,  1e-4f);
+    TEST_CHECK_NEAR(rearAxle[2],  210.0f, 1e-4f);
+
+    // 8. Terminal & attached aircraft stand arrival/corridor lock sanitization (0x6CD1E0):
+    //    Verifies that an airborne departed plane releases TERM->0xBB0, duplicate stand reservations
+    //    across attached stands are deduplicated to the closest stand entry point p2, and an unassigned
+    //    arriving plane gets its stand index (+0x56C) and 2 pull-in waypoints (p2 -> p1).
+    std::vector<BYTE> termBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> att0Bld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> att1Bld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> termBayPts(3 * BLD_BAY_POINT_STRIDE, 0);
+    std::vector<BYTE> att0BayPts(1 * BLD_BAY_POINT_STRIDE, 0);
+    std::vector<BYTE> att1BayPts(3 * BLD_BAY_POINT_STRIDE, 0);
+    *(BYTE**)(termBld.data() + BLD_BAY_POINTS_BEGIN_OFFSET) = termBayPts.data();
+    *(BYTE**)(termBld.data() + BLD_BAY_POINTS_END_OFFSET)   = termBayPts.data() + termBayPts.size();
+    *(BYTE**)(att0Bld.data() + BLD_BAY_POINTS_BEGIN_OFFSET) = att0BayPts.data();
+    *(BYTE**)(att0Bld.data() + BLD_BAY_POINTS_END_OFFSET)   = att0BayPts.data() + att0BayPts.size();
+    *(BYTE**)(att1Bld.data() + BLD_BAY_POINTS_BEGIN_OFFSET) = att1BayPts.data();
+    *(BYTE**)(att1Bld.data() + BLD_BAY_POINTS_END_OFFSET)   = att1BayPts.data() + att1BayPts.size();
+
+    std::vector<BYTE*> attList = { att0Bld.data(), att1Bld.data() };
+    *(BYTE***)(termBld.data() + BLD_ATTACHED_BEGIN_OFFSET) = attList.data();
+    *(BYTE***)(termBld.data() + BLD_ATTACHED_END_OFFSET)   = attList.data() + attList.size();
+
+    std::vector<BYTE> airType(0x400, 0);
+    *(int32_t*)(airType.data() + VEH_TYPE_CATEGORY_OFFSET) = 8; // aircraft
+    std::vector<BYTE> departedPlane(0x1B00, 0);
+    std::vector<BYTE> arrivingPlane(0x1B00, 0);
+    *(BYTE**)(departedPlane.data() + VEH_TYPE_PTR_OFFSET) = airType.data();
+    *(BYTE**)(arrivingPlane.data() + VEH_TYPE_PTR_OFFSET) = airType.data();
+    *(BYTE**)(departedPlane.data() + 0x390) = departedPlane.data();
+    *(BYTE**)(arrivingPlane.data() + 0x390) = arrivingPlane.data();
+
+    // Departed plane is airborne (1A04 = 3) but left TERM->0xBB0 locked
+    *(int32_t*)(departedPlane.data() + VEH_HELI_FLIGHT_STATE_OFF) = 3;
+    *(BYTE**)(departedPlane.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = termBld.data();
+    *(BYTE**)(termBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = departedPlane.data();
+
+    // Arriving plane is on ground at (4926, 199.5, -4916) with duplicate reservations in ATT[0].slot[0] (far) and ATT[1].slot[0] (near)
+    *(float*)(arrivingPlane.data() + VEH_POS_OFFSET + 0) = 4926.0f;
+    *(float*)(arrivingPlane.data() + VEH_POS_OFFSET + 4) = 199.5f;
+    *(float*)(arrivingPlane.data() + VEH_POS_OFFSET + 8) = -4916.0f;
+    *(BYTE**)(arrivingPlane.data() + VEH_BAY_TARGET_BLD_OFFSET) = termBld.data();
+    *(int32_t*)(arrivingPlane.data() + VEH_BAY_SLOT_IDX_OFFSET) = -1;
+    *(int32_t*)(arrivingPlane.data() + VEH_LINE_SLOT_IDX_OFFSET) = -1;
+    *(uint8_t*)(arrivingPlane.data() + VEH_BAY_ARRIVED_FLAG_OFFSET) = 1; // corrupted D39=1 while 56C=-1
+
+    float* att0s0p2 = (float*)(att0BayPts.data() + 0x0C);
+    att0s0p2[0] = 4934.6f; att0s0p2[1] = 199.5f; att0s0p2[2] = -4999.9f; // 84m away
+    att0Bld[BLD_BAY_STATE_BEGIN_OFFSET + 0] = 1;
+    *(BYTE**)(att0Bld.data() + BLD_BAY_VEH_BEGIN_OFFSET + 0) = arrivingPlane.data();
+
+    float* att1s0p1 = (float*)(att1BayPts.data() + 0x00);
+    float* att1s0p2 = (float*)(att1BayPts.data() + 0x0C);
+    att1s0p1[0] = 4917.5f; att1s0p1[1] = 199.5f; att1s0p1[2] = -4951.7f;
+    att1s0p2[0] = 4919.8f; att1s0p2[1] = 199.5f; att1s0p2[2] = -4905.8f; // 12m away
+    att1Bld[BLD_BAY_STATE_BEGIN_OFFSET + 0] = 1;
+    *(BYTE**)(att1Bld.data() + BLD_BAY_VEH_BEGIN_OFFSET + 0) = arrivingPlane.data();
+
+    std::vector<float> wpBuf(12, 0.0f); // capacity for 4 waypoints (12 floats)
+    *(uintptr_t*)(arrivingPlane.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = (uintptr_t)wpBuf.data();
+    *(uintptr_t*)(arrivingPlane.data() + VEH_WAYPOINTS_END_OFFSET)   = (uintptr_t)(wpBuf.data() + 9); // 3 bogus waypoints
+    *(uintptr_t*)(arrivingPlane.data() + VEH_WAYPOINTS_CAP_OFFSET)   = (uintptr_t)(wpBuf.data() + wpBuf.size());
+
+    SimPatches_TestSanitizeVehicleArrival(arrivingPlane.data());
+
+    // TERM->0xBB0 must be freed from the airborne plane
+    TEST_CHECK(*(BYTE**)(termBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == nullptr);
+    TEST_CHECK(*(BYTE**)(departedPlane.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == nullptr);
+    // Duplicate reservation on ATT[0].slot[0] must be cleared, and ATT[1].slot[0] (global slot 3 + 1 + 0 = 4) assigned
+    TEST_CHECK(att0Bld[BLD_BAY_STATE_BEGIN_OFFSET + 0] == 0);
+    TEST_CHECK(*(BYTE**)(att0Bld.data() + BLD_BAY_VEH_BEGIN_OFFSET + 0) == nullptr);
+    TEST_CHECK(att1Bld[BLD_BAY_STATE_BEGIN_OFFSET + 0] == 1);
+    TEST_CHECK(*(BYTE**)(att1Bld.data() + BLD_BAY_VEH_BEGIN_OFFSET + 0) == arrivingPlane.data());
+    TEST_CHECK(*(int32_t*)(arrivingPlane.data() + VEH_BAY_SLOT_IDX_OFFSET) == 4);
+    TEST_CHECK(arrivingPlane[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+    // Waypoints must now be exactly 2 points: p2 then p1 of ATT[1].slot[0]
+    uintptr_t newWpBegin = *(uintptr_t*)(arrivingPlane.data() + VEH_WAYPOINTS_BEGIN_OFFSET);
+    uintptr_t newWpEnd   = *(uintptr_t*)(arrivingPlane.data() + VEH_WAYPOINTS_END_OFFSET);
+    TEST_CHECK(newWpEnd - newWpBegin == 24);
+    TEST_CHECK_NEAR(wpBuf[0], 4919.8f, 1e-4f);
+    TEST_CHECK_NEAR(wpBuf[2], -4905.8f, 1e-4f);
+    TEST_CHECK_NEAR(wpBuf[3], 4917.5f, 1e-4f);
+    TEST_CHECK_NEAR(wpBuf[5], -4951.7f, 1e-4f);
 
     memset(world + WORLD_VEHICLES_OFFSET, 0, 24);
     return true;
