@@ -28,3 +28,5 @@ void CargoSettings_After(bool simBusy);
 
 // The command (lockstep/commands).
 bool CargoSettings_ApplyCommand(const void* data, size_t size);
+unsigned __int64 CargoSettings_AddStationTool(unsigned __int64 world);
+unsigned __int64 CargoSettings_AddStationDistTool(unsigned __int64 world);

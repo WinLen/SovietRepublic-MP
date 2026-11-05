@@ -479,10 +479,28 @@ static void SafeRecordOneVehicleTick(BYTE* p, unsigned long long tick)
     DiagLog_EndSafeSeh();
 }
 
+static void ReadAttachedVehicleVector(const BYTE* veh, unsigned beginOff, std::vector<BYTE*>& outList)
+{
+    outList.clear();
+    BYTE** vec[2] = {};
+    if (!Read(veh + beginOff, vec, sizeof(vec))) return;
+    uintptr_t begin = (uintptr_t)vec[0], end = (uintptr_t)vec[1];
+    if (end <= begin || (end - begin) % sizeof(BYTE*) != 0 || (end - begin) / sizeof(BYTE*) > 1024 ||
+        !IsPointerLikeX64((uint64_t)begin)) {
+        return;
+    }
+    size_t count = (end - begin) / sizeof(BYTE*);
+    outList.resize(count);
+    if (!Read((const void*)begin, outList.data(), count * sizeof(BYTE*))) {
+        outList.clear();
+    }
+}
+
 static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unordered_set<BYTE*>& visited)
 {
     if (!start || !IsPointerLikeX64((uint64_t)(uintptr_t)start)) return;
     std::vector<BYTE*> queue;
+    std::vector<BYTE*> attached;
     if (visited.insert(start).second) queue.push_back(start);
 
     for (size_t qi = 0; qi < queue.size() && qi < 2048; ++qi) {
@@ -505,24 +523,14 @@ static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unorde
             queue.push_back(parent);
         }
 
-        if (queue.size() >= 2048) continue;
-
-        BYTE** children[2] = {};
-        if (Read(curr + VEH_CHILDREN_BEGIN_OFFSET, children, sizeof(children))) {
-            uintptr_t cBegin = (uintptr_t)children[0];
-            uintptr_t cEnd = (uintptr_t)children[1];
-            if (cEnd > cBegin && (cEnd - cBegin) % sizeof(BYTE*) == 0 &&
-                (cEnd - cBegin) / sizeof(BYTE*) <= 1024 &&
-                IsPointerLikeX64((uint64_t)cBegin)) {
-                size_t nChildren = (cEnd - cBegin) / sizeof(BYTE*);
-                std::vector<BYTE*> c(nChildren);
-                if (Read((const void*)cBegin, c.data(), nChildren * sizeof(BYTE*))) {
-                    for (BYTE* child : c) {
-                        if (queue.size() >= 2048) break;
-                        if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child) && visited.insert(child).second) {
-                            queue.push_back(child);
-                        }
-                    }
+        const unsigned kVecOffsets[2] = { VEH_CHILDREN_BEGIN_OFFSET, VEH_CARRIED_BEGIN_OFFSET };
+        for (unsigned off : kVecOffsets) {
+            if (queue.size() >= 2048) break;
+            ReadAttachedVehicleVector(curr, off, attached);
+            for (BYTE* child : attached) {
+                if (queue.size() >= 2048) break;
+                if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child) && visited.insert(child).second) {
+                    queue.push_back(child);
                 }
             }
         }
@@ -718,6 +726,7 @@ static void RestoreVehicleSnapshotNodes(BYTE* p)
 static void ExpandVehicleTargetGraph(std::unordered_set<BYTE*>& seen, std::vector<BYTE*>& targets)
 {
     const size_t maxTargets = (64ull << 20) / 0x1AD8;
+    std::vector<BYTE*> attached;
     for (size_t i = 0; i < targets.size() && targets.size() < maxTargets; i++) {
         BYTE* target = targets[i];
 
@@ -733,24 +742,14 @@ static void ExpandVehicleTargetGraph(std::unordered_set<BYTE*>& seen, std::vecto
             IsPointerLikeX64((uint64_t)(uintptr_t)link)) {
             AddVisibleVehicleTarget(link, seen, targets);
         }
-        if (targets.size() >= maxTargets) break;
 
-        BYTE** children[2] = {};
-        if (Read(target + VEH_CHILDREN_BEGIN_OFFSET, children, sizeof(children))) {
-            uintptr_t begin = (uintptr_t)children[0], end = (uintptr_t)children[1];
-            if (end > begin && (end - begin) % sizeof(BYTE*) == 0 &&
-                (end - begin) / sizeof(BYTE*) <= 1024 &&
-                IsPointerLikeX64((uint64_t)begin)) {
-                size_t count = (end - begin) / sizeof(BYTE*);
-                std::vector<BYTE*> c(count);
-                if (Read((const void*)begin, c.data(), count * sizeof(BYTE*))) {
-                    for (BYTE* child : c) {
-                        if (targets.size() >= maxTargets) break;
-                        if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child)) {
-                            AddVisibleVehicleTarget(child, seen, targets);
-                        }
-                    }
-                }
+        const unsigned kVecOffsets[2] = { VEH_CHILDREN_BEGIN_OFFSET, VEH_CARRIED_BEGIN_OFFSET };
+        for (unsigned off : kVecOffsets) {
+            if (targets.size() >= maxTargets) break;
+            ReadAttachedVehicleVector(target, off, attached);
+            for (BYTE* child : attached) {
+                if (targets.size() >= maxTargets) break;
+                if (child) AddVisibleVehicleTarget(child, seen, targets);
             }
         }
     }

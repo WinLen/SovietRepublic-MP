@@ -1697,12 +1697,70 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
               RVA_BLD_COUNT_LIMIT_GET == RVA_BLD_COUNT_LIMIT_CHECK + 0xA0u,
               "Building count limit table pointer (+0x58), type limit (+0x208), and check/get RVAs (0x5F31F0/0x5F3290) must match 1.1.1.9 layout");
 
+// Distribution office, technical services, waste/transfer copy tools, carrier mechanism & storage slot RVAs
+#ifndef RVA_VEC_CARGO_ENTRY_PUSH_BACK
+#define RVA_VEC_CARGO_ENTRY_PUSH_BACK        0x0B1C20u // void __fastcall(void* vec, uint64_t count)
+#endif
+#ifndef RVA_OPERATOR_NEW
+#define RVA_OPERATOR_NEW                     0x84DECCu // void* __fastcall(size_t bytes)
+#endif
+#ifndef RVA_CARGO_RECORD_CTOR
+#define RVA_CARGO_RECORD_CTOR                0x1512A0u // void* __fastcall(void* rec0x198)
+#endif
+#ifndef RVA_VEC_PTR_PUSH_BACK
+#define RVA_VEC_PTR_PUSH_BACK                0x0B0E90u // void __fastcall(void* vec, const void* ptrAddr)
+#endif
+#ifndef RVA_VEC_LINK_PUSH_BACK
+#define RVA_VEC_LINK_PUSH_BACK               0x08E050u // void __fastcall(void* vec, const void* ptrAddr)
+#endif
+#ifndef RVA_REMOVE_PARTNER_LINK
+#define RVA_REMOVE_PARTNER_LINK              0x1C7E80u // void __fastcall(uint64_t world, uint64_t bld, uint64_t partnerBld)
+#endif
+#ifndef RVA_REMOVE_LINK_BY_INDEX
+#define RVA_REMOVE_LINK_BY_INDEX             0x162B40u // void __fastcall(uint64_t world, uint64_t bld, int index)
+#endif
+#ifndef SITE_COPY_DIST_OFFICE_RVA
+#define SITE_COPY_DIST_OFFICE_RVA            0x2B8A8Eu
+#endif
+#ifndef FN_COPY_DIST_OFFICE_RVA
+#define FN_COPY_DIST_OFFICE_RVA              0x2B8B10u
+#endif
+#ifndef SITE_COPY_WASTE_SETTINGS_RVA
+#define SITE_COPY_WASTE_SETTINGS_RVA         0x1DBCBEu
+#endif
+#ifndef FN_COPY_WASTE_SETTINGS_RVA
+#define FN_COPY_WASTE_SETTINGS_RVA           0x1DC5D0u
+#endif
+#ifndef SITE_COPY_TRANSFER_SETTINGS_RVA
+#define SITE_COPY_TRANSFER_SETTINGS_RVA      0x1DC00Fu
+#endif
+#ifndef FN_COPY_TRANSFER_SETTINGS_RVA
+#define FN_COPY_TRANSFER_SETTINGS_RVA        0x1DC7D0u
+#endif
+#ifndef VEH_CARRIED_BEGIN_OFFSET
+#define VEH_CARRIED_BEGIN_OFFSET             0x0488u   // std::vector<VEHICLE*> begin on flatbed carrier
+#endif
+#ifndef VEH_CARRIED_END_OFFSET
+#define VEH_CARRIED_END_OFFSET               0x0490u   // std::vector<VEHICLE*> end on flatbed carrier
+#endif
+#ifndef VEH_DEPOT_PTR_OFFSET
+#define VEH_DEPOT_PTR_OFFSET                 0x04F0u   // BUILDING* depot owner
+#endif
+#ifndef VEH_WORKPLACE_BLD_OFFSET
+#define VEH_WORKPLACE_BLD_OFFSET             0x04F8u   // BUILDING* workplace / construction office owner
+#endif
+#ifndef BLD_VEHICLES_BEGIN_OFFSET
+#define BLD_VEHICLES_BEGIN_OFFSET            0x0C70u   // std::vector<VEHICLE*> begin on workplace building
+#endif
+#ifndef BLD_VEHICLES_END_OFFSET
+#define BLD_VEHICLES_END_OFFSET              0x0C78u   // std::vector<VEHICLE*> end on workplace building
+#endif
 
-
-
-
-
-
-
-
+static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
+              BLD_VEHICLES_END_OFFSET == BLD_VEHICLES_BEGIN_OFFSET + 8u &&
+              VEH_WORKPLACE_BLD_OFFSET == VEH_CUR_BLD_OFFSET + 8u &&
+              FN_COPY_DIST_OFFICE_RVA == 0x2B8B10u &&
+              FN_COPY_WASTE_SETTINGS_RVA == 0x1DC5D0u &&
+              FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC7D0u,
+              "Carrier mechanism, workplace vehicle list, and building copy tool RVAs must match 1.1.1.9 layout");
 

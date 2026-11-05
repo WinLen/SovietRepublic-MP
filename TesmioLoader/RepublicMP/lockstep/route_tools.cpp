@@ -1054,6 +1054,24 @@ static U64 FindNetworkNodeByPos(U64 world, const float pos[3], U64* outNet = nul
                 }
             }
         }
+        for (U64 p = Q(net + 0x2B0); p && p < Q(net + 0x2B8); p += 8) {
+            U64 seg = Q(p);
+            if (!seg) continue;
+            for (int k = 0; k < 2; k++) {
+                U64 n = Q(seg + 0x20 + k * 8);
+                if (match(n)) {
+                    if (outNet) *outNet = net;
+                    return n;
+                }
+            }
+            for (U64 lp = Q(seg + 0xD0); lp && lp < Q(seg + 0xD8); lp += 8) {
+                U64 n = Q(lp);
+                if (match(n)) {
+                    if (outNet) *outNet = net;
+                    return n;
+                }
+            }
+        }
         return 0;
     };
     int netCount = *(int*)(world + 0x14034);
@@ -1067,6 +1085,12 @@ static U64 FindNetworkNodeByPos(U64 world, const float pos[3], U64* outNet = nul
         if (n) return n;
     }
     return 0;
+}
+
+unsigned __int64 RouteTools_FindNetworkNodeByPosForTest(unsigned __int64 world, const float pos[3], unsigned __int64* outNet)
+{
+    if (!world || !pos) return 0;
+    return FindNetworkNodeByPos(world, pos, outNet);
 }
 
 static const char* ApplyJoinHubStop(const RouteMsg& m)
@@ -1130,15 +1154,33 @@ static const char* ApplyJoinHub(const RouteMsg& m)
             if (Q(p) == e1) idx1 = idx;
         }
         if (idx0 < 0 || idx1 < 0) return "edges not found in network";
+        int lo = idx0 < idx1 ? idx0 : idx1;
+        int hi = idx0 < idx1 ? idx1 : idx0;
         if (idx0 != idx1) {
-            int lo = idx0 < idx1 ? idx0 : idx1;
-            int hi = idx0 < idx1 ? idx1 : idx0;
             typedef void (*JoinEdgesFn)(U64 net, int lo, int hi, unsigned char zero);
-            ((JoinEdgesFn)(g_exeBase + 0x53E630))(net, lo, hi, 0);
+            if (g_exeBase[0x53E630] != 0) ((JoinEdgesFn)(g_exeBase + 0x53E630))(net, lo, hi, 0);
         } else {
-            typedef void (*RemoveLoopNodeFn)(U64 net, U64 node);
-            ((RemoveLoopNodeFn)(g_exeBase + 0x541550))(net, node);
+            typedef void (*RemoveLoopSegFn)(U64 net, U64 seg);
+            if (g_exeBase[0x541550] != 0) ((RemoveLoopSegFn)(g_exeBase + 0x541550))(net, e0);
         }
+        if (g_exeBase[0x5518B0] != 0) ((void (*)(U64))(g_exeBase + 0x5518B0))(net);
+        if (g_exeBase[0x12DCF0] != 0) {
+            ((void (*)(U64, unsigned char, unsigned char))(g_exeBase + 0x12DCF0))(
+                world, net == Q(world + 0x14040) ? 1 : 0, 0);
+        }
+        if (g_exeBase[0x12F340] != 0) ((void (*)(U64, unsigned char))(g_exeBase + 0x12F340))(world, 0);
+        if (net == Q(world + 0x14038) && g_exeBase[0x578C40] != 0) {
+            ((void (*)(U64))(g_exeBase + 0x578C40))(net);
+        }
+        if (idx0 != idx1 && g_exeBase[0x0B0E90] != 0) {
+            U64 segBeg = Q(net + 0x2B0), segEnd = Q(net + 0x2B8);
+            if (segBeg && segBeg + (U64)lo * 8 < segEnd) {
+                U64 seg = Q(segBeg + (U64)lo * 8);
+                if (seg) ((void (*)(U64, U64*))(g_exeBase + 0x0B0E90))(world + 0x11FB8, &seg);
+            }
+        }
+        if (g_exeBase[0x12FD10] != 0) ((void (*)(U64))(g_exeBase + 0x12FD10))(world);
+        if (g_exeBase[0x551530] != 0) ((void (*)(U64))(g_exeBase + 0x551530))(net);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";
     }

@@ -65,3 +65,5 @@ unsigned __int64 RouteTools_VehicleSendConstrTool(unsigned __int64 world);
 
 // The command (lockstep/commands).
 bool RouteTools_ApplyCommand(const void* data, size_t size);
+unsigned __int64 RouteTools_FindNetworkNodeByPosForTest(unsigned __int64 world, const float pos[3], unsigned __int64* outNet);
+

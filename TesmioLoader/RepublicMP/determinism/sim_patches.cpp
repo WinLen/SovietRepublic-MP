@@ -449,6 +449,14 @@ static void SanitizeWorldVisibleVector()
     }
 }
 
+bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned __int64 storageBegin,
+                                                      unsigned __int64 storageEnd, float cameraZDist)
+{
+    if (nodeVisible) return true;
+    if (!storageBegin || storageEnd <= storageBegin) return false;
+    return (cameraZDist == cameraZDist) && cameraZDist >= 0.0f && cameraZDist < 1200.0f;
+}
+
 static void FillPrivateVisible()
 {
     typedef void (*PushFn)(void* vector, void* value);
@@ -474,11 +482,15 @@ static void FillPrivateVisible()
             if (type) {
                 BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
                 BYTE* node = f ? (BYTE*)getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
-                visible = node && node[0x25];
+                bool nodeVis = (node && node[0x25] != 0);
+                float at[4] = {};
+                position(b + 0x320, at);
+                float dist = zDistance(g_exeBase + CAMERA_RVA, at);
+                unsigned __int64 sBeg = *(unsigned __int64*)(b + BLD_STORAGE_OFFSET);
+                unsigned __int64 sEnd = *(unsigned __int64*)(b + BLD_STORAGE_OFFSET + 8);
+                visible = SimPatches_ShouldIncludeMeshlessStorageInVisible(nodeVis, sBeg, sEnd, dist);
                 if (visible) {
-                    float at[4] = {};
-                    position(b + 0x320, at);
-                    g_visibleDistance.push_back({ b, zDistance(g_exeBase + CAMERA_RVA, at) });
+                    g_visibleDistance.push_back({ b, dist });
                 }
             } else {
                 BYTE* render = *(BYTE**)(b + 0x5D0);
@@ -1022,6 +1034,8 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x214530 ? (unsigned __int64)&RoadSync_CtrlRectUpgradeTool
                                   : kToolCalls[i][1] == 0x213870 ? (unsigned __int64)&RoadSync_CtrlRectDemolishTool
                                   : kToolCalls[i][1] == 0x214220 ? (unsigned __int64)&RoadSync_ShiftCancelTool
+                                  : kToolCalls[i][1] == 0x2B6F30 ? (unsigned __int64)&CargoSettings_AddStationTool
+                                  : kToolCalls[i][1] == 0x2B78B0 ? (unsigned __int64)&CargoSettings_AddStationDistTool
                                   : kToolCalls[i][1] == 0x2BADE0 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target

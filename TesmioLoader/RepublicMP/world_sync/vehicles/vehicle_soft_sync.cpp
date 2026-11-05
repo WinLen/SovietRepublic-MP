@@ -571,8 +571,25 @@ static void ClearBuildingSlotAmounts(BYTE* sBeg, size_t localCount)
     }
 }
 
-static void SyncSingleSlotResource(const BYTE* w, BYTE* slot, BYTE* sBeg, size_t& localCount,
-                                   size_t capCount, unsigned resHash, float amount, bool& changed)
+static bool TryGrowCargoEntryVector(BYTE* slot, BYTE*& sBeg, size_t& localCount, size_t& capCount)
+{
+    if (!slot || !g_exeBase || g_exeBase[RVA_VEC_CARGO_ENTRY_PUSH_BACK] == 0) return false;
+    typedef void (*GrowVecFn)(void*, unsigned __int64);
+    ((GrowVecFn)(g_exeBase + RVA_VEC_CARGO_ENTRY_PUSH_BACK))(slot, 1ULL);
+    sBeg = *(BYTE**)slot;
+    BYTE* sEnd = *(BYTE**)(slot + 8);
+    BYTE* sCap = *(BYTE**)(slot + 16);
+    if (!sBeg || sEnd < sBeg || sCap < sEnd || (sEnd - sBeg) % CARGO_ENTRY_SIZE != 0) return false;
+    size_t newCount = (size_t)((sEnd - sBeg) / CARGO_ENTRY_SIZE);
+    if (newCount == 0) return false;
+    localCount = newCount - 1;
+    capCount = (size_t)((sCap - sBeg) / CARGO_ENTRY_SIZE);
+    *(BYTE**)(slot + 8) = sBeg + localCount * CARGO_ENTRY_SIZE;
+    return localCount < capCount;
+}
+
+static void SyncSingleSlotResource(const BYTE* w, BYTE* slot, BYTE*& sBeg, size_t& localCount,
+                                   size_t& capCount, unsigned resHash, float amount, bool& changed)
 {
     if (!isfinite(amount) || !resHash) return;
     for (size_t j = 0; j < localCount && j < 64; j++) {
@@ -585,7 +602,8 @@ static void SyncSingleSlotResource(const BYTE* w, BYTE* slot, BYTE* sBeg, size_t
         }
     }
     const char* resPtr = FindResourceByHash(w, resHash);
-    if (!resPtr || localCount >= capCount || localCount >= 64) return;
+    if (!resPtr || localCount >= 64) return;
+    if ((!sBeg || localCount >= capCount) && !TryGrowCargoEntryVector(slot, sBeg, localCount, capCount)) return;
     BYTE* entry = sBeg + localCount * CARGO_ENTRY_SIZE;
     *(const char**)entry = resPtr;
     *(float*)(entry + CARGO_AMOUNT_OFFSET) = amount;
@@ -601,17 +619,17 @@ static void SyncBuildingStorageSlot(const BYTE* w, BYTE* slot, unsigned char hos
     BYTE* sBeg = *(BYTE**)slot;
     BYTE* sEnd = *(BYTE**)(slot + 8);
     BYTE* sCap = *(BYTE**)(slot + 16);
-    if (!sBeg || sEnd < sBeg || sCap < sEnd || (sEnd - sBeg) % CARGO_ENTRY_SIZE != 0) return;
-    size_t localCount = (size_t)((sEnd - sBeg) / CARGO_ENTRY_SIZE);
+    if (sEnd < sBeg || sCap < sEnd || (sBeg && (sEnd - sBeg) % CARGO_ENTRY_SIZE != 0)) return;
+    size_t localCount = sBeg ? (size_t)((sEnd - sBeg) / CARGO_ENTRY_SIZE) : 0;
     if (hostCount == 0) {
-        if (localCount > 0) {
+        if (localCount > 0 && sBeg) {
             ClearBuildingSlotAmounts(sBeg, localCount);
             g_vssDiag.bldStorageUpdated++;
         }
         return;
     }
     if (hostCount > SOFT_SYNC_BLD_SLOT_ENTRIES_MAX) hostCount = SOFT_SYNC_BLD_SLOT_ENTRIES_MAX;
-    size_t capCount = (size_t)((sCap - sBeg) / CARGO_ENTRY_SIZE);
+    size_t capCount = sBeg ? (size_t)((sCap - sBeg) / CARGO_ENTRY_SIZE) : 0;
     bool changed = false;
     for (unsigned char k = 0; k < hostCount; k++) {
         SyncSingleSlotResource(w, slot, sBeg, localCount, capCount, resHashes[k], amounts[k], changed);
@@ -673,6 +691,7 @@ static bool HasActiveEnginePath(const BYTE* v)
 {
     if (!v) return false;
     if (*(const void* const*)(v + VEH_PARENT_PTR_OFFSET) != nullptr) return true;
+    if (*(const void* const*)(v + VEH_LINK_PTR_OFFSET) != nullptr) return true;
     if (*(const void* const*)(v + 0x528) != nullptr) return true;
     if (*(const void* const*)(v + 0x650) != nullptr) return true;
     if (*(const uintptr_t*)(v + 0x680) != *(const uintptr_t*)(v + 0x688)) return true;
@@ -696,12 +715,11 @@ static void ApplySingleVehicleTranslation(BYTE* v, float dx, float dy, float dz,
     }
 }
 
-static void ApplyVehicleTranslationWithChildren(BYTE* v, float dx, float dy, float dz, bool smoothBlend)
+static void TranslateAttachedVehicleVector(BYTE* v, unsigned beginOff, unsigned endOff,
+                                           float dx, float dy, float dz, bool smoothBlend)
 {
-    if (!v) return;
-    ApplySingleVehicleTranslation(v, dx, dy, dz, smoothBlend);
-    BYTE* const* cBegin = *(BYTE* const* const*)(v + VEH_CHILDREN_BEGIN_OFFSET);
-    BYTE* const* cEnd = *(BYTE* const* const*)(v + VEH_CHILDREN_END_OFFSET);
+    BYTE* const* cBegin = *(BYTE* const* const*)(v + beginOff);
+    BYTE* const* cEnd = *(BYTE* const* const*)(v + endOff);
     if (!cBegin || cEnd <= cBegin || (cEnd - cBegin) > 16) return;
     for (BYTE* const* it = cBegin; it < cEnd; ++it) {
         BYTE* child = *it;
@@ -709,6 +727,14 @@ static void ApplyVehicleTranslationWithChildren(BYTE* v, float dx, float dy, flo
             ApplySingleVehicleTranslation(child, dx, dy, dz, smoothBlend);
         }
     }
+}
+
+static void ApplyVehicleTranslationWithChildren(BYTE* v, float dx, float dy, float dz, bool smoothBlend)
+{
+    if (!v) return;
+    ApplySingleVehicleTranslation(v, dx, dy, dz, smoothBlend);
+    TranslateAttachedVehicleVector(v, VEH_CHILDREN_BEGIN_OFFSET, VEH_CHILDREN_END_OFFSET, dx, dy, dz, smoothBlend);
+    TranslateAttachedVehicleVector(v, VEH_CARRIED_BEGIN_OFFSET, VEH_CARRIED_END_OFFSET, dx, dy, dz, smoothBlend);
 }
 
 void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, float dz, bool smoothBlend)

@@ -459,7 +459,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Separate per-state free building limits ($COUNT_LIMIT) & deterministic 3D trailer/semi-trailer surface animation",
+                "v%s (Protocol %d) - Join two segments tool, distribution office & technical services settings sync, flatbed mechanism recovery, and free open storage visual cargo",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

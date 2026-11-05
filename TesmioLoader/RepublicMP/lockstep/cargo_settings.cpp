@@ -4,6 +4,7 @@
 #include "cargo_settings.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
@@ -11,7 +12,6 @@
 #include <string.h>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
 #define WINDOWS_RVA 0x9E19D0     // the open windows
 #define WINDOW_OBJECT 0x240
 #define WINDOW_KIND 0x248
@@ -28,7 +28,9 @@
 #define VEHICLE_LINE 0x650
 #define STOPS_LIST 0x638         // a vehicle's stop records, 0x198 each
 #define LINKS_LIST 0xD38         // a building's links (pointers), link +10 its record
+#define LINK_TARGET_BLD 0x08
 #define LINK_RECORD 0x10
+#define RECORD_TAIL_190 0x190
 #define RECORD_BYTES 0x198
 #define HALF_BYTES 0xC8
 #define HALVES 2
@@ -44,7 +46,10 @@
 #define DESTROY_RVA 0x1513F0
 #define COPY_RVA 0x204EF0
 #define REFRESH_RVA 0x499790
-#define MAGIC 0x31534743
+#define ADD_STATION_RVA 0x2B6F30
+#define ADD_STATION_DIST_RVA 0x2B78B0
+#define MAGIC 0x32534743
+
 
 enum { KIND_STOP = 0, KIND_LINK = 1 };
 static const char* const kObjectText[2] = { "vehicle", "building" };
@@ -130,18 +135,53 @@ static unsigned RecordCount(int kind, U64 object)
     return n <= MAX_RECORDS ? (unsigned)n : 0;
 }
 
+static U64 RecordBaseAt(int kind, U64 object, unsigned record, U64* outLink = nullptr)
+{
+    if (outLink) *outLink = 0;
+    U64 begin = 0, at = 0;
+    if (record >= RecordCount(kind, object)) return 0;
+    if (!ReadQ(object + (kind == KIND_STOP ? STOPS_LIST : LINKS_LIST), begin) || !begin) return 0;
+    if (kind == KIND_STOP) return begin + (U64)record * RECORD_BYTES;
+    U64 link = 0;
+    if (!ReadQ(begin + (U64)record * 8, link) || !link || !ReadQ(link + LINK_RECORD, at) || !at) return 0;
+    if (outLink) *outLink = link;
+    return at;
+}
+
 static U64 HalfAt(int kind, U64 object, unsigned record, unsigned half)
 {
-    U64 begin = 0, at = 0;
-    if (half >= HALVES || record >= RecordCount(kind, object)) return 0;
-    if (!ReadQ(object + (kind == KIND_STOP ? STOPS_LIST : LINKS_LIST), begin) || !begin) return 0;
-    if (kind == KIND_STOP) at = begin + (U64)record * RECORD_BYTES;
-    else {
-        U64 link = 0;
-        if (!ReadQ(begin + (U64)record * 8, link) || !ReadQ(link + LINK_RECORD, at) || !at) return 0;
-    }
-    return at + (U64)half * HALF_BYTES;
+    if (half >= HALVES) return 0;
+    U64 base = RecordBaseAt(kind, object, record);
+    return base ? base + (U64)half * HALF_BYTES : 0;
 }
+
+static bool ReadRecordMeta(int kind, U64 object, unsigned record, BYTE& outActive, U64& outTarget, U64& outTail190)
+{
+    outActive = 1;
+    outTarget = 0;
+    outTail190 = 0;
+    U64 link = 0;
+    U64 base = RecordBaseAt(kind, object, record, &link);
+    if (!base || !SafeMemcpyPod(&outTail190, (const void*)(base + RECORD_TAIL_190), 8)) return false;
+    if (kind == KIND_LINK) {
+        if (!link || !SafeMemcpyPod(&outActive, (const void*)link, 1) || !ReadQ(link + LINK_TARGET_BLD, outTarget))
+            return false;
+    }
+    return true;
+}
+
+static void WriteRecordMeta(int kind, U64 object, unsigned record, BYTE active, U64 tail190)
+{
+    U64 link = 0;
+    U64 base = RecordBaseAt(kind, object, record, &link);
+    if (!base) return;
+    SafeWritePod<U64>((void*)(base + RECORD_TAIL_190), tail190);
+    if (kind == KIND_LINK && link) {
+        SafeWritePod<BYTE>((void*)link, active);
+        SafeWritePod<BYTE>((void*)(object + 0xD50), 1);
+    }
+}
+
 
 static bool Natives(U64 at, const BYTE* standIn)
 {
@@ -215,9 +255,10 @@ struct Reader {
     unsigned count(unsigned max) { unsigned c = u32(); if (c > max) ok = false; return ok ? c : 0; }
 };
 
-// The message: magic, kind, half, record, the list's length, the object, the scalars,
-// then each list (pairs and definition lists with their definitions by table index).
-static const char* Encode(int kind, const RouteRef& ref, unsigned records, unsigned record, unsigned half, const Half& h, Writer& w)
+// The message: magic, kind, half, record, the list's length, the object, targetRef, linkActive,
+// recTail190, the scalars, then each list (pairs and definition lists with their definitions by table index).
+static const char* Encode(int kind, const RouteRef& ref, const RouteRef& targetRef, BYTE linkActive, U64 recTail190,
+                          unsigned records, unsigned record, unsigned half, const Half& h, Writer& w)
 {
     w.u32(MAGIC);
     w.u8((BYTE)kind);
@@ -225,6 +266,9 @@ static const char* Encode(int kind, const RouteRef& ref, unsigned records, unsig
     w.u16((unsigned short)record);
     w.u32(records);
     w.raw(&ref, sizeof(ref));
+    w.raw(&targetRef, sizeof(targetRef));
+    w.u8(linkActive);
+    w.u64(recTail190);
     w.raw(h.scalars, SCALAR_BYTES);
     for (int i = 0; i < VECTORS; i++) {
         const std::vector<BYTE>& v = h.vec[i];
@@ -254,6 +298,9 @@ struct Watched {
     U64 object;
     unsigned records;
     std::vector<Half> halves;
+    std::vector<BYTE> linkActive;
+    std::vector<U64> linkTarget;
+    std::vector<U64> recTail190;
 };
 static std::vector<Watched> g_watched;
 static bool g_taken = false;
@@ -272,6 +319,25 @@ static bool SortedList(U64 at, std::vector<U64>& out)
     out.resize((size_t)((v[1] - v[0]) / 8));
     if (!out.empty() && !SafeMemcpyPod(out.data(), (const void*)v[0], out.size() * 8)) return false;
     std::sort(out.begin(), out.end());
+    return true;
+}
+
+static bool SnapshotWatchedObject(int kind, U64 object, Watched& s)
+{
+    unsigned records = RecordCount(kind, object);
+    if (!records) return false;
+    s.kind = kind;
+    s.object = object;
+    s.records = records;
+    s.halves.resize((size_t)records * HALVES);
+    s.linkActive.assign(records, 1);
+    s.linkTarget.assign(records, 0);
+    s.recTail190.assign(records, 0);
+    for (unsigned r = 0; r < records; r++) {
+        if (!ReadRecordMeta(kind, object, r, s.linkActive[r], s.linkTarget[r], s.recTail190[r])) return false;
+        if (!ReadHalf(HalfAt(kind, object, r, 0), s.halves[(size_t)r * HALVES + 0])) return false;
+        if (!ReadHalf(HalfAt(kind, object, r, 1), s.halves[(size_t)r * HALVES + 1])) return false;
+    }
     return true;
 }
 
@@ -304,16 +370,9 @@ static void Shown(std::vector<Watched>& out)
             if (kind < 0 || taken[kind] >= MAX_OBJECTS) continue;
             bool listed = false;
             for (const Watched& s : out) listed |= s.object == object;
-            unsigned records = RecordCount(kind, object);
-            if (listed || !records) continue;
+            if (listed) continue;
             Watched s;
-            s.kind = kind;
-            s.object = object;
-            s.records = records;
-            s.halves.resize((size_t)records * HALVES);
-            bool ok = true;
-            for (unsigned k = 0; k < records * HALVES && ok; k++) ok = ReadHalf(HalfAt(kind, object, k / HALVES, k % HALVES), s.halves[k]);
-            if (!ok) continue;
+            if (!SnapshotWatchedObject(kind, object, s)) continue;
             out.push_back(std::move(s));
             taken[kind]++;
         }
@@ -330,20 +389,24 @@ void CargoSettings_Before(bool simBusy)
     g_taken = !g_watched.empty();
 }
 
-static void Take(const Watched& s, unsigned record, unsigned half, U64 at, const Half& now)
+static void Take(const Watched& s, unsigned record, unsigned half, U64 at, const Half& now, BYTE nowActive, U64 nowTail190)
 {
-    RouteRef ref = kNoRef;
+    RouteRef ref = kNoRef, targetRef = kNoRef;
+    if (s.kind == KIND_LINK && record < s.linkTarget.size() && s.linkTarget[record])
+        GuardedRef(KIND_LINK, s.linkTarget[record], targetRef);
     Writer w;
     const char* why = !GuardedRef(s.kind, s.object, ref) ? "it is not in the world's list"
-                                                         : Encode(s.kind, ref, s.records, record, half, now, w);
+                                                         : Encode(s.kind, ref, targetRef, nowActive, nowTail190, s.records, record, half, now, w);
     // Put back at once: the command makes the change on every PC.
+    WriteRecordMeta(s.kind, s.object, record, s.linkActive[record], s.recTail190[record]);
     bool back = Replace(at, s.halves[(size_t)record * HALVES + half]);
     bool allowed = s.kind == KIND_STOP ? TwoStates_CheckVehicleControlAllowed((const BYTE*)s.object, Tr("настройка груза чужого транспорта", "configuring foreign vehicle cargo"))
                                        : TwoStates_CheckBuildingControlAllowed((const BYTE*)s.object, Tr("настройка груза чужого здания", "configuring foreign building cargo"));
     if (!allowed) return;
     if (why || !back) {
-        Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s", kRecordText[s.kind], record, half ? "unloading" : "loading",
-             kObjectText[s.kind], why ? why : "it could not be put back", back ? "nothing is done" : "it stays on this PC");
+        const int kindIdx = (s.kind == KIND_LINK) ? 1 : 0;
+        Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s", kRecordText[kindIdx], record, half ? "unloading" : "loading",
+             kObjectText[kindIdx], why ? why : "it could not be put back", back ? "nothing is done" : "it stays on this PC");
         return;
     }
     Commands_Submit(LS_CMD_CARGO_SETTINGS, w.b.data(), w.b.size());
@@ -356,11 +419,19 @@ void CargoSettings_After(bool simBusy)
     if (!simBusy && Commands_TakeUi() && Commands_ApplyEpoch() == g_epoch) {
         for (const Watched& s : g_watched) {
             if (RecordCount(s.kind, s.object) != s.records) continue; // a record added or removed: not compared
-            for (unsigned k = 0; k < s.records * HALVES; k++) {
-                U64 at = HalfAt(s.kind, s.object, k / HALVES, k % HALVES);
-                Half now;
-                if (!ReadHalf(at, now) || now == s.halves[k]) continue;
-                Take(s, k / HALVES, k % HALVES, at, now);
+            for (unsigned r = 0; r < s.records; r++) {
+                BYTE nowActive = s.linkActive[r];
+                U64 nowTarget = s.linkTarget[r], nowTail190 = s.recTail190[r];
+                ReadRecordMeta(s.kind, s.object, r, nowActive, nowTarget, nowTail190);
+                bool metaChanged = (nowActive != s.linkActive[r]) || (nowTail190 != s.recTail190[r]);
+                for (unsigned half = 0; half < HALVES; half++) {
+                    unsigned k = r * HALVES + half;
+                    U64 at = HalfAt(s.kind, s.object, r, half);
+                    Half now;
+                    if (!ReadHalf(at, now)) continue;
+                    if (now == s.halves[k] && !(half == 0 && metaChanged)) continue;
+                    Take(s, r, half, at, now, nowActive, nowTail190);
+                }
             }
         }
     }
@@ -408,25 +479,163 @@ static bool Refresh(U64 vehicle)
     }
 }
 
+static void EnsurePartnerBackRef(U64 object, U64 targetBld)
+{
+    if (!object || !targetBld || g_exeBase[RVA_VEC_PTR_PUSH_BACK] == 0) return;
+    __try {
+        U64 bldType = *(U64*)(object + 0x318);
+        int subType = bldType ? *(int*)(bldType + 0x360) : 0;
+        U64 vecAddr = targetBld + (subType == 0x2D ? 0xD78u : 0xD90u);
+        U64 b = *(U64*)vecAddr, e = *(U64*)(vecAddr + 8);
+        for (U64 p = b; p && p + 8 <= e; p += 8) {
+            if (*(U64*)p == object) return;
+        }
+        ((void (*)(U64, const U64*))(g_exeBase + RVA_VEC_PTR_PUSH_BACK))(vecAddr, &object);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static bool CreateBuildingLinkNative(U64 object, U64 targetBld, BYTE linkActive, U64 recTail190, unsigned& outRecord)
+{
+    if (!object || !targetBld) return false;
+    if (g_exeBase[RVA_OPERATOR_NEW] == 0 || g_exeBase[RVA_CARGO_RECORD_CTOR] == 0 || g_exeBase[RVA_VEC_LINK_PUSH_BACK] == 0)
+        return false;
+    __try {
+        typedef U64 (*OpNewFn)(U64);
+        typedef U64 (*RecCtorFn)(U64);
+        typedef void (*VecLinkPushFn)(U64, const U64*);
+        OpNewFn opNew = (OpNewFn)(g_exeBase + RVA_OPERATOR_NEW);
+        RecCtorFn recCtor = (RecCtorFn)(g_exeBase + RVA_CARGO_RECORD_CTOR);
+        VecLinkPushFn vecPush = (VecLinkPushFn)(g_exeBase + RVA_VEC_LINK_PUSH_BACK);
+        U64 link = opNew(0x18);
+        U64 rec = opNew(RECORD_BYTES);
+        if (!link || !rec) return false;
+        recCtor(rec);
+        *(BYTE*)(link + 0x00) = linkActive;
+        *(U64*)(link + LINK_TARGET_BLD) = targetBld;
+        *(U64*)(link + LINK_RECORD) = rec;
+        *(U64*)(rec + RECORD_TAIL_190) = recTail190;
+        vecPush(object + LINKS_LIST, &link);
+        EnsurePartnerBackRef(object, targetBld);
+        *(BYTE*)(object + 0xD50) = 1;
+        *(float*)(object + 0xFC0) = 3.0f;
+        unsigned n = RecordCount(KIND_LINK, object);
+        if (!n) return false;
+        outRecord = n - 1;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static bool ResolveOrCreateBuildingLink(U64 object, U64 targetBld, BYTE linkActive, U64 recTail190,
+                                        unsigned requestedRecord, unsigned& outRecord)
+{
+    unsigned n = RecordCount(KIND_LINK, object);
+    if (targetBld != 0) {
+        U64 begin = 0;
+        if (ReadQ(object + LINKS_LIST, begin) && begin) {
+            for (unsigned i = 0; i < n; i++) {
+                U64 link = 0, t = 0;
+                if (ReadQ(begin + (U64)i * 8, link) && link && ReadQ(link + LINK_TARGET_BLD, t) && t == targetBld) {
+                    outRecord = i;
+                    return true;
+                }
+            }
+        }
+        if (CreateBuildingLinkNative(object, targetBld, linkActive, recTail190, outRecord)) return true;
+    }
+    if (requestedRecord < n) {
+        outRecord = requestedRecord;
+        return true;
+    }
+    return false;
+}
+
 bool CargoSettings_ApplyCommand(const void* data, size_t size)
 {
     Reader in = { (const BYTE*)data, size, 0, true };
-    RouteRef ref = kNoRef;
+    RouteRef ref = kNoRef, targetRef = kNoRef;
     if (in.u32() != MAGIC) return false;
     int kind = in.u8();
     unsigned half = in.u8(), record = in.u16(), records = in.u32();
     in.raw(&ref, sizeof(ref));
-    if (!in.ok || kind > KIND_LINK || half >= HALVES) return false;
+    in.raw(&targetRef, sizeof(targetRef));
+    BYTE linkActive = in.u8();
+    U64 recTail190 = in.u64();
+    if (!in.ok || kind < 0 || kind > KIND_LINK || half >= HALVES) return false;
     const char* why = nullptr;
     Half h;
     U64 object = GuardedAt(kind, ref), at = 0;
+    U64 targetBld = (kind == KIND_LINK && targetRef.place >= 0) ? GuardedAt(KIND_LINK, targetRef) : 0;
+    unsigned resolvedRecord = record;
     if (!Ready()) why = "a game routine differs";
     else if (!object) why = kind == KIND_STOP ? "the vehicle is gone" : "the building is gone";
-    else if (RecordCount(kind, object) != records) why = "its records differ here";
-    else if (!(at = HalfAt(kind, object, record, half))) why = "the record cannot be read";
+    else if (kind == KIND_STOP && RecordCount(kind, object) != records) why = "its records differ here";
+    else if (kind == KIND_LINK && !ResolveOrCreateBuildingLink(object, targetBld, linkActive, recTail190, record, resolvedRecord))
+        why = "its records differ here";
+    else if (!(at = HalfAt(kind, object, resolvedRecord, half))) why = "the record cannot be read";
     else if (!(why = Decode(in, h)) && !Replace(at, h)) why = "the game's half copy faulted";
-    else if (!why && kind == KIND_STOP && !Refresh(object)) why = "the line refresh faulted";
-    Logf("republicmp  CARGO: %s %u (%s) of %s #%d: %s", kRecordText[kind], record, half ? "unloading" : "loading", kObjectText[kind],
-         ref.place, why ? why : "made");
+    else {
+        WriteRecordMeta(kind, object, resolvedRecord, linkActive, recTail190);
+        if (kind == KIND_STOP && !Refresh(object)) why = "the line refresh faulted";
+    }
+    const int kindIdx = (kind == KIND_LINK) ? 1 : 0;
+    Logf("republicmp  CARGO: %s %u (%s) of %s #%d: %s", kRecordText[kindIdx], resolvedRecord, half ? "unloading" : "loading",
+         kObjectText[kindIdx], ref.place, why ? why : "made");
     return why == nullptr;
+}
+
+static void RevertLocalAddedLink(U64 world, U64 bld, U64 targetBld, unsigned linkIdx)
+{
+    if (!bld || g_exeBase[RVA_REMOVE_LINK_BY_INDEX] == 0) return;
+    __try {
+        if (targetBld && g_exeBase[RVA_REMOVE_PARTNER_LINK] != 0) {
+            ((void (*)(U64, U64, U64))(g_exeBase + RVA_REMOVE_PARTNER_LINK))(world, bld, targetBld);
+        }
+        ((void (*)(U64, U64, int))(g_exeBase + RVA_REMOVE_LINK_BY_INDEX))(world, bld, (int)linkIdx);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+static U64 RunAddStationTool(U64 world, unsigned nativeRva)
+{
+    U64 bld = 0;
+    ReadQ(world + 0xD298, bld);
+    unsigned beforeCount = RecordCount(KIND_LINK, bld);
+    U64 res = ((U64(*)(U64))(g_exeBase + nativeRva))(world);
+    unsigned afterCount = RecordCount(KIND_LINK, bld);
+    if (!Commands_Capturing() || !bld || afterCount <= beforeCount) return res;
+
+    unsigned newIdx = beforeCount;
+    BYTE active = 1;
+    U64 targetBld = 0, tail190 = 0;
+    Half h0, h1;
+    bool readOk = ReadRecordMeta(KIND_LINK, bld, newIdx, active, targetBld, tail190) &&
+                  ReadHalf(HalfAt(KIND_LINK, bld, newIdx, 0), h0) &&
+                  ReadHalf(HalfAt(KIND_LINK, bld, newIdx, 1), h1);
+    RevertLocalAddedLink(world, bld, targetBld, newIdx);
+    if (!readOk || !targetBld) return res;
+    if (!TwoStates_CheckBuildingControlAllowed((const BYTE*)bld, Tr("настройка чужого здания", "configuring foreign building")))
+        return res;
+
+    RouteRef ref = kNoRef, targetRef = kNoRef;
+    if (!GuardedRef(KIND_LINK, bld, ref) || !GuardedRef(KIND_LINK, targetBld, targetRef)) return res;
+    const Half* halves[2] = { &h0, &h1 };
+    for (unsigned half = 0; half < HALVES; half++) {
+        Writer w;
+        if (!Encode(KIND_LINK, ref, targetRef, active, tail190, afterCount, newIdx, half, *halves[half], w))
+            Commands_Submit(LS_CMD_CARGO_SETTINGS, w.b.data(), w.b.size());
+    }
+    return res;
+}
+
+unsigned __int64 CargoSettings_AddStationTool(unsigned __int64 world)
+{
+    return RunAddStationTool(world, ADD_STATION_RVA);
+}
+
+unsigned __int64 CargoSettings_AddStationDistTool(unsigned __int64 world)
+{
+    return RunAddStationTool(world, ADD_STATION_DIST_RVA);
 }

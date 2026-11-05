@@ -454,7 +454,9 @@ static const char* const kCarriedTools[] = {
     "vehicle_addstop_copy", "vehicle_replace", "vehicle_replace_auto", "vehicle_tovehicle", "vehicle_sendconstruction",
     "worker_relocate", "worker_relocate_educated", "worker_relocate_inmate",
     "bojka_red", "bojka_cancel",
-    "join_hub_stop", "join_hub",
+    "join_hub_stop", "join_hub", "join_hub_all",
+    "building_addstation", "building_addstation_dist",
+    "building_copy_dist", "building_copy_waste", "building_copy_transfer",
     "terrain_go_there",
     "water_square",
     "second_road_airplane", "second_road_airplane_square",
@@ -470,6 +472,15 @@ static const char* const kUncarriedTools[] = {
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
+
+bool Commands_IsToolCarriedForTest(const char* name)
+{
+    if (!name || !name[0]) return false;
+    for (const char* carried : kCarriedTools) {
+        if (strcmp(name, carried) == 0) return true;
+    }
+    return false;
+}
 
 static void PutAwayUncarriedTool()
 {

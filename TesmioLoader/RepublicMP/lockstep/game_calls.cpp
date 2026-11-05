@@ -187,6 +187,9 @@ static const GameCallSite kSites[] = {
     { SITE_CONSTRUCT_TOOL_START_PLAN_RVA, RVA_START_PLANNED_CONSTRUCTION, "construction tool: start planned network construction", "WObx", 0, 0, false },
     { SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "construction tool: assign office to network building", "WOOFbb", 0, 0, false },
     { SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "construction tool: assign office to building", "WOOFbb", 0, 0, false },
+    { SITE_COPY_DIST_OFFICE_RVA, FN_COPY_DIST_OFFICE_RVA, "copy tool: copy distribution office settings", "WBB", 0, 0, false },
+    { SITE_COPY_WASTE_SETTINGS_RVA, FN_COPY_WASTE_SETTINGS_RVA, "copy tool: copy technical services waste settings", "WBB", 0, 0, false },
+    { SITE_COPY_TRANSFER_SETTINGS_RVA, FN_COPY_TRANSFER_SETTINGS_RVA, "copy tool: copy factory connection settings", "WBB", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -589,8 +592,91 @@ static bool IsCommandSpecialSite(int special)
            special == CALL_DELETE_STOP || special == CALL_CHANGE_STOP || special == CALL_RELEASE_VEHICLE;
 }
 
+static void RestoreMechToBuildingInventory(U64 mech, U64 carrier)
+{
+    if (!mech || !carrier) return;
+    *(U64*)(mech + VEH_LINK_PTR_OFFSET) = 0;
+    U64 wpBld = *(U64*)(carrier + VEH_WORKPLACE_BLD_OFFSET);
+    U64 depBld = *(U64*)(carrier + VEH_DEPOT_PTR_OFFSET);
+    U64 homeBld = wpBld ? wpBld : depBld;
+    if (!homeBld) return;
+    if (*(U64*)(mech + VEH_WORKPLACE_BLD_OFFSET) == 0 && *(U64*)(mech + VEH_DEPOT_PTR_OFFSET) == 0) {
+        if (wpBld) *(U64*)(mech + VEH_WORKPLACE_BLD_OFFSET) = wpBld;
+        else *(U64*)(mech + VEH_DEPOT_PTR_OFFSET) = depBld;
+    }
+    U64 b = *(U64*)(homeBld + BLD_VEHICLES_BEGIN_OFFSET);
+    U64 e = *(U64*)(homeBld + BLD_VEHICLES_END_OFFSET);
+    U64 cap = *(U64*)(homeBld + BLD_VEHICLES_END_OFFSET + 8);
+    for (U64 p = b; p && p + 8 <= e; p += 8) {
+        if (*(U64*)p == mech) return;
+    }
+    if (b && e >= b && e + 8 <= cap) {
+        *(U64*)e = mech;
+        *(U64*)(homeBld + BLD_VEHICLES_END_OFFSET) = e + 8;
+    } else if (g_exeBase && g_exeBase[RVA_VEC_PTR_PUSH_BACK] != 0) {
+        ((void (*)(U64, const U64*))(g_exeBase + RVA_VEC_PTR_PUSH_BACK))(homeBld + BLD_VEHICLES_BEGIN_OFFSET, &mech);
+    }
+}
+
+static void DetachSingleMechFromCarrier(U64 carrier, U64 mech)
+{
+    if (!carrier || !mech) return;
+    U64 b = *(U64*)(carrier + VEH_CARRIED_BEGIN_OFFSET);
+    U64 e = *(U64*)(carrier + VEH_CARRIED_END_OFFSET);
+    if (b && e > b && (e - b) <= 64 * 8) {
+        U64 writePtr = b;
+        for (U64 p = b; p + 8 <= e; p += 8) {
+            U64 cur = *(U64*)p;
+            if (cur != mech) {
+                *(U64*)writePtr = cur;
+                writePtr += 8;
+            }
+        }
+        *(U64*)(carrier + VEH_CARRIED_END_OFFSET) = writePtr;
+    }
+    RestoreMechToBuildingInventory(mech, carrier);
+}
+
+static void RecoverOrphanedCarrierMechanisms(U64 veh)
+{
+    if (!veh) return;
+    __try {
+        U64 carrier = *(U64*)(veh + VEH_LINK_PTR_OFFSET);
+        if (carrier) {
+            DetachSingleMechFromCarrier(carrier, veh);
+        }
+        U64 b = *(U64*)(veh + VEH_CARRIED_BEGIN_OFFSET);
+        U64 e = *(U64*)(veh + VEH_CARRIED_END_OFFSET);
+        if (b && e > b && (e - b) <= 64 * 8) {
+            U64 count = (e - b) / 8;
+            U64 mechs[64] = {};
+            for (U64 i = 0; i < count; i++) mechs[i] = *(U64*)(b + i * 8);
+            *(U64*)(veh + VEH_CARRIED_END_OFFSET) = b;
+            for (U64 i = 0; i < count; i++) {
+                if (mechs[i]) RestoreMechToBuildingInventory(mechs[i], veh);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void GameCalls_RecoverOrphanedCarrierMechanismsForTest(unsigned long long vehicle)
+{
+    RecoverOrphanedCarrierMechanisms(vehicle);
+}
+
+static U64 ExtractCarrierRecoveryVehicle(const GameCallSite& s, const U64* a)
+{
+    if (s.target == RVA_VEH_RELEASE || s.target == 0x6B7670) return a[0];
+    if (s.target == SEND_TO_DEPOT || s.target == 0x3FB8E0) return a[1];
+    if (s.target == 0x497B10 && s.schema[2] == 'V') return a[2];
+    return 0;
+}
+
 static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U64*& drag, U64& dragged)
 {
+    U64 recoveryVeh = ExtractCarrierRecoveryVehicle(s, a);
+    if (recoveryVeh) RecoverOrphanedCarrierMechanisms(recoveryVeh);
     switch (s.special) {
     case CALL_INVITE_CITIZENS:
         InviteCitizensNow(a[0], a[3], s.worldPointer);

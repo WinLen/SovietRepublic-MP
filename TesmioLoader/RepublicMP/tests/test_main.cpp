@@ -56,6 +56,8 @@
 #include "../session/settings_sync.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/vehicle_switches.h"
+#include "../lockstep/route_tools.h"
+#include "../lockstep/cargo_settings.h"
 
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
@@ -10225,6 +10227,167 @@ static bool Test_Stress_Gen6_Challenger1()
     return true;
 }
 
+static void __fastcall MockCargoDestroyFn(U64 /*at*/, U64 /*unused*/)
+{
+}
+
+static U64 __fastcall MockCargoCopyFn(U64 dst, U64 src)
+{
+    if (dst && src) memcpy((void*)dst, (const void*)src, 0xC8);
+    return dst;
+}
+
+static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Carried tools check: join_hub_all, building_addstation, building_addstation_dist, building_copy_*
+    TEST_CHECK(Commands_IsToolCarriedForTest("join_hub_all"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("join_hub"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("join_hub_stop"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("building_addstation"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("building_addstation_dist"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("building_copy_dist"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("building_copy_waste"));
+    TEST_CHECK(Commands_IsToolCarriedForTest("building_copy_transfer"));
+    TEST_CHECK(!Commands_IsToolCarriedForTest("unknown_uncarried_tool"));
+
+    // 2. FindNetworkNodeByPos fallback via segment endpoints (net + 0x2B0..0x2B8) when net + 0x298 / 0xAA0 are empty
+    std::vector<BYTE> netMgr(0xB00, 0);
+    std::vector<BYTE> nodeA(0x40, 0), nodeB(0x40, 0), loopNode(0x40, 0);
+    *(float*)(nodeA.data() + 4) = 120.0f; *(float*)(nodeA.data() + 8) = 15.0f; *(float*)(nodeA.data() + 12) = -340.0f;
+    *(float*)(nodeB.data() + 4) = 220.0f; *(float*)(nodeB.data() + 8) = 15.0f; *(float*)(nodeB.data() + 12) = -340.0f;
+    *(float*)(loopNode.data() + 4) = 260.0f; *(float*)(loopNode.data() + 8) = 16.0f; *(float*)(loopNode.data() + 12) = -350.0f;
+
+    std::vector<BYTE> seg(0x160, 0);
+    *(U64*)(seg.data() + 0x20) = (U64)nodeA.data();
+    *(U64*)(seg.data() + 0x28) = (U64)nodeB.data();
+    std::vector<BYTE*> loopVec = { loopNode.data() };
+    WriteMockVectorHeader(seg.data() + 0xD0, loopVec);
+    std::vector<BYTE*> segVec = { seg.data() };
+    WriteMockVectorHeader(netMgr.data() + 0x2B0, segVec);
+
+    *(int*)(world + 0x14034) = 1;
+    *(U64*)(world + 0x14038) = (U64)netMgr.data();
+    const float qA[3] = { 120.05f, 15.0f, -339.95f };
+    const float qB[3] = { 220.0f, 15.0f, -340.0f };
+    const float qL[3] = { 260.0f, 16.0f, -350.0f };
+    const float qMiss[3] = { 999.0f, 15.0f, 999.0f };
+    U64 foundNet = 0;
+    TEST_CHECK(RouteTools_FindNetworkNodeByPosForTest((U64)world, qA, &foundNet) == (U64)nodeA.data());
+    TEST_CHECK(foundNet == (U64)netMgr.data());
+    TEST_CHECK(RouteTools_FindNetworkNodeByPosForTest((U64)world, qB, nullptr) == (U64)nodeB.data());
+    TEST_CHECK(RouteTools_FindNetworkNodeByPosForTest((U64)world, qL, nullptr) == (U64)loopNode.data());
+    TEST_CHECK(RouteTools_FindNetworkNodeByPosForTest((U64)world, qMiss, nullptr) == 0ULL);
+
+    // 3. Distribution Office CargoSettings_ApplyCommand with mismatched record count & targetRef resolution
+    const unsigned char sigDestroy[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 };
+    const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
+    const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
+    memcpy(g_mockExeBuffer + 0x1513F0, sigDestroy, 16);
+    memcpy(g_mockExeBuffer + 0x204EF0, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x499790, sigRefresh, 16);
+
+    std::vector<BYTE> distBld(BUILDING_STRUCT_BYTES, 0), storageBldA(BUILDING_STRUCT_BYTES, 0), storageBldB(BUILDING_STRUCT_BYTES, 0);
+    *(int*)distBld.data() = 501;
+    *(int*)storageBldA.data() = 502;
+    *(int*)storageBldB.data() = 503;
+    std::vector<BYTE*> worldBlds = { distBld.data(), storageBldA.data(), storageBldB.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, worldBlds);
+
+    std::vector<BYTE> recA(0x198, 0), recB(0x198, 0);
+    std::vector<BYTE> linkA(0x18, 0), linkB(0x18, 0);
+    linkA[0] = 1; *(U64*)(linkA.data() + 0x08) = (U64)storageBldA.data(); *(U64*)(linkA.data() + 0x10) = (U64)recA.data();
+    linkB[0] = 1; *(U64*)(linkB.data() + 0x08) = (U64)storageBldB.data(); *(U64*)(linkB.data() + 0x10) = (U64)recB.data();
+    // Host has 2 links (linkA, linkB), while packet from Client had records=1 for storageBldB!
+    std::vector<BYTE*> distLinks = { linkA.data(), linkB.data() };
+    WriteMockVectorHeader(distBld.data() + 0xD38, distLinks);
+
+    RouteRef distRef = kNoRef, targetRefB = kNoRef;
+    TEST_CHECK(Ref_Building((U64)distBld.data(), distRef));
+    TEST_CHECK(Ref_Building((U64)storageBldB.data(), targetRefB));
+
+    // Prime CargoSettings Ready() routine signature check, then install mock JMPs at 0x1513F0 / 0x204EF0
+    BYTE primeBuf[64] = {};
+    *(unsigned*)primeBuf = 0x32534743u;
+    CargoSettings_ApplyCommand(primeBuf, sizeof(primeBuf));
+    WriteAbsJmp12(g_mockExeBuffer + 0x1513F0, (void*)&MockCargoDestroyFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x204EF0, (void*)&MockCargoCopyFn);
+
+    std::vector<BYTE> pkt;
+    auto pushRaw = [&](const void* p, size_t n) { pkt.insert(pkt.end(), (const BYTE*)p, (const BYTE*)p + n); };
+    unsigned magic = 0x32534743u;
+    BYTE kind = 1, half = 0, activeFlag = 1;
+    unsigned short recIdx = 0;
+    unsigned recTotal = 1; // Mismatched count (1 vs 2 on Host), resolved via targetRefB!
+    U64 tailThresholds = 0;
+    float loadPct = 0.35f, unloadPct = 0.75f;
+    memcpy((BYTE*)&tailThresholds, &loadPct, 4);
+    memcpy((BYTE*)&tailThresholds + 4, &unloadPct, 4);
+    BYTE scalars[22] = {};
+    scalars[0] = 1; // loading enabled
+    pushRaw(&magic, 4);
+    pushRaw(&kind, 1);
+    pushRaw(&half, 1);
+    pushRaw(&recIdx, 2);
+    pushRaw(&recTotal, 4);
+    pushRaw(&distRef, sizeof(distRef));
+    pushRaw(&targetRefB, sizeof(targetRefB));
+    pushRaw(&activeFlag, 1);
+    pushRaw(&tailThresholds, 8);
+    pushRaw(scalars, sizeof(scalars));
+    unsigned zeroVec = 0;
+    for (int v = 0; v < 7; ++v) pushRaw(&zeroVec, 4);
+
+    TEST_CHECK(CargoSettings_ApplyCommand(pkt.data(), pkt.size()));
+    TEST_CHECK(recB[0] == 1);
+    TEST_CHECK_NEAR(*(float*)(recB.data() + 0x190), 0.35f, 1e-5f);
+    TEST_CHECK_NEAR(*(float*)(recB.data() + 0x194), 0.75f, 1e-5f);
+    TEST_CHECK(distBld[0xD50] == 1);
+
+    // 4. Orphaned Carrier Mechanism Recovery & VehicleSoftSync Carrier/Carried Sync
+    std::vector<BYTE> coBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> carrier(0x1AD8, 0), mech(0x1AD8, 0);
+    *(unsigned*)(carrier.data() + VEH_ID_OFFSET) = 701;
+    *(unsigned*)(mech.data() + VEH_ID_OFFSET) = 702;
+    *(U64*)(carrier.data() + VEH_WORKPLACE_BLD_OFFSET) = (U64)coBld.data();
+    // Simulate mech loaded onto carrier (0x68A420 cleared mech workplace & removed mech from coBld + 0xC70)
+    *(U64*)(mech.data() + VEH_LINK_PTR_OFFSET) = (U64)carrier.data();
+    *(U64*)(mech.data() + VEH_WORKPLACE_BLD_OFFSET) = 0;
+    std::vector<BYTE*> carriedVec = { mech.data() };
+    WriteMockVectorHeader(carrier.data() + VEH_CARRIED_BEGIN_OFFSET, carriedVec);
+    std::vector<BYTE*> officeVehBuf = { carrier.data(), nullptr };
+    *(U64*)(coBld.data() + BLD_VEHICLES_BEGIN_OFFSET) = (U64)officeVehBuf.data();
+    *(U64*)(coBld.data() + BLD_VEHICLES_END_OFFSET) = (U64)(officeVehBuf.data() + 1);
+    *(U64*)(coBld.data() + BLD_VEHICLES_END_OFFSET + 8) = (U64)(officeVehBuf.data() + 2);
+
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(mech.data()));
+    *(float*)(carrier.data() + 0xD60 + 0x80) = 100.0f;
+    *(float*)(mech.data() + 0xD60 + 0x80) = 100.0f;
+    VehicleSoftSync_TranslateWithChildrenForTest(carrier.data(), 12.5f, 0.0f, 0.0f, false);
+    TEST_CHECK_NEAR(*(float*)(carrier.data() + 0xD60 + 0x80), 112.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(mech.data() + 0xD60 + 0x80), 112.5f, 1e-4f);
+
+    // Recover orphaned mechanism when carrier is interrupted on pause / sent home
+    GameCalls_RecoverOrphanedCarrierMechanismsForTest((U64)carrier.data());
+    TEST_CHECK(*(U64*)(mech.data() + VEH_LINK_PTR_OFFSET) == 0ULL);
+    TEST_CHECK(*(U64*)(mech.data() + VEH_WORKPLACE_BLD_OFFSET) == (U64)coBld.data());
+    TEST_CHECK(*(U64*)(carrier.data() + VEH_CARRIED_BEGIN_OFFSET) == *(U64*)(carrier.data() + VEH_CARRIED_END_OFFSET));
+    TEST_CHECK(*(U64*)(coBld.data() + BLD_VEHICLES_END_OFFSET) == (U64)(officeVehBuf.data() + 2));
+    TEST_CHECK(officeVehBuf[1] == mech.data());
+
+    // 5. Meshless Free Open Storage Visual Goods (FillPrivateVisible inclusion rule)
+    TEST_CHECK(SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, 350.0f));
+    TEST_CHECK(SimPatches_ShouldIncludeMeshlessStorageInVisible(true, 0ULL, 0ULL, 1800.0f));
+    TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0ULL, 0ULL, 350.0f));
+    TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2000ULL, 350.0f));
+    TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, 1500.0f));
+    TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, -5.0f));
+
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
@@ -10282,6 +10445,7 @@ int main()
         { "Stress_M6_Challenger2 (TeardownConcurrency, MaterialBoundaryFuzz, BrushRecovery)", &Test_Stress_M6_Challenger2 },
         { "SettingsSync_MediaPrisonOrphanageAlerts (R2/R3 Broadcast, Upbringing, Alerts, Clamping)", &Test_SettingsSync_MediaPrisonOrphanageAlerts },
         { "Stress_Gen6_Challenger1 (FloatFuzzing, MalformedPackets, CheckboxBoundaries, StudioResilience)", &Test_Stress_Gen6_Challenger1 },
+        { "JoinHubDistOfficeCarrierAndStorageVisuals (JoinHubAll, DistLinks, CarrierRecovery, StorageVis)", &Test_JoinHubDistOfficeCarrierAndStorageVisuals },
     };
 
     for (const auto& tc : kTests) {
