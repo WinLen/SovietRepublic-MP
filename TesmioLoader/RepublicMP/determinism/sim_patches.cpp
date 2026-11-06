@@ -1739,6 +1739,9 @@ static bool ShouldReleaseCorridorLock(BYTE* bld, BYTE* lockVeh)
 {
     if (!IsPointerLikeX64((uintptr_t)lockVeh)) return true;
     if (*(BYTE**)(lockVeh + VEH_CORRIDOR_LOCK_BLD_OFFSET) != bld) return true;
+    if (lockVeh[VEH_IS_RAIL_FLAG_OFFSET] != 0 || GetVehicleCategory(lockVeh) == 4) return false;
+    if (*(int32_t*)(lockVeh + VEH_BAY_SLOT_IDX_OFFSET) <= -10) return false;
+    if (IsPointerLikeX64((uintptr_t)bld) && *(uintptr_t*)(bld + BLD_CONSTR_SITE_PTR_OFFSET) != 0) return false;
     if (*(int32_t*)(lockVeh + VEH_HELI_FLIGHT_STATE_OFF) != 0) return true;
     if (*(float*)(lockVeh + VEH_WAIT_TIMER_OFFSET) > 0.0f) return true;
     if (GetVehicleCategory(lockVeh) == 8 &&
@@ -1886,9 +1889,44 @@ static void AssignReservedAircraftStandIfReady(BYTE* veh, BYTE* bld)
     PushVehicleWaypoint3f(veh, (const float*)(slotPts + 0x00));
 }
 
+static void SanitizeRailVehicleStuckState(BYTE* veh)
+{
+    if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    if (veh[VEH_IS_RAIL_FLAG_OFFSET] == 0 && GetVehicleCategory(veh) != 4) return;
+    if (*(BYTE**)(veh + VEH_CUR_BLD_OFFSET) != nullptr) return;
+
+    uintptr_t wpBegin = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
+    uintptr_t wpEnd   = *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET);
+    int wpCount = (wpEnd > wpBegin && IsPointerLikeX64(wpBegin)) ? (int)((wpEnd - wpBegin) / 12u) : 0;
+    int32_t wpIdx = *(int32_t*)(veh + VEH_WAYPOINT_INDEX_OFFSET);
+
+    if (wpCount > 0 && wpIdx >= wpCount && veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] != 0 &&
+        *(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) == -1 &&
+        *(int32_t*)(veh + VEH_DEPOT_SLOT_IDX_OFFSET) == -1) {
+        uintptr_t ordBegin = *(uintptr_t*)(veh + VEH_ORDERS_BEGIN_OFFSET);
+        uintptr_t ordEnd   = *(uintptr_t*)(veh + VEH_ORDERS_END_OFFSET);
+        if (ordEnd > ordBegin && (ordEnd - ordBegin) >= 240u) {
+            *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET) = wpBegin;
+            *(int32_t*)(veh + VEH_WAYPOINT_INDEX_OFFSET) = 0;
+            veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] = 0;
+            *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) = nullptr;
+            veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
+            return;
+        }
+    }
+
+    if (wpCount == 0 && *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) != nullptr &&
+        *(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) == -1 &&
+        *(int32_t*)(veh + VEH_DEPOT_SLOT_IDX_OFFSET) == -1) {
+        *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) = nullptr;
+        veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
+    }
+}
+
 static void SanitizeVehicleArrivalBeforeStep(BYTE* veh)
 {
     if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    SanitizeRailVehicleStuckState(veh);
     BYTE* lockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
     if (IsPointerLikeX64((uintptr_t)lockBld)) {
         SanitizeBuildingCorridorLock(lockBld);
@@ -1935,6 +1973,117 @@ void SimPatches_TestSanitizeVehicleArrival(void* vehicle)
     HookedVehicleArrivalStep(vehicle);
 }
 
+static const unsigned char kIsVehicleAtDepotOrStopExpect[18] = {
+    0x4D, 0x8B, 0xD0, 0x48, 0x85, 0xD2, 0x75, 0x03, 0x32, 0xC0,
+    0xC3, 0x48, 0x8B, 0x82, 0xB0, 0x05, 0x00, 0x00
+};
+static void* o_isVehicleAtDepotOrStop = nullptr;
+
+static unsigned char IsVehicleAtDepotOrStopInner(const BYTE* bld, const BYTE* veh, unsigned char a4)
+{
+    if (!IsPointerLikeX64((uintptr_t)bld)) return 0;
+    for (int depth = 0; depth < 16; ++depth) {
+        const BYTE* parent = *(const BYTE* const*)(bld + 0x5B0);
+        if (!parent) break;
+        if (!IsPointerLikeX64((uintptr_t)parent)) return 0;
+        bld = parent;
+    }
+    const BYTE* bldType = *(const BYTE* const*)(bld + 0x318);
+    if (!IsPointerLikeX64((uintptr_t)bldType)) return 0;
+
+    int32_t bldCat = *(const int32_t*)(bldType + 0x360);
+    if (!veh) {
+        if ((uint32_t)bldCat > 0x2Fu) return 0;
+        return ((0x84000000C000ULL >> (uint32_t)bldCat) & 1ULL) != 0 ? 1 : 0;
+    }
+    if (!IsPointerLikeX64((uintptr_t)veh)) return 0;
+    const BYTE* vehType = *(const BYTE* const*)(veh + 0x1708);
+    if (!vehType) {
+        if ((uint32_t)bldCat > 0x2Fu) return 0;
+        return ((0x84000000C000ULL >> (uint32_t)bldCat) & 1ULL) != 0 ? 1 : 0;
+    }
+    if (!IsPointerLikeX64((uintptr_t)vehType)) return 0;
+
+    int32_t vehCat = *(const int32_t*)(vehType + 0x294);
+    if (bldCat == 0x0E) {
+        int32_t bldSub = *(const int32_t*)(bldType + 0x364);
+        if (bldSub == 0x24) {
+            if (g_exeBase && g_exeBase[0x6BD8D0] != 0x00 && g_exeBase[0x6BD8D0] != 0xC3) {
+                typedef unsigned char (__fastcall* Sub24CheckFn)(const BYTE*, unsigned int);
+                return ((Sub24CheckFn)(g_exeBase + 0x6BD8D0))(veh, (unsigned int)a4);
+            }
+            return a4 ? 1 : 0;
+        }
+        if (bldSub == 0x1B) {
+            return (*(const uint8_t*)(vehType + 0x8680) != 0 && vehCat == 1) ? 1 : 0;
+        }
+        return (vehCat == 1) ? 1 : 0;
+    }
+    if (bldCat == 0x0F) {
+        return ((uint32_t)(vehCat - 3) <= 1u) ? 1 : 0;
+    }
+    if (vehCat == 6 && bldCat == 0x2A) return 1;
+    if ((vehCat == 8 || vehCat == 0x0A) && bldCat == 0x2F) return 1;
+    return 0;
+}
+
+static unsigned char __fastcall HookedIsVehicleAtDepotOrStop(const void* /*world*/, const BYTE* bld,
+                                                             const BYTE* veh, unsigned char a4)
+{
+    unsigned char res = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        res = IsVehicleAtDepotOrStopInner(bld, veh, a4);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        res = 0;
+    }
+    DiagLog_EndSafeSeh();
+    return res;
+}
+
+unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void* veh, unsigned char a4)
+{
+    return HookedIsVehicleAtDepotOrStop(nullptr, (const BYTE*)bld, (const BYTE*)veh, a4);
+}
+
+static const unsigned char kBuildVehWaypointsExpect[19] = {
+    0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+    0x41, 0x57, 0x48, 0x8D, 0xA8, 0xD8, 0xF2, 0xFF, 0xFF
+};
+typedef void (__fastcall* BuildVehicleWaypointsFn)(void* vehicle, unsigned char a2);
+static BuildVehicleWaypointsFn o_buildVehicleWaypoints = nullptr;
+
+static void SanitizeBuildVehicleWaypointsPre(BYTE* veh)
+{
+    if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    if (veh[VEH_IS_RAIL_FLAG_OFFSET] == 0 && GetVehicleCategory(veh) != 4) return;
+    if (veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0) return;
+    uintptr_t wpBegin = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
+    uintptr_t wpEnd   = *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET);
+    if (wpEnd <= wpBegin) {
+        veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
+    }
+}
+
+static void __fastcall HookedBuildVehicleWaypoints(void* vehicle, unsigned char a2)
+{
+    DiagLog_BeginSafeSeh();
+    __try {
+        SanitizeBuildVehicleWaypointsPre((BYTE*)vehicle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+
+    if (o_buildVehicleWaypoints) {
+        o_buildVehicleWaypoints(vehicle, a2);
+    }
+}
+
+void SimPatches_TestBuildVehicleWaypoints(void* vehicle, unsigned char a2)
+{
+    HookedBuildVehicleWaypoints(vehicle, a2);
+}
+
 bool SimPatches_Install()
 {
     bool late = InstallInlineHook(g_exeBase + LATE_RVA, (void*)&HookedLate, (void**)&o_late,
@@ -1945,6 +2094,12 @@ bool SimPatches_Install()
     InstallInlineHook(g_exeBase + RVA_VEH_ARRIVAL_STEP, (void*)&HookedVehicleArrivalStep,
                       (void**)&o_vehicleArrivalStep, kVehArrivalStepExpect,
                       sizeof(kVehArrivalStepExpect), "republicmp vehicle arrival step");
+    InstallInlineHook(g_exeBase + RVA_IS_VEHICLE_AT_DEPOT_OR_STOP, (void*)&HookedIsVehicleAtDepotOrStop,
+                      &o_isVehicleAtDepotOrStop, kIsVehicleAtDepotOrStopExpect,
+                      sizeof(kIsVehicleAtDepotOrStopExpect), "republicmp is_vehicle_at_depot");
+    InstallInlineHook(g_exeBase + RVA_VEH_BUILD_WAYPOINTS, (void*)&HookedBuildVehicleWaypoints,
+                      (void**)&o_buildVehicleWaypoints, kBuildVehWaypointsExpect,
+                      sizeof(kBuildVehWaypointsExpect), "republicmp build vehicle waypoints");
 
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&

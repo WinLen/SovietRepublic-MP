@@ -831,13 +831,24 @@ static LONG CALLBACK CrashHandler(PEXCEPTION_POINTERS ep)
     const char* what = ExceptionName(ep->ExceptionRecord->ExceptionCode);
     if (!what) return EXCEPTION_CONTINUE_SEARCH;
 
-    // Faults inside our own module are the memory scanner walking off the end of
-    // a region; they are caught by its __except and are not worth reporting.
+    // Faults inside our own module or inside a RepublicMP guarded SEH probe are
+    // caught by their __except handler and are not worth reporting.
     {
         HMODULE m = NULL;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                (LPCSTR)ep->ExceptionRecord->ExceptionAddress, &m) && m == g_self)
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        typedef int (*IsInSafeSehFn)(void);
+        static IsInSafeSehFn s_isInSafeSeh = NULL;
+        static HMODULE s_repMpMod = NULL;
+        HMODULE curRepMp = GetModuleHandleA("RepublicMP.dll");
+        if (curRepMp != s_repMpMod) {
+            s_repMpMod = curRepMp;
+            s_isInSafeSeh = curRepMp ? (IsInSafeSehFn)GetProcAddress(curRepMp, "DiagLog_IsInSafeSeh") : NULL;
+        }
+        if (s_isInSafeSeh && s_isInSafeSeh() != 0)
             return EXCEPTION_CONTINUE_SEARCH;
     }
 

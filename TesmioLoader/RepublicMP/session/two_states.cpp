@@ -1766,7 +1766,7 @@ static void EnsureEngineResearchInitialized(BYTE* world);
 
 static int ResolveBuildingOwnerFast(const BYTE* b)
 {
-    if (!b) return 1;
+    if (!b || !IsPointerLikeX64((uintptr_t)b)) return 1;
     int owner = 1;
     DiagLog_BeginSafeSeh();
     __try {
@@ -1864,17 +1864,21 @@ static int ResolveUnhousedCitizenOwner(const BYTE* cit)
 
 static int ResolveCitizenOwnerFast(const BYTE* cit)
 {
-    if (!cit) return 1;
+    if (!cit || !IsPointerLikeX64((uintptr_t)cit)) return 1;
     int owner = 1;
     DiagLog_BeginSafeSeh();
     __try {
         const BYTE* home = *(const BYTE* const*)(cit + CIT_HOME_BUILDING_OFFSET);
-        if (home) {
+        if (home && IsPointerLikeX64((uintptr_t)home)) {
             owner = ResolveBuildingOwnerFast(home);
         } else {
             const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
-            const BYTE* parentHome = parent ? *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET) : nullptr;
-            owner = parentHome ? ResolveBuildingOwnerFast(parentHome) : ResolveUnhousedCitizenOwner(cit);
+            const BYTE* parentHome = (parent && IsPointerLikeX64((uintptr_t)parent))
+                ? *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET)
+                : nullptr;
+            owner = (parentHome && IsPointerLikeX64((uintptr_t)parentHome))
+                ? ResolveBuildingOwnerFast(parentHome)
+                : ResolveUnhousedCitizenOwner(cit);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         owner = 1;
@@ -2292,16 +2296,17 @@ void TwoStates_CitizenEvalNeedsForTest(BYTE* world, BYTE* citizen, int healthCau
     o_citizenEvalNeeds = prev;
 }
 
-static const BYTE* ResolveCourtCaseCitizen(const BYTE* caseOrCit)
+static const BYTE* ResolveCourtCaseCitizen(const BYTE* caseObj)
 {
-    if (!caseOrCit) return nullptr;
+    if (!IsPointerLikeX64((uintptr_t)caseObj)) return nullptr;
     const BYTE* cit = nullptr;
     DiagLog_BeginSafeSeh();
     __try {
-        const BYTE* vecBegin = *(const BYTE* const*)(caseOrCit + 0x28);
-        if (vecBegin && IsPointerLikeX64((uintptr_t)vecBegin)) {
+        const BYTE* vecBegin = *(const BYTE* const*)(caseObj + 0x28);
+        const BYTE* vecEnd   = *(const BYTE* const*)(caseObj + 0x30);
+        if (IsPointerLikeX64((uintptr_t)vecBegin) && vecEnd > vecBegin) {
             const BYTE* firstCit = *(const BYTE* const*)vecBegin;
-            if (firstCit && IsPointerLikeX64((uintptr_t)firstCit)) {
+            if (IsPointerLikeX64((uintptr_t)firstCit)) {
                 cit = firstCit;
             }
         }
@@ -2309,7 +2314,27 @@ static const BYTE* ResolveCourtCaseCitizen(const BYTE* caseOrCit)
         cit = nullptr;
     }
     DiagLog_EndSafeSeh();
-    return cit ? cit : caseOrCit;
+    return cit;
+}
+
+static int ResolveCrimeCaseOwner(const BYTE* caseObj)
+{
+    if (!IsPointerLikeX64((uintptr_t)caseObj)) return 1;
+    const BYTE* crimeBld = nullptr;
+    if (SafeReadPod((const BYTE* const*)(caseObj + 0x08), &crimeBld) && IsPointerLikeX64((uintptr_t)crimeBld)) {
+        return ResolveBuildingOwnerFast(crimeBld);
+    }
+    const BYTE* policeOrCourtBld = nullptr;
+    if (SafeReadPod((const BYTE* const*)(caseObj + 0x10), &policeOrCourtBld) && IsPointerLikeX64((uintptr_t)policeOrCourtBld)) {
+        return ResolveBuildingOwnerFast(policeOrCourtBld);
+    }
+    const BYTE* cit = ResolveCourtCaseCitizen(caseObj);
+    return cit ? ResolveCitizenOwnerFast(cit) : 1;
+}
+
+int TwoStates_ResolveCrimeCaseOwnerForTest(const BYTE* caseObj)
+{
+    return ResolveCrimeCaseOwner(caseObj);
 }
 
 class CivicBuildingFilterScope {
@@ -2369,16 +2394,18 @@ static void __fastcall H_CitizenStudioEffect(BYTE* world, BYTE* studio, BYTE* ci
 
 static int ResolveExistingCitizenHomeOwner(const BYTE* cit)
 {
-    if (!cit) return 0;
+    if (!cit || !IsPointerLikeX64((uintptr_t)cit)) return 0;
     int owner = 0;
     DiagLog_BeginSafeSeh();
     __try {
         const BYTE* home = *(const BYTE* const*)(cit + CIT_HOME_BUILDING_OFFSET);
-        if (!home) {
+        if (!home || !IsPointerLikeX64((uintptr_t)home)) {
             const BYTE* parent = *(const BYTE* const*)(cit + CIT_PARENT_OFFSET);
-            if (parent) home = *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET);
+            home = (parent && IsPointerLikeX64((uintptr_t)parent))
+                ? *(const BYTE* const*)(parent + CIT_HOME_BUILDING_OFFSET)
+                : nullptr;
         }
-        if (home) {
+        if (home && IsPointerLikeX64((uintptr_t)home)) {
             owner = ResolveBuildingOwnerFast(home);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -2507,7 +2534,7 @@ void TwoStates_CitizenMoveToBldForTest(BYTE* world, BYTE* citizen, BYTE* targetB
 
 static bool __fastcall H_CourtAssign(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4)
 {
-    int citOwner = TwoStates_IsActive() ? ResolveCitizenOwnerFast(ResolveCourtCaseCitizen(caseObj)) : 0;
+    int citOwner = TwoStates_IsActive() ? ResolveCrimeCaseOwner(caseObj) : 0;
     CivicBuildingFilterScope scope(world, citOwner);
     return o_courtAssign ? o_courtAssign(world, caseObj, a3, a4) : false;
 }
@@ -2597,16 +2624,6 @@ static void __fastcall H_CitizenCommitCrime(BYTE* world, BYTE* citizen, int32_t 
 {
     CitizenEconScope scope(world, nullptr, citizen);
     if (o_citizenCommitCrime) o_citizenCommitCrime(world, citizen, severity, a4, a5, a6);
-}
-
-static int ResolveCrimeCaseOwner(const BYTE* caseObj)
-{
-    if (!caseObj) return 1;
-    const BYTE* crimeBld = nullptr;
-    if (SafeReadPod((const BYTE* const*)(caseObj + 0x08), &crimeBld) && IsPointerLikeX64((uintptr_t)crimeBld)) {
-        return ResolveBuildingOwnerFast(crimeBld);
-    }
-    return ResolveCitizenOwnerFast(ResolveCourtCaseCitizen(caseObj));
 }
 
 static void __fastcall H_CrimeExpireCase(BYTE* world, BYTE* caseObj, float a3,

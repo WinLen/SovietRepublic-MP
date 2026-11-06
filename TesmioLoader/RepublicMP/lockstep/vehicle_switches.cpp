@@ -156,30 +156,26 @@ static bool TextWord(int kind, unsigned offset)
 }
 
 // A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
-// their contents are cargo_settings.cpp's. The vehicle's internal vectors and
-// object pointers (+3a0..+3d0, +458..+4a0, +4c8..+4e8, +4f0..+500, +600..+608, +638..+658,
-// +680..+6b8, +738..+750, +1708..+1710, +1ad0..+1ad8) and dynamic simulation/render
-// fields (+770, +d24, +d60..+1140, +17e8..+17f0, +1a54..+1a5c, +1a7c..+1a84)
-// must never be overwritten as switches.
+// their contents are cargo_settings.cpp's. The vehicle's internal vectors,
+// object pointers, dispatch/work state (+4c8..+574, +5d8..+5f0), route/rail path
+// and 75-entry rail trail buffer (+680..+1140), and dynamic simulation/render
+// fields (+1708..+1768, +17e8..+17f0, +1950..+1a10, +1a54..+1a5c, +1a7c..+1a84, +1ad0..+1ad8)
+// must never be overwritten or reverted as UI switches.
 #define HALF_BYTES 0xC8
 static bool ListWord(int kind, unsigned offset)
 {
     if (kind == KIND_VEHICLE) {
         return (offset >= 0x3A0 && offset < 0x3D0) ||
                (offset >= 0x458 && offset < 0x4A0) ||
-               (offset >= 0x4C8 && offset < 0x4E8) ||
-               (offset >= 0x4F0 && offset < 0x500) ||
+               (offset >= 0x4C8 && offset < 0x574) ||
+               (offset >= 0x5D8 && offset < 0x5F0) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
-               (offset >= 0x680 && offset < 0x698) ||
-               (offset >= 0x6A0 && offset < 0x6B8) ||
-               (offset >= 0x738 && offset < 0x750) ||
-               (offset >= 0x770 && offset < 0x774) ||
-               (offset >= 0xD24 && offset < 0xD28) ||
-               (offset >= 0xD60 && offset < 0x1140) ||
+               (offset >= 0x680 && offset < 0x1140) ||
                (offset >= 0x1708 && offset < 0x1710) ||
                (offset >= 0x1720 && offset < 0x1768) ||
                (offset >= 0x17E8 && offset < 0x17F0) ||
+               (offset >= 0x1950 && offset < 0x1A10) ||
                (offset >= 0x1A54 && offset < 0x1A5C) ||
                (offset >= 0x1A7C && offset < 0x1A84) ||
                (offset >= 0x1AD0 && offset < 0x1AD8);

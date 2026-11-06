@@ -123,6 +123,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     bool okDeterminism = Determinism_Install();
     Logf("republicmp  determinism layer: %d%s", okDeterminism, okDeterminism ? "" : " - the determinism probe is unavailable");
     SyncCheck_Install();
+    SettingsSync_InstallHooks();
     Weather_Install();
     TwoStates_Install();
     ModSync_Init();

@@ -1755,12 +1755,47 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #ifndef BLD_VEHICLES_END_OFFSET
 #define BLD_VEHICLES_END_OFFSET              0x0C78u   // std::vector<VEHICLE*> end on workplace building
 #endif
+#ifndef RVA_IS_VEHICLE_AT_DEPOT_OR_STOP
+#define RVA_IS_VEHICLE_AT_DEPOT_OR_STOP      0x3BB640u // bool __fastcall(const void* world, const void* bld, const void* veh, uint8_t a4)
+#endif
+#ifndef RVA_VEH_FIND_PATH
+#define RVA_VEH_FIND_PATH                    0x680A20u // bool __fastcall(void* veh, uint8_t a2, int32_t slotIdx, uint8_t a4, uint8_t a5)
+#endif
+#ifndef RVA_VEH_BUILD_WAYPOINTS
+#define RVA_VEH_BUILD_WAYPOINTS              0x6831A0u // void __fastcall(void* veh, uint8_t a2)
+#endif
+#ifndef VEH_DEPOT_SLOT_IDX_OFFSET
+#define VEH_DEPOT_SLOT_IDX_OFFSET            0x0510u   // int32_t depot / construction slot index (-1 when none)
+#endif
+#ifndef VEH_IS_RAIL_FLAG_OFFSET
+#define VEH_IS_RAIL_FLAG_OFFSET              0x067Du   // uint8_t 1 for rail / track builder vehicles
+#endif
+#ifndef VEH_ORDERS_BEGIN_OFFSET
+#define VEH_ORDERS_BEGIN_OFFSET              0x0680u   // std::vector<VehicleOrder> begin on VEHICLE
+#endif
+#ifndef VEH_ORDERS_END_OFFSET
+#define VEH_ORDERS_END_OFFSET                0x0688u   // std::vector<VehicleOrder> end on VEHICLE
+#endif
+#ifndef VEH_ORDER_INDEX_OFFSET
+#define VEH_ORDER_INDEX_OFFSET               0x0698u   // int32_t active order index on VEHICLE
+#endif
+#ifndef VEH_REVERSE_NEEDED_FLAG_OFFSET
+#define VEH_REVERSE_NEEDED_FLAG_OFFSET       0x0D3Au   // uint8_t 1 when rail vehicle needs reversal/repath at end of waypoints
+#endif
+#ifndef BLD_CONSTR_SITE_PTR_OFFSET
+#define BLD_CONSTR_SITE_PTR_OFFSET           0x05D0u   // ConstructionSite* active construction site data on BUILDING
+#endif
 
 static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               BLD_VEHICLES_END_OFFSET == BLD_VEHICLES_BEGIN_OFFSET + 8u &&
               VEH_WORKPLACE_BLD_OFFSET == VEH_CUR_BLD_OFFSET + 8u &&
+              VEH_ORDERS_END_OFFSET == VEH_ORDERS_BEGIN_OFFSET + 8u &&
+              VEH_REVERSE_NEEDED_FLAG_OFFSET == VEH_BAY_ARRIVED_FLAG_OFFSET + 1u &&
               FN_COPY_DIST_OFFICE_RVA == 0x2B8B10u &&
               FN_COPY_WASTE_SETTINGS_RVA == 0x1DC5D0u &&
-              FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC7D0u,
-              "Carrier mechanism, workplace vehicle list, and building copy tool RVAs must match 1.1.1.9 layout");
+              FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC7D0u &&
+              RVA_IS_VEHICLE_AT_DEPOT_OR_STOP == 0x3BB640u &&
+              RVA_VEH_FIND_PATH == 0x680A20u &&
+              RVA_VEH_BUILD_WAYPOINTS == 0x6831A0u,
+              "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, and building copy tool RVAs must match 1.1.1.9 layout");
 

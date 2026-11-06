@@ -1062,6 +1062,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *lmbJustPressed = 1;
             wrapper(thisPtr, seg.typeId, (unsigned int)seg.variant);
             *lmbJustPressed = 0;
+            EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+            EnsureDragNode(manager, MGR_END_NODE_OFFSET);
 
             float start[3] = { seg.startNode[0], seg.startNode[1], seg.startNode[2] };
             float startDir[3] = {
@@ -1085,6 +1087,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                     *(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) = 1;
                 }
             }
+            EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+            EnsureDragNode(manager, MGR_END_NODE_OFFSET);
             // Keep snapModeStart/End (+0x74A/+0x74B) zero while fcaf0 runs:
             // 0x4FCAF0 (0x140514FB7..0x140515186) inserts startNode/endNode into manager+0x410
             // whenever +0x74A/+0x74B == 1 or 3, and seg.points captured at 0x518A80 entry
@@ -1138,12 +1142,16 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.endNode[0];
             *(float*)(thisPtr + CURSOR_Y_OFFSET) = seg.endNode[1];
             *(float*)(thisPtr + CURSOR_Z_OFFSET) = seg.endNode[2];
+            EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+            EnsureDragNode(manager, MGR_END_NODE_OFFSET);
             *lmbHeld = 1;
             ((Fcaf0Fn)((uintptr_t)g_exe + FCAF0_RVA))(manager, end, seg.typeId, (unsigned int)seg.variant,
                                                       0, 0, 0, (__int64)&route, 0, 0);
             // Explicitly assign seg.points (route) to manager+0x408 after fcaf0 in case fcaf0
             // took an early exit on its internal Bézier curve [rbp+0x170] or mutated +0x410.
             ((VecAssignFn)((uintptr_t)g_exe + VEC_ASSIGN_RVA))((__int64*)(manager + MGR_ROUTE_BEGIN_OFFSET), &route);
+            EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+            EnsureDragNode(manager, MGR_END_NODE_OFFSET);
 
             // Restore startNode and endNode positions after fcaf0:
             // - fcaf0 can overwrite startNode->pos (0x140517BB1) and endNode->pos (0x1404FF420,
@@ -1405,8 +1413,12 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         float splitEnd[3] = { b[0], b[1], b[2] };
 
         float noDirection[3] = { 0.0f, 0.0f, 0.0f };
+        EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+        EnsureDragNode(manager, MGR_END_NODE_OFFSET);
         ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, splitStart, 0, 1,
             Fc040Param5ForCategory(category, msg.newType), 0, noDirection);
+        EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+        EnsureDragNode(manager, MGR_END_NODE_OFFSET);
         *(long long*)(manager + MGR_HOVER_SEGMENT_COPY_OFFSET) = 0;
         if (*(unsigned char*)(manager + MGR_START_ATTACHED_OFFSET) == 0)
             SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), splitStart);
@@ -1639,6 +1651,8 @@ static bool AdoptSenderRange(__int64 manager, const RoadSyncDemolishMsg& m, int*
     *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = seg;
     *(int*)(manager + MGR_UPG_RANGE_START_OFFSET) = rs;
     *(int*)(manager + MGR_UPG_RANGE_END_OFFSET) = re;
+    EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+    EnsureDragNode(manager, MGR_END_NODE_OFFSET);
     DetachDragNode(manager, MGR_START_NODE_OFFSET, MGR_START_ATTACHED_OFFSET, splitStart);
     DetachDragNode(manager, MGR_END_NODE_OFFSET, MGR_END_ATTACHED_OFFSET, splitEnd);
     SetNodePos(*(__int64*)(manager + MGR_START_NODE_OFFSET), splitStart);
@@ -1791,6 +1805,8 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved)
                 *lmbHeld = 0;
                 *lmbJustPressed = 0;
                 cursor[0] = m.cursor[0]; cursor[1] = m.cursor[1]; cursor[2] = m.cursor[2];
+                EnsureDragNode(manager, MGR_START_NODE_OFFSET);
+                EnsureDragNode(manager, MGR_END_NODE_OFFSET);
                 reset(manager, manager + MANAGER_RESET_STATE_OFFSET);
                 float c[3] = { m.cursor[0], m.cursor[1], m.cursor[2] };
                 fcaf0(manager, c, demType, 0, 0, 0, 0, 0, 0, 0);

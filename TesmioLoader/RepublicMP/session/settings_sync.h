@@ -49,6 +49,8 @@ struct SettingWire {
 #define SETTINGS_FIELD_BROADCAST   1003
 
 void SettingsSync_Bind(const TsmHost* host);
+bool SettingsSync_InstallHooks();
+void SettingsSync_TestSiteUiClick(BYTE* site, bool isStop, int stopVal, bool captureLocal);
 
 // Per-frame (game thread, Present hook, after BuildSync_Tick): scans for local
 // changes and applies received ones whose building exists.

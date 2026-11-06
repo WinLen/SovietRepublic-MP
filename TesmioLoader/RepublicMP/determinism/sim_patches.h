@@ -88,4 +88,6 @@ void SimPatches_TestC3dChangeValuesTo(void* material, const float color[4]);
 void SimPatches_TestC3dRestoreOriginalValues(void* material);
 
 void SimPatches_TestSanitizeVehicleArrival(void* vehicle);
+void SimPatches_TestBuildVehicleWaypoints(void* vehicle, unsigned char a2 = 0);
+unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void* veh, unsigned char a4 = 0);
 bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned __int64 storageBegin, unsigned __int64 storageEnd, float cameraZDist);

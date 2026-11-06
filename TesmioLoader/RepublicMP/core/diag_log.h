@@ -25,6 +25,7 @@ void DiagLog_FrameTick(void);
 void DiagLog_BeginSafeSeh(void);
 void DiagLog_EndSafeSeh(void);
 int  DiagLog_GetSafeSehDepthForTest(void);
+extern "C" __declspec(dllexport) int DiagLog_IsInSafeSeh(void);
 
 // Remote client log upload to Host (<GameDir>\RemoteLogs\<Reason>_<YYYYMMDD_HHMMSS>\)
 #include <vector>

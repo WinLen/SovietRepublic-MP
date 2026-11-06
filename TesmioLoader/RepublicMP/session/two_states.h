@@ -246,6 +246,7 @@ void    TwoStates_CitizenStudioEffectForTest(BYTE* world, BYTE* studio, BYTE* ci
 void    TwoStates_CalcCustomsTouristSpawnForTest(BYTE* world, BYTE* customsBld, float* outAvgRating, int32_t* outSpawnCount);
 void    TwoStates_BldCustomsTouristStepForTest(BYTE* world, BYTE* customsBld);
 int     TwoStates_ResolveCitizenOwnerForTest(const BYTE* citizen);
+int     TwoStates_ResolveCrimeCaseOwnerForTest(const BYTE* caseObj);
 bool    TwoStates_CheckBuildingCountLimitForTest(const BYTE* world, const BYTE* limitTableVec,
                                                  const BYTE* btype, int stateOverride = 0);
 bool    TwoStates_GetBuildingCountLimitEntryForTest(const BYTE* world, const BYTE* limitTableVec,

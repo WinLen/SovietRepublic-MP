@@ -581,7 +581,7 @@ static bool Test_StateHash()
     *(double*)(world + WORLD_RUB_OFFSET)     = 1500000.0;
 
     // Construct a mock building with 1 storage slot containing 1 resource entry {"steel", 42.5f}
-    std::vector<BYTE> bld(0x1000, 0);
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> slot(BLD_STORAGE_SLOT_SIZE, 0);
     std::vector<BYTE> entry(0x10, 0);
     const char* steelName = "steel";
@@ -765,7 +765,7 @@ static bool Test_TwoStates_ZonesAndEconomy()
     TEST_CHECK(TwoStates_CanBuildAt( 600.0f, 0.0f, 2));
 
     // Command execution wallet swapping + automatic registration of newly placed buildings
-    std::vector<BYTE> newBld(0x800, 0);
+    std::vector<BYTE> newBld(BUILDING_STRUCT_BYTES, 0);
     *(int*)newBld.data() = 42;
     *(float*)(newBld.data() + OBJ_POS_OFFSET) = 50.0f; // Placed in shared border zone by State 2!
     std::vector<BYTE*> bldVec;
@@ -792,7 +792,7 @@ static bool Test_TwoStates_ZonesAndEconomy()
     TEST_CHECK_NEAR(TwoStates_ComputeStepWeightState1(1, 3), 0.25, 1e-6);
     TEST_CHECK_NEAR(TwoStates_ComputeStepWeightState1(0, 0), 0.50, 1e-6);
 
-    std::vector<BYTE> b1(0x800, 0), b2(0x800, 0), b3(0x800, 0);
+    std::vector<BYTE> b1(BUILDING_STRUCT_BYTES, 0), b2(BUILDING_STRUCT_BYTES, 0), b3(BUILDING_STRUCT_BYTES, 0);
     *(int*)b1.data() = 101; *(float*)(b1.data() + OBJ_POS_OFFSET) = -1000.0f; *(float*)(b1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
     *(int*)b2.data() = 102; *(float*)(b2.data() + OBJ_POS_OFFSET) =  1000.0f; *(float*)(b2.data() + BLD_PROGRESS_OFFSET) = 1.0f;
     *(int*)b3.data() = 103; *(float*)(b3.data() + OBJ_POS_OFFSET) =  1500.0f; *(float*)(b3.data() + BLD_PROGRESS_OFFSET) = 1.0f;
@@ -1853,8 +1853,8 @@ static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     TwoStates_OnSessionEnded();
 
-    std::vector<BYTE> officeWest(0x1000, 0), officeEast(0x1000, 0);
-    std::vector<BYTE> siteWest(0x1000, 0), siteEast(0x1000, 0);
+    std::vector<BYTE> officeWest(BUILDING_STRUCT_BYTES, 0), officeEast(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> siteWest(BUILDING_STRUCT_BYTES, 0), siteEast(BUILDING_STRUCT_BYTES, 0);
     *(int*)officeWest.data() = 601;
     *(float*)(officeWest.data() + OBJ_POS_OFFSET) = -900.0f;
     *(int*)officeEast.data() = 602;
@@ -3010,8 +3010,8 @@ static bool TestLoans_DailyStepAndBankruptcyIsolation()
     TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
 
     // Asymmetric building count: 50 buildings in West (State 1) vs 1 building in East (State 2)
-    std::vector<std::vector<BYTE>> westBlds(50, std::vector<BYTE>(0x800, 0));
-    std::vector<BYTE> eastBld(0x800, 0);
+    std::vector<std::vector<BYTE>> westBlds(50, std::vector<BYTE>(BUILDING_STRUCT_BYTES, 0));
+    std::vector<BYTE> eastBld(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE*> bldVec;
     for (int i = 0; i < 50; ++i) {
         *(int*)westBlds[(size_t)i].data() = 100 + i;
@@ -10388,6 +10388,110 @@ static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     return true;
 }
 
+static bool Test_CrashFixesAndRcoTrackBuilder()
+{
+    ResetMockWorldMemory();
+
+    // 1. DiagLog_IsInSafeSeh exported state for TesmioLoader CrashHandler
+    TEST_CHECK(DiagLog_IsInSafeSeh() == 0);
+    DiagLog_BeginSafeSeh();
+    TEST_CHECK(DiagLog_IsInSafeSeh() == 1);
+    DiagLog_EndSafeSeh();
+    TEST_CHECK(DiagLog_IsInSafeSeh() == 0);
+
+    // 2. Crime / Court case owner resolution with empty suspect vector (Crash #2 at 0x182D41)
+    double initRub[2] = { 100000.0, 100000.0 };
+    double initUsd[2] = { 50000.0, 50000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 0.0f, false, initRub, initUsd);
+
+    std::vector<BYTE> eastCrimeBld(BUILDING_STRUCT_BYTES, 0);
+    *(int32_t*)eastCrimeBld.data() = 801;
+    *(float*)(eastCrimeBld.data() + OBJ_POS_OFFSET) = 1200.0f; // East SSR (State 2)
+
+    std::vector<BYTE> crimeCase(0x80, 0);
+    *(uint64_t*)(crimeCase.data() + 0x00) = 0xFFFFFFFF00000016ULL; // non-pointer case header
+    *(BYTE**)(crimeCase.data() + 0x08) = eastCrimeBld.data();
+    // Suspect vector (+0x28..+0x30) is empty -> must NOT cast crimeCase to CITIZEN*!
+    TEST_CHECK(TwoStates_ResolveCrimeCaseOwnerForTest(crimeCase.data()) == 2);
+
+    // Invalid non-pointer at +0x08 and +0x10 must safely return default fallback (1) without faulting
+    *(uint64_t*)(crimeCase.data() + 0x08) = 0x0000000000000352ULL;
+    *(uint64_t*)(crimeCase.data() + 0x10) = 0x0000000000000016ULL;
+    TEST_CHECK(TwoStates_ResolveCrimeCaseOwnerForTest(crimeCase.data()) == 1);
+    TwoStates_OnSessionEnded();
+
+    // 3. IsVehicleAtDepotOrStop (0x3BB640) corrupted parentBld guard (Crash #4 at 0x3BB65C)
+    std::vector<BYTE> bldType(0x400, 0);
+    *(int32_t*)(bldType.data() + 0x360) = 0x0F; // Rail depot / station category
+    std::vector<BYTE> vehType(0x8700, 0);
+    *(int32_t*)(vehType.data() + 0x294) = 4;    // Track builder / rail vehicle category
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(bld.data() + 0x318) = bldType.data();
+    std::vector<BYTE> veh(0x1AD8, 0);
+    *(BYTE**)(veh.data() + 0x1708) = vehType.data();
+
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 1);
+    // Corrupt parentBld (+0x5B0) to 0x3E7 (999) -> must return 0 safely without AV at 0x3E7 + 0x318 = 0x705
+    *(uint64_t*)(bld.data() + 0x5B0) = 0x3E7ULL;
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 0);
+    *(uint64_t*)(bld.data() + 0x5B0) = 0ULL;
+
+    // 4. Rail Construction Office (RCO) Track Builder corridor lock & stuck state recovery
+    std::vector<BYTE> railSiteBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> constrSiteData(0x200, 0);
+    *(BYTE**)(railSiteBld.data() + BLD_CONSTR_SITE_PTR_OFFSET) = constrSiteData.data();
+    *(BYTE**)(railSiteBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = veh.data();
+
+    veh[VEH_IS_RAIL_FLAG_OFFSET] = 1;
+    *(BYTE**)(veh.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = railSiteBld.data();
+    *(int32_t*)(veh.data() + VEH_BAY_SLOT_IDX_OFFSET) = -10;
+    *(int32_t*)(veh.data() + VEH_DEPOT_SLOT_IDX_OFFSET) = -1;
+    *(float*)(veh.data() + VEH_WAIT_TIMER_OFFSET) = 5.0f;
+    *(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) = 6;
+
+    // Corridor lock on rail construction site must NOT be stripped by SanitizeVehicleArrivalBeforeStep
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(BYTE**)(railSiteBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == veh.data());
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == railSiteBld.data());
+
+    // BuildVehicleWaypoints (0x6831A0) must clear 0xD39 when waypoints are empty on a rail vehicle
+    veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
+    *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = 0;
+    *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) = 0;
+    SimPatches_TestBuildVehicleWaypoints(veh.data(), 0);
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+
+    // Stuck Track Builder with empty waypoints and non-null targetBld (+0x528) outside building
+    *(BYTE**)(veh.data() + VEH_CUR_BLD_OFFSET) = nullptr;
+    *(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) = bld.data();
+    *(int32_t*)(veh.data() + VEH_BAY_SLOT_IDX_OFFSET) = -1;
+    *(int32_t*)(veh.data() + VEH_DEPOT_SLOT_IDX_OFFSET) = -1;
+    veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == nullptr);
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 1);
+
+    // Stuck Track Builder at end of waypoints with pending reversal (0xD3A = 1) and 2 orders
+    std::vector<float> dummyWp(6, 100.0f); // 2 waypoints (24 bytes)
+    std::vector<BYTE> dummyOrders(240, 0); // 2 orders (2 * 120 bytes)
+    *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = (uintptr_t)dummyWp.data();
+    *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) = (uintptr_t)(dummyWp.data() + 6);
+    *(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) = 2;
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_BEGIN_OFFSET) = (uintptr_t)dummyOrders.data();
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_END_OFFSET) = (uintptr_t)(dummyOrders.data() + dummyOrders.size());
+    *(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) = bld.data();
+    veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] = 1;
+    veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) == (uintptr_t)dummyWp.data());
+    TEST_CHECK(*(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) == 0);
+    TEST_CHECK(veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] == 0);
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == nullptr);
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 1);
+
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
@@ -10446,6 +10550,7 @@ int main()
         { "SettingsSync_MediaPrisonOrphanageAlerts (R2/R3 Broadcast, Upbringing, Alerts, Clamping)", &Test_SettingsSync_MediaPrisonOrphanageAlerts },
         { "Stress_Gen6_Challenger1 (FloatFuzzing, MalformedPackets, CheckboxBoundaries, StudioResilience)", &Test_Stress_Gen6_Challenger1 },
         { "JoinHubDistOfficeCarrierAndStorageVisuals (JoinHubAll, DistLinks, CarrierRecovery, StorageVis)", &Test_JoinHubDistOfficeCarrierAndStorageVisuals },
+        { "CrashFixesAndRcoTrackBuilder (SafeSeh, CourtCase, DepotStopGuard, RcoTrackBuilder)", &Test_CrashFixesAndRcoTrackBuilder },
     };
 
     for (const auto& tc : kTests) {

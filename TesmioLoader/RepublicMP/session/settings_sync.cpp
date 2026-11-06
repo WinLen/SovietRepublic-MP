@@ -3,6 +3,7 @@
 #include "settings_sync.h"
 #include "two_states.h"
 #include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
 #include "../core/diag_log.h"
 #include "../world_sync/citizens/citizen_destinations.h"
 #include "../world_sync/buildings/build_sync.h"
@@ -647,9 +648,79 @@ static void Scan(bool sendChanges)
 
 #define SET_PAY_RVA 0x160550 // FUN_140160550(world, building, rubles, dollars)
 #define STOP_RVA 0x160570    // FUN_140160570(world, building, 1)
+#define STOP_BODY_RVA 0x160579 // non-RIP-relative body after test rdx,rdx; je
 #define RESUME_RVA 0x161440  // FUN_140161440(world, building)
 #define BLD_PAY_OFFSET 0x608
 #define BLD_STOPPED_OFFSET 0x879
+
+typedef void (__fastcall* SiteStopFn)(__int64 world, BYTE* site, int stop);
+typedef void (__fastcall* SiteResumeFn)(__int64 world, BYTE* site);
+static SiteStopFn g_origSiteStop = nullptr;
+static SiteResumeFn g_origSiteResume = nullptr;
+static volatile LONG g_inApplyConstruction = 0;
+
+static const unsigned char kSiteStopBodyExpect[14] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55
+};
+static const unsigned char kSiteResumeExpect[14] = {
+    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56
+};
+
+static void __fastcall H_SiteStop(__int64 world, BYTE* site, int stop)
+{
+    if (!IsPointerLikeX64((uintptr_t)site)) return;
+    if (g_inApplyConstruction == 0 && Commands_TakeLocal()) {
+        unsigned char v = (stop != 0) ? 1u : 0u;
+        SafeWritePod(site + BLD_STOPPED_OFFSET, v);
+        return;
+    }
+    if (g_origSiteStop) {
+        g_origSiteStop(world, site, stop);
+    }
+}
+
+static void __fastcall H_SiteResume(__int64 world, BYTE* site)
+{
+    if (!IsPointerLikeX64((uintptr_t)site)) return;
+    if (g_inApplyConstruction == 0 && Commands_TakeLocal()) {
+        unsigned char cur = 0;
+        if (SafeReadPod(site + BLD_STOPPED_OFFSET, &cur) && cur != 0) {
+            unsigned char zero = 0;
+            SafeWritePod(site + BLD_STOPPED_OFFSET, zero);
+        }
+        return;
+    }
+    if (g_origSiteResume) {
+        g_origSiteResume(world, site);
+    }
+}
+
+bool SettingsSync_InstallHooks()
+{
+    if (!g_exeBase) return false;
+    bool okStop = InstallInlineHook(g_exeBase + STOP_BODY_RVA, (void*)&H_SiteStop, (void**)&g_origSiteStop,
+                                    kSiteStopBodyExpect, sizeof(kSiteStopBodyExpect), "republicmp site_stop");
+    bool okResume = InstallInlineHook(g_exeBase + RESUME_RVA, (void*)&H_SiteResume, (void**)&g_origSiteResume,
+                                      kSiteResumeExpect, sizeof(kSiteResumeExpect), "republicmp site_resume");
+    return okStop && okResume;
+}
+
+void SettingsSync_TestSiteUiClick(BYTE* site, bool isStop, int stopVal, bool captureLocal)
+{
+    if (!IsPointerLikeX64((uintptr_t)site)) return;
+    if (captureLocal) {
+        if (isStop) {
+            unsigned char v = (stopVal != 0) ? 1u : 0u;
+            SafeWritePod(site + BLD_STOPPED_OFFSET, v);
+        } else {
+            unsigned char cur = 0;
+            if (SafeReadPod(site + BLD_STOPPED_OFFSET, &cur) && cur != 0) {
+                unsigned char zero = 0;
+                SafeWritePod(site + BLD_STOPPED_OFFSET, zero);
+            }
+        }
+    }
+}
 
 struct LsBuilding {
     BYTE* b;
@@ -873,6 +944,8 @@ typedef void (*StopFn)(__int64 world, __int64 bld, int stop);
 static bool ApplyConstruction(BYTE* b, int field, unsigned long long value)
 {
     __int64 world = (__int64)(g_exeBase + WORLD_RVA);
+    InterlockedIncrement(&g_inApplyConstruction);
+    bool ok = false;
     __try {
         if (field == SETTINGS_FIELD_PAY)
             ((SetPayFn)(g_exeBase + SET_PAY_RVA))(world, (__int64)b, (int)(value & 0xFF), (int)((value >> 8) & 0xFF));
@@ -880,10 +953,12 @@ static bool ApplyConstruction(BYTE* b, int field, unsigned long long value)
             ((StopFn)(g_exeBase + STOP_RVA))(world, (__int64)b, 1);
         else
             ((BuildingFn)(g_exeBase + RESUME_RVA))(world, (__int64)b);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    InterlockedDecrement(&g_inApplyConstruction);
+    return ok;
 }
 
 // Applies one received setting; false if its building is not there (yet).

@@ -51,6 +51,11 @@ int DiagLog_GetSafeSehDepthForTest(void)
     return t_safeSehDepth;
 }
 
+extern "C" __declspec(dllexport) int DiagLog_IsInSafeSeh(void)
+{
+    return t_safeSehDepth > 0 ? 1 : 0;
+}
+
 static void EnsureDiagLock()
 {
     TsmEnsureCriticalSection(&g_diagLockOnce, &g_diagLock);
