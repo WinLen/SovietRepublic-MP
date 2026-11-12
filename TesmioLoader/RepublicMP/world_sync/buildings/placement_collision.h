@@ -23,7 +23,7 @@
 
 #include "tesmio_plugin.h"
 
-#define HOOK_COLLISION_QUERY_RVA 0x569d70
+#define HOOK_COLLISION_QUERY_RVA 0x569d00
 
 void PlacementCollision_Bind(const TsmHost* host);
 bool InstallPlacementCollisionHook();

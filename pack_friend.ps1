@@ -78,7 +78,7 @@ $batLines = @(
     'if exist "%HERE%\dinput8.dll" copy /y "%HERE%\dinput8.dll" "!GAME_DIR!dinput8.dll" >nul 2>&1',
     'if exist "%HERE%\media_soviet\editor\mp_icon_coop.png" copy /y "%HERE%\media_soviet\editor\mp_icon_*.png" "!GAME_DIR!media_soviet\editor\" >nul 2>&1',
     'echo [OK] dinput8.dll installed into !GAME_DIR! - future launches work directly via Play in Steam!',
-    'start "" "!GAME_EXE!"'
+    'start "" /D "!GAME_DIR!" "!GAME_EXE!"'
 )
 [System.IO.File]::WriteAllText((Join-Path $stage 'START-COOP.bat'), ($batLines -join "`r`n") + "`r`n", [System.Text.Encoding]::ASCII)
 

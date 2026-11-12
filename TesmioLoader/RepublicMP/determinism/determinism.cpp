@@ -24,18 +24,18 @@
 #pragma intrinsic(_ReturnAddress)
 
 #define GAME_TIMER_RVA 0x9D4EE0
-#define FAST_FACTOR_RVA 0x909D64
+#define FAST_FACTOR_RVA 0x909D6C
 // The main loop's other speed-2 factors (105d66 / 105d9f): Hyper (left Ctrl +
 // Numpad1, or turbo) and Plaid (left Ctrl + Numpad2, or the fast button held).
-#define HYPER_FACTOR_RVA 0x909C14   // 0.05
-#define PLAID_FACTOR_RVA 0x909B90   // 0.01
+#define HYPER_FACTOR_RVA 0x909C1C   // 0.05
+#define PLAID_FACTOR_RVA 0x909B98   // 0.01
 #define KEYS_RVA 0xA54B90           // C3D_INPUT key bytes
 #define KEY_LCTRL 0x1D
 #define KEY_NUMPAD1 0x4F
 #define KEY_NUMPAD2 0x50
 #define FAST_HELD_RVA (0x9D4F10 + 0x5A2) // the speed panel's fast button held
-#define SIM_STEP_RVA 0x30C790   // FUN_14030c790(world): one simulation step
-#define LOAD_WORLD_RVA 0x430FC0 // FUN_140430fc0(): loads the save named in the load globals
+#define SIM_STEP_RVA 0x30C710   // FUN_14030c790(world): one simulation step
+#define LOAD_WORLD_RVA 0x430F50 // FUN_140430fc0(): loads the save named in the load globals
 
 #define DLL_C3D "C3DDLL64.dll"
 #define DLL_CRT_UTILITY "api-ms-win-crt-utility-l1-1-0.dll"
@@ -93,9 +93,9 @@ static void LedgerDraw(unsigned site, int value, bool worker);
 // shift nothing else, and the probe leaves them out of its counts.
 // (by SoylentGreed)
 static const unsigned kPresentationSites[] = {
-    0x6A3B75, 0x6A4B83, 0x6A5164, 0x6AAC3B, // vehicle sounds
-    0x699AB7, 0x6A7686,                     // electric wire sparks
-    0x66DA63, 0x66FCE0, 0x6701A0,           // vehicle animation starts
+    0x6A3D15, 0x6A4D23, 0x6A5304, 0x6AADDB, // vehicle sounds
+    0x699C57, 0x6A7826,                     // electric wire sparks
+    0x66DB03, 0x66FD80, 0x670240,           // vehicle animation starts
     0x13D748, 0x13D7DE,                     // ambient sounds
 };
 static bool IsPresentationSite(unsigned site)
@@ -256,7 +256,7 @@ static DWORD ExeFunctionRva(void* addr)
 // update this step or a third of them with a tripled step; FUN_140699420
 // also reads a key. Under the layer both see "not pressed".
 #define KEY_SIM_FUNC1_RVA 0x139A70
-#define KEY_SIM_FUNC2_RVA 0x699420
+#define KEY_SIM_FUNC2_RVA 0x6995C0
 
 typedef bool (*GetKeyDownFn)(void* input, int key);
 static GetKeyDownFn o_getKeyDown;

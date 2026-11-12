@@ -25,14 +25,14 @@
 #include <string>
 
 // SOVIET64.exe native menu constants (verified via disassembly of 0x140261400 & 0x14028AF60)
-#define MENU_CALL_SITE_RVA      0x261897
-#define MENU_BUILD_FN_RVA       0x28AF60
+#define MENU_CALL_SITE_RVA      0x261817
+#define MENU_BUILD_FN_RVA       0x28AEE0
 
 // SOVIET64.exe in-game Left Sidebar 'system' (Hammer & Sickle) tab constants
 // (verified via disassembly of 0x14031E800, 0x140337450, 0x14021CC20)
-#define SYSTAB_CALL_SITE_RVA    0x31EAF8
-#define SYSTAB_BUILD_FN_RVA     0x337450
-#define SYSTAB_ROOT_TITLE_RVA   0x337D7B  // 6-byte call [0x14086C880] drawing "Меню параметров" when C65C < 0
+#define SYSTAB_CALL_SITE_RVA    0x31EA78
+#define SYSTAB_BUILD_FN_RVA     0x3373D0
+#define SYSTAB_ROOT_TITLE_RVA   0x337CFB  // 6-byte call [0x14086C880] drawing "Меню параметров" when C65C < 0
 #define IMPORT_CREATE_TEX_RVA   0x86C4C0
 #define IMPORT_DRAW_BOX_RVA     0x86C858
 #define IMPORT_PANEL_DRAW_RVA   0x86C860

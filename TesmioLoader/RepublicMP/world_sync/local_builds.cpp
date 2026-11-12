@@ -985,7 +985,7 @@ void HookedRoadCommit(__int64 manager,
         return;
     }
     uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
-    bool fromToolWrapper = (retRva >= 0x3AC000 && retRva < 0x3D8000);
+    bool fromToolWrapper = (retRva >= 0x3ABF40 && retRva < 0x3D7F40);
     if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
         !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
         TakeCommitAsCommand(manager, category))

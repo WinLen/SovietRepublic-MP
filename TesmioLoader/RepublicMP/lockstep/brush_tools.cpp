@@ -36,7 +36,7 @@ static const unsigned kMenus[3] = { 0xFBC, 0xFBE, 0xFC3 };
 
 #define KINDS 4
 #define TREE_KIND 3
-static const unsigned kRoutines[KINDS] = { 0x3A8A70, 0x3ADF80, 0x3CCD70, 0x2F94C0 };
+static const unsigned kRoutines[KINDS] = { 0x3A89B0, 0x3ADEC0, 0x3CCCB0, 0x2F9440 };
 static const unsigned char kEntries[KINDS][16] = {
     { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xd8 },
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x50, 0x80, 0xb9, 0xbc, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
@@ -49,14 +49,14 @@ static const char* const kKindText[KINDS] = { "terrain", "tree demolition", "top
 struct InputSite {
     unsigned site, getter;
 };
-static const InputSite kInputSites[3] = { { 0x3AA850, 0 }, { 0x3AAA58, 1 }, { 0x3AAAA9, 1 } };
+static const InputSite kInputSites[3] = { { 0x3AA790, 0 }, { 0x3AA998, 1 }, { 0x3AA9E9, 1 } };
 static const unsigned kInputSlots[2] = { 0x86C8B0, 0x86C8B8 };
 
 // 3a8a70's, 2bade0's and 4fcaf0's construction ledger rows (call 2fdb00, 5 bytes): the stroke's
 // cost in dollars (world +11330) and in rubles (+11360), written when it pays.
-#define LEDGER_RVA 0x2FDB00
-#define RESOURCE_BY_NAME_RVA 0x2AA830 // (world, name) -> resource definition
-static const unsigned kLedgerCalls[6] = { 0x3AABCD, 0x3AACE3, 0x2CB854, 0x2CB942, 0x517244, 0x517341 };
+#define LEDGER_RVA 0x2FDA80
+#define RESOURCE_BY_NAME_RVA 0x2AA7B0 // (world, name) -> resource definition
+static const unsigned kLedgerCalls[6] = { 0x3AAB0D, 0x3AAC23, 0x2CB7D4, 0x2CB8C2, 0x5171D4, 0x5172D1 };
 
 #pragma pack(push, 1)
 struct BrushState {
@@ -189,10 +189,10 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     return true;
 }
 
-#define CLEAR_TREES_RVA 0x3AE120
-#define PAINT_GROUND_RVA 0x40EAA0
-#define DEMOLISH_TREES_SITE_RVA 0x3ADEB6
-#define DEMOLISH_PAINT_SITE_RVA 0x3ADF12
+#define CLEAR_TREES_RVA 0x3AE060
+#define PAINT_GROUND_RVA 0x40E9E0
+#define DEMOLISH_TREES_SITE_RVA 0x3ADDF6
+#define DEMOLISH_PAINT_SITE_RVA 0x3ADE52
 #define KIND_DEMOLISH_GROUND 4
 
 typedef void (*ClearTreesFn)(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5);

@@ -37,11 +37,11 @@ bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName
 // Engine addresses (RVAs into SOVIET64.exe) and object offsets
 // ---------------------------------------------------------------------------
 
-#define FC040_RVA 0x4FC040                // drag start
-#define FCAF0_RVA 0x4FCAF0                // drag tick
-#define COMMIT_RVA 0x518A80               // commit
-#define VEC_ASSIGN_RVA 0x21D2B0           // std::vector<24-byte record>::operator=
-#define MANAGER_RESET_RVA 0x542A30        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
+#define FC040_RVA 0x4FBFD0                // drag start
+#define FCAF0_RVA 0x4FCA80                // drag tick
+#define COMMIT_RVA 0x518A10               // commit
+#define VEC_ASSIGN_RVA 0x21D230           // std::vector<24-byte record>::operator=
+#define MANAGER_RESET_RVA 0x5429C0        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
 #define ROAD_DEMOLISH_TYPE 0x65           // fcaf0 type argument of the demolish tool
 
 #define LMB_HELD_RVA 0xA54E90             // byte: left mouse button held
@@ -167,8 +167,8 @@ static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
 };
 
 static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
-    0x3D00F0, 0x3B0E60, 0x3B12B0, 0x3B4230, 0x3D4730, 0x3D68B0, 0x3B3820,
-    0x3B8780, 0x3BAED0, 0x3AEC30, 0x3CBFA0, 0x3C9130, 0x3D6E70, 0x3CF6F0,
+    0x3D0030, 0x3B0DA0, 0x3B11F0, 0x3B4170, 0x3D4670, 0x3D67F0, 0x3B3760,
+    0x3B86C0, 0x3BAE10, 0x3AEB70, 0x3CBEE0, 0x3C9070, 0x3D6DB0, 0x3CF630,
 };
 
 const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category)
@@ -676,7 +676,7 @@ static void ResetManagerDragState(__int64 manager)
     if (!manager) return;
     __try {
         typedef void (*QueueDeleteMeshFn)(__int64 mgr, void* mesh);
-        QueueDeleteMeshFn queueDeleteMesh = (QueueDeleteMeshFn)((uintptr_t)g_exe + 0x542900);
+        QueueDeleteMeshFn queueDeleteMesh = (QueueDeleteMeshFn)((uintptr_t)g_exe + 0x542890);
         const int kExtraPreviewOffsets[2] = { 0x5F8, 0x600 };
         for (int off : kExtraPreviewOffsets) {
             void* p = *(void**)(manager + off);
@@ -824,8 +824,8 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
     return ok;
 }
 
-#define OPERATOR_NEW_RVA 0x84DECC
-#define NODE_ALLOC_RVA 0x84DECC // operator new
+#define OPERATOR_NEW_RVA 0x84E06C
+#define NODE_ALLOC_RVA 0x84E06C // operator new
 #define NODE_CTOR_RVA 0x0FF950  // node constructor (returns the node)
 #define NODE_OBJECT_SIZE 0xE8
 typedef __int64 (*AllocFn)(unsigned long long size);
@@ -2698,7 +2698,7 @@ void RoadSync_CancelLocalDrag()
         __int64* sqEnd = *(__int64**)(thisPtr + 0xF610);
         if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
             typedef void (*CancelSegFn)(__int64, __int64, int, int, unsigned char);
-            CancelSegFn cancelSeg = (CancelSegFn)((uintptr_t)g_exe + 0x5434C0);
+            CancelSegFn cancelSeg = (CancelSegFn)((uintptr_t)g_exe + 0x543450);
             for (__int64* it = sqBegin; it < sqEnd; ++it) {
                 if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
             }
@@ -2835,7 +2835,7 @@ bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
 #define SEG_DIRECTION_OFFSET 0x1bc       // int: 0 both ways, 1 / 2 one way (node 0 / node 1 relative)
 #define NODE_BUILDINGS_BEGIN_OFFSET 0x70 // node: buildings attached to it
 #define NODE_BUILDINGS_END_OFFSET 0x78
-#define REFRESH_BUILDING_RVA 0x191950    // FUN_140191950(thisPtr, building)
+#define REFRESH_BUILDING_RVA 0x191970    // FUN_140191950(thisPtr, building)
 #define DIR_SCAN_INTERVAL_MS 250
 #define DIR_SCAN_MAX 4096
 
@@ -2950,11 +2950,11 @@ static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
 // Starting planned construction (see RoadSyncPlanStartMsg)
 // ---------------------------------------------------------------------------
 
-#define PLAN_START_RVA 0x5258E0        // FUN_1405258e0(network, dollars, rubles, count, group)
-#define PLAN_START_EXCEPT_RVA 0x525C30 // FUN_140525c30(network, dollars, rubles, -, group)
+#define PLAN_START_RVA 0x525870        // FUN_1405258e0(network, dollars, rubles, count, group)
+#define PLAN_START_EXCEPT_RVA 0x525BC0 // FUN_140525c30(network, dollars, rubles, -, group)
 #define PLAN_COLLECT_UI_RVA 0x86A40    // FUN_140086a40(world, &groupVec, &netVec, &hasGroupFlag)
 #define LEFT_MENU_PLAN_UI_RVA 0x86F40  // FUN_140086f40(world, x, y, flag)
-#define BOTTOM_BAR_PLAN_UI_RVA 0x395C90 // FUN_140395c90(world)
+#define BOTTOM_BAR_PLAN_UI_RVA 0x395BD0 // FUN_140395c90(world)
 #define EDGE_GROUP_OFFSET 0x124
 #define PLAN_CAPTURE_MAX 16
 #define WORLD_NETWORK_COUNT_OFFSET 0x14034 // int: entries below
@@ -3046,7 +3046,7 @@ static const unsigned char kPlanStartExceptExpect[15] = {
 // (FUN_140395c90). The others - a building's placement, the area paste -
 // start their own plans as part of an action that is synced itself.
 static const unsigned int kPlanStartUiReturns[] = {
-    0x7ECE0, 0x7EF10, 0x7F100, 0x881B1, 0x88A11, 0x88CC1, 0x39F0C0, 0x39F6F8, 0x39F8D8
+    0x7ECE0, 0x7EF10, 0x7F100, 0x881B1, 0x88A11, 0x88CC1, 0x39F000, 0x39F638, 0x39F818
 };
 static const unsigned int kPlanStartExceptUiReturns[] = { 0x7ECBA, 0x7EEEA, 0x7F0DA, 0x8818D, 0x889ED, 0x88C9D };
 
@@ -3156,8 +3156,8 @@ static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, uns
 }
 
 typedef __int64 (*CancelSegFn)(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5);
-#define CANCEL_SEG_RVA 0x5434C0
-#define BOTTOM_BAR_CANCEL_CALL_RVA 0x39F497
+#define CANCEL_SEG_RVA 0x543450
+#define BOTTOM_BAR_CANCEL_CALL_RVA 0x39F3D7
 #define LEFT_MENU_CANCEL_CALL_RVA 0x886C3
 
 static const unsigned char kPlanCollectUiExpect[16] = {
@@ -3275,7 +3275,7 @@ bool RoadSync_InstallPlanStartHooks()
     // segments_begin == segments_end (0 == 0). The original `je +0x11` (74 11) jumped to
     // 0x3CFA5B (`mov rbp, [rcx-8]`) and read `[0 - 8]` -> AV crash when building from an
     // existing road node. Redirecting to +0x0B lands on `je 0x1403D00C8` (0F 84 6B 06 00 00).
-    BYTE* secRoadJe = g_exeBase + 0x3CFA48;
+    BYTE* secRoadJe = g_exeBase + 0x3CF988;
     if (secRoadJe[0] == 0x74 && secRoadJe[1] == 0x11 &&
         secRoadJe[2 + 0x0B] == 0x0F && secRoadJe[2 + 0x0B + 1] == 0x84) {
         DWORD oldProt = 0;
@@ -3341,9 +3341,9 @@ static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
                 if (i > end - begin) i = end - begin;
             }
         }
-        ((void(*)(__int64))(g_exeBase + 0x4FAE50))(network);
+        ((void(*)(__int64))(g_exeBase + 0x4FADE0))(network);
         if (category == ROAD_SYNC_CATEGORY_RAIL) {
-            ((void(*)(__int64))(g_exeBase + 0x592990))(GetWorldThisPtr() + 0xF908);
+            ((void(*)(__int64))(g_exeBase + 0x592920))(GetWorldThisPtr() + 0xF908);
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3408,10 +3408,10 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 // Group construction tools (see RoadSyncGroupToolMsg)
 // ---------------------------------------------------------------------------
 
-#define GROUP_TOOL_RVA 0x21C110
-#define CTRL_RECT_DEMOLISH_RVA 0x213870
-#define CTRL_RECT_UPGRADE_RVA 0x214530
-#define SHIFT_CANCEL_PLAN_RVA 0x214220
+#define GROUP_TOOL_RVA 0x21C090
+#define CTRL_RECT_DEMOLISH_RVA 0x2137F0
+#define CTRL_RECT_UPGRADE_RVA 0x2144B0
+#define SHIFT_CANCEL_PLAN_RVA 0x2141A0
 #define GROUP_TOOL_YAW_RVA 0x9E9D20   // float: camera yaw that turns the box
 #define GROUP_TOOL_DOWN_RVA 0xA54E90  // byte: mouse button held
 #define GROUP_TOOL_PRESS_RVA 0xA54E91 // byte: mouse button pressed this frame

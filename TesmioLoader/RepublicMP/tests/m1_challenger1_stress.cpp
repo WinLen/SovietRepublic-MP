@@ -183,15 +183,15 @@ static bool Adversarial_R1_RouteBufferStress()
     std::vector<BYTE> roadMgr(0x1000, 0);
     *(BYTE**)(world + 0xF7A0) = roadMgr.data();
 
-    g_mockExeBuffer[0x3D00F0] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x4FCAF0] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x518A80] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3D0030] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x4FCA80] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     // Install real vector assign and manager reset trampolines
-    WriteJumpTrampoline(g_mockExeBuffer + 0x21D2B0, (void*)MockVecAssign_Iter2);
-    WriteJumpTrampoline(g_mockExeBuffer + 0x542A30, (void*)MockManagerReset_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x21D230, (void*)MockVecAssign_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x5429C0, (void*)MockManagerReset_Iter2);
 
     // 1. Test 0 points (empty drag route)
     printf("      [R1 Stress] Testing N = 0 route points ...\n"); fflush(stdout);
@@ -324,13 +324,13 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     *(BYTE**)(world + 0xF7A0) = fix.roadMgr.data();
     *(BYTE**)(world + 0xF968) = fix.pedMgr.data();
 
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x21D2B0] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x542A30] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     // Install mock commit trampoline
-    WriteJumpTrampoline(g_mockExeBuffer + 0x518A80, (void*)MockCommit_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x518A10, (void*)MockCommit_Iter2);
 
     s_mockCommitThrowsSEH = false;
 

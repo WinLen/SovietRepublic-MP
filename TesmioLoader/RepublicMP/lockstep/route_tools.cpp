@@ -25,44 +25,44 @@
 #define CTRL_RVA 0xA54BAD         // the left Ctrl key
 #define STAND_IN_BYTES 0x400
 
-static const unsigned kStopTools[2] = { 0x2B2760, 0x2B4A50 };
-#define LINE_COPY_TOOL 0x2B4C60
-#define LINE_MARK 0x40CDE0
-#define LINE_TEST 0x498990
-#define LINE_HOME_TEST 0x1AA540
-#define LINE_PUT 0x497B10
-#define LINE_START 0x3BB330
-#define DEPOT_TOOL 0x2B2DD0
-#define DEPOT_MARK 0x40BD60
-#define DEPOT_MARK_RETURN 0x2B3795 // after the mark's call at 2b3790
+static const unsigned kStopTools[2] = { 0x2B26E0, 0x2B49D0 };
+#define LINE_COPY_TOOL 0x2B4BE0
+#define LINE_MARK 0x40CD20
+#define LINE_TEST 0x498920
+#define LINE_HOME_TEST 0x1AA560
+#define LINE_PUT 0x497AA0
+#define LINE_START 0x3BB270
+#define DEPOT_TOOL 0x2B2D50
+#define DEPOT_MARK 0x40BCA0
+#define DEPOT_MARK_RETURN 0x2B3715 // after the mark's call at 2b3790
 #define DEPOT_LIST_BEGIN (0x100 - 0x58) // the tool's vehicle list, from the mark caller's rsp
 #define DEPOT_LIST_END (0x100 - 0x50)
 #define DEPOT_MAX 64
 
 static const TsmRoutineSig kRoutines[] = {
-    { 0x2B5120, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 }, 0 },
-    { 0x2B2760, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x98, 0xd2, 0x00, 0x00, 0x48 }, 0 },
-    { 0x2B4A50, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x98, 0xd2, 0x00, 0x00, 0x48, 0x8b }, 0 },
-    { 0x2B4C60, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 }, 0 },
-    { 0x40CDE0, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
-    { 0x498990, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 }, 0 },
-    { 0x1AA540, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 }, 0 },
-    { 0x3BB330, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xbc, 0x05, 0x00, 0x00 }, 0 },
-    { 0x497B10, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 }, 0 },
+    { 0x2B50A0, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 }, 0 },
+    { 0x2B26E0, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x98, 0xd2, 0x00, 0x00, 0x48 }, 0 },
+    { 0x2B49D0, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x98, 0xd2, 0x00, 0x00, 0x48, 0x8b }, 0 },
+    { 0x2B4BE0, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 }, 0 },
+    { 0x40CD20, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
+    { 0x498920, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 }, 0 },
+    { 0x1AA560, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 }, 0 },
+    { 0x3BB270, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xbc, 0x05, 0x00, 0x00 }, 0 },
+    { 0x497AA0, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 }, 0 },
     // The depot tool's frame (mov rax,rsp; five pushes; lea rbp,[rax-108h]) and its mark.
-    { 0x2B2DD0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xf8 }, 0 },
-    { 0x2B2DE0, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
-    { 0x40BD60, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
+    { 0x2B2D50, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xf8 }, 0 },
+    { 0x2B2D60, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
+    { 0x40BCA0, { 0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf8, 0xe5, 0xff, 0xff, 0xb8, 0x08, 0x1b }, 0 },
     // The sending steps.
-    { 0x68B2B0, { 0x48, 0x8b, 0x81, 0x08, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 }, 0 },
-    { 0x3E2900, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 }, 0 },
-    { 0x3E3F40, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 0 },
-    { 0x3A38F0, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 }, 0 },
-    { 0x3A3830, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a }, 0 },
-    { 0x6DE260, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x04, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 }, 0 },
+    { 0x68B350, { 0x48, 0x8b, 0x81, 0x08, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 }, 0 },
+    { 0x3E2840, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 }, 0 },
+    { 0x3E3E80, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 0 },
+    { 0x3A3830, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 }, 0 },
+    { 0x3A3770, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a }, 0 },
+    { 0x6DE400, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x04, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 }, 0 },
     { 0x1AE130, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 }, 0 },
-    { 0x6B7070, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 }, 0 },
-    { 0x6B7420, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 }, 0 },
+    { 0x6B7210, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 }, 0 },
+    { 0x6B75C0, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 }, 0 },
 };
 
 typedef U64 (*PickFn)(U64, U64, U64, U64, U64, U64, U64*, U64*);
@@ -224,7 +224,7 @@ U64 RouteTools_StopPick(int kind, U64 world, U64 a2, U64 a3, U64 a4, U64 a5, U64
         if (node) *node = t_forcedNode;
         return 1;
     }
-    U64 r = ((PickFn)(g_exeBase + 0x2B5120))(world, a2, a3, a4, a5, a6, building, node);
+    U64 r = ((PickFn)(g_exeBase + 0x2B50A0))(world, a2, a3, a4, a5, a6, building, node);
     if (!(r & 0xff) || !Commands_TakeLocal()) return r;
     __try {
         // The line window's "New stop" edits its working copy: local until the window's Accept.
@@ -393,7 +393,7 @@ U64 RouteTools_DepotTool(U64 world, U64 batch)
 U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
 {
     typedef U64 (*SecondRoadFn)(U64, U64, U64);
-    SecondRoadFn tool = (SecondRoadFn)(g_exeBase + 0x3CF6F0);
+    SecondRoadFn tool = (SecondRoadFn)(g_exeBase + 0x3CF630);
     if ((square & 0xff) == 0) return tool(world, type, square);
     BYTE* down = g_exeBase + 0xA54E90;
     if (*down || !*(BYTE*)(world + 0xD2AC) || !Commands_TakeLocal()) return tool(world, type, square);
@@ -413,7 +413,7 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
         U64* sqEnd = (U64*)Q(world + 0xF610);
         if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
             typedef void (*CancelSegFn)(U64, U64, int, int, BYTE);
-            CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x5434C0);
+            CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x543450);
             for (U64* it = sqBegin; it < sqEnd; ++it) {
                 if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
             }
@@ -450,7 +450,7 @@ U64 RouteTools_SecondRoadTool(U64 world, U64 type, U64 square)
 
 U64 RouteTools_GoThereTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x3CA560);
+    ToolFn tool = (ToolFn)(g_exeBase + 0x3CA4A0);
     BYTE* press = g_exeBase + PRESS_RVA;
     if (!*press || !Commands_TakeLocal()) return tool(world);
     BYTE kept = *press;
@@ -534,7 +534,7 @@ static void SubmitPointRouteTool(unsigned kind, int index, const float pos[3], c
 U64 RouteTools_BojkaTool(U64 world, U64 mode)
 {
     U64 r = 0;
-    if (!InvokeTwoArgPressTool(world, mode, 0x3C85B0, &r)) return r;
+    if (!InvokeTwoArgPressTool(world, mode, 0x3C84F0, &r)) return r;
     __try {
         float pos[3];
         memcpy(pos, (const void*)(world + 0xF6C), 12);
@@ -547,7 +547,7 @@ U64 RouteTools_BojkaTool(U64 world, U64 mode)
 
 U64 RouteTools_JoinHubStopTool(U64 world)
 {
-    ToolFn tool = (ToolFn)(g_exeBase + 0x2B23B0);
+    ToolFn tool = (ToolFn)(g_exeBase + 0x2B2330);
     BYTE* press = g_exeBase + PRESS_RVA;
     if (!*press || !Commands_TakeLocal()) return tool(world);
     BYTE kept = *press;
@@ -580,7 +580,7 @@ U64 RouteTools_JoinHubStopTool(U64 world)
 U64 RouteTools_JoinHubTool(U64 world, U64 a2)
 {
     U64 r = 0;
-    if (!InvokeTwoArgPressTool(world, a2, 0x3C9A00, &r)) return r;
+    if (!InvokeTwoArgPressTool(world, a2, 0x3C9940, &r)) return r;
     __try {
         U64 node = Q(world + 0xF650);
         if (node) {
@@ -608,7 +608,7 @@ U64 RouteTools_WorkerRelocateTool(U64 world)
     }
     unsigned char ctrl = *(g_exeBase + CTRL_RVA);
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x2B8CE0, false, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x2B8C60, false, &r)) return r;
     __try {
         U64 srcBld = Q(world + TARGET_OFFSET);
         if (!srcBld) return r;
@@ -634,7 +634,7 @@ U64 RouteTools_VehicleCopyTool(U64 world)
 {
     unsigned char ctrl = *(g_exeBase + CTRL_RVA);
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x2B18C0, false, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x2B1840, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
         if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, Tr("копирование расписания чужому транспорту", "copying schedule to a foreign vehicle")))
@@ -655,7 +655,7 @@ U64 RouteTools_VehicleCopyTool(U64 world)
 U64 RouteTools_VehicleReplaceTool(U64 world)
 {
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x2B3C80, false, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x2B3C00, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
         const char* replDesc = Tr("замена чужого транспорта", "replacing foreign vehicle");
@@ -666,7 +666,7 @@ U64 RouteTools_VehicleReplaceTool(U64 world)
             Refused(KindText(ROUTE_VEHICLE_REPLACE), "the source vehicle");
             return r;
         }
-        if (g_depotReturnTo == (U64)(g_exeBase + 0x2B4464)) {
+        if (g_depotReturnTo == (U64)(g_exeBase + 0x2B43E4)) {
             if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, replDesc)) return r;
             m.index = 0;
             if (!Ref_Vehicle(g_depot, m.vehicle)) {
@@ -691,7 +691,7 @@ U64 RouteTools_VehicleReplaceTool(U64 world)
 U64 RouteTools_VehicleReplaceAutoTool(U64 world)
 {
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x2B4680, false, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x2B4600, false, &r)) return r;
     __try {
         if (!TwoStates_CheckVehicleControlAllowed((const BYTE*)g_depot, Tr("автозамена чужого транспорта", "auto-replacing foreign vehicle"))) return r;
         RouteMsg m;
@@ -710,7 +710,7 @@ U64 RouteTools_VehicleReplaceAutoTool(U64 world)
 U64 RouteTools_VehicleToVehicleTool(U64 world)
 {
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x2B6AB0, true, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x2B6A30, true, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
         if (!srcVeh ||
@@ -733,7 +733,7 @@ U64 RouteTools_VehicleToVehicleTool(U64 world)
 U64 RouteTools_VehicleSendConstrTool(U64 world)
 {
     U64 r = 0;
-    if (!InvokeArmedCaptureTool(world, 0x1D88A0, false, &r)) return r;
+    if (!InvokeArmedCaptureTool(world, 0x1D8820, false, &r)) return r;
     __try {
         U64 srcVeh = Q(world + TARGET_OFFSET);
         if (!srcVeh || !TwoStates_CheckVehicleControlAllowed((const BYTE*)srcVeh, Tr("отправка чужой строительной техники", "dispatching foreign construction vehicle")))
@@ -854,34 +854,34 @@ static const char* ApplyDepot(const DepotMsg& m, unsigned* sent)
             U64 v = list[k];
             U64 type = Q(v + 0x1708);
             if (m.count > 1 && *(unsigned*)(type + 0x294) != 1) continue;
-            if (((UnusableFn)(g_exeBase + 0x68B2B0))(v)) continue;
-            if (!((DepotTypeFn)(g_exeBase + 0x3E2900))(world, depot, type, 0, 0) ||
-                !((DepotTypeFn)(g_exeBase + 0x3E3F40))(world, depot, type, 0, 0))
+            if (((UnusableFn)(g_exeBase + 0x68B350))(v)) continue;
+            if (!((DepotTypeFn)(g_exeBase + 0x3E2840))(world, depot, type, 0, 0) ||
+                !((DepotTypeFn)(g_exeBase + 0x3E3E80))(world, depot, type, 0, 0))
                 continue;
             if (*(BYTE*)(Q(v + 0x1710) + 0x25C)) {
                 float load = *(float*)(type + 0x7A78);
                 for (U64 at = Q(v + 0x3A0); at < Q(v + 0x3A8); at += 8) load += *(float*)(Q(Q(at) + 0x1708) + 0x7A78);
-                if (((LinkedFn)(g_exeBase + 0x3BB640))(0, depot, v, 0) && load > *(float*)(Q(depot + 0x318) + 0x9E4))
+                if (((LinkedFn)(g_exeBase + 0x3BB580))(0, depot, v, 0) && load > *(float*)(Q(depot + 0x318) + 0x9E4))
                     continue;
             }
             if (Q(v + 0x4F8) == depot) continue;
             if (!Q(depot + 0x5D0) && *(unsigned*)(type + 0x294) == 6) {
-                int slot = ((SlotFn)(g_exeBase + 0x3A38F0))(0, depot);
-                if (slot < 0 || !((SlotFitsFn)(g_exeBase + 0x3A3830))(0, *(float*)(type + 0x7A78), depot, slot)) continue;
+                int slot = ((SlotFn)(g_exeBase + 0x3A3830))(0, depot);
+                if (slot < 0 || !((SlotFitsFn)(g_exeBase + 0x3A3770))(0, *(float*)(type + 0x7A78), depot, slot)) continue;
             }
             U64 dt = Q(depot + 0x318);
             if (dt && *(unsigned*)(dt + 0x360) == 0x2B && Q(v + 0x490) != Q(v + 0x488)) continue;
             if (*(unsigned*)(type + 0x294) == 8 && Q(v + 0xC80)) continue;
-            if (*(unsigned*)(type + 0x294) == 0xA && *(unsigned*)(v + 0x1A04) == 3) ((UnloadFn)(g_exeBase + 0x6DE260))(v);
-            if (Q(v + 0x4F8) && !((AtHomeFn)(g_exeBase + 0x1AA540))(0, v)) {
+            if (*(unsigned*)(type + 0x294) == 0xA && *(unsigned*)(v + 0x1A04) == 3) ((UnloadFn)(g_exeBase + 0x6DE400))(v);
+            if (Q(v + 0x4F8) && !((AtHomeFn)(g_exeBase + 0x1AA560))(0, v)) {
                 *(U64*)(v + 0x600) = depot;
                 U64 route = Q(v + 0x1AD0);
                 if (!route) continue;
                 ((RouteFn)(g_exeBase + 0x1AE130))(world, route, v, 0);
             } else {
-                ((SendFn)(g_exeBase + 0x6B7070))(v, depot);
+                ((SendFn)(g_exeBase + 0x6B7210))(v, depot);
                 int a = -1, c = -1;
-                ((SendResultFn)(g_exeBase + 0x6B7420))(v, depot, &a, &c);
+                ((SendResultFn)(g_exeBase + 0x6B75C0))(v, depot, &a, &c);
             }
             ++*sent;
         }
@@ -920,7 +920,7 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     U64* sqEnd = (U64*)Q(world + 0xF610);
     if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
         typedef void (*CancelSegFn)(U64, U64, int, int, BYTE);
-        CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x5434C0);
+        CancelSegFn cancelSeg = (CancelSegFn)(g_exeBase + 0x543450);
         for (U64* it = sqBegin; it < sqEnd; ++it) {
             if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
         }
@@ -947,7 +947,7 @@ static const char* ApplySquareRoad(const RouteMsg& m)
     bool faulted = false;
     __try {
         typedef U64 (*SecondRoadFn)(U64, U64, U64);
-        ((SecondRoadFn)(g_exeBase + 0x3CF6F0))(world, (U64)(unsigned)m.index, 1);
+        ((SecondRoadFn)(g_exeBase + 0x3CF630))(world, (U64)(unsigned)m.index, 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         faulted = true;
     }
@@ -984,10 +984,10 @@ static const char* ApplyGoThere(const RouteMsg& m)
         *(void**)(stopObj + 0x190) = g_exeBase + 0xA556B0;
         memcpy((void*)(v + 0x728), m.posA, 12);
         *(U64*)(v + 0x688) = *(U64*)(v + 0x680);
-        ((ClearStopsFn)(g_exeBase + 0x1FF7A0))(v + 0x638);
+        ((ClearStopsFn)(g_exeBase + 0x1FF720))(v + 0x638);
         U64 zero = 0;
         ((PushPtrFn)(g_exeBase + 0x0B0E90))(v + 0x680, &zero);
-        ((AddStopFn)(g_exeBase + 0x1FF8F0))(v + 0x638, stopObj);
+        ((AddStopFn)(g_exeBase + 0x1FF870))(v + 0x638, stopObj);
         *(int*)(v + 0x698) = 0;
         *(BYTE*)(v + 0xD3A) = 1;
         ((DtorSubFn)(g_exeBase + 0x1513F0))(stopObj + 0xC8);
@@ -1014,7 +1014,7 @@ static const char* ApplyBojka(const RouteMsg& m)
     bool faulted = false;
     __try {
         typedef U64 (*BojkaFn)(U64, U64);
-        ((BojkaFn)(g_exeBase + 0x3C85B0))(world, (U64)(unsigned)m.index);
+        ((BojkaFn)(g_exeBase + 0x3C84F0))(world, (U64)(unsigned)m.index);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         faulted = true;
     }
@@ -1116,15 +1116,15 @@ static const char* ApplyJoinHubStop(const RouteMsg& m)
         if (inHub) {
             if ((end - beg) / 8 >= 2) {
                 ((RemoveFromHubFn)(g_exeBase + 0x0F98D0))(stopNode, hub + 0x88);
-                unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222B50))(hub, 0);
+                unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222AD0))(hub, 0);
                 if (m.origin == g_origin && Q(world + WINDOW_OFFSET))
                     *(int*)(Q(world + WINDOW_OFFSET) + 0x264) = ok ? 0 : 1;
             }
         } else {
-            if (((CanJoinHubFn)(g_exeBase + 0x2251D0))(hub, stopNode) &&
-                ((HubDistFn)(g_exeBase + 0x225530))(hub, stopNode) <= *(float*)(g_exeBase + 0x90A9F0)) {
-                ((AddToHubFn)(g_exeBase + 0x2233A0))(hub, stopNode, 0);
-                unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222B50))(hub, 0);
+            if (((CanJoinHubFn)(g_exeBase + 0x225150))(hub, stopNode) &&
+                ((HubDistFn)(g_exeBase + 0x2254B0))(hub, stopNode) <= *(float*)(g_exeBase + 0x90AA00)) {
+                ((AddToHubFn)(g_exeBase + 0x223320))(hub, stopNode, 0);
+                unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222AD0))(hub, 0);
                 if (m.origin == g_origin && Q(world + WINDOW_OFFSET))
                     *(int*)(Q(world + WINDOW_OFFSET) + 0x264) = ok ? 0 : 1;
             }
@@ -1157,19 +1157,19 @@ static const char* ApplyJoinHub(const RouteMsg& m)
         int hi = idx0 < idx1 ? idx1 : idx0;
         if (idx0 != idx1) {
             typedef void (*JoinEdgesFn)(U64 net, int lo, int hi, unsigned char zero);
-            if (g_exeBase[0x53E630] != 0) ((JoinEdgesFn)(g_exeBase + 0x53E630))(net, lo, hi, 0);
+            if (g_exeBase[0x53E5C0] != 0) ((JoinEdgesFn)(g_exeBase + 0x53E5C0))(net, lo, hi, 0);
         } else {
             typedef void (*RemoveLoopSegFn)(U64 net, U64 seg);
-            if (g_exeBase[0x541550] != 0) ((RemoveLoopSegFn)(g_exeBase + 0x541550))(net, e0);
+            if (g_exeBase[0x5414E0] != 0) ((RemoveLoopSegFn)(g_exeBase + 0x5414E0))(net, e0);
         }
-        if (g_exeBase[0x5518B0] != 0) ((void (*)(U64))(g_exeBase + 0x5518B0))(net);
+        if (g_exeBase[0x551840] != 0) ((void (*)(U64))(g_exeBase + 0x551840))(net);
         if (g_exeBase[0x12DCF0] != 0) {
             ((void (*)(U64, unsigned char, unsigned char))(g_exeBase + 0x12DCF0))(
                 world, net == Q(world + 0x14040) ? 1 : 0, 0);
         }
         if (g_exeBase[0x12F340] != 0) ((void (*)(U64, unsigned char))(g_exeBase + 0x12F340))(world, 0);
-        if (net == Q(world + 0x14038) && g_exeBase[0x578C40] != 0) {
-            ((void (*)(U64))(g_exeBase + 0x578C40))(net);
+        if (net == Q(world + 0x14038) && g_exeBase[0x578BD0] != 0) {
+            ((void (*)(U64))(g_exeBase + 0x578BD0))(net);
         }
         if (idx0 != idx1 && g_exeBase[0x0B0E90] != 0) {
             U64 segBeg = Q(net + 0x2B0), segEnd = Q(net + 0x2B8);
@@ -1179,7 +1179,7 @@ static const char* ApplyJoinHub(const RouteMsg& m)
             }
         }
         if (g_exeBase[0x12FD10] != 0) ((void (*)(U64))(g_exeBase + 0x12FD10))(world);
-        if (g_exeBase[0x551530] != 0) ((void (*)(U64))(g_exeBase + 0x551530))(net);
+        if (g_exeBase[0x5514C0] != 0) ((void (*)(U64))(g_exeBase + 0x5514C0))(net);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";
     }
@@ -1216,7 +1216,7 @@ static const char* ApplyWorkerRelocate(const RouteMsg& m)
                     if (curCount <= 0 || attempts >= curCount) break;
                     if (idx >= curCount) idx = 0;
                     U64 inmate = Q(iBeg + (U64)idx * 8);
-                    if (inmate) ((RelocInmateFn)(g_exeBase + 0x83CA50))(world, inmate, dstBld);
+                    if (inmate) ((RelocInmateFn)(g_exeBase + 0x83CBF0))(world, inmate, dstBld);
                     moved++;
                     attempts++;
                     U64 newBeg = Q(srcBld + 0xBD8), newEnd = Q(srcBld + 0xBE0);
@@ -1228,7 +1228,7 @@ static const char* ApplyWorkerRelocate(const RouteMsg& m)
             typedef unsigned char (*RelocWorkerFn)(U64 world, U64 src, U64 dst, unsigned char testOnly, unsigned char onlyEducated);
             unsigned char edu = (m.index == 1) ? 1 : 0;
             for (int i = 0; i < limit; i++)
-                ((RelocWorkerFn)(g_exeBase + 0x83C6A0))(world, srcBld, dstBld, 0, edu);
+                ((RelocWorkerFn)(g_exeBase + 0x83C840))(world, srcBld, dstBld, 0, edu);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";
@@ -1251,7 +1251,7 @@ static const char* ApplyVehicleCopy(const RouteMsg& m)
             typedef void (*UpdateVehFn)(U64 world, U64 veh);
             typedef void (*ClearStopsFn)(U64 veh638);
             typedef void (*CopyFieldFn)(U64 dst, U64 src);
-            ((CopySchedFn)(g_exeBase + 0x1FEF00))(dstVeh + 0x638, srcVeh + 0x638);
+            ((CopySchedFn)(g_exeBase + 0x1FEE80))(dstVeh + 0x638, srcVeh + 0x638);
             *(U64*)(dstVeh + 0x688) = *(U64*)(dstVeh + 0x680);
             U64 n = (Q(srcVeh + 0x688) - Q(srcVeh + 0x680)) >> 3;
             if (*(BYTE*)(srcVeh + 0x5FD) && n > 0) n--;
@@ -1263,7 +1263,7 @@ static const char* ApplyVehicleCopy(const RouteMsg& m)
                 U64 depPtr = Q(dstVeh + 0x600);
                 ((PushPtrFn)(g_exeBase + 0x0B0E90))(dstVeh + 0x680, &depPtr);
             }
-            ((UpdateVehFn)(g_exeBase + 0x44A180))(world, dstVeh);
+            ((UpdateVehFn)(g_exeBase + 0x44A110))(world, dstVeh);
             *(int*)(dstVeh + 0x698) = *(int*)(srcVeh + 0x698);
             *(BYTE*)(dstVeh + 0xD3A) = 1;
             *(U64*)(dstVeh + 0x728) = *(U64*)(srcVeh + 0x728);
@@ -1272,7 +1272,7 @@ static const char* ApplyVehicleCopy(const RouteMsg& m)
             U64 btype = bld ? Q(bld + 0x318) : 0;
             int bkind = btype ? *(int*)(btype + 0x360) : -1;
             if (bkind == 0x26 || bkind == 0x2B || bkind == 0x16) {
-                ((ClearStopsFn)(g_exeBase + 0x1FF7A0))(dstVeh + 0x638);
+                ((ClearStopsFn)(g_exeBase + 0x1FF720))(dstVeh + 0x638);
                 *(U64*)(dstVeh + 0x688) = *(U64*)(dstVeh + 0x680);
                 *(int*)(dstVeh + 0x698) = 0;
             }
@@ -1283,11 +1283,11 @@ static const char* ApplyVehicleCopy(const RouteMsg& m)
                         U64 item = Q(p);
                         if (item) *(U64*)(item + 0x48) = dstVeh;
                     }
-                    ((CopyFieldFn)(g_exeBase + 0x1E0FC0))(dstVeh + 0x488, srcVeh + 0x488);
+                    ((CopyFieldFn)(g_exeBase + 0x1E0F40))(dstVeh + 0x488, srcVeh + 0x488);
                     *(U64*)(srcVeh + 0x490) = *(U64*)(srcVeh + 0x488);
                     if (Q(dstVeh + 0x490) != Q(dstVeh + 0x488)) {
                         U64 first = Q(Q(dstVeh + 0x488));
-                        ((void (*)(U64, U64, int, U64))(g_exeBase + 0x67D5D0))(dstVeh, first, -1, 0);
+                        ((void (*)(U64, U64, int, U64))(g_exeBase + 0x67D670))(dstVeh, first, -1, 0);
                     }
                     *(int*)(srcVeh + 0x50C) = 3;
                 }
@@ -1296,7 +1296,7 @@ static const char* ApplyVehicleCopy(const RouteMsg& m)
             *(BYTE*)(dstVeh + 0x1A69) = *(BYTE*)(srcVeh + 0x1A69);
             *(BYTE*)(dstVeh + 0x1A6A) = *(BYTE*)(srcVeh + 0x1A6A);
             *(unsigned*)(dstVeh + 0x1700) = *(unsigned*)(srcVeh + 0x1700);
-            ((void (*)(U64, U64))(g_exeBase + 0x67CD20))(dstVeh, srcVeh);
+            ((void (*)(U64, U64))(g_exeBase + 0x67CDC0))(dstVeh, srcVeh);
         }
         if (m.ctrl && Q(dstVeh + 0x4F8) != 0 && ((HomeTestFn)(g_exeBase + LINE_HOME_TEST))(world, dstVeh) != 0)
             ((StartFn)(g_exeBase + LINE_START))(world, dstVeh);
@@ -1317,13 +1317,13 @@ static const char* ApplyVehicleReplace(const RouteMsg& m)
             if (!dstVeh) return "the target vehicle is gone";
             typedef unsigned char (*CanReplaceVehFn)(U64 world, U64 src, U64 dst, U64 zero);
             typedef unsigned char (*DoReplaceVehFn)(U64 world, U64 src, U64 dst, unsigned char one);
-            if (((CanReplaceVehFn)(g_exeBase + 0x1AA6E0))(world, srcVeh, dstVeh, 0))
-                ((DoReplaceVehFn)(g_exeBase + 0x1AAAA0))(world, srcVeh, dstVeh, 1);
+            if (((CanReplaceVehFn)(g_exeBase + 0x1AA700))(world, srcVeh, dstVeh, 0))
+                ((DoReplaceVehFn)(g_exeBase + 0x1AAAC0))(world, srcVeh, dstVeh, 1);
         } else {
             U64 dstBld = Ref_BuildingAt(m.building);
             if (!dstBld) return "the target building is gone";
             typedef unsigned char (*DoReplaceBldFn)(U64 world, U64 src, U64 dst);
-            ((DoReplaceBldFn)(g_exeBase + 0x1AAD70))(world, srcVeh, dstBld);
+            ((DoReplaceBldFn)(g_exeBase + 0x1AAD90))(world, srcVeh, dstBld);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";
@@ -1340,7 +1340,7 @@ static const char* ApplyVehicleReplaceAuto(const RouteMsg& m)
         U64 mgr = Q(world + 0xD440);
         if (!mgr) return "no auto-replace manager";
         typedef unsigned char (*AutoRepFn)(U64 mgr, U64 veh);
-        if (((AutoRepFn)(g_exeBase + 0x614310))(mgr, dstVeh)) {
+        if (((AutoRepFn)(g_exeBase + 0x614370))(mgr, dstVeh)) {
             U64 beg = Q(mgr + 0x40), end = Q(mgr + 0x48);
             bool found = false;
             for (U64 p = beg; p && p < end; p += 8)
@@ -1367,7 +1367,7 @@ static const char* ApplyVehicleToVehicle(const RouteMsg& m)
     if (!srcVeh || !dstVeh) return "a vehicle is gone";
     __try {
         typedef unsigned char (*LoadVehOntoVehFn)(U64 dst, U64 src, unsigned char one);
-        if (((LoadVehOntoVehFn)(g_exeBase + 0x68A420))(dstVeh, srcVeh, 1) && m.origin == g_origin) {
+        if (((LoadVehOntoVehFn)(g_exeBase + 0x68A4C0))(dstVeh, srcVeh, 1) && m.origin == g_origin) {
             *(U64*)(world + SELECTED_OFFSET) = 0;
             *(BYTE*)(world + 0xFBC) = 1;
         }
@@ -1402,14 +1402,14 @@ static const char* ApplyVehicleSendConstr(const RouteMsg& m)
         if (r13 == r12) {
             bool done = false;
             if (!zeroSpeed) {
-                if (((unsigned char (*)(U64, U64))(g_exeBase + 0x3FB8E0))(world, r15)) done = true;
+                if (((unsigned char (*)(U64, U64))(g_exeBase + 0x3FB820))(world, r15)) done = true;
                 else if (isMechanism && ((unsigned char (*)(U64, U64, U64, U64))(g_exeBase + 0x151150))(world, r15, carrier, r12))
                     done = true;
             } else {
                 if (((unsigned char (*)(U64, U64, U64, U64))(g_exeBase + 0x151150))(world, r15, carrier, r12)) done = true;
             }
             if (!done)
-                ((void (*)(U64, U64, U64, U64, unsigned char, unsigned char))(g_exeBase + 0x3FBDC0))(world, r15, 0, 0, 1, 1);
+                ((void (*)(U64, U64, U64, U64, unsigned char, unsigned char))(g_exeBase + 0x3FBD00))(world, r15, 0, 0, 1, 1);
             if (m.origin == g_origin) *(U64*)(world + TARGET_OFFSET) = 0;
         } else {
             alignas(16) BYTE info[64] = {};
@@ -1425,8 +1425,8 @@ static const char* ApplyVehicleSendConstr(const RouteMsg& m)
                 if (r14_site && ((unsigned char (*)(U64, U64))(g_exeBase + 0x0F99C0))(r11_veh, rbx_host + 0x488)) {
                     *(int*)(r11_veh + 0x50C) = 8;
                     *(int*)(rbx_host + 0x50C) = 8;
-                    ((void (*)(U64, unsigned char))(g_exeBase + 0x67CB30))(rbx_host, 1);
-                    ((void (*)(U64, U64, int, U64))(g_exeBase + 0x67D5D0))(rbx_host, r14_site, -1, 0);
+                    ((void (*)(U64, unsigned char))(g_exeBase + 0x67CBD0))(rbx_host, 1);
+                    ((void (*)(U64, U64, int, U64))(g_exeBase + 0x67D670))(rbx_host, r14_site, -1, 0);
                     *(int*)(rbx_host + 0x698) = 0;
                     *(BYTE*)(rbx_host + 0xD3A) = 1;
                     ok = true;

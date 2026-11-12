@@ -31,9 +31,9 @@ typedef unsigned __int64 U64;
 
 #define CACHE_BEGIN 0xC6B0    // after the block the window empties this world vector (7595f9..)
 #define CACHE_END 0xC6B8
-#define RESET_RVA 0x224300
-#define COPY_RVA 0x226530
-#define MARK_RVA 0x22A6D0
+#define RESET_RVA 0x224280
+#define COPY_RVA 0x2264B0
+#define MARK_RVA 0x22A650
 #define UNMARK_RVA 0x0F98D0
 
 #pragma pack(push, 1)

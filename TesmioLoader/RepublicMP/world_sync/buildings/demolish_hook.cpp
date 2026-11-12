@@ -87,9 +87,9 @@ static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigne
     msg.demolishEb1 = *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET);
     msg.demolishShift = (*(int*)(g_exeBase + 0x9D5A08) != 0) ? 1 : 0;
     msg.demolishCtrl  = (*(int*)(g_exeBase + 0x9D5A0C) != 0) ? 1 : 0;
-    msg.fromDialog424 = (callerRva == 0x7FD000) ? 1 : 0;
+    msg.fromDialog424 = (callerRva == 0x7FD1A0) ? 1 : 0;
     msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC798);
-    msg.assignFromTool = (callerRva == 0x1DAA78 || callerRva == 0x1DAFFE) ? 1 : 0;
+    msg.assignFromTool = (callerRva == 0x1DA9F8 || callerRva == 0x1DAF7E) ? 1 : 0;
     msg.assignPriority = (*(unsigned char*)(g_exeBase + 0xA54BAD) != 0) ? 1 : 0;
     msg.assignIsDemolishOffice = 0;
     msg.sliderValue = 0;
@@ -105,7 +105,7 @@ static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigne
         if (office && Ref_Building(office, msg.assignOffice)) {
             msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == 104) ? 1 : 0;
         }
-        if (callerRva == 0x1DAFFE)
+        if (callerRva == 0x1DAF7E)
             msg.assignDist = *(float*)(thisPtr + 0xF5C0);
     }
 }
@@ -181,8 +181,8 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
-            if (callerRva == 0x7FD000) {
-                *retSlot = g_exeBase + 0x7FD04F;
+            if (callerRva == 0x7FD1A0) {
+                *retSlot = g_exeBase + 0x7FD1EF;
             }
             SaveSync_NotifyWaitingLobbyActionBlocked();
             InterlockedDecrement(&g_depth);
@@ -190,10 +190,10 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
         }
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args, callerRva)) {
-            if (callerRva == 0x7FD000) {
+            if (callerRva == 0x7FD1A0) {
                 // Skip post-call 0x7FD000..0x7FD04E on the UI pass so it does not write
                 // +0x879/+0x630 before 0x168730 runs at the Lockstep boundary.
-                *retSlot = g_exeBase + 0x7FD04F;
+                *retSlot = g_exeBase + 0x7FD1EF;
             }
             InterlockedDecrement(&g_depth);
             return;
@@ -274,11 +274,11 @@ bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyn
                 if (office) {
                     typedef void (*AssignOfficeFn)(__int64 world, __int64 office, __int64 target,
                                                    float dist, unsigned char p5, unsigned char isDemolishOffice);
-                    ((AssignOfficeFn)(g_exeBase + 0x161C90))(thisPtr, (__int64)office, building,
+                    ((AssignOfficeFn)(g_exeBase + 0x161CB0))(thisPtr, (__int64)office, building,
                                                              msg.assignDist, 0, msg.assignIsDemolishOffice);
                     if (msg.assignPriority) {
                         typedef void (*SetPriorityFn)(__int64 world, __int64 target, unsigned char prio);
-                        ((SetPriorityFn)(g_exeBase + 0x1A04F0))(thisPtr, building, 1);
+                        ((SetPriorityFn)(g_exeBase + 0x1A0510))(thisPtr, building, 1);
                     }
                 }
             }

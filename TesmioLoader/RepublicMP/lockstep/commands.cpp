@@ -531,7 +531,7 @@ static const GameRulePair kGameRules[] = {
     { 0xC852, 0x14452, 1 },
 };
 #define RELOAD_FLAGS_OFFSET 0x14D3C // 4 bytes: a critical rule's save and reload
-#define GAME_RULES_APPLY_RVA 0x337170
+#define GAME_RULES_APPLY_RVA 0x3370F0
 
 #pragma pack(push, 1)
 struct LsGameRules {

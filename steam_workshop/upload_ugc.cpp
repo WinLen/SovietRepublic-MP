@@ -174,6 +174,7 @@ static bool SafeReplaceDll(const std::string& srcPath, const std::string& dstPat
 }
 
 static void SyncLocalWorkshopFolder(const std::string& lws,
+                                    const std::string& contentDir,
                                     const std::string& srcRepublicMp,
                                     const std::string& srcLoader,
                                     const std::string& srcLauncher,
@@ -183,6 +184,9 @@ static void SyncLocalWorkshopFolder(const std::string& lws,
     DeleteFileA((lws + "\\RepublicMP.dll").c_str());
     DeleteFileA((lws + "\\update_mod.ps1").c_str());
     DeleteFileA((lws + "\\CREATE-DESKTOP-SHORTCUT.bat").c_str());
+    DeleteFileA((lws + "\\config.ini").c_str());
+    DeleteFileA((lws + "\\log.html").c_str());
+    DeleteFileA((lws + "\\media_soviet\\config.ini").c_str());
     CreateDirectoryA((lws + "\\TesmioLoader").c_str(), nullptr);
     CreateDirectoryA((lws + "\\TesmioLoader\\build").c_str(), nullptr);
     CreateDirectoryA((lws + "\\TesmioLoader\\build\\plugins").c_str(), nullptr);
@@ -190,10 +194,13 @@ static void SyncLocalWorkshopFolder(const std::string& lws,
     SafeReplaceDll(srcLoader,     lws + "\\TesmioLoader\\build\\tesmioloader.dll");
     SafeReplaceDll(srcLauncher,   lws + "\\TesmioLoader\\build\\tesmiolauncher.exe");
     SafeReplaceDll(srcDinput8,    lws + "\\dinput8.dll");
+    SafeReplaceDll(contentDir + "\\START-COOP.bat", lws + "\\START-COOP.bat");
+    SafeReplaceDll(contentDir + "\\README-RU.txt",  lws + "\\README-RU.txt");
+    SafeReplaceDll(contentDir + "\\LICENSE",        lws + "\\LICENSE");
     std::string localIni = lws + "\\TesmioLoader\\build\\plugins\\republicmp_updater.ini";
     WritePrivateProfileStringA("updater", "github_repo", REPUBLICMP_GITHUB_REPO, localIni.c_str());
     WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, localIni.c_str());
-    printf("[UGC] Synced latest v%s DLLs into local Steam Workshop folder (%s)\n", REPUBLICMP_VERSION, lws.c_str());
+    printf("[UGC] Synced latest v%s DLLs & scripts into local Steam Workshop folder (%s)\n", REPUBLICMP_VERSION, lws.c_str());
 }
 
 static void SyncLatestModBinaries(const std::string& repoRoot, const std::string& wsDir, const std::string& contentDir, uint64_t activeId)
@@ -227,13 +234,13 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
 
     // 2. Also sync into local subscribed Steam Workshop folders and Steam game dir if present
     SyncLocalWorkshopFolder("C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3823543010",
-                            srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
+                            contentDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
     if (activeId > 0 && activeId != 3823543010ULL) {
         char activeDir[MAX_PATH] = {};
         _snprintf_s(activeDir, sizeof(activeDir), _TRUNCATE,
                     "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\%llu",
                     (unsigned long long)activeId);
-        SyncLocalWorkshopFolder(activeDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
+        SyncLocalWorkshopFolder(activeDir, contentDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
     }
 
     const char* steamGameDir = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SovietRepublic";
@@ -459,7 +466,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix Rail Construction Office (RCO) track builder stuck after 1st trip, court case/road sync/depot check crash fixes, and construction site Stop/Resume/Pay Sim-thread deferral",
+                "v%s (Protocol %d) - Full compatibility with game update v1.1.1.13 (BuildID 24922914, PE 0x6A8D4087) + fix START-COOP.bat working directory launch from Steam Workshop folder",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

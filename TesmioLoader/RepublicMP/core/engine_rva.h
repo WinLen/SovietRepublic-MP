@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Canonical RVA addresses and structure offsets for SOVIET64.exe (PE 6A3EB6AD).
+// Canonical RVA addresses and structure offsets for SOVIET64.exe (v1.1.1.13, PE 6A8D4087).
 // Centralizes engine memory constants and enforces compile-time invariants from AGENTS.md.
 #pragma once
 
@@ -386,34 +386,34 @@
 #define RVA_BLD_WORKER_STEP         0x14C5B0
 #endif
 #ifndef RVA_BLD_IMPORT_STEP
-#define RVA_BLD_IMPORT_STEP         0x171E10
+#define RVA_BLD_IMPORT_STEP         0x171E30
 #endif
 #ifndef RVA_BLD_PRODUCTIVITY_STEP
-#define RVA_BLD_PRODUCTIVITY_STEP   0x175A00
+#define RVA_BLD_PRODUCTIVITY_STEP   0x175A20
 #endif
 #ifndef RVA_BLD_COURTHOUSE_STEP
-#define RVA_BLD_COURTHOUSE_STEP     0x181C80
+#define RVA_BLD_COURTHOUSE_STEP     0x181CA0
 #endif
 #ifndef RVA_BLD_POLICE_STEP
-#define RVA_BLD_POLICE_STEP         0x1825D0
+#define RVA_BLD_POLICE_STEP         0x1825F0
 #endif
 #ifndef RVA_BLD_HOTEL_STEP
-#define RVA_BLD_HOTEL_STEP          0x183010
+#define RVA_BLD_HOTEL_STEP          0x183030
 #endif
 #ifndef RVA_BLD_ATTRACTION1_STEP
-#define RVA_BLD_ATTRACTION1_STEP    0x183580
+#define RVA_BLD_ATTRACTION1_STEP    0x1835A0
 #endif
 #ifndef RVA_BLD_EXPORT_STEP
-#define RVA_BLD_EXPORT_STEP         0x183D30
+#define RVA_BLD_EXPORT_STEP         0x183D50
 #endif
 #ifndef RVA_BLD_ATTRACTION2_STEP
-#define RVA_BLD_ATTRACTION2_STEP    0x184930
+#define RVA_BLD_ATTRACTION2_STEP    0x184950
 #endif
 #ifndef RVA_CALC_CUSTOMS_TOURIST_SPAWN
-#define RVA_CALC_CUSTOMS_TOURIST_SPAWN 0x185100
+#define RVA_CALC_CUSTOMS_TOURIST_SPAWN 0x185120
 #endif
 #ifndef RVA_BLD_CUSTOMS_TOURIST_STEP
-#define RVA_BLD_CUSTOMS_TOURIST_STEP 0x1854E0
+#define RVA_BLD_CUSTOMS_TOURIST_STEP 0x185500
 #endif
 #ifndef BLD_CUSTOMS_WAITING_TOURISTS_OFF
 #define BLD_CUSTOMS_WAITING_TOURISTS_OFF 0xBC0u
@@ -428,133 +428,133 @@
 #define BLD_CUSTOMS_TOURISTS_SPAWNED_OFF 0x1234u
 #endif
 #ifndef RVA_BLD_TOURISM_STEP
-#define RVA_BLD_TOURISM_STEP        0x1856F0
+#define RVA_BLD_TOURISM_STEP        0x185710
 #endif
 #ifndef RVA_BLD_STEP_PRODUCTION
-#define RVA_BLD_STEP_PRODUCTION     0x189030
+#define RVA_BLD_STEP_PRODUCTION     0x189050
 #endif
 #ifndef RVA_CIT_HOME_STEP
-#define RVA_CIT_HOME_STEP           0x18FF20
+#define RVA_CIT_HOME_STEP           0x18FF40
 #endif
 #ifndef RVA_BLD_CONSUME_RESOURCE
-#define RVA_BLD_CONSUME_RESOURCE    0x1990C0
+#define RVA_BLD_CONSUME_RESOURCE    0x1990E0
 #endif
 #ifndef RVA_WATER_HEALTH_STEP
 #define RVA_WATER_HEALTH_STEP       0x1B0950
 #endif
 #ifndef RVA_CUSTOMS_BORDER
-#define RVA_CUSTOMS_BORDER          0x1B7D50
+#define RVA_CUSTOMS_BORDER          0x1B7CD0
 #endif
 #ifndef RVA_CUSTOMS_VEHICLE
-#define RVA_CUSTOMS_VEHICLE         0x1B9A40
+#define RVA_CUSTOMS_VEHICLE         0x1B99C0
 #endif
 #ifndef RVA_LIVING_TICK
-#define RVA_LIVING_TICK             0x1BC210
+#define RVA_LIVING_TICK             0x1BC190
 #endif
 #ifndef RVA_BLD_STEP_PRE_POST
-#define RVA_BLD_STEP_PRE_POST       0x1BD530
+#define RVA_BLD_STEP_PRE_POST       0x1BD4B0
 #endif
 #ifndef RVA_BLD_STEP_UTILITY
-#define RVA_BLD_STEP_UTILITY        0x1D1E80
+#define RVA_BLD_STEP_UTILITY        0x1D1E00
 #endif
 #ifndef RVA_BLD_UTILITY_BORDER_STEP
-#define RVA_BLD_UTILITY_BORDER_STEP 0x1D2DD0
+#define RVA_BLD_UTILITY_BORDER_STEP 0x1D2D50
 #endif
 #ifndef RVA_LEDGER_ADD
-#define RVA_LEDGER_ADD              0x2FDB00
+#define RVA_LEDGER_ADD              0x2FDA80
 #endif
 #ifndef RVA_STAT_RECORD_CLEAR
-#define RVA_STAT_RECORD_CLEAR       0x2FC290
+#define RVA_STAT_RECORD_CLEAR       0x2FC210
 #endif
 #ifndef CHEAT_KEYS_STEP_RVA
-#define CHEAT_KEYS_STEP_RVA         0x309D80
+#define CHEAT_KEYS_STEP_RVA         0x309D00
 #endif
 #ifndef CHEAT_KEYS_CALL_RVA
-#define CHEAT_KEYS_CALL_RVA         0x30D959
+#define CHEAT_KEYS_CALL_RVA         0x30D8D9
 #endif
 #ifndef RVA_CALC_STORED_RESOURCES
-#define RVA_CALC_STORED_RESOURCES   0x33E620
+#define RVA_CALC_STORED_RESOURCES   0x33E5A0
 #endif
 #ifndef RVA_VEHICLE_BORDER_EXPORT
-#define RVA_VEHICLE_BORDER_EXPORT   0x3DF9B9
+#define RVA_VEHICLE_BORDER_EXPORT   0x3DF8F9
 #endif
 #ifndef RVA_VEC_LOAN_PUSH_BACK
-#define RVA_VEC_LOAN_PUSH_BACK      0x448AA0
+#define RVA_VEC_LOAN_PUSH_BACK      0x448A30
 #endif
 #ifndef RVA_HEATING_STEP
-#define RVA_HEATING_STEP            0x4881A0
+#define RVA_HEATING_STEP            0x488130
 #endif
 #ifndef RVA_TAKE_LOAN
-#define RVA_TAKE_LOAN               0x4B9140
+#define RVA_TAKE_LOAN               0x4B90D0
 #endif
 #ifndef RVA_GET_MAX_AVAILABLE_BORROW
-#define RVA_GET_MAX_AVAILABLE_BORROW 0x4B9380
+#define RVA_GET_MAX_AVAILABLE_BORROW 0x4B9310
 #endif
 #ifndef RVA_STEP_ONE_LOAN_DAY
-#define RVA_STEP_ONE_LOAN_DAY       0x4B9490
+#define RVA_STEP_ONE_LOAN_DAY       0x4B9420
 #endif
 #ifndef RVA_STEP_ALL_LOANS_DAILY
-#define RVA_STEP_ALL_LOANS_DAILY    0x4B9660
+#define RVA_STEP_ALL_LOANS_DAILY    0x4B95F0
 #endif
 #ifndef RVA_CALC_INTEREST_RATE
-#define RVA_CALC_INTEREST_RATE      0x4B9A80
+#define RVA_CALC_INTEREST_RATE      0x4B9A10
 #endif
 #ifndef RVA_VEHICLE_CARGO_TRADE
-#define RVA_VEHICLE_CARGO_TRADE     0x68B330
+#define RVA_VEHICLE_CARGO_TRADE     0x68B3D0
 #endif
 #ifndef RVA_VEHICLE_REFUEL
-#define RVA_VEHICLE_REFUEL          0x6B3B50
+#define RVA_VEHICLE_REFUEL          0x6B3CF0
 #endif
 #ifndef RVA_FOREIGN_LABOR_STEP
-#define RVA_FOREIGN_LABOR_STEP      0x830820
+#define RVA_FOREIGN_LABOR_STEP      0x8309C0
 #endif
 #ifndef RVA_FOREIGN_WORKER_BOARD
-#define RVA_FOREIGN_WORKER_BOARD    0x831120
+#define RVA_FOREIGN_WORKER_BOARD    0x8312C0
 #endif
 #ifndef RVA_CITIZEN_VEHICLE_ALIGHT
-#define RVA_CITIZEN_VEHICLE_ALIGHT  0x831700
+#define RVA_CITIZEN_VEHICLE_ALIGHT  0x8318A0
 #endif
 #ifndef RVA_CITIZEN_FOOT_ARRIVE
-#define RVA_CITIZEN_FOOT_ARRIVE     0x82D820
+#define RVA_CITIZEN_FOOT_ARRIVE     0x82D9C0
 #endif
 #ifndef RVA_CITIZEN_COMMIT_CRIME
-#define RVA_CITIZEN_COMMIT_CRIME    0x2558D0
+#define RVA_CITIZEN_COMMIT_CRIME    0x255850
 #endif
 #ifndef RVA_CRIME_EXPIRE_CASE
-#define RVA_CRIME_EXPIRE_CASE       0x2571E0
+#define RVA_CRIME_EXPIRE_CASE       0x257160
 #endif
 #ifndef RVA_CITIZEN_CHURCH_STEP
-#define RVA_CITIZEN_CHURCH_STEP     0x834520
+#define RVA_CITIZEN_CHURCH_STEP     0x8346C0
 #endif
 #ifndef RVA_CITIZEN_STUDIO_EFFECT
-#define RVA_CITIZEN_STUDIO_EFFECT   0x4C21F0
+#define RVA_CITIZEN_STUDIO_EFFECT   0x4C2180
 #endif
 #ifndef RVA_CITIZEN_STUDIO_SELECT
-#define RVA_CITIZEN_STUDIO_SELECT   0x4C2610
+#define RVA_CITIZEN_STUDIO_SELECT   0x4C25A0
 #endif
 #ifndef RVA_CIT_SEVERE_ILLNESS_TICK
-#define RVA_CIT_SEVERE_ILLNESS_TICK 0x833509
+#define RVA_CIT_SEVERE_ILLNESS_TICK 0x8336A9
 #endif
 #ifndef RVA_CIT_SEVERE_ILLNESS_RESUME
-#define RVA_CIT_SEVERE_ILLNESS_RESUME 0x833523
+#define RVA_CIT_SEVERE_ILLNESS_RESUME 0x8336C3
 #endif
 #ifndef RVA_CITIZEN_BIRTH
-#define RVA_CITIZEN_BIRTH           0x834A20
+#define RVA_CITIZEN_BIRTH           0x834BC0
 #endif
 #ifndef RVA_CITIZEN_STARVE_STEP
-#define RVA_CITIZEN_STARVE_STEP     0x834DE0
+#define RVA_CITIZEN_STARVE_STEP     0x834F80
 #endif
 #ifndef RVA_CITIZEN_REMOVE
-#define RVA_CITIZEN_REMOVE          0x835D70
+#define RVA_CITIZEN_REMOVE          0x835F10
 #endif
 #ifndef RVA_CITIZEN_EVAL_NEEDS
-#define RVA_CITIZEN_EVAL_NEEDS      0x83A6D0
+#define RVA_CITIZEN_EVAL_NEEDS      0x83A870
 #endif
 #ifndef RVA_CITIZEN_CAN_MOVE_TO_BLD
-#define RVA_CITIZEN_CAN_MOVE_TO_BLD 0x83C590
+#define RVA_CITIZEN_CAN_MOVE_TO_BLD 0x83C730
 #endif
 #ifndef RVA_CITIZEN_MOVE_TO_BLD
-#define RVA_CITIZEN_MOVE_TO_BLD     0x83CA50
+#define RVA_CITIZEN_MOVE_TO_BLD     0x83CBF0
 #endif
 
 static_assert(WORLD_SYSTAB_SUBPAGE_OFFSET == WORLD_SYSTAB_TAB_PTR_OFFSET + 0x0Cu &&
@@ -647,7 +647,7 @@ struct SovietStatResEntry {
 #define WORKSHOP_MGR_PTR_RVA        0x9E22B8
 #endif
 #ifndef RVA_WORKSHOP_REFRESH
-#define RVA_WORKSHOP_REFRESH        0x8407C0
+#define RVA_WORKSHOP_REFRESH        0x840960
 #endif
 
 // ---------------------------------------------------------------------------
@@ -770,28 +770,28 @@ struct SovietStatResEntry {
 #define WORLD_SOVIET_BORDER_BLD_OFF  0x11B00
 #endif
 #ifndef RVA_LINES_NOTIFY_VEH
-#define RVA_LINES_NOTIFY_VEH        0x499790
+#define RVA_LINES_NOTIFY_VEH        0x499720
 #endif
 #ifndef RVA_VEH_INVERT_STOPS
-#define RVA_VEH_INVERT_STOPS        0x6644A0
+#define RVA_VEH_INVERT_STOPS        0x664500
 #endif
 #ifndef RVA_VEH_ADD_STOP
-#define RVA_VEH_ADD_STOP            0x67D5D0
+#define RVA_VEH_ADD_STOP            0x67D670
 #endif
 #ifndef RVA_VEH_DEL_STOP
-#define RVA_VEH_DEL_STOP            0x67D910
+#define RVA_VEH_DEL_STOP            0x67D9B0
 #endif
 #ifndef RVA_VEH_REBUILD_CARGO_SUM
-#define RVA_VEH_REBUILD_CARGO_SUM   0x6BF1D0
+#define RVA_VEH_REBUILD_CARGO_SUM   0x6BF370
 #endif
 #ifndef RVA_VEH_ADD_STOP_CARGO_RES
-#define RVA_VEH_ADD_STOP_CARGO_RES  0x6BF710
+#define RVA_VEH_ADD_STOP_CARGO_RES  0x6BF8B0
 #endif
 #ifndef RVA_VEH_RELEASE
-#define RVA_VEH_RELEASE             0x6C52C0
+#define RVA_VEH_RELEASE             0x6C5460
 #endif
 #ifndef RVA_HELI_REROUTE
-#define RVA_HELI_REROUTE            0x6DE260
+#define RVA_HELI_REROUTE            0x6DE400
 #endif
 #ifndef VEH_WORKER_SIM_FLAG_OFFSET
 #define VEH_WORKER_SIM_FLAG_OFFSET  0xD41
@@ -830,13 +830,13 @@ struct SovietStatResEntry {
 #define RVA_VEC_WAYPOINT_PUSH_BACK    0x02F2F0
 #endif
 #ifndef RVA_VEH_CLEAR_PATH_NODES
-#define RVA_VEH_CLEAR_PATH_NODES      0x681970
+#define RVA_VEH_CLEAR_PATH_NODES      0x681A10
 #endif
 #ifndef RVA_VEH_ASSIGN_BAY_PATH
-#define RVA_VEH_ASSIGN_BAY_PATH       0x6B2A60
+#define RVA_VEH_ASSIGN_BAY_PATH       0x6B2C00
 #endif
 #ifndef RVA_VEH_ARRIVAL_STEP
-#define RVA_VEH_ARRIVAL_STEP          0x6CD1E0
+#define RVA_VEH_ARRIVAL_STEP          0x6CD380
 #endif
 #ifndef BLD_ATTACHED_BEGIN_OFFSET
 #define BLD_ATTACHED_BEGIN_OFFSET     0x5B8u
@@ -968,7 +968,7 @@ struct SovietStatResEntry {
 
 // Residential building invite citizens (0x6F8CC0: 0x6FEE1E / 0x6FF31A / 0x6FF52D / 0x6FFA4E -> 0x823470)
 #ifndef RVA_SPAWN_CITIZEN
-#define RVA_SPAWN_CITIZEN                   0x823470
+#define RVA_SPAWN_CITIZEN                   0x823610
 #endif
 #ifndef RVA_IAT_RAND
 #define RVA_IAT_RAND                        0x86E0A0
@@ -977,13 +977,13 @@ struct SovietStatResEntry {
 #define RVA_IAT_RAND_FLOAT                  0x86CA78
 #endif
 #ifndef RVA_INVITE_EXPERT_EDU_MIN_FLOAT
-#define RVA_INVITE_EXPERT_EDU_MIN_FLOAT     0x90A2A8
+#define RVA_INVITE_EXPERT_EDU_MIN_FLOAT     0x90A2B8
 #endif
 #ifndef RVA_INVITE_EXPERT_EDU_MAX_FLOAT
-#define RVA_INVITE_EXPERT_EDU_MAX_FLOAT     0x90A310
+#define RVA_INVITE_EXPERT_EDU_MAX_FLOAT     0x90A320
 #endif
 #ifndef RVA_INVITE_EXPERT_MULT_FLOAT
-#define RVA_INVITE_EXPERT_MULT_FLOAT        0x90A364
+#define RVA_INVITE_EXPERT_MULT_FLOAT        0x90A374
 #endif
 #ifndef WORLD_PRICE_IMMIGRANT_USD_OFF
 #define WORLD_PRICE_IMMIGRANT_USD_OFF       0x0E7C
@@ -1079,7 +1079,7 @@ static_assert(CAM_MGR_POS_OFFSET == 0x08 && CAM_MGR_ANGLES_OFFSET == 0x14 &&
               CAM_MGR_TRANS_STEP_OFFSET == 0x14C && CAM_MGR_TRANS_TIMER_OFFSET == 0x15C &&
               CAM_MGR_TRANS_DUR_OFFSET == 0x160,
               "Camera manager position and transition offsets must match 0x14250 layout");
-static_assert(RVA_SPAWN_CITIZEN == 0x823470 &&
+static_assert(RVA_SPAWN_CITIZEN == 0x823610 &&
               BLD_CITIZENS_END_OFF == BLD_CITIZENS_BEGIN_OFF + 8 &&
               WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF == 0x11568 &&
               WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12 == 0x1157C,
@@ -1157,10 +1157,10 @@ static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
 #define NOTIF_MSG_POS_Z_OFFSET          0x4208u
 #endif
 #ifndef NOTIFICATION_REBUILD_POPUPS_RVA
-#define NOTIFICATION_REBUILD_POPUPS_RVA 0x4C4A40u
+#define NOTIFICATION_REBUILD_POPUPS_RVA 0x4C49D0u
 #endif
 #ifndef WARNING_POPUP_CREATE_RVA
-#define WARNING_POPUP_CREATE_RVA        0x6EE2A0u
+#define WARNING_POPUP_CREATE_RVA        0x6EE440u
 #endif
 #ifndef REMOTE_3D_SOUND_MAX_DIST
 #define REMOTE_3D_SOUND_MAX_DIST        250.0f
@@ -1191,16 +1191,16 @@ static_assert(WORLD_WARNING_TIMER_OFFSET == WORLD_WARNING_TEXT_OFFSET + WORLD_WA
 #define BLD_STORAGE_VEC_CLEAR_RVA       0x0B11F0u
 #endif
 #ifndef BLD_INIT_RES_SLIDERS_RVA
-#define BLD_INIT_RES_SLIDERS_RVA        0x174B30u
+#define BLD_INIT_RES_SLIDERS_RVA        0x174B50u
 #endif
 #ifndef BLD_APPLY_AUTO_BUY_RVA
-#define BLD_APPLY_AUTO_BUY_RVA          0x174D40u
+#define BLD_APPLY_AUTO_BUY_RVA          0x174D60u
 #endif
 #ifndef BLD_MANUAL_BUY_RES_RVA
-#define BLD_MANUAL_BUY_RES_RVA          0x174E40u
+#define BLD_MANUAL_BUY_RES_RVA          0x174E60u
 #endif
 #ifndef SITE_BLD_MANUAL_BUY_RES_RVA
-#define SITE_BLD_MANUAL_BUY_RES_RVA     0x711A4Bu
+#define SITE_BLD_MANUAL_BUY_RES_RVA     0x711BEBu
 #endif
 #ifndef BLD_AUTO_BUY_MODE_OFFSET
 #define BLD_AUTO_BUY_MODE_OFFSET        0x9E8u
@@ -1288,19 +1288,19 @@ static_assert(RVA_IAT_RESTORE_ORIGINAL_VALUES == 0x86D570, "RVA_IAT_RESTORE_ORIG
 #define BLD_UNIV_STAFF_RATIO_OFFSET         0x11A8u
 #endif
 #ifndef RVA_BLD_UNIV_STEP
-#define RVA_BLD_UNIV_STEP                   0x17DCF0u
+#define RVA_BLD_UNIV_STEP                   0x17DD10u
 #endif
 #ifndef RVA_RESEARCH_DAILY_UPDATE
-#define RVA_RESEARCH_DAILY_UPDATE           0x2F6BD0u
+#define RVA_RESEARCH_DAILY_UPDATE           0x2F6B50u
 #endif
 #ifndef RVA_RESEARCH_RECOMPUTE
-#define RVA_RESEARCH_RECOMPUTE              0x2F6C90u
+#define RVA_RESEARCH_RECOMPUTE              0x2F6C10u
 #endif
 #ifndef RVA_RESEARCH_FIND_BY_BLD
-#define RVA_RESEARCH_FIND_BY_BLD            0x2F7B10u
+#define RVA_RESEARCH_FIND_BY_BLD            0x2F7A90u
 #endif
 #ifndef RVA_UNIV_RESEARCH_PANEL
-#define RVA_UNIV_RESEARCH_PANEL             0x2F7ED0u
+#define RVA_UNIV_RESEARCH_PANEL             0x2F7E50u
 #endif
 
 static_assert(WORLD_RESEARCH_VEC_END_OFFSET == WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8 &&
@@ -1321,28 +1321,28 @@ static_assert(WORLD_RESEARCH_VEC_END_OFFSET == WORLD_RESEARCH_VEC_BEGIN_OFFSET +
 #define RVA_CALLER_OFFICE_ROAD_SCAN         0x14119Bu
 #endif
 #ifndef RVA_ASSIGN_CONSTRUCTION_OFFICE
-#define RVA_ASSIGN_CONSTRUCTION_OFFICE      0x161C90u
+#define RVA_ASSIGN_CONSTRUCTION_OFFICE      0x161CB0u
 #endif
 #ifndef RVA_UNASSIGN_CONSTRUCTION_OFFICE
-#define RVA_UNASSIGN_CONSTRUCTION_OFFICE    0x162360u
+#define RVA_UNASSIGN_CONSTRUCTION_OFFICE    0x162380u
 #endif
 #ifndef RVA_START_PLANNED_CONSTRUCTION
-#define RVA_START_PLANNED_CONSTRUCTION      0x1A8D70u
+#define RVA_START_PLANNED_CONSTRUCTION      0x1A8D90u
 #endif
 #ifndef SITE_COPY_OFFICE_ASSIGN_NET_RVA
-#define SITE_COPY_OFFICE_ASSIGN_NET_RVA     0x1D70EEu
+#define SITE_COPY_OFFICE_ASSIGN_NET_RVA     0x1D706Eu
 #endif
 #ifndef SITE_COPY_OFFICE_ASSIGN_BLD_RVA
-#define SITE_COPY_OFFICE_ASSIGN_BLD_RVA     0x1D83C2u
+#define SITE_COPY_OFFICE_ASSIGN_BLD_RVA     0x1D8342u
 #endif
 #ifndef SITE_CONSTRUCT_TOOL_START_PLAN_RVA
-#define SITE_CONSTRUCT_TOOL_START_PLAN_RVA  0x1D9FFDu
+#define SITE_CONSTRUCT_TOOL_START_PLAN_RVA  0x1D9F7Du
 #endif
 #ifndef SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA
-#define SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA  0x1DA02Au
+#define SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA  0x1D9FAAu
 #endif
 #ifndef SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA
-#define SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA  0x1DA48Du
+#define SITE_CONSTRUCT_TOOL_ASSIGN_BLD_RVA  0x1DA40Du
 #endif
 
 static_assert(RVA_UNASSIGN_CONSTRUCTION_OFFICE == RVA_ASSIGN_CONSTRUCTION_OFFICE + 0x6D0u &&
@@ -1362,16 +1362,16 @@ static_assert(VEH_TYPE_SCRIPT_NAME_OFFSET == 0x200u &&
 // ---------------------------------------------------------------------------
 
 #ifndef CITY_CREATE_RVA
-#define CITY_CREATE_RVA                     0x32F450u
+#define CITY_CREATE_RVA                     0x32F3D0u
 #endif
 #ifndef CITY_DELETE_RVA
-#define CITY_DELETE_RVA                     0x32F5C0u
+#define CITY_DELETE_RVA                     0x32F540u
 #endif
 #ifndef CITY_REASSIGN_BLDS_RVA
-#define CITY_REASSIGN_BLDS_RVA              0x32FF40u
+#define CITY_REASSIGN_BLDS_RVA              0x32FEC0u
 #endif
 #ifndef REBUILD_STOP_LINE_NAMES_RVA
-#define REBUILD_STOP_LINE_NAMES_RVA         0x4963D0u
+#define REBUILD_STOP_LINE_NAMES_RVA         0x496360u
 #endif
 #ifndef WORLD_RENAME_REFRESH_SRC_OFF
 #define WORLD_RENAME_REFRESH_SRC_OFF        0xC6B0u
@@ -1392,10 +1392,10 @@ static_assert(VEH_TYPE_SCRIPT_NAME_OFFSET == 0x200u &&
 #define LINE_NAME_OFFSET                    0x04u
 #endif
 #ifndef SITE_RENAME_AFTER_CALL_RVA
-#define SITE_RENAME_AFTER_CALL_RVA          0x8018D5u
+#define SITE_RENAME_AFTER_CALL_RVA          0x801A75u
 #endif
 #ifndef SITE_RENAME_SKIP_MUTATION_RVA
-#define SITE_RENAME_SKIP_MUTATION_RVA       0x8019CEu
+#define SITE_RENAME_SKIP_MUTATION_RVA       0x801B6Eu
 #endif
 #ifndef VEH_CUSTOM_NAME_FLAG_OFF
 #define VEH_CUSTOM_NAME_FLAG_OFF            0x108u
@@ -1428,13 +1428,13 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 // ---------------------------------------------------------------------------
 
 #ifndef RVA_HUD_DRAW_BTN_FRAME
-#define RVA_HUD_DRAW_BTN_FRAME              0x4461F0u
+#define RVA_HUD_DRAW_BTN_FRAME              0x446180u
 #endif
 #ifndef RVA_MINIMAP_DRAW_CONTENT
-#define RVA_MINIMAP_DRAW_CONTENT            0x4BDE80u
+#define RVA_MINIMAP_DRAW_CONTENT            0x4BDE10u
 #endif
 #ifndef RVA_MINIMAP_DRAW_BUTTONS
-#define RVA_MINIMAP_DRAW_BUTTONS            0x4BFF40u
+#define RVA_MINIMAP_DRAW_BUTTONS            0x4BFED0u
 #endif
 #ifndef WORLD_MINIMAP_PTR_OFFSET
 #define WORLD_MINIMAP_PTR_OFFSET            0xD400u
@@ -1512,7 +1512,7 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #define HUD_FMT_WSTR_RVA                    0x8B5528u
 #endif
 #ifndef HUD_BASIC_PASS_STR_RVA
-#define HUD_BASIC_PASS_STR_RVA              0x8D8464u
+#define HUD_BASIC_PASS_STR_RVA              0x8D8450u
 #endif
 #ifndef HUD_MOUSE_STATE_RVA
 #define HUD_MOUSE_STATE_RVA                 0xA54B90u
@@ -1636,8 +1636,8 @@ static_assert(CAM_MGR_PID_PTRS_OFFSET + CAM_MGR_PID_COUNT * sizeof(void*) == 0x1
               VEH_TRAIL_BUFFER_OFFSET + VEH_TRAIL_ENTRY_COUNT * VEH_TRAIL_ENTRY_STRIDE == VEH_AXLE_FRONT_POS_OFFSET &&
               VEH_AXLE_REAR_POS_OFFSET == VEH_AXLE_FRONT_POS_OFFSET + 3 * sizeof(float) &&
               BLD_BAY_POINT_STRIDE == 0x20u &&
-              RVA_VEH_ARRIVAL_STEP == 0x6CD1E0 &&
-              RVA_VEH_ASSIGN_BAY_PATH == 0x6B2A60,
+              RVA_VEH_ARRIVAL_STEP == 0x6CD380 &&
+              RVA_VEH_ASSIGN_BAY_PATH == 0x6B2C00,
               "Camera manager PID pointers (+0xF8..+0x128) and vehicle trail buffer/axle offsets (+0x1168..+0x130C) must match 1.1.1.9 layout");
 
 // Building animated sub-mesh (oil pumpjack / excavator / mine hoist / wind turbine / factory rotor) offsets
@@ -1686,10 +1686,10 @@ static_assert(BLD_CONSTRUCTION_SITE_OFFSET == 0x628u &&
 #define BLD_TYPE_COUNT_LIMIT_OFFSET          0x0208u // int32_t $COUNT_LIMIT in BUILDING::TYPE
 #endif
 #ifndef RVA_BLD_COUNT_LIMIT_CHECK
-#define RVA_BLD_COUNT_LIMIT_CHECK            0x5F31F0u // bool __fastcall(const void* limitTableVec, const void* btype)
+#define RVA_BLD_COUNT_LIMIT_CHECK            0x5F3180u // bool __fastcall(const void* limitTableVec, const void* btype)
 #endif
 #ifndef RVA_BLD_COUNT_LIMIT_GET
-#define RVA_BLD_COUNT_LIMIT_GET              0x5F3290u // SovietCountLimitEntry* __fastcall(const void* limitTableVec, SovietCountLimitEntry* out, const void* btype)
+#define RVA_BLD_COUNT_LIMIT_GET              0x5F3220u // SovietCountLimitEntry* __fastcall(const void* limitTableVec, SovietCountLimitEntry* out, const void* btype)
 #endif
 
 static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
@@ -1702,7 +1702,7 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #define RVA_VEC_CARGO_ENTRY_PUSH_BACK        0x0B1C20u // void __fastcall(void* vec, uint64_t count)
 #endif
 #ifndef RVA_OPERATOR_NEW
-#define RVA_OPERATOR_NEW                     0x84DECCu // void* __fastcall(size_t bytes)
+#define RVA_OPERATOR_NEW                     0x84E06Cu // void* __fastcall(size_t bytes)
 #endif
 #ifndef RVA_CARGO_RECORD_CTOR
 #define RVA_CARGO_RECORD_CTOR                0x1512A0u // void* __fastcall(void* rec0x198)
@@ -1714,28 +1714,28 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #define RVA_VEC_LINK_PUSH_BACK               0x08E050u // void __fastcall(void* vec, const void* ptrAddr)
 #endif
 #ifndef RVA_REMOVE_PARTNER_LINK
-#define RVA_REMOVE_PARTNER_LINK              0x1C7E80u // void __fastcall(uint64_t world, uint64_t bld, uint64_t partnerBld)
+#define RVA_REMOVE_PARTNER_LINK              0x1C7E00u // void __fastcall(uint64_t world, uint64_t bld, uint64_t partnerBld)
 #endif
 #ifndef RVA_REMOVE_LINK_BY_INDEX
-#define RVA_REMOVE_LINK_BY_INDEX             0x162B40u // void __fastcall(uint64_t world, uint64_t bld, int index)
+#define RVA_REMOVE_LINK_BY_INDEX             0x162B60u // void __fastcall(uint64_t world, uint64_t bld, int index)
 #endif
 #ifndef SITE_COPY_DIST_OFFICE_RVA
-#define SITE_COPY_DIST_OFFICE_RVA            0x2B8A8Eu
+#define SITE_COPY_DIST_OFFICE_RVA            0x2B8A0Eu
 #endif
 #ifndef FN_COPY_DIST_OFFICE_RVA
-#define FN_COPY_DIST_OFFICE_RVA              0x2B8B10u
+#define FN_COPY_DIST_OFFICE_RVA              0x2B8A90u
 #endif
 #ifndef SITE_COPY_WASTE_SETTINGS_RVA
-#define SITE_COPY_WASTE_SETTINGS_RVA         0x1DBCBEu
+#define SITE_COPY_WASTE_SETTINGS_RVA         0x1DBC3Eu
 #endif
 #ifndef FN_COPY_WASTE_SETTINGS_RVA
-#define FN_COPY_WASTE_SETTINGS_RVA           0x1DC5D0u
+#define FN_COPY_WASTE_SETTINGS_RVA           0x1DC550u
 #endif
 #ifndef SITE_COPY_TRANSFER_SETTINGS_RVA
-#define SITE_COPY_TRANSFER_SETTINGS_RVA      0x1DC00Fu
+#define SITE_COPY_TRANSFER_SETTINGS_RVA      0x1DBF8Fu
 #endif
 #ifndef FN_COPY_TRANSFER_SETTINGS_RVA
-#define FN_COPY_TRANSFER_SETTINGS_RVA        0x1DC7D0u
+#define FN_COPY_TRANSFER_SETTINGS_RVA        0x1DC750u
 #endif
 #ifndef VEH_CARRIED_BEGIN_OFFSET
 #define VEH_CARRIED_BEGIN_OFFSET             0x0488u   // std::vector<VEHICLE*> begin on flatbed carrier
@@ -1756,13 +1756,13 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #define BLD_VEHICLES_END_OFFSET              0x0C78u   // std::vector<VEHICLE*> end on workplace building
 #endif
 #ifndef RVA_IS_VEHICLE_AT_DEPOT_OR_STOP
-#define RVA_IS_VEHICLE_AT_DEPOT_OR_STOP      0x3BB640u // bool __fastcall(const void* world, const void* bld, const void* veh, uint8_t a4)
+#define RVA_IS_VEHICLE_AT_DEPOT_OR_STOP      0x3BB580u // bool __fastcall(const void* world, const void* bld, const void* veh, uint8_t a4)
 #endif
 #ifndef RVA_VEH_FIND_PATH
-#define RVA_VEH_FIND_PATH                    0x680A20u // bool __fastcall(void* veh, uint8_t a2, int32_t slotIdx, uint8_t a4, uint8_t a5)
+#define RVA_VEH_FIND_PATH                    0x680AC0u // bool __fastcall(void* veh, uint8_t a2, int32_t slotIdx, uint8_t a4, uint8_t a5)
 #endif
 #ifndef RVA_VEH_BUILD_WAYPOINTS
-#define RVA_VEH_BUILD_WAYPOINTS              0x6831A0u // void __fastcall(void* veh, uint8_t a2)
+#define RVA_VEH_BUILD_WAYPOINTS              0x683240u // void __fastcall(void* veh, uint8_t a2)
 #endif
 #ifndef VEH_DEPOT_SLOT_IDX_OFFSET
 #define VEH_DEPOT_SLOT_IDX_OFFSET            0x0510u   // int32_t depot / construction slot index (-1 when none)
@@ -1791,11 +1791,11 @@ static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               VEH_WORKPLACE_BLD_OFFSET == VEH_CUR_BLD_OFFSET + 8u &&
               VEH_ORDERS_END_OFFSET == VEH_ORDERS_BEGIN_OFFSET + 8u &&
               VEH_REVERSE_NEEDED_FLAG_OFFSET == VEH_BAY_ARRIVED_FLAG_OFFSET + 1u &&
-              FN_COPY_DIST_OFFICE_RVA == 0x2B8B10u &&
-              FN_COPY_WASTE_SETTINGS_RVA == 0x1DC5D0u &&
-              FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC7D0u &&
-              RVA_IS_VEHICLE_AT_DEPOT_OR_STOP == 0x3BB640u &&
-              RVA_VEH_FIND_PATH == 0x680A20u &&
-              RVA_VEH_BUILD_WAYPOINTS == 0x6831A0u,
+              FN_COPY_DIST_OFFICE_RVA == 0x2B8A90u &&
+              FN_COPY_WASTE_SETTINGS_RVA == 0x1DC550u &&
+              FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC750u &&
+              RVA_IS_VEHICLE_AT_DEPOT_OR_STOP == 0x3BB580u &&
+              RVA_VEH_FIND_PATH == 0x680AC0u &&
+              RVA_VEH_BUILD_WAYPOINTS == 0x683240u,
               "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, and building copy tool RVAs must match 1.1.1.9 layout");
 

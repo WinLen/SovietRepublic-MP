@@ -23,9 +23,9 @@
 #define SLOT_ENTRY_SIZE 0x10
 #define MAX_SLOTS 16
 
-#define PIPELINE_TO_EXPORT_RVA 0x1B7AF0 // FUN_1401b7af0(world, bld): empties the export slots
-#define PIPELINE_TO_IMPORT_RVA 0x1B7C00 // FUN_1401b7c00(world, bld): fills the chosen resource
-#define AUTO_PURCHASE_RVA 0x1754D0      // FUN_1401754d0(world, bld, value)
+#define PIPELINE_TO_EXPORT_RVA 0x1B7A70 // FUN_1401b7af0(world, bld): empties the export slots
+#define PIPELINE_TO_IMPORT_RVA 0x1B7B80 // FUN_1401b7c00(world, bld): fills the chosen resource
+#define AUTO_PURCHASE_RVA 0x1754F0      // FUN_1401754d0(world, bld, value)
 
 enum FieldKind { FIELD_BYTES, FIELD_SLOT0 };   // SLOT0: offset is inside storage slot 0
 enum FollowUp { FOLLOW_NONE, FOLLOW_PIPELINE, FOLLOW_AUTO_PURCHASE };

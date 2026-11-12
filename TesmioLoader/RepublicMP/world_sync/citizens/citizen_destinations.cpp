@@ -18,7 +18,7 @@ constexpr int kMax = SETTINGS_MAX_SLOT_ENTRIES * 2 / kStride; // 9 endpoints
 constexpr uint32_t kFormat = 0x44535431;
 constexpr uintptr_t kWorld = 0x9D4F10;
 constexpr uintptr_t kBuildingsBegin = 0x9E6A18, kBuildingsEnd = 0x9E6A20;
-constexpr uintptr_t kAdd = 0x1D4330, kRemove = 0x1D4440;
+constexpr uintptr_t kAdd = 0x1D42B0, kRemove = 0x1D43C0;
 
 struct Entry { float share; unsigned char flags[4]; BYTE* target; };
 struct Vector { Entry* begin; Entry* end; Entry* capacity; };

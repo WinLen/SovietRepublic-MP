@@ -59,85 +59,85 @@ struct KnownCaller {
 };
 static const KnownCaller kKnownCallers[] = {
     // FUN_1403a8a70 - game terrain tool (mode 0 raise, 1 lower, 2 level, 3 level2, 4 level3)
-    {0x3AAE5E, "tool.raise(a8a70)"},
-    {0x3AAF86, "tool.lower(a8a70)"},
-    {0x3AB188, "tool.level2-3a(a8a70)"},
-    {0x3AB212, "tool.level2-3b(a8a70)"},
-    {0x3AB33C, "tool.level3(a8a70)"},
-    {0x3A9A28, "tool.cost-a(a8a70)"},
-    {0x3A9AFB, "tool.cost-b(a8a70)"},
-    {0x3A8C46, "tool.open(a8a70)"},
-    {0x3A8C5A, "tool.open(a8a70)"},
-    {0x3AB3B6, "tool.close(a8a70)"},
-    {0x3AB3CA, "tool.close(a8a70)"},
+    {0x3AAD9E, "tool.raise(a8a70)"},
+    {0x3AAEC6, "tool.lower(a8a70)"},
+    {0x3AB0C8, "tool.level2-3a(a8a70)"},
+    {0x3AB152, "tool.level2-3b(a8a70)"},
+    {0x3AB27C, "tool.level3(a8a70)"},
+    {0x3A9968, "tool.cost-a(a8a70)"},
+    {0x3A9A3B, "tool.cost-b(a8a70)"},
+    {0x3A8B86, "tool.open(a8a70)"},
+    {0x3A8B9A, "tool.open(a8a70)"},
+    {0x3AB2F6, "tool.close(a8a70)"},
+    {0x3AB30A, "tool.close(a8a70)"},
     // FUN_140234a50 - map editor tool
-    {0x234D34, "editor.raiselower(234a50)"},
-    {0x234DDC, "editor.level(234a50)"},
-    {0x234E84, "editor.smooth(234a50)"},
-    {0x234F65, "editor.toheight(234a50)"},
-    {0x235560, "editor?(235370)"},
-    {0x235748, "editor?(235580)"},
+    {0x234CB4, "editor.raiselower(234a50)"},
+    {0x234D5C, "editor.level(234a50)"},
+    {0x234E04, "editor.smooth(234a50)"},
+    {0x234EE5, "editor.toheight(234a50)"},
+    {0x2354E0, "editor?(235370)"},
+    {0x2356C8, "editor?(235580)"},
     // FUN_1402bade0 - building placement
-    {0x2CB402, "building.level-click(bade0)"},
-    {0x2CBB47, "building.level-paid(bade0)"},
-    {0x2CB2EB, "building.open(bade0)"},
-    {0x2CB423, "building.close(bade0)"},
-    {0x2CB9F3, "building.open(bade0)"},
-    {0x2CBCD6, "building.close(bade0)"},
-    {0x2C89E6, "building.mask-open(bade0)"},
-    {0x2C8C60, "building.mask-close(bade0)"},
-    {0x2C925A, "building.mask-open(bade0)"},
-    {0x2CAF68, "building.mask-close(bade0)"},
+    {0x2CB382, "building.level-click(bade0)"},
+    {0x2CBAC7, "building.level-paid(bade0)"},
+    {0x2CB26B, "building.open(bade0)"},
+    {0x2CB3A3, "building.close(bade0)"},
+    {0x2CB973, "building.open(bade0)"},
+    {0x2CBC56, "building.close(bade0)"},
+    {0x2C8966, "building.mask-open(bade0)"},
+    {0x2C8BE0, "building.mask-close(bade0)"},
+    {0x2C91DA, "building.mask-open(bade0)"},
+    {0x2CAEE8, "building.mask-close(bade0)"},
     // FUN_1404fcaf0 - drag tick / FUN_140518a80 - drag commit
-    {0x517692, "drag.tick-a(fcaf0)"},
-    {0x51772F, "drag.tick-b(fcaf0)"},
-    {0x5173ED, "drag.open(fcaf0)"},
-    {0x5179E0, "drag.close(fcaf0)"},
-    {0x516D38, "drag.mask-open(fcaf0)"},
-    {0x516E24, "drag.mask-close(fcaf0)"},
-    {0x519B34, "commit(a80)"},
-    {0x5199C6, "commit.open(a80)"},
-    {0x519B78, "commit.close(a80)"},
+    {0x517622, "drag.tick-a(fcaf0)"},
+    {0x5176BF, "drag.tick-b(fcaf0)"},
+    {0x51737D, "drag.open(fcaf0)"},
+    {0x517970, "drag.close(fcaf0)"},
+    {0x516CC8, "drag.mask-open(fcaf0)"},
+    {0x516DB4, "drag.mask-close(fcaf0)"},
+    {0x519AC4, "commit(a80)"},
+    {0x519956, "commit.open(a80)"},
+    {0x519B08, "commit.close(a80)"},
     // FUN_14040ece0 - per-frame drain of the mask-paint queue thisPtr+0x130d0
     // (filled by FUN_14040eaa0 next to its particle spawn)
-    {0x40EE41, "maskqueue(40ece0)"},
+    {0x40ED81, "maskqueue(40ece0)"},
     // FUN_1403ccd70 - terrain_restore_topsoil
-    {0x3CCF92, "topsoil.open(ccd70)"},
-    {0x3CD829, "topsoil.close(ccd70)"},
-    {0x3CCFA6, "topsoil.mask-open(ccd70)"},
-    {0x3CD83D, "topsoil.mask-close(ccd70)"},
+    {0x3CCED2, "topsoil.open(ccd70)"},
+    {0x3CD769, "topsoil.close(ccd70)"},
+    {0x3CCEE6, "topsoil.mask-open(ccd70)"},
+    {0x3CD77D, "topsoil.mask-close(ccd70)"},
     // Open/Close without any Edit* in the same function - possible direct
     // texture writes that the Edit* hooks cannot see
     {0x12289D, "direct?.mask-open(1226a0)"},
     {0x123936, "direct?.mask-close(1226a0)"},
-    {0x1DD526, "direct?.mask-open(1dd200)"},
-    {0x1DDE95, "direct?.mask-close(1dd200)"},
-    {0x241EC6, "direct?.mask-open(2412f0)"},
-    {0x241EDA, "direct?.open(2412f0)"},
-    {0x241EF6, "direct?.mask-close(2412f0)"},
-    {0x241F0A, "direct?.close(2412f0)"},
-    {0x4E7527, "direct?.mask-open(4e7440)"},
-    {0x4E753B, "direct?.open(4e7440)"},
-    {0x4EF198, "direct?.mask-close(4e7440)"},
-    {0x4EF1AC, "direct?.close(4e7440)"},
-    {0x314BE6, "dispatcher.mask-open(30d1a0)"},
-    {0x314CB2, "dispatcher.mask-close(30d1a0)"},
+    {0x1DD4A6, "direct?.mask-open(1dd200)"},
+    {0x1DDE15, "direct?.mask-close(1dd200)"},
+    {0x241E46, "direct?.mask-open(2412f0)"},
+    {0x241E5A, "direct?.open(2412f0)"},
+    {0x241E76, "direct?.mask-close(2412f0)"},
+    {0x241E8A, "direct?.close(2412f0)"},
+    {0x4E74B7, "direct?.mask-open(4e7440)"},
+    {0x4E74CB, "direct?.open(4e7440)"},
+    {0x4EF128, "direct?.mask-close(4e7440)"},
+    {0x4EF13C, "direct?.close(4e7440)"},
+    {0x314B66, "dispatcher.mask-open(30d1a0)"},
+    {0x314C32, "dispatcher.mask-close(30d1a0)"},
     // map generation / load
-    {0x22FF4B, "mapgen(22eea0)"},
-    {0x230338, "mapgen(22eea0)"},
-    {0x2300F0, "mapgen(22eea0)"},
-    {0x2304D0, "mapgen(22eea0)"},
-    {0x244FF5, "smoothlimits(2436b0)"},
-    {0x22D7EA, "regen(22d340)"},
-    {0x22D7FE, "regen(22d340)"},
-    {0x23AC1F, "regen(239b90)"},
-    {0x23AC33, "regen(239b90)"},
-    {0x24C583, "load(2479a0)"},
-    {0x24C597, "load(2479a0)"},
-    {0x24C47F, "load(2479a0)"},
-    {0x31E34C, "load(317db0)"},
-    {0x31E360, "load(317db0)"},
-    {0x22EC5A, "setheight(22e1c0)"},
+    {0x22FECB, "mapgen(22eea0)"},
+    {0x2302B8, "mapgen(22eea0)"},
+    {0x230070, "mapgen(22eea0)"},
+    {0x230450, "mapgen(22eea0)"},
+    {0x244F75, "smoothlimits(2436b0)"},
+    {0x22D76A, "regen(22d340)"},
+    {0x22D77E, "regen(22d340)"},
+    {0x23AB9F, "regen(239b90)"},
+    {0x23ABB3, "regen(239b90)"},
+    {0x24C503, "load(2479a0)"},
+    {0x24C517, "load(2479a0)"},
+    {0x24C3FF, "load(2479a0)"},
+    {0x31E2CC, "load(317db0)"},
+    {0x31E2E0, "load(317db0)"},
+    {0x22EBDA, "setheight(22e1c0)"},
 };
 
 static const char* CallerLabel(unsigned long long rva)
@@ -358,8 +358,8 @@ static bool IsMapGenCaller(void* returnAddress)
 {
     if (!g_exeBase || !returnAddress) return false;
     unsigned long long rva = (unsigned long long)((BYTE*)returnAddress - g_exeBase);
-    return rva == 0x22FF4B || rva == 0x230338 || rva == 0x2300F0 ||
-           rva == 0x2304D0 || rva == 0x244FF5;
+    return rva == 0x22FECB || rva == 0x2302B8 || rva == 0x230070 ||
+           rva == 0x230450 || rva == 0x244F75;
 }
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
@@ -613,7 +613,7 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     InterlockedIncrement(&g_terrainApplyingRemote);
     bool heightOpen = false;
     bool maskOpen = false;
-    ClearGroundObjectsFn clearGround = (ClearGroundObjectsFn)(g_exeBase + 0x3AE120);
+    ClearGroundObjectsFn clearGround = (ClearGroundObjectsFn)(g_exeBase + 0x3AE060);
     void* world = (void*)(g_exeBase + 0x9D4F10);
     for (size_t i = 0; i < n; i++) {
         int m = e[i].method;

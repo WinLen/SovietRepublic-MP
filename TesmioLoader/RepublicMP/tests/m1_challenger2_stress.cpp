@@ -62,13 +62,13 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localRoute.data() + localRoute.size();
 
     // Setup mock function return stubs
-    g_mockExeBuffer[0x3D00F0] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x4FCAF0] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x518A80] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D2B0] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x542A30] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3D0030] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x4FCA80] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     // 2. Simulate 1,000 rapid interleaved commands from 3 remote players (Player 2, 3, 4)
     int successfulReplays = 0;
@@ -187,13 +187,13 @@ static bool SubTest_M1_Challenger2_SnapshotManagerRouteMemorySafety()
     std::vector<BYTE> roadMgr(0x1000, 0);
     *(BYTE**)(world + 0xF7A0) = roadMgr.data();
 
-    g_mockExeBuffer[0x3D00F0] = 0xC3;
-    g_mockExeBuffer[0x4FC040] = 0xC3;
-    g_mockExeBuffer[0x4FCAF0] = 0xC3;
-    g_mockExeBuffer[0x518A80] = 0xC3;
-    g_mockExeBuffer[0x21D2B0] = 0xC3;
-    g_mockExeBuffer[0x542A30] = 0xC3;
-    g_mockExeBuffer[0x542900] = 0xC3;
+    g_mockExeBuffer[0x3D0030] = 0xC3;
+    g_mockExeBuffer[0x4FBFD0] = 0xC3;
+    g_mockExeBuffer[0x4FCA80] = 0xC3;
+    g_mockExeBuffer[0x518A10] = 0xC3;
+    g_mockExeBuffer[0x21D230] = 0xC3;
+    g_mockExeBuffer[0x5429C0] = 0xC3;
+    g_mockExeBuffer[0x542890] = 0xC3;
 
     auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
     RoadSyncMsg& remoteMsg = *remoteMsgPtr;
@@ -314,13 +314,13 @@ static bool SubTest_M1_Challenger2_MultiThreadedConcurrencyStress()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x418) = localPts + 2;
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localPts + 2;
 
-    g_mockExeBuffer[0x3D00F0] = 0xC3;
-    g_mockExeBuffer[0x4FC040] = 0xC3;
-    g_mockExeBuffer[0x4FCAF0] = 0xC3;
-    g_mockExeBuffer[0x518A80] = 0xC3;
-    g_mockExeBuffer[0x21D2B0] = 0xC3;
-    g_mockExeBuffer[0x542A30] = 0xC3;
-    g_mockExeBuffer[0x542900] = 0xC3;
+    g_mockExeBuffer[0x3D0030] = 0xC3;
+    g_mockExeBuffer[0x4FBFD0] = 0xC3;
+    g_mockExeBuffer[0x4FCA80] = 0xC3;
+    g_mockExeBuffer[0x518A10] = 0xC3;
+    g_mockExeBuffer[0x21D230] = 0xC3;
+    g_mockExeBuffer[0x5429C0] = 0xC3;
+    g_mockExeBuffer[0x542890] = 0xC3;
 
     // Concurrent execution across 2 threads simulating simultaneous network packet arrivals
     std::atomic<bool> startFlag{false};

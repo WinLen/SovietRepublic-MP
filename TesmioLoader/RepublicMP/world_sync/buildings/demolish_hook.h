@@ -25,7 +25,7 @@
 
 #include "tesmio_plugin.h"
 
-#define HOOK_DEMOLISH_RVA 0x168730
+#define HOOK_DEMOLISH_RVA 0x168750
 
 void DemolishHook_Bind(const TsmHost* host);
 bool InstallDemolishHook();

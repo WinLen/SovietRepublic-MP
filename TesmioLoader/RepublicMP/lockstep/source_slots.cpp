@@ -23,8 +23,8 @@
 #define MAX_SLOTS 64
 #define MAX_BUILDINGS 2048
 #define MAX_LIST 1000000
-#define ADD_SOURCE_RVA 0x1D51A0
-#define COPY_SOURCE_RVA 0x1D6820
+#define ADD_SOURCE_RVA 0x1D5120
+#define COPY_SOURCE_RVA 0x1D67A0
 #define MAGIC 0x31535253
 
 static const unsigned char kToolEntry[16] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x48, 0x08, 0x55,

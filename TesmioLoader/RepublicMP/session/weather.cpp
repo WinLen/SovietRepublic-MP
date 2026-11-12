@@ -18,7 +18,7 @@
 #define W_SKY 0xE70
 #define W_WETNESS 0xE78
 #define W_DAY_START_RESET 0x598      // zeroed by FUN_140333bd0 before a sky switch
-#define SET_SKY_RVA 0x334020         // FUN_140334020(_, type, -1, blend)
+#define SET_SKY_RVA 0x333FA0         // FUN_140334020(_, type, -1, blend)
 #define SKY_BLEND 0.001f             // DAT_140909afc, the blend FUN_140333bd0 uses
 
 void Weather_Bind(const TsmHost* host)

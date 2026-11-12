@@ -169,9 +169,9 @@ static void InitMockHarness()
     }
     if (!g_mockExeBuffer) { abort(); }
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
-    g_mockExeBuffer[0x542900] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
-    g_mockExeBuffer[0x542A30] = 0xC3; // ret for MANAGER_RESET_RVA
-    g_mockExeBuffer[0x5434C0] = 0xC3; // ret for CANCEL_SEG_RVA
+    g_mockExeBuffer[0x542890] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
+    g_mockExeBuffer[0x5429C0] = 0xC3; // ret for MANAGER_RESET_RVA
+    g_mockExeBuffer[0x543450] = 0xC3; // ret for CANCEL_SEG_RVA
 
     char tmpPath[MAX_PATH] = {};
     GetTempPathA(sizeof(tmpPath), tmpPath);
@@ -205,12 +205,12 @@ static void ResetMockWorldMemory()
 {
     TwoStates_ResetEconStatsForTest(nullptr);
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
-    g_mockExeBuffer[0x542900] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
-    g_mockExeBuffer[0x542A30] = 0xC3; // ret for MANAGER_RESET_RVA
-    g_mockExeBuffer[0x5434C0] = 0xC3; // ret for CANCEL_SEG_RVA
-    g_mockExeBuffer[0x1754D0] = 0xC3; // ret for AUTO_PURCHASE_RVA
-    g_mockExeBuffer[0x1B7AF0] = 0xC3; // ret for PIPELINE_TO_EXPORT_RVA
-    g_mockExeBuffer[0x1B7C00] = 0xC3; // ret for PIPELINE_TO_IMPORT_RVA
+    g_mockExeBuffer[0x542890] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
+    g_mockExeBuffer[0x5429C0] = 0xC3; // ret for MANAGER_RESET_RVA
+    g_mockExeBuffer[0x543450] = 0xC3; // ret for CANCEL_SEG_RVA
+    g_mockExeBuffer[0x1754F0] = 0xC3; // ret for AUTO_PURCHASE_RVA
+    g_mockExeBuffer[0x1B7A70] = 0xC3; // ret for PIPELINE_TO_EXPORT_RVA
+    g_mockExeBuffer[0x1B7B80] = 0xC3; // ret for PIPELINE_TO_IMPORT_RVA
 }
 
 // Helper to write a fake MSVC std::vector<T> header { begin, end, cap } at a target address
@@ -252,12 +252,12 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(WORLD_LOAN_SELECTED_OFFSET == 0x10BE8);
     TEST_CHECK(WORLD_LOAN_REPAY_AMOUNT_OFF == 0x10C08);
     TEST_CHECK(WORLD_LOAN_STATS_OFFSET == 0x11718);
-    TEST_CHECK(RVA_VEC_LOAN_PUSH_BACK == 0x448AA0);
-    TEST_CHECK(RVA_TAKE_LOAN == 0x4B9140);
-    TEST_CHECK(RVA_GET_MAX_AVAILABLE_BORROW == 0x4B9380);
-    TEST_CHECK(RVA_STEP_ONE_LOAN_DAY == 0x4B9490);
-    TEST_CHECK(RVA_STEP_ALL_LOANS_DAILY == 0x4B9660);
-    TEST_CHECK(RVA_CALC_INTEREST_RATE == 0x4B9A80);
+    TEST_CHECK(RVA_VEC_LOAN_PUSH_BACK == 0x448A30);
+    TEST_CHECK(RVA_TAKE_LOAN == 0x4B90D0);
+    TEST_CHECK(RVA_GET_MAX_AVAILABLE_BORROW == 0x4B9310);
+    TEST_CHECK(RVA_STEP_ONE_LOAN_DAY == 0x4B9420);
+    TEST_CHECK(RVA_STEP_ALL_LOANS_DAILY == 0x4B95F0);
+    TEST_CHECK(RVA_CALC_INTEREST_RATE == 0x4B9A10);
     TEST_CHECK(sizeof(SovietLoan) == 0x28);
     TEST_CHECK(offsetof(SovietLoan, yearInterestRate) == 0x00);
     TEST_CHECK(offsetof(SovietLoan, loanSubType) == 0x0C);
@@ -265,9 +265,9 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(offsetof(SovietLoan, unpaidPenaltyBalance) == 0x18);
     TEST_CHECK(offsetof(SovietLoan, totalPaidSoFar) == 0x24);
     TEST_CHECK(sizeof(LsLoanCommand) == 84);
-    TEST_CHECK(RVA_HUD_DRAW_BTN_FRAME == 0x4461F0);
-    TEST_CHECK(RVA_MINIMAP_DRAW_CONTENT == 0x4BDE80);
-    TEST_CHECK(RVA_MINIMAP_DRAW_BUTTONS == 0x4BFF40);
+    TEST_CHECK(RVA_HUD_DRAW_BTN_FRAME == 0x446180);
+    TEST_CHECK(RVA_MINIMAP_DRAW_CONTENT == 0x4BDE10);
+    TEST_CHECK(RVA_MINIMAP_DRAW_BUTTONS == 0x4BFED0);
     TEST_CHECK(WORLD_MINIMAP_PTR_OFFSET == 0xD400);
     TEST_CHECK(MINIMAP_TOOLTIP_WSTR_RVA == 0x9E24B0);
     TEST_CHECK(HUD_QUAD_STAGE_RVA == 0x9BE060);
@@ -279,7 +279,7 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(HUD_QUAD_ROT_RVA == 0x9BE308);
     TEST_CHECK(HUD_MIDDLEPOINT_OBJ_RVA == 0x9EACD0);
     TEST_CHECK(HUD_FMT_WSTR_RVA == 0x8B5528);
-    TEST_CHECK(HUD_BASIC_PASS_STR_RVA == 0x8D8464);
+    TEST_CHECK(HUD_BASIC_PASS_STR_RVA == 0x8D8450);
     TEST_CHECK(RVA_IAT_CREATE_MANAGED_TEX == 0x86C4C0);
     TEST_CHECK(RVA_IAT_HUD_HIT_TEST_QUAD == 0x86C850);
     TEST_CHECK(RVA_IAT_HUD_DRAW_QUAD == 0x86C860);
@@ -302,6 +302,12 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(BLD_POLLUTION_ALERT_THRESH_OFFSET == 0x0E3Cu);
     TEST_CHECK(SETTINGS_FIELD_UPBRINGING == 1002);
     TEST_CHECK(SETTINGS_FIELD_BROADCAST == 1003);
+    TEST_CHECK(RVA_CIT_SEVERE_ILLNESS_TICK == 0x8336A9u);
+    TEST_CHECK(RVA_CIT_SEVERE_ILLNESS_RESUME == 0x8336C3u);
+    TEST_CHECK(RVA_WATER_HEALTH_STEP == 0x1B0950u);
+    TEST_CHECK(RVA_VEHICLE_CARGO_TRADE == 0x68B3D0u);
+    TEST_CHECK(RVA_BLD_COUNT_LIMIT_CHECK == 0x5F3180u);
+    TEST_CHECK(RVA_BLD_COUNT_LIMIT_GET == 0x5F3220u);
 
     TEST_CHECK(TwoStates_GetShowMinimapBorders() == true);
     TwoStates_SetShowMinimapBorders(false);
@@ -835,9 +841,9 @@ static bool Test_TwoStates_ZonesAndEconomy()
     *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
 
     // Planned road segment ownership & per-republic separation for "Build planned" / "Cancel all planned"
-    WriteAbsJmp12(g_mockExeBuffer + 0x5258E0, (void*)&MockPlanStartFn);
-    WriteAbsJmp12(g_mockExeBuffer + 0x5434C0, (void*)&MockCancelSegFn);
-    g_mockExeBuffer[0x4FAE50] = 0xC3;
+    WriteAbsJmp12(g_mockExeBuffer + 0x525870, (void*)&MockPlanStartFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x543450, (void*)&MockCancelSegFn);
+    g_mockExeBuffer[0x4FADE0] = 0xC3;
 
     auto makeNode = [](float x, float y, float z) {
         std::vector<BYTE> n(0x40, 0);
@@ -5193,9 +5199,9 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
 static bool SubTest_CoopGameSpeedAndTimerScaling()
 {
     ResetMockWorldMemory();
-    *(float*)(g_mockExeBuffer + 0x909D64) = 0.35f; // FAST_FACTOR_RVA (2x)
-    *(float*)(g_mockExeBuffer + 0x909C14) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
-    *(float*)(g_mockExeBuffer + 0x909B90) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
+    *(float*)(g_mockExeBuffer + 0x909D6C) = 0.35f; // FAST_FACTOR_RVA (2x)
+    *(float*)(g_mockExeBuffer + 0x909C1C) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
+    *(float*)(g_mockExeBuffer + 0x909B98) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
     *(uint8_t*)(g_mockExeBuffer + 0x9D4EE0 + 13) = 0;
     *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
     *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 0;
@@ -5967,13 +5973,13 @@ static bool SubTest_T1_R1_LinearBuildingContinuity()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x418) = localRoutePts + 3;
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localRoutePts + 3;
 
-    g_mockExeBuffer[0x3D00F0] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x4FCAF0] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x518A80] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D2B0] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x542A30] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3D0030] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x4FCA80] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     // Remote road segment command arrives while local player is dragging.
     // RoadSync_ApplyCommandSegment executes ApplySegmentImplInner which resets
@@ -6714,11 +6720,11 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
     *(const __int64**)(pedMgr.data() + 0x2B0) = pedSegList.data();
     *(const __int64**)(pedMgr.data() + 0x2B8) = pedSegList.data() + pedSegList.size();
 
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x518A80] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D2B0] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x542A30] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     std::vector<BYTE> dragNodeStart(0xE8, 0);
     std::vector<BYTE> dragNodeEnd(0xE8, 0);
@@ -8159,7 +8165,7 @@ static bool SubTest_Stress_M1_DragContinuityHighFrequency()
 {
     printf("      DragContinuity: ResetMockWorldMemory...\n"); fflush(stdout);
     ResetMockWorldMemory();
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret stub
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret stub
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
@@ -8263,12 +8269,12 @@ static bool SubTest_Stress_M1_ComplexRoadUpgradeWithFootpaths()
     *(const __int64**)(roadMgr.data() + 0x2B0) = segList.data(); // MGR_SEGMENTS_BEGIN_OFFSET
     *(const __int64**)(roadMgr.data() + 0x2B8) = segList.data() + segList.size(); // MGR_SEGMENTS_END_OFFSET
 
-    g_mockExeBuffer[0x4FC040] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x518A80] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D2B0] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x542A30] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
 
-    g_mockExeBuffer[0x542900] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
 
     std::vector<BYTE> dragNodeStart(0xE8, 0);
     std::vector<BYTE> dragNodeEnd(0xE8, 0);
@@ -10286,8 +10292,8 @@ static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
     const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
     memcpy(g_mockExeBuffer + 0x1513F0, sigDestroy, 16);
-    memcpy(g_mockExeBuffer + 0x204EF0, sigCopy, 16);
-    memcpy(g_mockExeBuffer + 0x499790, sigRefresh, 16);
+    memcpy(g_mockExeBuffer + 0x204E70, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x499720, sigRefresh, 16);
 
     std::vector<BYTE> distBld(BUILDING_STRUCT_BYTES, 0), storageBldA(BUILDING_STRUCT_BYTES, 0), storageBldB(BUILDING_STRUCT_BYTES, 0);
     *(int*)distBld.data() = 501;
@@ -10313,7 +10319,7 @@ static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     *(unsigned*)primeBuf = 0x32534743u;
     CargoSettings_ApplyCommand(primeBuf, sizeof(primeBuf));
     WriteAbsJmp12(g_mockExeBuffer + 0x1513F0, (void*)&MockCargoDestroyFn);
-    WriteAbsJmp12(g_mockExeBuffer + 0x204EF0, (void*)&MockCargoCopyFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x204E70, (void*)&MockCargoCopyFn);
 
     std::vector<BYTE> pkt;
     auto pushRaw = [&](const void* p, size_t n) { pkt.insert(pkt.end(), (const BYTE*)p, (const BYTE*)p + n); };
