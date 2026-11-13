@@ -182,4 +182,5 @@ const StateResearchTree* TwoStates_GetLocalResearchTree();
 bool  TwoStates_ApplyResearchCommand(const LsResearchCommand& cmd);
 void  TwoStates_ResetResearch();
 bool  Commands_IsToolCarriedForTest(const char* name);
+bool  Commands_IsAreaCloneToolBlockedForTest(const char* name);
 

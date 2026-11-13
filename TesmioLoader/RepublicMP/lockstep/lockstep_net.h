@@ -34,6 +34,7 @@
 #define LOCKSTEP_PORT 5560
 #define LOCKSTEP_WINDOW 24      // ticks the host may run ahead of the player (~800 ms buffer)
 #define LOCKSTEP_HASH_TICKS 60  // ticks between state comparisons
+#define LS_MAX_PAYLOAD (16u << 20)
 
 void LockstepNet_Bind(const TsmHost* host);
 
@@ -108,6 +109,9 @@ void LockstepNet_SendCursor(float x, float y, float z,
                             bool isPing);
 void LockstepNet_SendCursor(float x, float y, float z, float camX, float camZ, bool isPing);
 PartnerCursorInfo LockstepNet_GetPartnerCursor();
+
+// Test helper: evaluates state summary differences and builds the mismatch descriptor.
+bool LockstepNet_CompareSummaryForTest(const StateSummary& a, const StateSummary& b, char* outWhat, size_t whatSize);
 
 // Sends the client's compressed log bundle to the Host (on DESYNC, DISCONNECT, or CRASH).
 void LockstepNet_SendClientLogs(const char* reason);

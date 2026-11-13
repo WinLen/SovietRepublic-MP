@@ -54,7 +54,9 @@ struct LsCursor {
 };
 #pragma pack(pop)
 
-#define LS_MAX_PAYLOAD (1u << 20)
+#ifndef LS_MAX_PAYLOAD
+#define LS_MAX_PAYLOAD (16u << 20)
+#endif
 #define LS_HASH_KEEP 32
 
 struct LsMessage {
@@ -355,6 +357,58 @@ unsigned long long LockstepNet_LastMatchedTick() { return g_lastMatched; }
 // State comparison (host)
 // ---------------------------------------------------------------------------
 
+static void EvaluateStateSummaryDiff(const StateSummary& a, const StateSummary& b,
+                                     bool& bldSoftDiff, bool& conSoftDiff,
+                                     bool& vehLogicalDiff, bool& vehPosDiff,
+                                     bool& citSoftDiff, bool& moneyDiff,
+                                     char* what, size_t whatSize)
+{
+    bool bldCountDiff = (a.buildings != b.buildings);
+    bldSoftDiff  = (!bldCountDiff && a.hashBuildings != b.hashBuildings);
+    bool conCountDiff = (a.constructions != b.constructions);
+    conSoftDiff  = (!conCountDiff && a.hashConstructions != b.hashConstructions);
+    bool vehCountDiff = (a.vehicles != b.vehicles);
+    vehLogicalDiff = (!vehCountDiff && a.hashVehicles != b.hashVehicles);
+    vehPosDiff   = (!vehCountDiff && a.hashVehiclesPos != b.hashVehiclesPos);
+    bool citCountDiff = (a.citizens != b.citizens);
+    citSoftDiff  = (!citCountDiff && a.hashCitizens != b.hashCitizens);
+    bool netDiff      = (a.hashNetworks != b.hashNetworks);
+    bool lineDiff     = (a.lines != b.lines || a.hashLines != b.hashLines);
+    bool loanDiff     = (a.loans != b.loans || a.hashLoans != b.hashLoans);
+    bool researchDiff = (a.hashResearch != b.hashResearch);
+    moneyDiff    = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05 ||
+                    fabs(a.rubState[0] - b.rubState[0]) > 0.05 || fabs(a.rubState[1] - b.rubState[1]) > 0.05 ||
+                    fabs(a.usdState[0] - b.usdState[0]) > 0.05 || fabs(a.usdState[1] - b.usdState[1]) > 0.05);
+
+    what[0] = '\0';
+    if (a.hashClock != b.hashClock) strcat_s(what, whatSize, "clock ");
+    if (bldCountDiff)               strcat_s(what, whatSize, "buildings ");
+    if (conCountDiff)               strcat_s(what, whatSize, "constructions ");
+    if (vehCountDiff)               strcat_s(what, whatSize, "vehicles ");
+    if (citCountDiff)               strcat_s(what, whatSize, "citizens ");
+    if (netDiff)                    strcat_s(what, whatSize, "networks ");
+    if (lineDiff)                   strcat_s(what, whatSize, "lines ");
+    if (loanDiff)                   strcat_s(what, whatSize, "loans ");
+    if (researchDiff)               strcat_s(what, whatSize, "research ");
+    if (fabs(a.rub - b.rub) > 1.0 || fabs(a.usd - b.usd) > 1.0 ||
+        fabs(a.rubState[0] - b.rubState[0]) > 1.0 || fabs(a.rubState[1] - b.rubState[1]) > 1.0 ||
+        fabs(a.usdState[0] - b.usdState[0]) > 1.0 || fabs(a.usdState[1] - b.usdState[1]) > 1.0) {
+        strcat_s(what, whatSize, "money ");
+    }
+    if (vehLogicalDiff)             strcat_s(what, whatSize, "veh-logical ");
+    if (bldSoftDiff)               strcat_s(what, whatSize, "bld-storage ");
+    if (conSoftDiff)               strcat_s(what, whatSize, "con-progress ");
+    if (citSoftDiff)               strcat_s(what, whatSize, "citizens-state ");
+}
+
+bool LockstepNet_CompareSummaryForTest(const StateSummary& a, const StateSummary& b, char* outWhat, size_t whatSize)
+{
+    if (!outWhat || whatSize == 0) return false;
+    bool bldSoft = false, conSoft = false, vehLog = false, vehPos = false, citSoft = false, mon = false;
+    EvaluateStateSummaryDiff(a, b, bldSoft, conSoft, vehLog, vehPos, citSoft, mon, outWhat, whatSize);
+    return outWhat[0] != '\0';
+}
+
 static void Compare(const LsHash& theirs)
 {
     if (g_desync[0]) return;
@@ -368,26 +422,21 @@ static void Compare(const LsHash& theirs)
     const StateSummary& a = mine->s;
     const StateSummary& b = theirs.s;
 
-    bool bldCountDiff = (a.buildings != b.buildings);
-    bool bldSoftDiff = (!bldCountDiff && a.hashBuildings != b.hashBuildings);
-    bool vehLogicalDiff = (a.hashVehicles != b.hashVehicles);
-    bool vehPosDiff = (a.hashVehiclesPos != b.hashVehiclesPos);
-    bool citDiff = (a.hashCitizens != b.hashCitizens);
-    bool moneyDiff = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05);
-    if (bldSoftDiff || vehLogicalDiff || vehPosDiff || moneyDiff) {
+    char what[256] = "";
+    bool bldSoftDiff = false, conSoftDiff = false, vehLogicalDiff = false, vehPosDiff = false, citSoftDiff = false, moneyDiff = false;
+    EvaluateStateSummaryDiff(a, b, bldSoftDiff, conSoftDiff, vehLogicalDiff, vehPosDiff, citSoftDiff, moneyDiff, what, sizeof(what));
+
+    if (bldSoftDiff || conSoftDiff || vehLogicalDiff || vehPosDiff || citSoftDiff || moneyDiff) {
         VehicleSoftSync_RequestImmediate();
         if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
             g_lastSoftDriftLogTick = theirs.tick;
-            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (bldSoft=%d vehLogic=%d vehPos=%d cit=%d money=%d, buildings %d/%d vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
-                 theirs.tick, (int)bldSoftDiff, (int)vehLogicalDiff, (int)vehPosDiff, (int)citDiff, (int)moneyDiff,
-                 a.buildings, b.buildings, a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
+            Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (bldSoft=%d conSoft=%d vehLogic=%d vehPos=%d citSoft=%d money=%d, buildings %d/%d con %d/%d vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
+                 theirs.tick, (int)bldSoftDiff, (int)conSoftDiff, (int)vehLogicalDiff, (int)vehPosDiff, (int)citSoftDiff, (int)moneyDiff,
+                 a.buildings, b.buildings, a.constructions, b.constructions, a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
                  a.citizens, b.citizens, a.ageTotal, b.ageTotal, a.rub, b.rub);
         }
     }
 
-    char what[160] = "";
-    if (a.hashClock != b.hashClock) strcat_s(what, "clock ");
-    if (bldCountDiff) strcat_s(what, "buildings ");
     if (!what[0]) {
         g_hardMismatchCount = 0;
         g_lastMatched = theirs.tick;
@@ -404,16 +453,16 @@ static void Compare(const LsHash& theirs)
     }
 
     _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s", theirs.tick, what);
-    Logf("republicmp  LOCKSTEP: DESYNC - %s (host: buildings %d vehicles %d citizens %d, player: %d %d %d)", g_desync,
-         a.buildings, a.vehicles, a.citizens, b.buildings, b.vehicles, b.citizens);
-    Logf("republicmp  LOCKSTEP:   host day %d %.4f rubles %.4f dollars %.4f, player day %d %.4f rubles %.4f dollars %.4f", a.day,
-         a.dayProgress, a.rub, a.usd, b.day, b.dayProgress, b.rub, b.usd);
-    Logf("republicmp  LOCKSTEP:   totals host(prod=%.3f stor=%.3f cargo=%.3f age=%.1f) vs player(prod=%.3f stor=%.3f cargo=%.3f age=%.1f)",
-         a.productionTotal, a.storageTotal, a.cargoTotal, a.ageTotal,
-         b.productionTotal, b.storageTotal, b.cargoTotal, b.ageTotal);
-    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX veh=%016llX vpos=%016llX cit=%016llX) vs player(clk=%016llX bld=%016llX veh=%016llX vpos=%016llX cit=%016llX)",
-         a.hashClock, a.hashBuildings, a.hashVehicles, a.hashVehiclesPos, a.hashCitizens,
-         b.hashClock, b.hashBuildings, b.hashVehicles, b.hashVehiclesPos, b.hashCitizens);
+    Logf("republicmp  LOCKSTEP: DESYNC - %s", g_desync);
+    Logf("republicmp  LOCKSTEP:   counts host(bld=%d con=%d veh=%d cit=%d line=%d loan=%d) vs player(bld=%d con=%d veh=%d cit=%d line=%d loan=%d)",
+         a.buildings, a.constructions, a.vehicles, a.citizens, a.lines, a.loans,
+         b.buildings, b.constructions, b.vehicles, b.citizens, b.lines, b.loans);
+    Logf("republicmp  LOCKSTEP:   money host(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f) vs player(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f)",
+         a.rub, a.usd, a.rubState[0], a.rubState[1],
+         b.rub, b.usd, b.rubState[0], b.rubState[1]);
+    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX)",
+         a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch,
+         b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch);
     Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
 }

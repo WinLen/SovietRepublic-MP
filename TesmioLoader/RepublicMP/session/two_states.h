@@ -47,6 +47,20 @@ struct LsLoanCommand {
 #pragma pack(pop)
 static_assert(sizeof(LsLoanCommand) == 84, "LsLoanCommand wire size must be 84 bytes");
 
+#ifndef TRACKER_HEALTH_CAUSE_COUNT
+#define TRACKER_HEALTH_CAUSE_COUNT 12
+#endif
+#ifndef TRACKER_HAPPY_CAUSE_COUNT
+#define TRACKER_HAPPY_CAUSE_COUNT  23
+#endif
+
+struct StateTrackerSlice {
+    float   healthSum[TRACKER_HEALTH_CAUSE_COUNT];
+    int32_t healthCnt[TRACKER_HEALTH_CAUSE_COUNT];
+    float   happySum[TRACKER_HAPPY_CAUSE_COUNT];
+    int32_t happyCnt[TRACKER_HAPPY_CAUSE_COUNT];
+};
+
 void TwoStates_Bind(const TsmHost* host);
 bool TwoStates_Install();
 
@@ -186,6 +200,14 @@ bool TwoStates_TriggerQuickCoopSave();
 bool TwoStates_IsSaveInProgress();
 unsigned long long TwoStates_GetCompletedSaveCount();
 
+// Feature 32: Deterministic Co-op Autosaves & Client Backup
+#define COOP_AUTOSAVE_INTERVAL_SECONDS 600
+#define COOP_AUTOSAVE_INTERVAL_TICKS   (COOP_AUTOSAVE_INTERVAL_SECONDS * 30) // 18,000 ticks at 30 TPS
+
+bool TwoStates_IsAutosaveTick(unsigned long long stepCount, unsigned long long intervalTicks = COOP_AUTOSAVE_INTERVAL_TICKS);
+const char* TwoStates_GetAutosaveRelPath(bool isHost);
+bool TwoStates_CheckAndTriggerAutosave(BYTE* world, unsigned long long stepCount, bool isHost);
+
 // Testable domain helpers (used by runtime and unit test suite)
 bool   TwoStates_IsSafeSaveScriptPath(const char* saveDir);
 double TwoStates_ComputeStepWeightState1(int countState1, int countState2);
@@ -214,6 +236,7 @@ bool   TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int own
 int    TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* building, int stateOwner = 0);
 float  TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int techIdx);
 uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner, unsigned byteIdx);
+void   TwoStates_SetEngineResearchUnlockByteForTest(int stateOwner, unsigned byteIdx, uint8_t val);
 void   TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio);
 void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
 void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
@@ -229,7 +252,9 @@ void   TwoStates_VehicleSaleForTest(BYTE* world, BYTE* vehicle, float customSale
 void   TwoStates_CitizenEvalNeedsForTest(BYTE* world, BYTE* citizen, int healthCauseIdx, float healthDelta,
                                          int happyCauseIdx, float happyDelta);
 int32_t TwoStates_GetStateEconExtraCountForTest(int state, int idx);
+void    TwoStates_SetStateEconExtraCountForTest(int state, int idx, int32_t val);
 float   TwoStates_GetStateEconExtraFloatForTest(int state, int idx);
+void    TwoStates_SetStateEconExtraFloatForTest(int state, int idx, float val);
 float   TwoStates_GetStateEconTourismFloatForTest(int state, int idx);
 void    TwoStates_CitizenCommitCrimeForTest(BYTE* world, BYTE* citizen, int32_t severity);
 void    TwoStates_BldHotelStepForTest(BYTE* world, BYTE* building, int tourismIdx, float spendAmount, bool isUsd);
@@ -252,6 +277,11 @@ bool    TwoStates_CheckBuildingCountLimitForTest(const BYTE* world, const BYTE* 
 bool    TwoStates_GetBuildingCountLimitEntryForTest(const BYTE* world, const BYTE* limitTableVec,
                                                     const BYTE* btype, int stateOverride,
                                                     int32_t* outCur, int32_t* outMax);
+
+// Feature 35 & 36 helpers
+void    TwoStates_PruneDeadEntities(bool checkWorldLoaded = true);
+bool    TwoStates_GetStateTrackerSliceForTest(int state, bool isOld, StateTrackerSlice* out);
+void    TwoStates_SetStateTrackerSliceForTest(int state, bool isOld, const StateTrackerSlice& in);
 
 
 

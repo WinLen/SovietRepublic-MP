@@ -127,6 +127,7 @@ static const TsmRoutineSig kRoutines[] = {
     { 0x0CC880, { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0x49, 0x10, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x51, 0x08, 0x49 }, 16 },
     { 0x662530, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x26, 0x01, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x66, 0x0f }, 16 },
     { 0x660AD0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xde, 0x00, 0x00, 0x00, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b }, 16 },
+    { 0x6148A0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf0, 0x00, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x82 }, 16 },
 };
 
 static int g_routinesOk = -1; // -1 not checked yet
@@ -143,10 +144,7 @@ static bool RoutinesOk()
 // In lockstep the building list is the same on every PC: a building travels as
 // its place in the list and its id (+0).
 
-struct BuildingRef {
-    int place; // -1: none
-    int id;
-};
+using BuildingRef = PurchaseBuildingRef;
 
 static BuildingRef RefOf(BYTE* world, BYTE* building)
 {
@@ -313,27 +311,6 @@ static BYTE* ResourceAt(BYTE* world, int idx)
 // The command
 // ---------------------------------------------------------------------------
 
-#pragma pack(push, 1)
-struct PurchaseMsg {
-    unsigned kind;        // window kind 1/2 (rubles/dollars), 5/6 licence, 7 blueprint
-    unsigned typeIndex;   // in world +12840
-    unsigned typeCheck;   // FNV of the type's name
-    unsigned char refill; // realistic: the window asked for its customs houses again
-    unsigned char used;   // from the used-vehicle market
-    unsigned char pad[2];
-    BuildingRef depot;    // depot or factory
-    BuildingRef customsRub, customsUsd;
-    double rubles, dollars;
-    float avail;
-    int variant;
-    int resIndex;         // category 9 resource index in world +c2b0 (or -1)
-    unsigned trailers;
-    int trailerVariant[MAX_TRAILERS];
-    double usedAge, usedAge2;
-    char scriptName[64];
-};
-#pragma pack(pop)
-
 static bool Finite(double v)
 {
     return isfinite(v) && v >= 0 && v < 1e15;
@@ -390,9 +367,29 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         unsigned target = *(unsigned*)(window + 0x248);
         BYTE* depot = *(BYTE**)(window + 0x240);
         if (!hover || (c->Rbx & 0xFF)) return PRESS_PASS; // not on the Buy button
-        // Catalog browsers (9/10) and selection modes (0xb picks an auto-replacement
-        // type, 0xc/0xd add a type to a stop half) are not vehicle/blueprint purchases.
-        if (kind == 9 || kind == 10 || kind == 0xB || kind == 0xC || kind == 0xD) return PRESS_PASS;
+        // Catalog browsers (9/10) and selection modes (0xc/0xd add a type to a stop half)
+        // are not vehicle/blueprint purchases.
+        if (kind == 9 || kind == 10 || kind == 0xC || kind == 0xD) return PRESS_PASS;
+        if (kind == 0xB) {
+            BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
+            BYTE* typesEnd = *(BYTE**)(world + TYPES_OFFSET + 8);
+            if (!types || !type || type < types || type >= typesEnd || (type - types) % TYPE_STRIDE) {
+                *why = "type";
+                return PRESS_REFUSE;
+            }
+            BYTE* targetEntry = *(BYTE**)(window + 0x240);
+            BYTE* targetType = targetEntry ? *(BYTE**)targetEntry : nullptr;
+            m.kind = kind;
+            m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
+            m.typeCheck = TypeCheck(type);
+            SafeReadAsciiDirect((const char*)type + 0x200, m.scriptName, sizeof(m.scriptName));
+            if (targetType && types && targetType >= types && targetType < typesEnd && ((targetType - types) % TYPE_STRIDE) == 0) {
+                m.resIndex = (int)((targetType - types) / TYPE_STRIDE);
+            } else {
+                m.resIndex = -1;
+            }
+            return PRESS_TAKE;
+        }
         if (kind != 1 && kind != 2 && kind != 5 && kind != 6 && kind != 7) {
             *why = "window kind";
             return PRESS_REFUSE;
@@ -497,6 +494,12 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
         }
         if (!ModSync_CheckVehicleTypeAllowed(vehType)) {
             InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMod);
+            return false;
+        }
+        if (m.kind == 0xB) {
+            Commands_Submit(LS_CMD_PURCHASE, &m, sizeof(m));
+            DiagLog_Printf("VEH_REP", "Auto-Replace Submitted: Script='%s' | NetIdx=%u | TargetIdx=%d",
+                           m.scriptName, m.typeIndex, m.resIndex);
             return false;
         }
         __try {
@@ -885,6 +888,22 @@ static const char* Replay(const PurchaseMsg& m)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     __try {
+        if (m.kind == 0xB) {
+            BYTE* newType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
+            if (!newType) return "the new vehicle type is not in this PC's list";
+            BYTE* targetType = nullptr;
+            if (m.resIndex >= 0) {
+                targetType = TypeAt(world, (unsigned)m.resIndex);
+                if (!targetType) return "the target vehicle type is not in this PC's list";
+            }
+            BYTE* mgr = *(BYTE**)(world + WORLD_AUTO_REPLACE_MGR_OFFSET);
+            if (!mgr) return "auto-replacement manager is null";
+            typedef void (*SetAutoReplaceFn)(BYTE* mgr, BYTE* targetType, BYTE* newType);
+            ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, newType);
+            DiagLog_Printf("VEH_REP", "Replay Auto-Replace Success: Script='%s' | NewIdx=%u | TargetIdx=%d",
+                           m.scriptName, m.typeIndex, m.resIndex);
+            return nullptr;
+        }
         BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
         BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
         if (!type) {
@@ -946,9 +965,13 @@ bool Purchase_ApplyCommand(const void* data, size_t size)
         return false;
     }
     const char* why = Replay(m);
-    static const char* const kKinds[] = { "?", "vehicle", "vehicle", "?", "?", "licence", "licence", "factory blueprint" };
+    static const char* const kKinds[] = {
+        "?", "vehicle", "vehicle", "?", "?", "licence", "licence", "factory blueprint",
+        "?", "?", "?", "auto replacement"
+    };
+    const char* kindLabel = (m.kind < sizeof(kKinds)/sizeof(kKinds[0])) ? kKinds[m.kind] : "?";
     Logf("republicmp  PURCHASE: %s%s (window kind %u), type #%u, depot #%d, %.0f rubles %.0f dollars: %s",
-         m.kind < 8 ? kKinds[m.kind] : "?", m.used ? " used" : "", m.kind, m.typeIndex, m.depot.place, m.rubles, m.dollars,
+         kindLabel, m.used ? " used" : "", m.kind, m.typeIndex, m.depot.place, m.rubles, m.dollars,
          why ? why : "made");
     return why == nullptr;
 }

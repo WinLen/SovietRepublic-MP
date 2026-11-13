@@ -22,7 +22,7 @@
 #include <random>
 
 #ifndef M4_C2_VEH_FUEL_OFFSET
-#define M4_C2_VEH_FUEL_OFFSET 0x770
+#define M4_C2_VEH_FUEL_OFFSET 0x5F0
 #endif
 #ifndef M4_C2_BUILDINGS_BEGIN_RVA
 #define M4_C2_BUILDINGS_BEGIN_RVA 0x9E6A18

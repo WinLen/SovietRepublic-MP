@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../core/safe_mem.h"
+#include "../core/engine_rva.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include <string.h>
@@ -37,7 +38,9 @@ static const unsigned kStopTools[2] = { 0x2B26E0, 0x2B49D0 };
 #define DEPOT_MARK_RETURN 0x2B3715 // after the mark's call at 2b3790
 #define DEPOT_LIST_BEGIN (0x100 - 0x58) // the tool's vehicle list, from the mark caller's rsp
 #define DEPOT_LIST_END (0x100 - 0x50)
-#define DEPOT_MAX 64
+#ifndef DEPOT_MAX
+#define DEPOT_MAX ROUTE_TOOLS_DEPOT_MAX
+#endif
 
 static const TsmRoutineSig kRoutines[] = {
     { 0x2B50A0, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89 }, 0 },
@@ -1311,19 +1314,32 @@ static const char* ApplyVehicleReplace(const RouteMsg& m)
     U64 world = (U64)World();
     U64 srcVeh = Ref_VehicleAt(m.object);
     if (!srcVeh) return "the source vehicle is gone";
+    int oldOwner = TwoStates_GetVehicleOwner(*(const int*)(srcVeh + VEH_ID_OFFSET), (const BYTE*)srcVeh);
     __try {
         if (m.index == 0) {
             U64 dstVeh = Ref_VehicleAt(m.vehicle);
             if (!dstVeh) return "the target vehicle is gone";
             typedef unsigned char (*CanReplaceVehFn)(U64 world, U64 src, U64 dst, U64 zero);
             typedef unsigned char (*DoReplaceVehFn)(U64 world, U64 src, U64 dst, unsigned char one);
-            if (((CanReplaceVehFn)(g_exeBase + 0x1AA700))(world, srcVeh, dstVeh, 0))
+            if (((CanReplaceVehFn)(g_exeBase + 0x1AA700))(world, srcVeh, dstVeh, 0)) {
                 ((DoReplaceVehFn)(g_exeBase + 0x1AAAC0))(world, srcVeh, dstVeh, 1);
+                if (oldOwner == 1 || oldOwner == 2) {
+                    TwoStates_RegisterVehicleOwner(*(const int*)(dstVeh + VEH_ID_OFFSET), oldOwner);
+                }
+            }
         } else {
             U64 dstBld = Ref_BuildingAt(m.building);
             if (!dstBld) return "the target building is gone";
             typedef unsigned char (*DoReplaceBldFn)(U64 world, U64 src, U64 dst);
+            int vehBefore = g_exeBase ? (int)SafeCountStdVector(g_exeBase + VEC_VEHICLES_BEGIN_RVA, sizeof(void*)) : 0;
             ((DoReplaceBldFn)(g_exeBase + 0x1AAD90))(world, srcVeh, dstBld);
+            int vehAfter = g_exeBase ? (int)SafeCountStdVector(g_exeBase + VEC_VEHICLES_BEGIN_RVA, sizeof(void*)) : 0;
+            if (vehAfter > vehBefore && (oldOwner == 1 || oldOwner == 2) && g_exeBase) {
+                BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
+                for (int i = vehBefore; v && i < vehAfter; ++i) {
+                    if (v[i]) TwoStates_RegisterVehicleOwner(*(const int*)(v[i] + VEH_ID_OFFSET), oldOwner);
+                }
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "the steps faulted";

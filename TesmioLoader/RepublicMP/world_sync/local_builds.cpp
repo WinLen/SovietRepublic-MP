@@ -101,7 +101,9 @@ RoadCommitFn g_origRoadCommit = nullptr;
 #define SEG_POINTS_END_OFFSET 0x10
 #define SEG_NODE0_OFFSET 0x20
 #define SEG_NODE1_OFFSET 0x28
+#ifndef SEG_TYPE_OFFSET
 #define SEG_TYPE_OFFSET 0x120
+#endif
 #define SEG_VARIANT_OFFSET 0x124
 #define SEG_SKIP_FLAG_OFFSET 0x129       // commit skips segments with this set
 #define SEG_KIND_OFFSET 300              // commit skips kinds 2 and 3
@@ -111,8 +113,12 @@ RoadCommitFn g_origRoadCommit = nullptr;
 #define PLACE_LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
 #define PLACE_LMB_JUST_PRESSED_RVA 0xA54E91 // byte: pressed this frame
 #define PLACE_SCOPE_MARGIN 150.0f           // view-list scope around a placement
+#ifndef MGR_SEGMENTS_BEGIN_OFFSET
 #define MGR_SEGMENTS_BEGIN_OFFSET 0x2b0  // the network's committed edges (+0xaa0 is only the camera's)
+#endif
+#ifndef MGR_SEGMENTS_END_OFFSET
 #define MGR_SEGMENTS_END_OFFSET 0x2b8
+#endif
 
 // Demolish/cancel tools use type ids >= 100 (e.g. road_destroy).
 #define TOOL_TYPE_DEMOLISH_MIN 100
@@ -494,7 +500,7 @@ static int g_demolishCategory = -1;
 static float g_demolishCursor[3];
 static bool g_demolishHasRange = false;
 static float g_demolishRangeA[3], g_demolishRangeB[3];
-static RoadSyncUpgradePiece g_demolishPieces[8];
+static RoadSyncUpgradePiece g_demolishPieces[ROAD_SYNC_MAX_DEMOLISH_PIECES];
 static int g_demolishPieceCount = 0;
 
 // Multi-segment demolish: the whole segments of path +0x3d8 in the list at
@@ -559,7 +565,7 @@ static bool CaptureDemolish(__int64 manager, int category)
     g_demolishCursor[1] = *(float*)(thisPtr + CURSOR_Y_OFFSET);
     g_demolishCursor[2] = *(float*)(thisPtr + CURSOR_Z_OFFSET);
     g_demolishHasRange = ReadDemolishRange(manager, g_demolishRangeA, g_demolishRangeB);
-    g_demolishPieceCount = g_demolishHasRange ? 0 : ReadDemolishPieces(manager, g_demolishPieces, 8);
+    g_demolishPieceCount = g_demolishHasRange ? 0 : ReadDemolishPieces(manager, g_demolishPieces, ROAD_SYNC_MAX_DEMOLISH_PIECES);
     return true;
 }
 
@@ -1120,7 +1126,7 @@ static void FlushCommitCaptures()
         float cursor[3] = { g_demolishCursor[0], g_demolishCursor[1], g_demolishCursor[2] };
         bool hasRange = g_demolishHasRange;
         int pieceCount = g_demolishPieceCount;
-        RoadSyncUpgradePiece pieces[8];
+        RoadSyncUpgradePiece pieces[ROAD_SYNC_MAX_DEMOLISH_PIECES];
         memcpy(pieces, g_demolishPieces, sizeof(pieces));
         float a[3] = { g_demolishRangeA[0], g_demolishRangeA[1], g_demolishRangeA[2] };
         float b[3] = { g_demolishRangeB[0], g_demolishRangeB[1], g_demolishRangeB[2] };

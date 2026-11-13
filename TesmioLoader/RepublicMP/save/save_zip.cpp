@@ -14,6 +14,12 @@ void SaveZip_Bind(const TsmHost* host)
     TsmBind(host);
 }
 
+static std::string PathToUtf8(const fs::path& p)
+{
+    auto u8 = p.u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
 bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn onProgress, void* userData)
 {
     std::error_code ec;
@@ -36,8 +42,10 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
 
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
-    if (!mz_zip_writer_init_file(&zip, outZipPath, 0)) {
-        Logf("republicmp  SAVE_ZIP: mz_zip_writer_init_file couldn't open [%s]", outZipPath);
+    fs::path outPathFs(outZipPath);
+    std::string outZipPathUtf8 = PathToUtf8(outPathFs);
+    if (!mz_zip_writer_init_file_v2(&zip, outZipPathUtf8.c_str(), 0, MZ_ZIP_FLAG_WRITE_ZIP64)) {
+        Logf("republicmp  SAVE_ZIP: mz_zip_writer_init_file_v2 couldn't open [%s]", outZipPath);
         return false;
     }
 
@@ -46,8 +54,11 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
     for (auto it = fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) {
-            Logf("republicmp  SAVE_ZIP: folder walk error: %s", ec.message().c_str());
-            break;
+            Logf("republicmp  SAVE_ZIP: folder walk error: %s - aborting archive creation", ec.message().c_str());
+            mz_zip_writer_end(&zip);
+            std::error_code rmEc;
+            fs::remove(outPathFs, rmEc);
+            return false;
         }
         const fs::directory_entry& entry = *it;
         std::error_code fileEc;
@@ -55,16 +66,24 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
             continue;
         }
 
-        std::string archiveName = fs::relative(entry.path(), base, ec).generic_string();
-        std::string fullPath = entry.path().string();
+        fs::path relPath = fs::relative(entry.path(), base, ec);
         if (ec) {
-            Logf("republicmp  SAVE_ZIP: couldn't compute relative path for [%s]", fullPath.c_str());
-            continue;
+            Logf("republicmp  SAVE_ZIP: couldn't compute relative path for [%s]", entry.path().string().c_str());
+            mz_zip_writer_end(&zip);
+            std::error_code rmEc;
+            fs::remove(outPathFs, rmEc);
+            return false;
         }
 
-        if (!mz_zip_writer_add_file(&zip, archiveName.c_str(), fullPath.c_str(), nullptr, 0, MZ_DEFAULT_LEVEL)) {
-            Logf("republicmp  SAVE_ZIP: couldn't add [%s]", archiveName.c_str());
+        auto u8Archive = relPath.generic_u8string();
+        std::string archiveNameUtf8(reinterpret_cast<const char*>(u8Archive.data()), u8Archive.size());
+        std::string fullPathUtf8 = PathToUtf8(entry.path());
+
+        if (!mz_zip_writer_add_file(&zip, archiveNameUtf8.c_str(), fullPathUtf8.c_str(), nullptr, 0, MZ_DEFAULT_LEVEL)) {
+            Logf("republicmp  SAVE_ZIP: couldn't add [%s]", archiveNameUtf8.c_str());
             mz_zip_writer_end(&zip);
+            std::error_code rmEc;
+            fs::remove(outPathFs, rmEc);
             return false;
         }
         fileCount++;
@@ -75,13 +94,15 @@ bool ZipSaveDirectory(const char* srcDir, const char* outZipPath, ZipProgressFn 
     if (!mz_zip_writer_finalize_archive(&zip)) {
         Logf("republicmp  SAVE_ZIP: finalize archive failed for [%s]", outZipPath);
         mz_zip_writer_end(&zip);
+        std::error_code rmEc;
+        fs::remove(outPathFs, rmEc);
         return false;
     }
     mz_zip_writer_end(&zip);
 
     long long zipSize = 0;
     std::error_code sizeEc;
-    zipSize = (long long)fs::file_size(fs::path(outZipPath), sizeEc);
+    zipSize = (long long)fs::file_size(outPathFs, sizeEc);
 
     Logf("republicmp  SAVE_ZIP: zipped %zu files (%lld bytes) from [%s] -> [%s] (%lld bytes archive)",
          fileCount, totalBytes, srcDir, outZipPath, zipSize);
@@ -105,13 +126,16 @@ bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn on
 {
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
-    if (!mz_zip_reader_init_file(&zip, zipPath, 0)) {
+    fs::path zipPathFs(zipPath);
+    std::string zipPathUtf8 = PathToUtf8(zipPathFs);
+    if (!mz_zip_reader_init_file(&zip, zipPathUtf8.c_str(), 0)) {
         Logf("republicmp  SAVE_ZIP: mz_zip_reader_init_file couldn't open [%s]", zipPath);
         return false;
     }
 
     std::error_code ec;
-    fs::create_directories(fs::path(destDir), ec);
+    fs::path destBase(destDir);
+    fs::create_directories(destBase, ec);
 
     mz_uint numFiles = mz_zip_reader_get_num_files(&zip);
     size_t extracted = 0;
@@ -133,13 +157,14 @@ bool UnzipToDirectory(const char* zipPath, const char* destDir, ZipProgressFn on
             return false;
         }
 
-        fs::path outPath = fs::path(destDir) / stat.m_filename;
+        fs::path relPath(reinterpret_cast<const char8_t*>(stat.m_filename));
+        fs::path outPath = destBase / relPath;
         std::error_code dirEc;
         fs::create_directories(outPath.parent_path(), dirEc);
 
-        std::string outPathStr = outPath.string();
-        if (!mz_zip_reader_extract_to_file(&zip, i, outPathStr.c_str(), 0)) {
-            Logf("republicmp  SAVE_ZIP: couldn't extract [%s] -> [%s]", stat.m_filename, outPathStr.c_str());
+        std::string outPathUtf8 = PathToUtf8(outPath);
+        if (!mz_zip_reader_extract_to_file(&zip, i, outPathUtf8.c_str(), 0)) {
+            Logf("republicmp  SAVE_ZIP: couldn't extract [%s] -> [%s]", stat.m_filename, outPathUtf8.c_str());
             mz_zip_reader_end(&zip);
             return false;
         }

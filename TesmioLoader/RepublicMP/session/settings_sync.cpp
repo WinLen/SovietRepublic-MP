@@ -129,7 +129,7 @@ static bool ReadField(BYTE* b, const WatchedField& f, unsigned long long* out)
     return ok;
 }
 
-// Storage slot settings of one slot: count and (share, enabled) pairs.
+// Storage slot settings of one slot: count and (resIndex, share, enabled) triplets.
 static int ReadSlot(BYTE* b, int slot, float* data)
 {
     int ret = -1;
@@ -144,9 +144,18 @@ static int ReadSlot(BYTE* b, int slot, float* data)
             if (e && ee >= e) {
                 int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
                 if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
+                BYTE* world = g_exeBase + WORLD_RVA;
+                BYTE* cbeg = *(BYTE**)(world + 0xC2B0);
+                BYTE* cend = *(BYTE**)(world + 0xC2B8);
                 for (int i = 0; i < n; i++) {
-                    data[i * 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
-                    data[i * 2 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
+                    BYTE* res = *(BYTE**)(e + i * SLOT_ENTRY_SIZE);
+                    float resIdx = -1.0f;
+                    if (res && cbeg && cend && res >= cbeg && res < cend && ((res - cbeg) % 0x340) == 0) {
+                        resIdx = (float)((res - cbeg) / 0x340);
+                    }
+                    data[i * 3 + 0] = resIdx;
+                    data[i * 3 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
+                    data[i * 3 + 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
                 }
                 ret = n;
             } else {
@@ -182,7 +191,7 @@ static unsigned long long HashSlot(const float* data, int n)
 {
     unsigned long long h = 0xcbf29ce484222325ull ^ (unsigned)n;
     const unsigned char* p = (const unsigned char*)data;
-    for (int i = 0; i < n * 2 * 4; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
+    for (int i = 0; i < n * 3 * 4; i++) { h ^= p[i]; h *= 0x100000001b3ull; }
     return h;
 }
 
@@ -340,9 +349,18 @@ static bool WriteSlot(BYTE* b, int slot, const float* data, int n)
             BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
             BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
             if (e && (int)((ee - e) / SLOT_ENTRY_SIZE) == n) {
+                BYTE* world = g_exeBase + WORLD_RVA;
+                BYTE* cbeg = *(BYTE**)(world + 0xC2B0);
+                BYTE* cend = *(BYTE**)(world + 0xC2B8);
                 for (int i = 0; i < n; i++) {
-                    *(float*)(e + i * SLOT_ENTRY_SIZE + 8) = data[i * 2];
-                    *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC) = data[i * 2 + 1];
+                    int resIdx = (int)data[i * 3 + 0];
+                    if (resIdx >= 0 && cbeg && cend && cbeg + (size_t)resIdx * 0x340 < cend) {
+                        *(BYTE**)(e + i * SLOT_ENTRY_SIZE) = cbeg + (size_t)resIdx * 0x340;
+                    } else if (resIdx == -1) {
+                        *(BYTE**)(e + i * SLOT_ENTRY_SIZE) = nullptr;
+                    }
+                    *(float*)(e + i * SLOT_ENTRY_SIZE + 8) = data[i * 3 + 1];
+                    *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC) = data[i * 3 + 2];
                 }
                 ok = true;
             }
@@ -506,7 +524,7 @@ static void Send(BYTE* b, int field, unsigned long long value, int slot, const f
     if (field == SETTINGS_FIELD_UPBRINGING || field == SETTINGS_FIELD_BROADCAST) {
         if (data && count > 0) memcpy(w.data, data, count * sizeof(float));
     } else {
-        if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+        if (data && count > 0) memcpy(w.data, data, count * 3 * sizeof(float));
     }
     BuildSync_SendSetting(w);
     if (field == SETTINGS_FIELD_SLOT)
@@ -529,14 +547,27 @@ static void Send(BYTE* b, int field, unsigned long long value, int slot, const f
 // simulation: it is recorded but not sent.
 #define LMB_HELD_RVA 0xA54E90
 #define LMB_JUST_PRESSED_RVA 0xA54E91
+#define ENTER_RVA 0xA54CAC
+#define KEYPAD_ENTER_RVA 0xA54D2C
 static ULONGLONG g_lastClickMs = 0;
+
+static bool Clicked()
+{
+    float wheel = 0.0f;
+    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
+    bool pressed = false;
+    __try {
+        pressed = *(g_exeBase + LMB_HELD_RVA) || *(g_exeBase + LMB_JUST_PRESSED_RVA) ||
+                  *(g_exeBase + ENTER_RVA) || *(g_exeBase + KEYPAD_ENTER_RVA);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        pressed = false;
+    }
+    return pressed || (isfinite(wheel) && wheel != 0.0f);
+}
 
 static void TrackClick(ULONGLONG now)
 {
-    __try {
-        if (*(g_exeBase + LMB_HELD_RVA) || *(g_exeBase + LMB_JUST_PRESSED_RVA)) g_lastClickMs = now;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
+    if (Clicked()) g_lastClickMs = now;
 }
 
 static bool ClickedRecently(ULONGLONG now)
@@ -597,7 +628,7 @@ static void Scan(bool sendChanges)
 
         int slots = SlotCount(b);
         for (int s = 0; s < slots; s++) {
-            float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
+            float data[SETTINGS_MAX_SLOT_ENTRIES * 3];
             int count = ReadSlot(b, s, data);
             if (count < 0 || st.slotFlood[s].muted) continue;
             unsigned long long h = HashSlot(data, count);
@@ -769,10 +800,10 @@ static void ReadLsBuilding(BYTE* b, LsBuilding& s)
     s.slots = SlotCount(b);
     s.slotAt = g_lsSlotData.size();
     for (int i = 0; i < s.slots; i++) {
-        float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
+        float data[SETTINGS_MAX_SLOT_ENTRIES * 3];
         int n = ReadSlot(b, i, data);
         s.slotCount[i] = n < 0 ? -1 : n;
-        if (n > 0) g_lsSlotData.insert(g_lsSlotData.end(), data, data + n * 2);
+        if (n > 0) g_lsSlotData.insert(g_lsSlotData.end(), data, data + n * 3);
     }
     if (s.category == 0x4A || s.category == 0x4C) {
         if (ReadUpbringing(b, s.composite)) s.hasComposite = true;
@@ -809,7 +840,7 @@ bool SettingsSync_OwnsBuildingWord(const BYTE* building, unsigned offset)
 
 bool SettingsSync_OwnsSlotWord(const BYTE* building, unsigned slot, unsigned region, unsigned local)
 {
-    if (region == 2) return (local % SLOT_ENTRY_SIZE) >= 8; // share and enabled of each entry
+    if (region == 2) return true; // all words of each entry (resource, share, enabled)
     if (region != 0 || slot != 0) return false;
     int category = SafeCategory(building);
     for (int f = 0; f < kFieldCount; f++)
@@ -850,7 +881,7 @@ static void SubmitSetting(const LsBuilding& s, int field, unsigned long long val
     if (field == SETTINGS_FIELD_UPBRINGING || field == SETTINGS_FIELD_BROADCAST) {
         if (data && count > 0) memcpy(w.data, data, count * sizeof(float));
     } else {
-        if (data && count > 0) memcpy(w.data, data, count * 2 * sizeof(float));
+        if (data && count > 0) memcpy(w.data, data, count * 3 * sizeof(float));
     }
     Commands_Submit(LS_CMD_SETTING, &w, sizeof(w));
 }
@@ -865,8 +896,24 @@ static void RawWrite(BYTE* p, const void* v, int size)
     DiagLog_EndSafeSeh();
 }
 
+static bool CheckControlAllowed(const BYTE* b, const float* pos, bool userInteracted)
+{
+    if (!TwoStates_IsActive() || !b) return true;
+    float x = pos ? pos[0] : 0.0f;
+    float z = pos ? pos[2] : 0.0f;
+    int key = TwoStates_BuildingPosKey(x, z);
+    if (TwoStates_CanControlBuilding(key, x, z))
+        return true;
+    if (userInteracted) {
+        TwoStates_CheckBuildingControlAllowed(b);
+    }
+    return false;
+}
+
 void SettingsSync_LockstepDetect()
 {
+    ULONGLONG now = GetTickCount64();
+    bool userInteracted = ClickedRecently(now) || Clicked();
     for (const LsBuilding& old : g_lsBuildings) {
         if (!old.b) continue;
         BYTE* b = old.b;
@@ -878,7 +925,7 @@ void SettingsSync_LockstepDetect()
             if (!(old.hasMask & (1u << f))) continue;
             unsigned long long v;
             if (!ReadField(b, kFields[f], &v) || v == old.values[f]) continue;
-            if (TwoStates_CheckBuildingControlAllowed(b))
+            if (CheckControlAllowed(b, pos, userInteracted))
                 SubmitSetting(old, f, v, 0, nullptr, 0);
             BYTE* p = FieldAddress(b, kFields[f]);
             if (p) RawWrite(p, &old.values[f], kFields[f].size);
@@ -887,12 +934,12 @@ void SettingsSync_LockstepDetect()
         unsigned char stopped;
         if (ReadConstruction(b, &pay, &stopped)) {
             if (pay != old.pay) {
-                if (TwoStates_CheckBuildingControlAllowed(b))
+                if (CheckControlAllowed(b, pos, userInteracted))
                     SubmitSetting(old, SETTINGS_FIELD_PAY, pay, 0, nullptr, 0);
                 RawWrite(b + BLD_PAY_OFFSET, &old.pay, 2);
             }
             if (stopped != old.stopped) {
-                if (TwoStates_CheckBuildingControlAllowed(b))
+                if (CheckControlAllowed(b, pos, userInteracted))
                     SubmitSetting(old, SETTINGS_FIELD_STOP, stopped, 0, nullptr, 0);
                 RawWrite(b + BLD_STOPPED_OFFSET, &old.stopped, 1);
             }
@@ -901,16 +948,16 @@ void SettingsSync_LockstepDetect()
         for (int i = 0; i < old.slots; i++) {
             int n = old.slotCount[i];
             if (n < 0) continue;
-            float data[SETTINGS_MAX_SLOT_ENTRIES * 2];
-            int now = ReadSlot(b, i, data);
+            float data[SETTINGS_MAX_SLOT_ENTRIES * 3];
+            int nowSlots = ReadSlot(b, i, data);
             const float* before = g_lsSlotData.data() + at;
-            at += n > 0 ? n * 2 : 0;
-            if (now != n || n == 0 || memcmp(data, before, n * 2 * sizeof(float)) == 0) {
-                if (now != n && now >= 0)
+            at += n > 0 ? n * 3 : 0;
+            if (nowSlots != n || n == 0 || memcmp(data, before, n * 3 * sizeof(float)) == 0) {
+                if (nowSlots != n && nowSlots >= 0)
                     Logf("republicmp  SETTINGS: storage slot %d changed its resource list locally - not carried", i);
                 continue;
             }
-            if (TwoStates_CheckBuildingControlAllowed(b))
+            if (CheckControlAllowed(b, pos, userInteracted))
                 SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
             WriteSlot(b, i, before, n);
         }
@@ -926,7 +973,7 @@ void SettingsSync_LockstepDetect()
                 field = SETTINGS_FIELD_BROADCAST;
             }
             if (ok && memcmp(cur, old.composite, sizeof(cur)) != 0) {
-                if (TwoStates_CheckBuildingControlAllowed(b))
+                if (CheckControlAllowed(b, pos, userInteracted))
                     SubmitSetting(old, field, 0, 0, cur, 6);
                 if (field == SETTINGS_FIELD_UPBRINGING)
                     WriteUpbringing(b, old.composite);

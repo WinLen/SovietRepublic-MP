@@ -4,6 +4,7 @@
 #include "../buildings/build_sync.h"
 #include "../../lockstep/commands.h"
 #include "../../session/two_states.h"
+#include "../../core/engine_rva.h"
 #include <string.h>
 #include <unordered_map>
 #include <vector>
@@ -14,10 +15,11 @@ namespace {
 constexpr int kOffsets[] = {0xF18, 0xF30, 0xF48, 0xF60};
 const char* kNames[] = {"workers", "students", "passengers", "tourists"};
 constexpr int kStride = 7;
-constexpr int kMax = SETTINGS_MAX_SLOT_ENTRIES * 2 / kStride; // 9 endpoints
+constexpr int kMax = CITIZEN_DESTINATIONS_MAX;
 constexpr uint32_t kFormat = 0x44535431;
 constexpr uintptr_t kWorld = 0x9D4F10;
-constexpr uintptr_t kBuildingsBegin = 0x9E6A18, kBuildingsEnd = 0x9E6A20;
+constexpr uintptr_t kBuildingsBegin = VEC_BUILDINGS_BEGIN_RVA, kBuildingsEnd = VEC_BUILDINGS_END_RVA;
+constexpr uintptr_t kConstructionsBegin = VEC_CONSTRUCTIONS_BEGIN_RVA, kConstructionsEnd = VEC_CONSTRUCTIONS_END_RVA;
 constexpr uintptr_t kAdd = 0x1D42B0, kRemove = 0x1D43C0;
 
 struct Entry { float share; unsigned char flags[4]; BYTE* target; };
@@ -84,10 +86,15 @@ int LocalCount(BYTE* source, int group) {
 }
 
 bool Listed(BYTE* target) {
-    BYTE** begin = *(BYTE***)(g_exeBase + kBuildingsBegin);
-    BYTE** end = *(BYTE***)(g_exeBase + kBuildingsEnd);
-    if (end < begin || end-begin > 200000) return false;
-    for (BYTE** it = begin; it < end; ++it) if (*it == target) return true;
+    if (!target) return false;
+    const uintptr_t begins[2] = { kBuildingsBegin, kConstructionsBegin };
+    const uintptr_t ends[2] = { kBuildingsEnd, kConstructionsEnd };
+    for (int v = 0; v < 2; ++v) {
+        BYTE** begin = *(BYTE***)(g_exeBase + begins[v]);
+        BYTE** end = *(BYTE***)(g_exeBase + ends[v]);
+        if (!begin || !end || end < begin || (size_t)(end - begin) > 200000) continue;
+        for (BYTE** it = begin; it < end; ++it) if (*it == target) return true;
+    }
     return false;
 }
 
@@ -140,19 +147,23 @@ unsigned long long Hash(const SettingWire& wire) {
 // Temporary test-session correspondence, deliberately rejects ambiguous matches.
 BYTE* Resolve(const float* pos, int category, uint32_t type, bool* ambiguous) {
     *ambiguous = false;
-    BYTE** begin = *(BYTE***)(g_exeBase + kBuildingsBegin);
-    BYTE** end = *(BYTE***)(g_exeBase + kBuildingsEnd);
-    if (end < begin || end-begin > 200000) return nullptr;
     BYTE* found = nullptr;
-    for (BYTE** it = begin; it < end; ++it) {
-        BYTE* b = *it;
-        if (!b || !*(BYTE**)(b + 0x318)) continue;
-        if (*(int*)(*(BYTE**)(b+0x318)+0x360) != category || TypeHash(b) != type) continue;
-        float* p = (float*)(b+0x350);
-        if (!isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2]) ||
-            fabsf(p[0]-pos[0]) > 0.5f || fabsf(p[1]-pos[1]) > 1.0f || fabsf(p[2]-pos[2]) > 0.5f) continue;
-        if (found) { *ambiguous = true; return nullptr; }
-        found = b;
+    const uintptr_t begins[2] = { kBuildingsBegin, kConstructionsBegin };
+    const uintptr_t ends[2] = { kBuildingsEnd, kConstructionsEnd };
+    for (int v = 0; v < 2; ++v) {
+        BYTE** begin = *(BYTE***)(g_exeBase + begins[v]);
+        BYTE** end = *(BYTE***)(g_exeBase + ends[v]);
+        if (!begin || !end || end < begin || (size_t)(end - begin) > 200000) continue;
+        for (BYTE** it = begin; it < end; ++it) {
+            BYTE* b = *it;
+            if (!b || !*(BYTE**)(b + 0x318)) continue;
+            if (*(int*)(*(BYTE**)(b + 0x318) + 0x360) != category || TypeHash(b) != type) continue;
+            float* p = (float*)(b + 0x350);
+            if (!isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2]) ||
+                fabsf(p[0] - pos[0]) > 0.5f || fabsf(p[1] - pos[1]) > 1.0f || fabsf(p[2] - pos[2]) > 0.5f) continue;
+            if (found) { *ambiguous = true; return nullptr; }
+            found = b;
+        }
     }
     return found;
 }

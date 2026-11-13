@@ -190,6 +190,17 @@ static const GameCallSite kSites[] = {
     { SITE_COPY_DIST_OFFICE_RVA, FN_COPY_DIST_OFFICE_RVA, "copy tool: copy distribution office settings", "WBB", 0, 0, false },
     { SITE_COPY_WASTE_SETTINGS_RVA, FN_COPY_WASTE_SETTINGS_RVA, "copy tool: copy technical services waste settings", "WBB", 0, 0, false },
     { SITE_COPY_TRANSFER_SETTINGS_RVA, FN_COPY_TRANSFER_SETTINGS_RVA, "copy tool: copy factory connection settings", "WBB", 0, 0, false },
+    { 0x31484D, 0x5EED80, "assign co tool: assign offices in rectangle", "M", 0xD448, 0, false },
+    { 0x3142D6, 0x1D4820, "firestation tool: dispatch to fire", "W", 0, 0, false },
+    { 0x3142F6, 0x1DB130, "building distribution tool: assign tasks", "W", 0, 0, false },
+    { 0x314356, 0x1D7140, "building copyweights tool: copy distribution weights", "W", 0, 0, false },
+    { 0x314893, 0x5F7860, "kgb surveillance tool: set surveillance target", "M", 0xD450, 0, false },
+    { 0x3135F9, 0x418210, "snow priority tool: set clearing priority", "WI", 0, 0, false },
+    { 0x1A131E, 0x1A0510, "building construction: clear priority on cancel", "WOb", 0, 0, false },
+    { 0x1A1343, 0x1A0510, "building construction: reset priority on finish", "WOb", 0, 0, false },
+    { 0x776557, 0x1A8D90, "factory window: replace machines", "WObx", 0, 0, false },
+    { 0x1A15A8, 0x1BC010, "building: cancel production on demolish", "WO", 0, 0, false },
+    { 0x7D8738, 0x664940, "vehicle window: repaint template", "V", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -992,7 +1003,8 @@ bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
     static const auto thunksF4 = MakeThunksF4(std::make_index_sequence<SITE_COUNT>());
-    BYTE* relay = AllocNear(g_exeBase, 4096);
+    static_assert(SITE_COUNT * 32 <= 16384, "kSites relay allocation overflow");
+    BYTE* relay = AllocNear(g_exeBase, 16384);
     if (!relay) {
         Logf("republicmp  GAME CALL: no relay page near the executable - window buttons are not shared");
         return false;
@@ -1049,4 +1061,12 @@ bool GameCalls_Install()
     }
     Logf("republicmp  GAME CALL: %d of %d window call sites relayed", on, (int)SITE_COUNT);
     return on == (int)SITE_COUNT;
+}
+
+bool GameCalls_HasCallSiteForTest(unsigned atSiteRva, unsigned targetRoutineRva)
+{
+    for (size_t i = 0; i < SITE_COUNT; ++i) {
+        if (kSites[i].site == atSiteRva && kSites[i].target == targetRoutineRva) return true;
+    }
+    return false;
 }

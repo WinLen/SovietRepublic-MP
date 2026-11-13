@@ -35,20 +35,34 @@
 #include <vector>
 
 struct StateSummary {
-    int day, year;
-    float dayProgress;
-    double rub, usd;
-    int buildings, vehicles, citizens;
-    double storageTotal;    // all building storage amounts
-    double cargoTotal;      // all vehicle cargo amounts
-    double productionTotal; // all buildings' current production windows
-    double ageTotal;        // all citizens' ages
-    unsigned long long hashClock;       // day, year, progress, money
-    unsigned long long hashBuildings;
-    unsigned long long hashVehicles;    // logical vehicle state (id, schedule stop, cargo)
-    unsigned long long hashVehiclesPos; // in-transit 3D positions (soft-synced in multiplayer)
-    unsigned long long hashCitizens;    // logical citizen state (home building, age)
+    int day, year;                      // 8 bytes (offset 0)
+    float dayProgress;                  // 4 bytes (offset 8)
+    float _pad0;                        // 4 bytes (offset 12)
+    double rub, usd;                    // 16 bytes (offset 16)
+    double rubState[2];                 // 16 bytes (offset 32)
+    double usdState[2];                 // 16 bytes (offset 48)
+    int buildings;                      // 4 bytes (offset 64)
+    int constructions;                  // 4 bytes (offset 68)
+    int vehicles;                       // 4 bytes (offset 72)
+    int citizens;                       // 4 bytes (offset 76)
+    int lines;                          // 4 bytes (offset 80)
+    int loans;                          // 4 bytes (offset 84)
+    double storageTotal;                // 8 bytes (offset 88)
+    double cargoTotal;                  // 8 bytes (offset 96)
+    double productionTotal;             // 8 bytes (offset 104)
+    double ageTotal;                    // 8 bytes (offset 112)
+    unsigned long long hashClock;       // 8 bytes (offset 120)
+    unsigned long long hashBuildings;   // 8 bytes (offset 128)
+    unsigned long long hashConstructions;// 8 bytes (offset 136)
+    unsigned long long hashVehicles;    // 8 bytes (offset 144)
+    unsigned long long hashVehiclesPos; // 8 bytes (offset 152)
+    unsigned long long hashCitizens;    // 8 bytes (offset 160)
+    unsigned long long hashNetworks;    // 8 bytes (offset 168)
+    unsigned long long hashLines;       // 8 bytes (offset 176)
+    unsigned long long hashLoans;       // 8 bytes (offset 184)
+    unsigned long long hashResearch;    // 8 bytes (offset 192)
 };
+static_assert(sizeof(StateSummary) == 200, "StateSummary must be exactly 200 bytes with clean alignment");
 
 void StateHash_Bind(const TsmHost* host);
 

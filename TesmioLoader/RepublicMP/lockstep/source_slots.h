@@ -18,6 +18,8 @@
 
 #include "tesmio_plugin.h"
 
+#define SOURCE_SLOTS_MAX_BUILDINGS 16384
+
 void SourceSlots_Bind(const TsmHost* host);
 
 // The tool's routine is the checked one (the tool is put away otherwise).

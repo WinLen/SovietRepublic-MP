@@ -11,7 +11,9 @@
 #include <math.h>
 
 #define VEH_CUR_BLD_OFFSET 0x4F0
+#ifndef VEH_SPEED_OFFSET
 #define VEH_SPEED_OFFSET 0xD24
+#endif
 #define VEH_NODE0_OFFSET 0xD60
 #define VEH_WEAR0_OFFSET 0x17E8
 #define VEH_WEAR1_OFFSET 0x1A54
@@ -43,6 +45,9 @@ struct VehicleSoftSyncEntry {
     unsigned cargoResHash[SOFT_SYNC_VEH_CARGO_MAX];
     float cargoAmount[SOFT_SYNC_VEH_CARGO_MAX];
     float passengers;
+    float workers;
+    float students;
+    float tourists;
 };
 
 struct VehicleSoftSyncTreasury {
@@ -224,34 +229,39 @@ static void TranslateVehicleNodes(BYTE* v, float dx, float dy, float dz)
     }
 }
 
-static float ReadVehiclePassengers(const BYTE* v)
+static void ReadVehiclePassengers(const BYTE* v, float& passengers, float& workers, float& students, float& tourists)
 {
+    passengers = 0.0f;
+    workers = 0.0f;
+    students = 0.0f;
+    tourists = 0.0f;
     const BYTE* cBeg = *(const BYTE**)(v + 0x458);
     const BYTE* cEnd = *(const BYTE**)(v + 0x460);
-    if (!cBeg || cEnd < cBeg || (cEnd - cBeg) % 16 != 0) return 0.0f;
+    if (!cBeg || cEnd < cBeg || (cEnd - cBeg) % 16 != 0) return;
     for (const BYTE* p = cBeg; p + 16 <= cEnd; p += 16) {
         const char* name = *(const char**)p;
-        if (name && (strcmp(name, "passengers") == 0 || strcmp(name, "workers") == 0 ||
-                     strcmp(name, "students") == 0 || strcmp(name, "tourists") == 0)) {
-            float amt = *(const float*)(p + 8);
-            if (isfinite(amt) && amt >= 0.0f) return amt;
-        }
+        if (!name) continue;
+        float amt = *(const float*)(p + 8);
+        if (!isfinite(amt) || amt < 0.0f) amt = 0.0f;
+        if (strcmp(name, "passengers") == 0) passengers = amt;
+        else if (strcmp(name, "workers") == 0) workers = amt;
+        else if (strcmp(name, "students") == 0) students = amt;
+        else if (strcmp(name, "tourists") == 0) tourists = amt;
     }
-    return 0.0f;
 }
 
-static void WriteVehiclePassengers(BYTE* v, float passengers)
+static void WriteVehiclePassengers(BYTE* v, float passengers, float workers, float students, float tourists)
 {
     BYTE* cBeg = *(BYTE**)(v + 0x458);
     BYTE* cEnd = *(BYTE**)(v + 0x460);
     if (!cBeg || cEnd < cBeg || (cEnd - cBeg) % 16 != 0) return;
     for (BYTE* p = cBeg; p + 16 <= cEnd; p += 16) {
         const char* name = *(const char**)p;
-        if (name && (strcmp(name, "passengers") == 0 || strcmp(name, "workers") == 0 ||
-                     strcmp(name, "students") == 0 || strcmp(name, "tourists") == 0)) {
-            *(float*)(p + 8) = passengers;
-            return;
-        }
+        if (!name) continue;
+        if (strcmp(name, "passengers") == 0 && isfinite(passengers) && passengers >= 0.0f) *(float*)(p + 8) = passengers;
+        else if (strcmp(name, "workers") == 0 && isfinite(workers) && workers >= 0.0f) *(float*)(p + 8) = workers;
+        else if (strcmp(name, "students") == 0 && isfinite(students) && students >= 0.0f) *(float*)(p + 8) = students;
+        else if (strcmp(name, "tourists") == 0 && isfinite(tourists) && tourists >= 0.0f) *(float*)(p + 8) = tourists;
     }
 }
 
@@ -265,13 +275,13 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
         BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
         out.currentBldId = effBld ? *(int*)effBld : -1;
         out.scheduleIdx = *(int*)(v + VEH_SCHED_IDX_OFFSET);
-        out.fuel = *(float*)(v + VEH_CORNER_TURN_ANGLE_OFFSET);
+        out.fuel = *(float*)(v + VEH_FUEL_OFFSET);
         out.speed = *(float*)(v + VEH_SPEED_OFFSET);
         out.wear[0] = *(float*)(v + VEH_WEAR0_OFFSET);
         out.wear[1] = *(float*)(v + VEH_WEAR1_OFFSET);
         out.wear[2] = *(float*)(v + VEH_WEAR2_OFFSET);
         memcpy(out.pos, v + VEH_POS_OFFSET, 12);
-        out.passengers = ReadVehiclePassengers(v);
+        ReadVehiclePassengers(v, out.passengers, out.workers, out.students, out.tourists);
 
         BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
         BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
@@ -294,26 +304,28 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
     return ok;
 }
 
-static bool FillBldEntrySafe(BYTE* b, int place, VehicleSoftSyncBldEntry& out)
+static bool FillBldEntrySafe(BYTE* b, int place, unsigned char list, VehicleSoftSyncBldEntry& out)
 {
     bool ok = false;
     __try {
         BYTE* sBeg = *(BYTE**)(b + BLD_STORAGE_OFFSET);
         BYTE* sEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
         float produced = *(float*)(b + BLD_PRODUCED_OFFSET);
+        float progress = *(float*)(b + BLD_PROGRESS_OFFSET);
         size_t ns = 0;
         if (sBeg && sEnd >= sBeg && (sEnd - sBeg) % BLD_STORAGE_SLOT_SIZE == 0) {
             ns = (size_t)((sEnd - sBeg) / BLD_STORAGE_SLOT_SIZE);
         }
-        if (ns == 0 && produced == 0.0f) return false;
+        if (ns == 0 && produced == 0.0f && progress == 0.0f) return false;
         if (ns > SOFT_SYNC_BLD_SLOTS_MAX) ns = SOFT_SYNC_BLD_SLOTS_MAX;
 
         memset(&out, 0, sizeof(out));
         out.place = place;
         out.bldId = *(int*)b;
-        out.progress = *(float*)(b + BLD_PROGRESS_OFFSET);
+        out.progress = progress;
         out.produced = produced;
         out.slotCount = (unsigned char)ns;
+        out.reserved = list;
         for (size_t s = 0; s < ns; s++) {
             BYTE* slot = sBeg + s * BLD_STORAGE_SLOT_SIZE;
             BYTE* eBeg = *(BYTE**)slot;
@@ -339,22 +351,42 @@ static void CaptureSoftSyncBuildings(const BYTE* w, VehicleSoftSyncBldBatch& bld
 {
     memset(&bldBatch, 0, sizeof(bldBatch));
     if (!w) return;
-    BYTE* const* begin = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET);
-    BYTE* const* end = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET + 8);
-    if (!begin || end <= begin) return;
-    size_t total = (size_t)(end - begin);
-    if (total == 0 || total > MAX_BUILDINGS_SCAN) return;
-    if (g_bldRollingCursor >= total) g_bldRollingCursor = 0;
-    size_t startCursor = g_bldRollingCursor;
-    size_t scanned = 0;
-    while (scanned < total && bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX) {
-        size_t idx = (startCursor + scanned) % total;
-        scanned++;
-        g_bldRollingCursor = (idx + 1) % total;
-        BYTE* b = begin[idx];
-        if (!b) continue;
-        if (FillBldEntrySafe(b, (int)idx, bldBatch.entries[bldBatch.count])) {
-            bldBatch.count++;
+
+    BYTE* const* beginBld = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET);
+    BYTE* const* endBld = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET + 8);
+    if (beginBld && endBld > beginBld) {
+        size_t total = (size_t)(endBld - beginBld);
+        if (total > 0 && total <= MAX_BUILDINGS_SCAN) {
+            if (g_bldRollingCursor >= total) g_bldRollingCursor = 0;
+            size_t startCursor = g_bldRollingCursor;
+            size_t scanned = 0;
+            while (scanned < total && bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX) {
+                size_t idx = (startCursor + scanned) % total;
+                scanned++;
+                g_bldRollingCursor = (idx + 1) % total;
+                BYTE* b = beginBld[idx];
+                if (!b) continue;
+                if (FillBldEntrySafe(b, (int)idx, 0, bldBatch.entries[bldBatch.count])) {
+                    bldBatch.count++;
+                }
+            }
+        }
+    }
+
+    if (bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX) {
+        BYTE* const* beginCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET);
+        BYTE* const* endCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET + 8);
+        if (beginCon && endCon > beginCon) {
+            size_t totalCon = (size_t)(endCon - beginCon);
+            if (totalCon > 0 && totalCon <= MAX_BUILDINGS_SCAN) {
+                for (size_t i = 0; i < totalCon && bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX; i++) {
+                    BYTE* c = beginCon[i];
+                    if (!c) continue;
+                    if (FillBldEntrySafe(c, (int)i, 1, bldBatch.entries[bldBatch.count])) {
+                        bldBatch.count++;
+                    }
+                }
+            }
         }
     }
     if (bldBatch.count > 0) bldBatch.magic = VSS_BLD_STORAGE_MAGIC;
@@ -406,7 +438,15 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                     if (!v) continue;
                     float speed = *(float*)(v + VEH_SPEED_OFFSET);
                     BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
-                    if (speed == 0.0f && effBld != nullptr) continue;
+                    bool isStationaryParked = (speed == 0.0f && effBld != nullptr);
+                    if (isStationaryParked) {
+                        float bldProg = *(float*)(effBld + BLD_PROGRESS_OFFSET);
+                        unsigned char workerSim = *(unsigned char*)(v + VEH_WORKER_SIM_FLAG_OFFSET);
+                        if (bldProg < 1.0f || workerSim != 0) {
+                            isStationaryParked = false; // Active machinery on construction site
+                        }
+                    }
+                    if (isStationaryParked) continue;
                     if (FillEntrySafe(v, (int)idx, msg.entries[msg.count])) {
                         msg.count++;
                     }
@@ -420,7 +460,8 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                         if (!v) continue;
                         float speed = *(float*)(v + VEH_SPEED_OFFSET);
                         BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
-                        if (speed != 0.0f || effBld == nullptr) continue;
+                        bool isStationaryParked = (speed == 0.0f && effBld != nullptr);
+                        if (!isStationaryParked) continue;
                         if (FillEntrySafe(v, (int)idx, msg.entries[msg.count])) {
                             msg.count++;
                         }
@@ -639,16 +680,29 @@ static void SyncBuildingStorageSlot(const BYTE* w, BYTE* slot, unsigned char hos
 
 static bool ApplySoftSyncBuildings(BYTE* w, const BYTE* bldPtr, unsigned bldCount)
 {
-    BYTE** begin = *(BYTE***)(w + WORLD_BUILDINGS_OFFSET);
-    BYTE** end = *(BYTE***)(w + WORLD_BUILDINGS_OFFSET + 8);
-    if (!begin || end <= begin) return false;
-    size_t total = (size_t)(end - begin);
-    if (total > MAX_BUILDINGS_SCAN) return false;
+    BYTE** beginBld = *(BYTE***)(w + WORLD_BUILDINGS_OFFSET);
+    BYTE** endBld   = *(BYTE***)(w + WORLD_BUILDINGS_OFFSET + 8);
+    size_t totalBld = (beginBld && endBld > beginBld) ? (size_t)(endBld - beginBld) : 0;
+    if (totalBld > MAX_BUILDINGS_SCAN) totalBld = 0;
+
+    BYTE** beginCon = *(BYTE***)(w + WORLD_CONSTRUCTIONS_OFFSET);
+    BYTE** endCon   = *(BYTE***)(w + WORLD_CONSTRUCTIONS_OFFSET + 8);
+    size_t totalCon = (beginCon && endCon > beginCon) ? (size_t)(endCon - beginCon) : 0;
+    if (totalCon > MAX_BUILDINGS_SCAN) totalCon = 0;
+
+    if (totalBld == 0 && totalCon == 0) return false;
 
     const VehicleSoftSyncBldEntry* entries = (const VehicleSoftSyncBldEntry*)(bldPtr + sizeof(unsigned) * 2);
     for (unsigned i = 0; i < bldCount; i++) {
         const VehicleSoftSyncBldEntry& e = entries[i];
-        BYTE* b = FindBuilding(begin, total, e.place, e.bldId);
+        BYTE* b = nullptr;
+        if (e.reserved == 1) {
+            if (beginCon && totalCon > 0) b = FindBuilding(beginCon, totalCon, e.place, e.bldId);
+            if (!b && beginBld && totalBld > 0) b = FindBuilding(beginBld, totalBld, e.place, e.bldId);
+        } else {
+            if (beginBld && totalBld > 0) b = FindBuilding(beginBld, totalBld, e.place, e.bldId);
+            if (!b && beginCon && totalCon > 0) b = FindBuilding(beginCon, totalCon, e.place, e.bldId);
+        }
         if (!b) continue;
         if (isfinite(e.progress)) *(float*)(b + BLD_PROGRESS_OFFSET) = e.progress;
         if (isfinite(e.produced)) *(float*)(b + BLD_PRODUCED_OFFSET) = e.produced;
@@ -673,8 +727,9 @@ static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppe
     BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
     if (!cBegin || cEnd < cBegin || (cEnd - cBegin) % CARGO_ENTRY_SIZE != 0) return;
     size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
-    if (cn != e.cargoCount) return;
-    for (size_t k = 0; k < cn && k < SOFT_SYNC_VEH_CARGO_MAX; k++) {
+    size_t limit = (cn < (size_t)e.cargoCount) ? cn : (size_t)e.cargoCount;
+    if (limit > SOFT_SYNC_VEH_CARGO_MAX) limit = SOFT_SYNC_VEH_CARGO_MAX;
+    for (size_t k = 0; k < limit; k++) {
         BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
         const char* resName = *(const char**)entry;
         if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {
@@ -683,6 +738,12 @@ static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppe
             if (stoppedAtBld && e.cargoAmount[k] > 1e-4f && diff < 2.0f) continue;
             if (diff > 1e-4f) g_vssDiag.cargoUpdated++;
             *(float*)(entry + CARGO_AMOUNT_OFFSET) = e.cargoAmount[k];
+        }
+    }
+    if (stoppedAtBld && cn > (size_t)e.cargoCount && cn <= SOFT_SYNC_VEH_CARGO_MAX) {
+        for (size_t k = (size_t)e.cargoCount; k < cn; k++) {
+            BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
+            *(float*)(entry + CARGO_AMOUNT_OFFSET) = 0.0f;
         }
     }
 }
@@ -694,7 +755,6 @@ static bool HasActiveEnginePath(const BYTE* v)
     if (*(const void* const*)(v + VEH_LINK_PTR_OFFSET) != nullptr) return true;
     if (*(const void* const*)(v + 0x528) != nullptr) return true;
     if (*(const void* const*)(v + 0x650) != nullptr) return true;
-    if (*(const uintptr_t*)(v + 0x680) != *(const uintptr_t*)(v + 0x688)) return true;
     if (*(const uintptr_t*)(v + 0x6A0) != *(const uintptr_t*)(v + 0x6A8)) return true;
     if (*(const uintptr_t*)(v + 0x738) != *(const uintptr_t*)(v + 0x740)) return true;
     if (*(const void* const*)(v + 0x798) != nullptr) return true;
@@ -745,6 +805,8 @@ void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, f
 static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
     g_vssDiag.vehiclesSynced++;
+    if (isfinite(e.fuel) && e.fuel >= 0.0f) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
+    if (isfinite(e.speed) && e.speed >= 0.0f) *(float*)(v + VEH_SPEED_OFFSET) = e.speed;
     if (isfinite(e.wear[0])) *(float*)(v + VEH_WEAR0_OFFSET) = e.wear[0];
     if (isfinite(e.wear[1])) *(float*)(v + VEH_WEAR1_OFFSET) = e.wear[1];
     if (isfinite(e.wear[2])) *(float*)(v + VEH_WEAR2_OFFSET) = e.wear[2];
@@ -754,9 +816,7 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
     bool stoppedAtBld = (effBld != nullptr || e.currentBldId >= 0);
     SyncVehicleCargo(v, e, stoppedAtBld);
 
-    if (isfinite(e.passengers) && e.passengers >= 0.0f) {
-        WriteVehiclePassengers(v, e.passengers);
-    }
+    WriteVehiclePassengers(v, e.passengers, e.workers, e.students, e.tourists);
 
     if (*(int*)(v + VEH_SCHED_IDX_OFFSET) != e.scheduleIdx) return;
 
@@ -768,18 +828,22 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
     if (!isfinite(distSq)) return;
     if (distSq > batchMaxDriftSq && distSq < 1e6f) batchMaxDriftSq = distSq;
 
+    bool isChild = (*(const void* const*)(v + VEH_PARENT_PTR_OFFSET) != nullptr ||
+                    *(const void* const*)(v + VEH_LINK_PTR_OFFSET) != nullptr);
+    bool isDocked = (*(const void* const*)(v + 0x528) != nullptr);
+
     if (e.currentBldId >= 0 && localBldId == e.currentBldId) {
-        if (distSq > 0.0f && distSq < 400.0f && !HasActiveEnginePath(v)) {
+        if (distSq > 0.0f && distSq < 400.0f && !isChild && !isDocked) {
             ApplyVehicleTranslationWithChildren(v, dx, dy, dz, false);
             g_vssDiag.posSnapped++;
         }
         return;
     }
-    if (e.currentBldId < 0 && localBldId < 0 && !HasActiveEnginePath(v)) {
+    if (e.currentBldId < 0 && localBldId < 0 && !isChild && !isDocked) {
         if (distSq > 1e-4f && distSq < 2500.0f) {
             ApplyVehicleTranslationWithChildren(v, dx, dy, dz, true);
             g_vssDiag.posBlended++;
-        } else if (distSq >= 2500.0f) {
+        } else if (distSq >= 2500.0f && !HasActiveEnginePath(v)) {
             ApplyVehicleTranslationWithChildren(v, dx, dy, dz, false);
             g_vssDiag.posSnapped++;
         }

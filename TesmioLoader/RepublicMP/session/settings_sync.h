@@ -32,6 +32,7 @@
 #define SETTINGS_FLOOD_LIMIT 40
 #define SETTINGS_FLOOD_WINDOW_MS 10000
 #define SETTINGS_MAX_SLOT_ENTRIES 32
+#define SETTINGS_WIRE_DATA_FLOATS 224 // 32 * 7 for citizen destinations (kMax=32, kStride=7), and 32 * 3 for slot entries
 #define SETTINGS_RETRY_MS 15000      // receiver: how long a setting waits for its building
 
 // Wire form (part of BuildSyncMsg).
@@ -42,7 +43,7 @@ struct SettingWire {
     unsigned long long value;   // raw field bytes (fields up to 8 bytes)
     int slot;       // SETTINGS_FIELD_SLOT: storage slot index
     int count;      // SETTINGS_FIELD_SLOT: entries
-    float data[SETTINGS_MAX_SLOT_ENTRIES * 2]; // share, enabled per entry
+    float data[SETTINGS_WIRE_DATA_FLOATS]; // slot: resIdx, share, enabled; composite: sliders; destinations: endpoints
 };
 #define SETTINGS_FIELD_SLOT        1000
 #define SETTINGS_FIELD_UPBRINGING  1002

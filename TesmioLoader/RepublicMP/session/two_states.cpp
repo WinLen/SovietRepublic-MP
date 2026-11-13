@@ -12,6 +12,7 @@
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
 #include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/networks/road_sync.h"
 #include "../determinism/determinism.h"
 #include "../ui/lang.h"
 #include "../ui/native_menu.h"
@@ -22,6 +23,7 @@
 #include <string.h>
 #include <math.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <sstream>
 #include <vector>
@@ -231,13 +233,6 @@ static_assert(sizeof(RawStatResVecHeader) == 24, "RawStatResVecHeader must be 24
 struct StatRecordUiBackup {
     RawStatResVecHeader resVecHeaders[STAT_RES_VEC_COUNT];
     StateEconScalars    scalars;
-};
-
-struct StateTrackerSlice {
-    float   healthSum[12];
-    int32_t healthCnt[12];
-    float   happySum[23];
-    int32_t happyCnt[23];
 };
 
 static StateEconPeriodStats              g_stateCurEcon[2];
@@ -2062,6 +2057,10 @@ static __int64 __fastcall H_BldStepPrePost(BYTE* world, BYTE* building, uintptr_
     return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldStepPrePost);
 }
 
+static int GetWorldBuildingCount();
+static int GetWorldConstructionCount();
+static int GetWorldVehicleCount();
+
 static __int64 __fastcall H_BldStepUtility(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                            uintptr_t a5, uintptr_t a6)
 {
@@ -2071,7 +2070,24 @@ static __int64 __fastcall H_BldStepUtility(BYTE* world, BYTE* building, uintptr_
 static __int64 __fastcall H_BldStepProduction(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                               uintptr_t a5, uintptr_t a6)
 {
-    return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldStepProduction);
+    int vehBefore = GetWorldVehicleCount();
+    __int64 r = CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldStepProduction);
+    int vehAfter = GetWorldVehicleCount();
+    if (vehAfter > vehBefore && building && g_exeBase) {
+        int owner = ResolveBuildingOwnerFast(building);
+        if (owner == 1 || owner == 2) {
+            __try {
+                BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
+                for (int i = vehBefore; v && i < vehAfter; ++i) {
+                    if (v[i]) {
+                        int vehId = *(const int*)(v[i] + VEH_ID_OFFSET);
+                        TwoStates_RegisterVehicleOwner(vehId, owner);
+                    }
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+    }
+    return r;
 }
 
 static __int64 __fastcall H_BldConstructWorkers(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
@@ -2778,8 +2794,8 @@ static __int64 CalcCustomsTouristSpawnFallback(BYTE* world, BYTE* customsBld, fl
     SafeReadPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET + (size_t)(visaIdx + 2), &mktUnlocked);
     StateEconScalars cur = {};
     SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &cur);
-    int tripIdx = (visaIdx == 11) ? 4 : 5;
-    int rateIdx = (visaIdx == 11) ? 8 : 9;
+    int tripIdx = (visaIdx == 11) ? 5 : 4;
+    int rateIdx = (visaIdx == 11) ? 11 : 10;
     int32_t trips = cur.extraCounts[tripIdx];
     float ratingSum = 0.0f;
     memcpy(&ratingSum, &cur.extraCounts[rateIdx], sizeof(float));
@@ -3037,7 +3053,8 @@ static bool SetEngineResearchBuildingAt(BYTE* world, BYTE* building, int techIdx
 
 static void FinalizePreviousBuildingResearch(BYTE* world, BYTE* begin, int count, BYTE* building, int techIdx)
 {
-    bool needRecompute = false;
+    (void)world;
+    (void)techIdx;
     for (int i = 0; i < count; ++i) {
         BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
         BYTE* curBld = nullptr;
@@ -3045,19 +3062,9 @@ static void FinalizePreviousBuildingResearch(BYTE* world, BYTE* begin, int count
             curBld != building) {
             continue;
         }
-        if (techIdx >= 0 && i != techIdx) {
-            float curProg = 0.0f;
-            if (SafeReadPod((const float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), &curProg) &&
-                curProg > 0.0f && curProg < 1.0f) {
-                SafeWritePod((float*)(item + RESEARCH_ITEM_PROGRESS_OFFSET), 1.0f);
-                needRecompute = true;
-            }
-        }
+        // Retain accumulated curProg without writing 1.0f (eliminates instant science exploit).
         BYTE* zero = nullptr;
         SafeWritePod((BYTE**)(item + RESEARCH_ITEM_BUILDING_PTR_OFFSET), zero);
-    }
-    if (needRecompute) {
-        RecomputeEngineResearch(world);
     }
 }
 
@@ -3335,7 +3342,7 @@ static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a
     }
     if (twoStates) {
         CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
-        int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+        int restoreState = g_inCommand ? g_cmdOwner : (g_inSimStep ? 1 : TwoStates_LocalState());
         if (restoreState != 1 && restoreState != 2) restoreState = 1;
         WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
     }
@@ -3462,7 +3469,7 @@ bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int owner
     bool ok = ApplyEngineResearchSelectionAt(world, building, techIdx);
     if (twoStates && ok) {
         CaptureWorldResearchToSlice(world, &g_engineResearch[state - 1], state);
-        int restoreState = g_inCommand ? g_cmdOwner : TwoStates_LocalState();
+        int restoreState = g_inCommand ? g_cmdOwner : (g_inSimStep ? 1 : TwoStates_LocalState());
         if (restoreState != 1 && restoreState != 2) restoreState = 1;
         WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
     }
@@ -3513,6 +3520,14 @@ uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner,
     uint8_t val = 0;
     if (world) SafeReadPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET + byteIdx, &val);
     return val;
+}
+
+void TwoStates_SetEngineResearchUnlockByteForTest(int stateOwner, unsigned byteIdx, uint8_t val)
+{
+    if ((stateOwner == 1 || stateOwner == 2) && byteIdx < WORLD_RESEARCH_UNLOCKS_BYTES) {
+        g_engineResearch[stateOwner - 1].initialized = true;
+        g_engineResearch[stateOwner - 1].unlocks[byteIdx] = val;
+    }
 }
 
 void TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio)
@@ -4066,8 +4081,16 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
                                         uintptr_t a5, uintptr_t a6, float a7)
 {
     if (!isfinite(a7) || fabsf(a7) > 1.0e9f) a7 = 0.0f;
+    int vehId = vehicle ? *(const int*)(vehicle + VEH_ID_OFFSET) : -1;
     VehicleEconOverrideScope econ(world, vehicle);
-    return o_vehicleSale ? o_vehicleSale(world, vehicle, a3, a4, a5, a6, a7) : 0;
+    __int64 r = o_vehicleSale ? o_vehicleSale(world, vehicle, a3, a4, a5, a6, a7) : 0;
+    if (r && vehId >= 0) {
+        EnsureOwnerLock();
+        EnterCriticalSection(&g_ownerLock);
+        g_vehicleOwners.erase(vehId);
+        LeaveCriticalSection(&g_ownerLock);
+    }
+    return r;
 }
 
 static float g_mockVehicleSaleDefaultPrice = 0.0f;
@@ -5129,12 +5152,26 @@ int32_t TwoStates_GetStateEconExtraCountForTest(int state, int idx)
     return g_stateCurEcon[state - 1].scalars.extraCounts[idx];
 }
 
+void TwoStates_SetStateEconExtraCountForTest(int state, int idx, int32_t val)
+{
+    if ((state == 1 || state == 2) && idx >= 0 && idx < 21) {
+        g_stateCurEcon[state - 1].scalars.extraCounts[idx] = val;
+    }
+}
+
 float TwoStates_GetStateEconExtraFloatForTest(int state, int idx)
 {
     if ((state != 1 && state != 2) || idx < 0 || idx >= 21) return 0.0f;
     float f = 0.0f;
     memcpy(&f, &g_stateCurEcon[state - 1].scalars.extraCounts[idx], sizeof(float));
     return f;
+}
+
+void TwoStates_SetStateEconExtraFloatForTest(int state, int idx, float val)
+{
+    if ((state == 1 || state == 2) && idx >= 0 && idx < 21) {
+        memcpy(&g_stateCurEcon[state - 1].scalars.extraCounts[idx], &val, sizeof(float));
+    }
 }
 
 float TwoStates_GetStateEconTourismFloatForTest(int state, int idx)
@@ -6702,6 +6739,19 @@ void TwoStates_BeforeStep(BYTE* world)
         g_simStepThread = GetCurrentThreadId();
         g_inSimStep = true;
 
+        if (IsTwoStatesResearchOrLicenseActive()) {
+            EnsureEngineResearchInitialized(world);
+            EnsureEngineVehLicensesInitialized(world);
+            int localSt = TwoStates_LocalState();
+            if (localSt != 1 && localSt != 2) localSt = 1;
+            CaptureWorldResearchToSlice(world, &g_engineResearch[localSt - 1], localSt);
+            CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[localSt - 1]);
+            // Both Host and Client mount the identical canonical simulation baseline (State 1)
+            // without any OR-merging or union mixing between the two republics' trees!
+            WriteSliceToWorldResearch(world, &g_engineResearch[0]);
+            WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[0]);
+        }
+
         PrepareStructureVectorBeforeStep(VEC_BUILDINGS_BEGIN_RVA, VEC_BUILDINGS_END_RVA, unlim);
         PrepareStructureVectorBeforeStep(VEC_CONSTRUCTIONS_BEGIN_RVA, VEC_CONSTRUCTIONS_END_RVA, unlim);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -6757,6 +6807,12 @@ void TwoStates_AfterStep(BYTE* world)
             }
             *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
             *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
+        }
+        if (IsTwoStatesResearchOrLicenseActive()) {
+            int localSt = TwoStates_LocalState();
+            if (localSt != 1 && localSt != 2) localSt = 1;
+            WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
+            WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -7034,7 +7090,11 @@ bool TwoStates_CanDemolishAt(float x, float z, int state)
     if (!TwoStates_IsActive()) return true;
     int s = (state == 1 || state == 2) ? state : TwoStates_LocalState();
     int zone = TwoStates_GetZoneAt(x, z);
-    return zone == 0 || zone == s;
+    if (zone == 0) {
+        int owner = TwoStates_GetBuildingOwner(0, x, z);
+        return owner == s;
+    }
+    return zone == s;
 }
 
 bool TwoStates_CanControlBuilding(int buildingId, float x, float z, int state)
@@ -9326,6 +9386,160 @@ static void ParseEngineVehLicenses(const std::string& val, StateEngineVehLicense
     dst->loadedFromMeta = true;
 }
 
+// ---------------------------------------------------------------------------
+// Demographic Trackers Serialization (Feature 35) & Entity Pruning (Feature 36)
+// ---------------------------------------------------------------------------
+
+static std::string SerializeStateTrackerSlice(const StateTrackerSlice& slice)
+{
+    std::ostringstream ss;
+    AppendScaledFloatSlice(ss, "HS:", slice.healthSum, TRACKER_HEALTH_CAUSE_COUNT, 1000.0);
+    AppendIntSlice(ss, ";HC:", slice.healthCnt, TRACKER_HEALTH_CAUSE_COUNT);
+    AppendScaledFloatSlice(ss, ";PS:", slice.happySum, TRACKER_HAPPY_CAUSE_COUNT, 1000.0);
+    AppendIntSlice(ss, ";PC:", slice.happyCnt, TRACKER_HAPPY_CAUSE_COUNT);
+    return ss.str();
+}
+
+static void DeserializeStateTrackerSlice(const std::string& str, StateTrackerSlice* out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    size_t pos = 0;
+    while (pos < str.size()) {
+        size_t semi = str.find(';', pos);
+        if (semi == std::string::npos) semi = str.size();
+        std::string seg = str.substr(pos, semi - pos);
+        pos = semi + 1;
+        size_t colon = seg.find(':');
+        if (colon != std::string::npos) {
+            std::string tag = seg.substr(0, colon);
+            std::string vals = seg.substr(colon + 1);
+            if (tag == "HS") {
+                ParseScaledFloatSlice(vals, out->healthSum, TRACKER_HEALTH_CAUSE_COUNT, 1000.0);
+            } else if (tag == "HC") {
+                ParseIntSlice(vals, out->healthCnt, TRACKER_HEALTH_CAUSE_COUNT);
+            } else if (tag == "PS") {
+                ParseScaledFloatSlice(vals, out->happySum, TRACKER_HAPPY_CAUSE_COUNT, 1000.0);
+            } else if (tag == "PC") {
+                ParseIntSlice(vals, out->happyCnt, TRACKER_HAPPY_CAUSE_COUNT);
+            }
+        }
+    }
+}
+
+static bool ParseCoopMetaTrackerKey(const std::string& curSection, const std::string& key, const std::string& val,
+                                    bool haveTrackerCur[2], bool haveTrackerOld[2])
+{
+    if (curSection == "TrackerHealth0") {
+        if (key == "cur") { DeserializeStateTrackerSlice(val, &g_stateTrackerCur[0]); haveTrackerCur[0] = true; return true; }
+        if (key == "old") { DeserializeStateTrackerSlice(val, &g_stateTrackerOld[0]); haveTrackerOld[0] = true; return true; }
+    } else if (curSection == "TrackerHealth1") {
+        if (key == "cur") { DeserializeStateTrackerSlice(val, &g_stateTrackerCur[1]); haveTrackerCur[1] = true; return true; }
+        if (key == "old") { DeserializeStateTrackerSlice(val, &g_stateTrackerOld[1]); haveTrackerOld[1] = true; return true; }
+    } else {
+        if (key == "tracker_cur1") { DeserializeStateTrackerSlice(val, &g_stateTrackerCur[0]); haveTrackerCur[0] = true; return true; }
+        if (key == "tracker_cur2") { DeserializeStateTrackerSlice(val, &g_stateTrackerCur[1]); haveTrackerCur[1] = true; return true; }
+        if (key == "tracker_old1") { DeserializeStateTrackerSlice(val, &g_stateTrackerOld[0]); haveTrackerOld[0] = true; return true; }
+        if (key == "tracker_old2") { DeserializeStateTrackerSlice(val, &g_stateTrackerOld[1]); haveTrackerOld[1] = true; return true; }
+    }
+    return false;
+}
+
+void TwoStates_PruneDeadEntities(bool checkWorldLoaded)
+{
+    if (!g_exeBase) return;
+    if (checkWorldLoaded && !SafeIsWorldLoaded(g_exeBase)) return;
+
+    std::unordered_set<int> liveVehicles;
+    std::unordered_set<int> liveBuildings;
+
+    // Collect live vehicles via SafeReadPod
+    int vehCount = GetWorldVehicleCount();
+    uintptr_t vehVecBegin = 0;
+    if (vehCount > 0 && SafeReadPod(g_exeBase + VEC_VEHICLES_BEGIN_RVA, &vehVecBegin) && vehVecBegin != 0) {
+        for (int i = 0; i < vehCount; ++i) {
+            uintptr_t vehPtr = 0;
+            if (SafeReadPod((const void*)(vehVecBegin + (size_t)i * sizeof(void*)), &vehPtr) && vehPtr != 0) {
+                int vehId = -1;
+                if (SafeReadPod((const void*)(vehPtr + VEH_ID_OFFSET), &vehId) && vehId >= 0) {
+                    liveVehicles.insert(vehId);
+                }
+            }
+        }
+    }
+
+    // Collect live buildings via SafeReadPod
+    int bldCount = GetWorldBuildingCount();
+    uintptr_t bldVecBegin = 0;
+    if (bldCount > 0 && SafeReadPod(g_exeBase + VEC_BUILDINGS_BEGIN_RVA, &bldVecBegin) && bldVecBegin != 0) {
+        for (int i = 0; i < bldCount; ++i) {
+            uintptr_t bldPtr = 0;
+            if (SafeReadPod((const void*)(bldVecBegin + (size_t)i * sizeof(void*)), &bldPtr) && bldPtr != 0) {
+                float x = 0.0f, z = 0.0f;
+                SafeReadPod((const void*)(bldPtr + OBJ_POS_OFFSET), &x);
+                SafeReadPod((const void*)(bldPtr + OBJ_POS_OFFSET + 8), &z);
+                liveBuildings.insert(TwoStates_BuildingPosKey(x, z));
+                int id = 0;
+                if (SafeReadPod((const void*)bldPtr, &id) && id > 0) {
+                    liveBuildings.insert(id);
+                }
+            }
+        }
+    }
+
+    // Collect live constructions via SafeReadPod
+    int conCount = GetWorldConstructionCount();
+    uintptr_t conVecBegin = 0;
+    if (conCount > 0 && SafeReadPod(g_exeBase + VEC_CONSTRUCTIONS_BEGIN_RVA, &conVecBegin) && conVecBegin != 0) {
+        for (int i = 0; i < conCount; ++i) {
+            uintptr_t conPtr = 0;
+            if (SafeReadPod((const void*)(conVecBegin + (size_t)i * sizeof(void*)), &conPtr) && conPtr != 0) {
+                float x = 0.0f, z = 0.0f;
+                SafeReadPod((const void*)(conPtr + OBJ_POS_OFFSET), &x);
+                SafeReadPod((const void*)(conPtr + OBJ_POS_OFFSET + 8), &z);
+                liveBuildings.insert(TwoStates_BuildingPosKey(x, z));
+                int id = 0;
+                if (SafeReadPod((const void*)conPtr, &id) && id > 0) {
+                    liveBuildings.insert(id);
+                }
+            }
+        }
+    }
+
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    for (auto it = g_vehicleOwners.begin(); it != g_vehicleOwners.end(); ) {
+        if (liveVehicles.find(it->first) == liveVehicles.end()) {
+            it = g_vehicleOwners.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = g_buildingOwners.begin(); it != g_buildingOwners.end(); ) {
+        if (liveBuildings.find(it->first) == liveBuildings.end()) {
+            it = g_buildingOwners.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    LeaveCriticalSection(&g_ownerLock);
+}
+
+bool TwoStates_GetStateTrackerSliceForTest(int state, bool isOld, StateTrackerSlice* out)
+{
+    if (!out || (state != 1 && state != 2)) return false;
+    *out = isOld ? g_stateTrackerOld[state - 1] : g_stateTrackerCur[state - 1];
+    return true;
+}
+
+void TwoStates_SetStateTrackerSliceForTest(int state, bool isOld, const StateTrackerSlice& in)
+{
+    if (state != 1 && state != 2) return;
+    if (isOld) g_stateTrackerOld[state - 1] = in;
+    else g_stateTrackerCur[state - 1] = in;
+    g_stateTrackerInitialized = true;
+}
+
 static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
 {
     if (!fullSaveDir || !fullSaveDir[0]) return;
@@ -9417,6 +9631,8 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
         WriteCoopMetaVec3Cm(out, "cam2_look_cm", c2_look);
     }
 
+    TwoStates_PruneDeadEntities(true);
+
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
     out << "building_owners=";
@@ -9475,6 +9691,20 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     if (g_engineVehLicenses[1].initialized) {
         out << "veh_licenses2=" << SerializeEngineVehLicenses(g_engineVehLicenses[1]) << "\r\n";
     }
+
+    // Feature 35: Demographic Trackers Persistence
+    out << "tracker_cur1=" << SerializeStateTrackerSlice(g_stateTrackerCur[0]) << "\r\n";
+    out << "tracker_cur2=" << SerializeStateTrackerSlice(g_stateTrackerCur[1]) << "\r\n";
+    out << "tracker_old1=" << SerializeStateTrackerSlice(g_stateTrackerOld[0]) << "\r\n";
+    out << "tracker_old2=" << SerializeStateTrackerSlice(g_stateTrackerOld[1]) << "\r\n";
+
+    out << "\r\n[TrackerHealth0]\r\n";
+    out << "cur=" << SerializeStateTrackerSlice(g_stateTrackerCur[0]) << "\r\n";
+    out << "old=" << SerializeStateTrackerSlice(g_stateTrackerOld[0]) << "\r\n";
+
+    out << "\r\n[TrackerHealth1]\r\n";
+    out << "cur=" << SerializeStateTrackerSlice(g_stateTrackerCur[1]) << "\r\n";
+    out << "old=" << SerializeStateTrackerSlice(g_stateTrackerOld[1]) << "\r\n";
 
     std::string data = out.str();
     FILE* f = nullptr;
@@ -9921,7 +10151,10 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     long long tradeUsdCents[2] = { 0, 0 };
     bool haveRub = false, haveUsd = false;
     bool haveEconCur[2] = { false, false };
+    bool haveTrackerCur[2] = { false, false };
+    bool haveTrackerOld[2] = { false, false };
     bool hadPoisonedZero = false;
+    std::string curSection = "republicmp_coop";
     const BYTE* world = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
 
     ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
@@ -9940,13 +10173,18 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     std::string line;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.empty() || line[0] == '[' || line[0] == ';' || line[0] == '#') continue;
+        if (line.empty() || line[0] == ';' || line[0] == '#') continue;
+        if (line.front() == '[' && line.back() == ']') {
+            curSection = line.substr(1, line.size() - 2);
+            continue;
+        }
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         std::string key = line.substr(0, eq);
         std::string val = line.substr(eq + 1);
 
-        if (key == "coop_mode") mode = atoi(val.c_str());
+        if (ParseCoopMetaTrackerKey(curSection, key, val, haveTrackerCur, haveTrackerOld)) { /* parsed tracker key */ }
+        else if (key == "coop_mode") mode = atoi(val.c_str());
         else if (key == "border_half_width_m") bw = atoi(val.c_str());
         else if (key == "expand_borders") expB = atoi(val.c_str());
         else if (key == "state1_rub_cents") { rubCents[0] = _strtoi64(val.c_str(), nullptr, 10); haveRub = true; }
@@ -9970,7 +10208,15 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
     FinalizeSavedCameraMeta(camState);
 
     g_stateEconInitialized = (haveEconCur[0] && haveEconCur[1]);
-    ResetStateTrackerSlices();
+    if (haveTrackerCur[0] && haveTrackerCur[1]) {
+        g_stateTrackerInitialized = true;
+        if (world) {
+            SafeReadTrackerSlice(world, false, &g_lastWorldTrackerCur);
+            memset(&g_unattributedTrackerCur, 0, sizeof(g_unattributedTrackerCur));
+        }
+    } else {
+        ResetStateTrackerSlices();
+    }
     HealLoadedCoopMetaTradeStats(hadPoisonedZero, rubCents, usdCents, tradeRubCents, tradeUsdCents);
     if (g_stateEconInitialized && world) {
         SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
@@ -10018,6 +10264,7 @@ void TwoStates_BeforeAnyWorldLoad()
     g_pendingCamRestore.active = false;
     MemoryBarrier();
     g_pendingCamRestore = {};
+    RoadSync_ClearPlannedSegments();
     if (!g_exeBase) return;
     if (g_beforeLoadPrepared) return;
     g_beforeLoadPrepared = true;
@@ -10207,7 +10454,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
             TwoStates_AddToast(Tr("Загружен кооп-сейв «Одно государство»",
                                   "Loaded 'One State' Co-op save"), 1);
         }
-        RestoreOrFrameCoopCamera(true);
+        RestoreOrFrameCoopCamera(g_isHost);
     } else {
         TwoStates_ResetResearch();
         g_loadedFromCoopSave = false;
@@ -10230,6 +10477,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
         g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
         ResetStateHudPopCache();
+        RoadSync_ClearPlannedSegments();
         ResetStateTrackerSlices();
         g_stateEconInitialized = false;
         ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
@@ -10237,7 +10485,7 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         g_stateHistEcon[0].clear();
         g_stateHistEcon[1].clear();
         if (inCoop) {
-            RestoreOrFrameCoopCamera(true);
+            RestoreOrFrameCoopCamera(g_isHost);
         }
     }
 }
@@ -10264,5 +10512,36 @@ bool TwoStates_TriggerQuickCoopSave()
     }
 
     return TriggerSaveGame(saveName);
+}
+
+bool TwoStates_IsAutosaveTick(unsigned long long stepCount, unsigned long long intervalTicks)
+{
+    if (stepCount == 0 || intervalTicks == 0) return false;
+    return (stepCount % intervalTicks) == 0;
+}
+
+const char* TwoStates_GetAutosaveRelPath(bool isHost)
+{
+    return isHost ? "save/coop_autosave" : "save/coop_client_backup";
+}
+
+bool TwoStates_CheckAndTriggerAutosave(BYTE* world, unsigned long long stepCount, bool isHost)
+{
+    if (!world || !TwoStates_IsAutosaveTick(stepCount)) return false;
+    if (!Determinism_SessionRunning() && !TwoStates_IsActive()) return false;
+    if (!o_masterSave) return false;
+
+    const char* targetRel = TwoStates_GetAutosaveRelPath(isHost);
+    char fullSaveDir[MAX_PATH] = {};
+    if (BuildFullSaveDir(targetRel, fullSaveDir, sizeof(fullSaveDir))) {
+        CreateDirectoryA(fullSaveDir, nullptr);
+    }
+
+    strncpy_s((char*)(world + SAVE_NAME_FIELD_OFFSET), SAVE_NAME_FIELD_MAX_LEN, targetRel, _TRUNCATE);
+    H_MasterSave(world);
+
+    Logf("republicmp  TWO_STATES: deterministic %s autosave completed at tick %llu to [%s]",
+         isHost ? "host" : "client", stepCount, targetRel);
+    return true;
 }
 

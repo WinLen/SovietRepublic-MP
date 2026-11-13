@@ -466,7 +466,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Full compatibility with game update v1.1.1.13 (BuildID 24922914, PE 0x6A8D4087) + fix START-COOP.bat working directory launch from Steam Workshop folder",
+                "v%s (Protocol %d) - Full sync & save overhaul: 10-min co-op autosaves + client backup, UTF-8/ZIP64 saves, mouse-wheel sliders, vehicle auto-replacement, factory queues, road/air waypoints, expanded StateHash & isolated TwoStates research",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

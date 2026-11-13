@@ -147,23 +147,18 @@ inline long long SafeCountStdVector(const void* vecHeader, size_t elemSize, long
     return n;
 }
 
-// Invariant #12 (AGENTS.md): Detects x64 heap/module pointers in a 64-bit word,
-// including low Windows x64 segment heap addresses below 4 GB (high == 0, v >= 0x00100000)
-// and in the low 1 TB range (high < 0x100). Pre-validates low addresses with VirtualQuery
-// (MEM_COMMIT + readable non-guard protection) before probing so 64-bit pairs of 32-bit
-// integers (e.g. 0x0000000A00000000 at building + 0xDF8) never raise a first-chance
-// EXCEPTION_ACCESS_VIOLATION in tesmioloader's VEH.
+// Invariant #12 (AGENTS.md): Detects x64 heap/module pointers in a 64-bit word.
+// Pointers in x64 Windows user-space have high >= 1 and high <= 0x7FFF, and require 8-byte alignment.
+// Low addresses with high == 0 are pairs of 32-bit floats/integers, which are never 64-bit pointers.
 inline bool IsPointerLikeX64(uint64_t v)
 {
-    if (v < 0x00100000ULL)
-        return false;
     unsigned high = (unsigned)(v >> 32);
-    if (high > 0x7FFFu)
+    if (high < 1u || high > 0x7FFFu)
+        return false;
+    if ((v & 7u) != 0u)
         return false;
     if (high >= 0x100u)
         return true;
-    if ((v & 3u) != 0u)
-        return false;
     MEMORY_BASIC_INFORMATION mbi = {};
     if (VirtualQuery((const void*)(uintptr_t)v, &mbi, sizeof(mbi)) != sizeof(mbi) ||
         mbi.State != MEM_COMMIT)

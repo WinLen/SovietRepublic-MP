@@ -42,7 +42,12 @@ bool BuildingSwitches_CaptureUnivResearch(unsigned long long building, int owner
 bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset);
 
 // Testable predicate: true if `offset` in a KIND_SLOT switch range is excluded from switch capture/revert.
-bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset);
+bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset, bool click = false);
 
 // Restores a building's +0x114..+0x194 name from the current frame's snapshot when Rename_Capture handles it.
 void BuildingSwitches_RevertBuildingName(unsigned long long building);
+
+bool BuildingSwitches_IsOneByteWorldSettingForTest(unsigned at);
+bool BuildingSwitches_IsLocalPerStateWorldSettingForTest(unsigned at);
+bool BuildingSwitches_IsNoiseEmptyForTest();
+bool BuildingSwitches_ClickedForTest();

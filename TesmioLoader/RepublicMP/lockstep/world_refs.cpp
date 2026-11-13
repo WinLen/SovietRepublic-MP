@@ -11,7 +11,7 @@
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define NODE_LIST 0x298
 
-static const unsigned kNodeFields[2] = { 0xF908, 0xFA28 };
+static const unsigned kNodeFields[5] = { 0xF7A0, 0xF7A8, 0xF908, 0xFA28, 0xFA30 };
 
 const RouteRef kNoRef = { 0, -1, 0 };
 
@@ -231,7 +231,14 @@ bool Ref_Node(U64 node, RouteRef& r)
 
 U64 Ref_NodeAt(const RouteRef& r)
 {
-    if (r.list != kNodeFields[0] && r.list != kNodeFields[1]) return 0;
+    bool valid = false;
+    for (unsigned field : kNodeFields) {
+        if (r.list == field) {
+            valid = true;
+            break;
+        }
+    }
+    if (!valid) return 0;
     U64 net = Q((U64)World() + r.list);
     U64 n = net ? At(net + NODE_LIST, r.place) : 0;
     return n && Ref_NodeCheck(n) == r.check ? n : 0;

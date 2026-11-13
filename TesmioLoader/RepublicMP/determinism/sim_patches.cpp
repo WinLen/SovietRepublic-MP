@@ -15,6 +15,7 @@
 #include "../lockstep/source_slots.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include "../ui/native_menu.h"
 #include "determinism.h"
 #include "held_frame.h"
@@ -731,8 +732,7 @@ static const unsigned kToolCalls[][2] = {
     { 0x313414, 0x3D0030 }, { 0x31343B, 0x3D0030 }, { 0x313462, 0x3D0030 }, { 0x313489, 0x3D0030 },
     { 0x3134B0, 0x3D0030 }, { 0x3134D7, 0x3D0030 }, { 0x3134FD, 0x3D0030 }, { 0x313528, 0x3D0030 },
     { 0x31354E, 0x3D0030 }, { 0x313574, 0x3D0030 }, { 0x313594, 0x4179B0 }, { 0x3135B4, 0x2B2330 },
-    { 0x3135D6, 0x3C9940 }, { 0x3135E3, 0x3CE530 }, { 0x3135EF, 0x3CE590 }, { 0x3135F9, 0x418210 },
-    { 0x313603, 0x3CE0F0 }, { 0x313622, 0x418110 }, { 0x31362C, 0x417CC0 }, { 0x31364F, 0x3AEB70 },
+    { 0x3135D6, 0x3C9940 }, { 0x3135E3, 0x3CE530 }, { 0x3135EF, 0x3CE590 }, { 0x313603, 0x3CE0F0 }, { 0x313622, 0x418110 }, { 0x31362C, 0x417CC0 }, { 0x31364F, 0x3AEB70 },
     { 0x31367E, 0x3AEB70 }, { 0x3136A4, 0x3AEB70 }, { 0x3136DC, 0x3B0DA0 }, { 0x313702, 0x3B0DA0 },
     { 0x313729, 0x3B0DA0 }, { 0x31374F, 0x3B0DA0 }, { 0x313795, 0x3B11F0 }, { 0x3137C1, 0x3B11F0 },
     { 0x313892, 0x3B11F0 }, { 0x3138D3, 0x3B3760 }, { 0x3138F9, 0x3B3760 }, { 0x31391F, 0x3B3760 },
@@ -745,19 +745,18 @@ static const unsigned kToolCalls[][2] = {
     { 0x313D58, 0x3BAE10 }, { 0x313D7E, 0x3BAE10 }, { 0x313DA4, 0x3BAE10 }, { 0x313DCA, 0x3BAE10 },
     { 0x313DF0, 0x3BAE10 }, { 0x314025, 0x3D4670 }, { 0x3140DF, 0x418ED0 }, { 0x31415F, 0x2B49D0 },
     { 0x3141AD, 0x2B26E0 }, { 0x3141CD, 0x2B1840 }, { 0x3141EF, 0x2B2D50 }, { 0x314211, 0x2B2D50 },
-    { 0x314231, 0x2B3C00 }, { 0x314251, 0x2B4600 }, { 0x314271, 0x2B6A30 }, { 0x3142D6, 0x1D4820 },
-    { 0x3142F6, 0x1DB130 }, { 0x314316, 0x1D5120 }, { 0x314336, 0x1D67A0 }, { 0x314356, 0x1D7140 },
-    { 0x314376, 0x1D9900 }, { 0x314396, 0x1DA500 }, { 0x3143B6, 0x1D6C30 }, { 0x3143D6, 0x1D8390 },
-    { 0x3143F6, 0x1D8820 }, { 0x314416, 0x1DB960 }, { 0x314436, 0x1DBCC0 }, { 0x314458, 0x3D6DB0 },
-    { 0x314478, 0x3D6DB0 }, { 0x314498, 0x3D6DB0 }, { 0x3144A2, 0x2B8C60 }, { 0x3144AC, 0x2B4BE0 },
-    { 0x3144BC, 0x418400 }, { 0x3144F2, 0x3D67F0 }, { 0x314517, 0x3D67F0 }, { 0x31453C, 0x3D67F0 },
-    { 0x314562, 0x3D67F0 }, { 0x314587, 0x3D67F0 }, { 0x3145AD, 0x3D67F0 }, { 0x3145D3, 0x3D67F0 },
-    { 0x3145F9, 0x3D67F0 }, { 0x31461F, 0x3D67F0 }, { 0x314645, 0x3D67F0 }, { 0x314667, 0x3C84F0 },
-    { 0x314689, 0x3C84F0 }, { 0x3146AC, 0x3CBEE0 }, { 0x3146CF, 0x3CBEE0 }, { 0x3146F4, 0x3C9070 },
-    { 0x314719, 0x3C9070 }, { 0x31473E, 0x3C9070 }, { 0x314763, 0x3C9070 }, { 0x314789, 0x3C9070 },
-    { 0x3147A9, 0x2B6EB0 }, { 0x3147C9, 0x2B7830 }, { 0x3147E9, 0x2B8700 }, { 0x314809, 0x216700 },
-    { 0x314829, 0x2168F0 }, { 0x31484D, 0x5EED80 }, { 0x314893, 0x5F7860 }, { 0x3148B0, 0x3CA4A0 },
-    { 0x3148CD, 0x3CB010 }, { 0x3148DE, 0x2144B0 }, { 0x3148E8, 0x2137F0 },
+    { 0x314231, 0x2B3C00 }, { 0x314251, 0x2B4600 }, { 0x314271, 0x2B6A30 }, { 0x314316, 0x1D5120 },
+    { 0x314336, 0x1D67A0 }, { 0x314376, 0x1D9900 }, { 0x314396, 0x1DA500 }, { 0x3143B6, 0x1D6C30 },
+    { 0x3143D6, 0x1D8390 }, { 0x3143F6, 0x1D8820 }, { 0x314416, 0x1DB960 }, { 0x314436, 0x1DBCC0 },
+    { 0x314458, 0x3D6DB0 }, { 0x314478, 0x3D6DB0 }, { 0x314498, 0x3D6DB0 }, { 0x3144A2, 0x2B8C60 },
+    { 0x3144AC, 0x2B4BE0 }, { 0x3144BC, 0x418400 }, { 0x3144F2, 0x3D67F0 }, { 0x314517, 0x3D67F0 },
+    { 0x31453C, 0x3D67F0 }, { 0x314562, 0x3D67F0 }, { 0x314587, 0x3D67F0 }, { 0x3145AD, 0x3D67F0 },
+    { 0x3145D3, 0x3D67F0 }, { 0x3145F9, 0x3D67F0 }, { 0x31461F, 0x3D67F0 }, { 0x314645, 0x3D67F0 },
+    { 0x314667, 0x3C84F0 }, { 0x314689, 0x3C84F0 }, { 0x3146AC, 0x3CBEE0 }, { 0x3146CF, 0x3CBEE0 },
+    { 0x3146F4, 0x3C9070 }, { 0x314719, 0x3C9070 }, { 0x31473E, 0x3C9070 }, { 0x314763, 0x3C9070 },
+    { 0x314789, 0x3C9070 }, { 0x3147A9, 0x2B6EB0 }, { 0x3147C9, 0x2B7830 }, { 0x3147E9, 0x2B8700 },
+    { 0x314809, 0x216700 }, { 0x314829, 0x2168F0 }, { 0x3148B0, 0x3CA4A0 }, { 0x3148CD, 0x3CB010 },
+    { 0x3148DE, 0x2144B0 }, { 0x3148E8, 0x2137F0 },
 };
 #define TOOL_CALL_COUNT (sizeof(kToolCalls) / sizeof(kToolCalls[0]))
 #define TOOL_STUB_SIZE 32
@@ -953,6 +952,35 @@ static void SimPatches_BuildingPlacementTool(__int64 param_1, char* param_2, cha
     ((UniversalFn)(g_exeBase + 0x2BAD60))(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
 }
 
+static bool SimPatches_BlockAreaCloneTool()
+{
+    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning())
+        return false;
+    *(uintptr_t*)(g_exeBase + WORLD_RVA + 0xD428) = 0;
+    static ULONGLONG s_lastToast = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - s_lastToast > 2000) {
+        s_lastToast = now;
+        TwoStates_AddToast(Tr("⛔ Клонирование районов (копипаст) заблокировано в коопе для предотвращения рассинхрона!",
+                              "⛔ Area cloning (copy/paste) is disabled in co-op to prevent desync!"), 3);
+    }
+    return true;
+}
+
+static void SimPatches_AreaCopyTool(__int64 a1, __int64 a2, __int64 a3, __int64 a4)
+{
+    if (SimPatches_BlockAreaCloneTool()) return;
+    typedef void (*Fn)(__int64, __int64, __int64, __int64);
+    ((Fn)(g_exeBase + 0x216700))(a1, a2, a3, a4);
+}
+
+static void SimPatches_AreaPasteTool(__int64 a1, __int64 a2, __int64 a3, __int64 a4)
+{
+    if (SimPatches_BlockAreaCloneTool()) return;
+    typedef void (*Fn)(__int64, __int64, __int64, __int64);
+    ((Fn)(g_exeBase + 0x2168F0))(a1, a2, a3, a4);
+}
+
 bool SimPatches_GetActivePlacementInfo(char* outName, size_t maxLen, float* outX, float* outY, float* outZ)
 {
     if (!outName || maxLen == 0) return false;
@@ -1037,6 +1065,8 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x2B6EB0 ? (unsigned __int64)&CargoSettings_AddStationTool
                                   : kToolCalls[i][1] == 0x2B7830 ? (unsigned __int64)&CargoSettings_AddStationDistTool
                                   : kToolCalls[i][1] == 0x2BAD60 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
+                                  : kToolCalls[i][1] == 0x216700 ? (unsigned __int64)&SimPatches_AreaCopyTool
+                                  : kToolCalls[i][1] == 0x2168F0 ? (unsigned __int64)&SimPatches_AreaPasteTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common

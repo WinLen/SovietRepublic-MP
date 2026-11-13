@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
+#include <filesystem>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -330,7 +331,9 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size)
 
 bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
 {
-    FILE* f = fopen(filePath, "rb");
+    std::filesystem::path fp(filePath);
+    FILE* f = nullptr;
+    _wfopen_s(&f, fp.c_str(), L"rb");
     if (!f) {
         Logf("republicmp  NETWORK: couldn't open [%s] for reading", filePath);
         return false;
@@ -383,7 +386,9 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
         return false;
     }
 
-    FILE* f = fopen(outFilePath, "wb");
+    std::filesystem::path fp(outFilePath);
+    FILE* f = nullptr;
+    _wfopen_s(&f, fp.c_str(), L"wb");
     if (!f) {
         Logf("republicmp  NETWORK: couldn't open [%s] for writing", outFilePath);
         return false;

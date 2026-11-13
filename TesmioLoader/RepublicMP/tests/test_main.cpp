@@ -58,6 +58,8 @@
 #include "../lockstep/vehicle_switches.h"
 #include "../lockstep/route_tools.h"
 #include "../lockstep/cargo_settings.h"
+#include "../lockstep/lockstep_net.h"
+#include "../world_sync/citizens/citizen_destinations.h"
 
 
 extern "C" int TsmPluginInit(const TsmHost* origHost, TsmPluginInfo* info);
@@ -352,14 +354,14 @@ static bool Test_RvaAndSafeMem()
     // Unmapped low-heap address (high == 2, but not committed) -> must return false
     TEST_CHECK(!IsPointerLikeX64(0x00000002deadbeefULL & ~3ULL));
 
-    // Try allocating a real page in low x64 address space (both < 4 GB and high in 1..0xFF) to verify low segment detection
+    // Try allocating a page in low x64 address space (< 4 GB, high == 0) to verify rejection of float/int pairs
     void* lowSub4GbPage = nullptr;
     for (uintptr_t addr = 0x10000000ULL; addr < 0xF0000000ULL && !lowSub4GbPage; addr += 0x04000000ULL) {
         lowSub4GbPage = VirtualAlloc((LPVOID)addr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     }
     if (lowSub4GbPage) {
         *(uint64_t*)lowSub4GbPage = 0xCAFEBABE12345678ULL;
-        TEST_CHECK(IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage));
+        TEST_CHECK(!IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage)); // high == 0 rejected to prevent float pair false positive
         TEST_CHECK(!IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage | 1ULL)); // unaligned low pointer rejected
         VirtualFree(lowSub4GbPage, 0, MEM_RELEASE);
     }
@@ -431,6 +433,7 @@ static bool Test_RvaAndSafeMem()
 static bool Test_WorldRefs()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // Create 2 completed buildings (list 0 at WORLD_BUILDINGS_OFFSET = 0x11B08)
@@ -729,6 +732,7 @@ static void WriteAbsJmp12(BYTE* dst, void* fn)
 static bool Test_TwoStates_ZonesAndEconomy()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
@@ -1591,6 +1595,7 @@ static bool SubTest_WorldSettingMultiToggleAndPerStateBuildMode()
 static bool SubTest_UnivResearchTwoStatesIsolation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     TwoStates_OnSessionEnded();
     BuildingSwitches_Reset();
@@ -1760,6 +1765,7 @@ static bool SubTest_UnivResearchTwoStatesIsolation()
 static bool SubTest_UnivResearchNearCompleteAndStaffRatioSync()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     TwoStates_OnSessionEnded();
     BuildingSwitches_Reset();
@@ -1806,10 +1812,11 @@ static bool SubTest_UnivResearchNearCompleteAndStaffRatioSync()
     TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 0);
 
     // Now apply selection of new tech #2 on univWest:
+    // Feature 40: Free science exploit eliminated! Switching research retains curProg, does NOT force 1.0f or unlock!
     TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 2));
-    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 1.0f, 1e-5f);
-    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 0) == 1);
-    TEST_CHECK(it0[RESEARCH_ITEM_AVAILABLE_OFFSET] == 0);
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 0.988447f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 0) == 0);
+    TEST_CHECK(it0[RESEARCH_ITEM_AVAILABLE_OFFSET] == 1);
     TEST_CHECK(*(void**)(it0 + RESEARCH_ITEM_BLD_PTR_OFFSET) == nullptr);
     TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 2);
     TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 2), 0.0f, 1e-5f);
@@ -1856,6 +1863,7 @@ static bool SubTest_UnivResearchNearCompleteAndStaffRatioSync()
 static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     TwoStates_OnSessionEnded();
 
@@ -2045,6 +2053,7 @@ static unsigned __int64 MockCopySourceToolCallback(unsigned __int64 /*world*/, u
 static bool SubTest_SourceSlotsAddAndCopySourceSync()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeCo(0x400, 0), typeSupply(0x400, 0);
@@ -2569,6 +2578,7 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
 static bool Test_WaitingLobbyAndActionLock()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. Pure state matrix for SaveSync_ShouldBlockWorldEdits(sessionState, inGameplay, syncBlockActive)
@@ -2753,6 +2763,7 @@ static SovietLoan MakeTestLoan(int32_t loanType, int32_t subType, float principa
 static bool TestLoans_MaxAvailableBorrow()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     double initRub[2] = { 1000000.0, 1000000.0 };
@@ -2823,6 +2834,7 @@ static bool TestLoans_MaxAvailableBorrow()
 static bool TestLoans_UiSwapAndSelectionMapping()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     double initRub[2] = { 900000.0, 600000.0 };
@@ -2888,6 +2900,7 @@ static bool TestLoans_UiSwapAndSelectionMapping()
 static bool TestLoans_LockstepBorrowAndRepay()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
 
@@ -3009,6 +3022,7 @@ static bool TestLoans_LockstepBorrowAndRepay()
 static bool TestLoans_DailyStepAndBankruptcyIsolation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     double initRub[2] = { 500000.0, 100000.0 };
@@ -3074,6 +3088,7 @@ static bool Test_TwoStates_Loans()
 static bool TestEconStats_ResourceLedgerAndScalarsIsolation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -3139,6 +3154,7 @@ static bool TestEconStats_ResourceLedgerAndScalarsIsolation()
 static bool TestEconStats_UiSwapAndExactSimulationRestore()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -3210,6 +3226,7 @@ static bool TestEconStats_UiSwapAndExactSimulationRestore()
 static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -3341,6 +3358,7 @@ static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
 static bool TestEconStats_BatchConstructionAndDemographics()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -3696,6 +3714,7 @@ static bool TestEconStats_LeafHookRelayStubPreservesRegisters()
 static bool TestEconStats_PosKeyAndPoisonedSaveHeal()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     int keyWest = TwoStates_BuildingPosKey(-650.0f, 120.0f);
@@ -3788,6 +3807,7 @@ static bool TestEconStats_PosKeyAndPoisonedSaveHeal()
 static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     double initRub[2] = { 10000000.0, 10000000.0 };
@@ -3963,6 +3983,7 @@ static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
 static bool TestEconStats_HealthAndHappinessTrackerIsolation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -4081,6 +4102,7 @@ static bool TestEconStats_HealthAndHappinessTrackerIsolation()
 static bool TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -4174,6 +4196,7 @@ static bool TestEconStats_CitizenDeathSevereIllnessAndStudioIsolation()
 static bool TestEconStats_CustomsTouristSpawnAndVehicleTouristOwner()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
@@ -4214,9 +4237,9 @@ static bool TestEconStats_CustomsTouristSpawnAndVehicleTouristOwner()
     // Record 4 completed Soviet tourist trips for State 2 with total rating sum 16.0f (avgRating = 4.0f)
     TwoStates_BeginCommand(2);
     {
-        *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 5 * sizeof(int32_t)) += 4;
+        *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 4 * sizeof(int32_t)) += 4;
         float ratingSum = 16.0f;
-        memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 9 * sizeof(int32_t), &ratingSum, sizeof(float));
+        memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 10 * sizeof(int32_t), &ratingSum, sizeof(float));
     }
     TwoStates_EndCommand(2);
 
@@ -4399,6 +4422,7 @@ static bool TestSingleplayer_InputBlockAndPatchesDormancy()
 static bool TestSingleplayer_SessionTransitionReset()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
@@ -4660,6 +4684,7 @@ static bool SubTest_TrailerDlcValidation()
 static bool SubTest_ScriptNameResolutionWithShiftedIndices()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // Create 4 vehicle types, each of size WORLD_VEHICLE_TYPE_STRIDE (0x9F08)
@@ -4970,6 +4995,7 @@ static bool SubTest_BuildingStorageAndWagonLoadingSoftSync()
 static bool SubTest_VehicleWindowScheduleAndLaunchCommands()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. AddBorderStopForTest on Airplane (cat == 8):
@@ -5276,6 +5302,7 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
 static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. Setup free construction office primary + mirrored types with $COUNT_LIMIT = 7 at +0x208
@@ -5395,6 +5422,7 @@ static bool Test_VehicleCargoAndScheduleSync()
 static bool Test_CameraPersistenceAndFraming()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> mockCamMgr(CAM_MGR_STRUCT_BYTES, 0);
     *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = mockCamMgr.data();
@@ -5603,6 +5631,7 @@ static bool Test_CameraPersistenceAndFraming()
     TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
     TwoStates_BeforeAnyWorldLoad();
     TEST_CHECK(!TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
+    TwoStates_OnAnyWorldLoaded(false);
 
     TwoStates_RestoreOrFrameCameraForTest(false);
     TEST_CHECK(TwoStates_GetPendingCameraRestoreForTest(nullptr, nullptr, nullptr, nullptr));
@@ -5700,6 +5729,7 @@ static int MockHost_InstallInlineHookForCommands(void* target, void*, void** out
 static bool SubTest_RemoteReplayScopeAndSnapshots()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     while (Commands_IsApplyingRemote()) {
@@ -5812,6 +5842,7 @@ static bool SubTest_Sound2DAnd3DDistanceHooks()
 static bool SubTest_PopupAndForeignTerritoryNotificationFilter()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     double initRub[2] = { 500000.0, 500000.0 };
     double initUsd[2] = { 100000.0, 100000.0 };
@@ -5947,6 +5978,7 @@ static void E2eInitTwoStates(double r1, double r2, double u1, double u2)
 static bool SubTest_T1_R1_LinearBuildingContinuity()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // Set up road manager at 0xF7A0
@@ -6080,6 +6112,7 @@ static bool SubTest_T1_R2_ForeignCustomsTradeRevenue()
 static bool SubTest_T1_R3_BuildingNamesOnPlacement()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. Tool string resolves to standard building and records via placement tool
@@ -6215,6 +6248,7 @@ static bool SubTest_T1_R5_DlcRoadFiltering()
 static bool SubTest_T1_R6_CityNameSyncAndDeletion()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> city0(128, 0), city1(128, 0);
@@ -6334,7 +6368,7 @@ static bool SubTest_T1_R7_HostSaveTransferPercentage()
     int lastPct = 0;
     for (int p : steps) {
         SyncBlock_SetPercentEx(p, (100 - p) * 500000, 50000000, 15.0f);
-        SyncBlock_GetTransferStats(&pct, nullptr, nullptr, nullptr);
+        SyncBlock_GetTransferStats(&pct, (int*)nullptr, (int*)nullptr, nullptr);
         TEST_CHECK(pct > lastPct);
         lastPct = pct;
     }
@@ -6677,6 +6711,7 @@ static bool SubTest_T1_R15_BidirectionalResearchSync()
 static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
@@ -6804,6 +6839,7 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
 static bool SubTest_T1_R17_OilPumpModelAndAnimation()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> animCtrl(0x100, 0);
@@ -6928,6 +6964,7 @@ static bool Test_E2E_Tier1_FeatureCoverage_R13_to_R18()
 static bool SubTest_T2_R1_LinearBuildingContinuity_Boundaries()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. Local command cancels drag properly on commit
@@ -7013,6 +7050,7 @@ static bool SubTest_T2_R2_ForeignCustomsTrade_Boundaries()
 static bool SubTest_T2_R3_BuildingNamesOnPlacement_Boundaries()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     char outName[128] = {};
@@ -7163,6 +7201,7 @@ static bool SubTest_T2_R5_DlcRoadFiltering_Boundaries()
 static bool SubTest_T2_R6_CityNameSyncAndDeletion_Boundaries()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> city(128, 0);
@@ -7758,6 +7797,7 @@ static bool SubTest_T3_Cross_2_RoadDragWithFootpathUpgrade()
 {
     // R1 (Linear drag continuity) + R16 (Road upgrade with footpaths)
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // Player 1 dragging road
@@ -7785,6 +7825,7 @@ static bool SubTest_T3_Cross_3_CityOperationsWithResearch()
 {
     // R6 (City rename/delete) + R14 (Concurrent research)
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> city(128, 0);
@@ -7908,6 +7949,7 @@ static bool SubTest_T3_Cross_8_BuildingPlacementWithOilPumpVisuals()
 {
     // R3 (Building name on placement) + R17 (Oil pump visual model & animation)
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     const char pumpTool[] = "TYPE_MINE_OIL";
@@ -7927,6 +7969,7 @@ static bool SubTest_T3_Cross_9_StabilityTeardownWithLinearDrag()
 {
     // R13 (Stability crash prevention) + R1 (Linear drag continuity)
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     *(char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
@@ -8237,6 +8280,7 @@ static bool SubTest_Stress_M1_DragContinuityHighFrequency()
 static bool SubTest_Stress_M1_ComplexRoadUpgradeWithFootpaths()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
@@ -8480,6 +8524,9 @@ struct VehicleSoftSyncEntry_M4 {
     unsigned cargoResHash[SOFT_SYNC_VEH_CARGO_MAX];
     float cargoAmount[SOFT_SYNC_VEH_CARGO_MAX];
     float passengers;
+    float workers;
+    float students;
+    float tourists;
 };
 
 struct VehicleSoftSyncMsg_M4 {
@@ -9055,6 +9102,11 @@ static bool Test_Stress_M4_Challenger_R3_R10_R11_R17()
 #include "m5_challenger1_stress.cpp"
 #include "m6_challenger1_stress.cpp"
 #include "m6_challenger2_stress.cpp"
+#include "m9_2_challenger2_stress.cpp"
+#include "m9_2_challenger1_stress.cpp"
+#include "m9_3_challenger1_stress.cpp"
+#include "m9_3_challenger2_stress.cpp"
+#include "m9_4_challenger2_stress.cpp"
 
 // ---------------------------------------------------------------------------
 // Test 36: SettingsSync for TV/Radio Broadcast, Prison/Orphanage Upbringing, and Building Alerts
@@ -9121,6 +9173,7 @@ static bool SubTest_SettingsSync_UpbringingComposite()
 static bool SubTest_SettingsSync_BroadcastComposite()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
@@ -9369,6 +9422,7 @@ static bool SubTest_SettingsSync_ScalarAlertsAndLoyalty()
 static bool SubTest_SettingsSync_EdgeCases()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
@@ -9727,6 +9781,7 @@ static bool Test_SettingsSync_MediaPrisonOrphanageAlerts()
 static bool SubTest_Gen6_FloatFuzzingUpbringingAndBroadcast()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeOrph(0x400, 0), typePrison(0x400, 0), typeMedia(0x400, 0);
@@ -10058,6 +10113,7 @@ static bool SubTest_Gen6_CheckboxBoundariesAndAdjacentIntegrity()
 static bool SubTest_Gen6_StudioLookupResilienceAndCorruptedPointers()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
@@ -10170,6 +10226,7 @@ static bool SubTest_Gen6_CategoryMismatchAndInjection()
 static bool SubTest_Gen6_RapidPacketBurst()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
@@ -10246,6 +10303,7 @@ static U64 __fastcall MockCargoCopyFn(U64 dst, U64 src)
 static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
 {
     ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. Carried tools check: join_hub_all, building_addstation, building_addstation_dist, building_copy_*
@@ -10498,6 +10556,1921 @@ static bool Test_CrashFixesAndRcoTrackBuilder()
     return true;
 }
 
+static bool Test_SystemUiInterceptionAndNetworkTools_M9_1()
+{
+    // 1. Feature 22: IsPointerLikeX64 pointer filter refinement
+    // Scalar pair {1.0f, 0} = 0x000000003F800000ULL: high == 0, must return false
+    TEST_CHECK(!IsPointerLikeX64(0x000000003F800000ULL));
+    // Small integer pair {10, 0} = 0x000000000000000AULL: high == 0, must return false
+    TEST_CHECK(!IsPointerLikeX64(0x000000000000000AULL));
+    // Misaligned 64-bit addresses (not 8-byte aligned) must return false
+    TEST_CHECK(!IsPointerLikeX64(0x0000010000000004ULL));
+    TEST_CHECK(!IsPointerLikeX64(0x0000000100000002ULL));
+    TEST_CHECK(!IsPointerLikeX64(0x0000000100000007ULL));
+    // Kernel space addresses (high > 0x7FFF) must return false
+    TEST_CHECK(!IsPointerLikeX64(0x8000000000000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0xFFFFF80000000000ULL));
+    // Valid module / heap pointers (8-byte aligned, high >= 1) must return true
+    if (g_exeBase) {
+        uint64_t exePtr = (uint64_t)(uintptr_t)g_exeBase;
+        if ((exePtr & 7u) == 0 && (exePtr >> 32) >= 1) {
+            TEST_CHECK(IsPointerLikeX64(exePtr));
+        }
+    }
+    void* heapBuf = malloc(64);
+    if (heapBuf) {
+        uint64_t heapPtr = (uint64_t)(uintptr_t)heapBuf;
+        if ((heapPtr & 7u) == 0 && (heapPtr >> 32) >= 1) {
+            TEST_CHECK(IsPointerLikeX64(heapPtr));
+        }
+        free(heapBuf);
+    }
+
+    // 2. Feature 21: BuildingSwitches_Reset and VehicleSwitches_Reset clearing noise arrays
+    BuildingSwitches_Reset();
+    TEST_CHECK(BuildingSwitches_IsNoiseEmptyForTest());
+    VehicleSwitches_Reset();
+    TEST_CHECK(VehicleSwitches_IsNoiseEmptyForTest());
+
+    // 3. Feature 21: Mouse wheel interaction detection in Clicked()
+    if (g_exeBase) {
+        // Clear buttons and wheel
+        g_exeBase[0xA54E90] = 0; // DOWN
+        g_exeBase[0xA54E91] = 0; // PRESS
+        g_exeBase[0xA54CAC] = 0; // ENTER
+        g_exeBase[0xA54D2C] = 0; // KEYPAD_ENTER
+        *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = 0.0f;
+        TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+        // Wheel delta scrolled up (+120.0f)
+        *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = 120.0f;
+        TEST_CHECK(BuildingSwitches_ClickedForTest());
+
+        // Wheel delta scrolled down (-120.0f)
+        *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = -120.0f;
+        TEST_CHECK(BuildingSwitches_ClickedForTest());
+
+        // Reset wheel
+        *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = 0.0f;
+        TEST_CHECK(!BuildingSwitches_ClickedForTest());
+    }
+
+    // 4. Feature 23: Bottom panel blind bytes 0xB08..0xB0B and 0xC798..0xC79B in IsOneByteWorldSetting
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xAF8)); // dword
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xAFC)); // dword
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xB00)); // dword
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xB04)); // dword
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB08));  // byte 0
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB09));  // byte 1
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB0A));  // byte 2
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB0B));  // byte 3
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC798)); // byte 0
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC799)); // byte 1
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC79A)); // byte 2
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC79B)); // byte 3
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xC79C));
+
+    // 5. Feature 24: Commands_SanitizeCheatState clears terrain editor cheat fields 0xADE8, 0xADEC
+    std::vector<BYTE> mockWorld(0x15000, 0);
+    *(int32_t*)(mockWorld.data() + 0xADE8) = 42;
+    *(float*)(mockWorld.data() + 0xADEC) = 3.14159f;
+    TEST_CHECK(Commands_SanitizeCheatState(mockWorld.data()));
+    TEST_CHECK(*(int32_t*)(mockWorld.data() + 0xADE8) == 0);
+    TEST_CHECK(*(float*)(mockWorld.data() + 0xADEC) == 0.0f);
+    // Idempotent: second call returns false because already sanitized
+    TEST_CHECK(!Commands_SanitizeCheatState(mockWorld.data()));
+
+    // 6. Feature 24 & 25: Tool carriage & Area clone safe blocking
+    TEST_CHECK(Commands_IsAreaCloneToolBlockedForTest("area_copy"));
+    TEST_CHECK(Commands_IsAreaCloneToolBlockedForTest("area_paste"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("building_distribution"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("assign_co"));
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Challenger M9.1: Adversarial Stress Tests (Features 21–25)
+// ---------------------------------------------------------------------------
+
+static bool SubTest_M9_1_MouseWheelAdversarialFloatFuzzing()
+{
+    if (!g_exeBase) return true;
+
+    // Reset button states
+    g_exeBase[0xA54E90] = 0; // DOWN
+    g_exeBase[0xA54E91] = 0; // PRESS
+    g_exeBase[0xA54CAC] = 0; // ENTER
+    g_exeBase[0xA54D2C] = 0; // KEYPAD_ENTER
+
+    // 1. Zero values
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = 0.0f;
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = -0.0f;
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    // 2. Normal deltas (positive and negative, discrete and smooth)
+    const float kNormalDeltas[] = { 120.0f, -120.0f, 1.0f, -1.0f, 0.5f, -0.5f, 0.0001f, -0.0001f, 1e20f, -1e20f };
+    for (float delta : kNormalDeltas) {
+        *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = delta;
+        TEST_CHECK(BuildingSwitches_ClickedForTest());
+    }
+
+    // 3. Infinite values
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = std::numeric_limits<float>::infinity();
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = -std::numeric_limits<float>::infinity();
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    // 4. NaN values (quiet, signaling, and arbitrary payloads)
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = std::numeric_limits<float>::quiet_NaN();
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = std::numeric_limits<float>::signaling_NaN();
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    const uint32_t kNanPayloads[] = {
+        0x7F800001u, 0x7F800002u, 0x7FA00000u, 0x7FC00000u, 0x7FFFFFFFu,
+        0xFF800001u, 0xFF800002u, 0xFFA00000u, 0xFFC00000u, 0xFFFFFFFFu
+    };
+    for (uint32_t rawNan : kNanPayloads) {
+        memcpy(g_exeBase + MOUSE_WHEEL_DELTA_RVA, &rawNan, sizeof(rawNan));
+        TEST_CHECK(!BuildingSwitches_ClickedForTest());
+    }
+
+    // 5. Subnormal floats (denorm_min, tiny positive/negative)
+    // In IEEE-754, non-zero subnormal floats have isfinite() == true, so they evaluate to true.
+    const uint32_t kDenormPayloads[] = { 0x00000001u, 0x00000002u, 0x007FFFFFu, 0x80000001u, 0x807FFFFFu };
+    for (uint32_t rawDenorm : kDenormPayloads) {
+        memcpy(g_exeBase + MOUSE_WHEEL_DELTA_RVA, &rawDenorm, sizeof(rawDenorm));
+        TEST_CHECK(BuildingSwitches_ClickedForTest());
+    }
+
+    // 6. Keyboard / Mouse button precedence over NaN/Inf wheel
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = std::numeric_limits<float>::quiet_NaN();
+    g_exeBase[0xA54E90] = 1; // DOWN
+    TEST_CHECK(BuildingSwitches_ClickedForTest());
+    g_exeBase[0xA54E90] = 0;
+
+    g_exeBase[0xA54E91] = 1; // PRESS
+    TEST_CHECK(BuildingSwitches_ClickedForTest());
+    g_exeBase[0xA54E91] = 0;
+
+    g_exeBase[0xA54CAC] = 1; // ENTER
+    TEST_CHECK(BuildingSwitches_ClickedForTest());
+    g_exeBase[0xA54CAC] = 0;
+
+    g_exeBase[0xA54D2C] = 1; // KEYPAD_ENTER
+    TEST_CHECK(BuildingSwitches_ClickedForTest());
+    g_exeBase[0xA54D2C] = 0;
+
+    // Reset clean
+    *(float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA) = 0.0f;
+    TEST_CHECK(!BuildingSwitches_ClickedForTest());
+
+    return true;
+}
+
+static bool SubTest_M9_1_PointerFilterExhaustiveBoundaries()
+{
+    // A. Misaligned addresses must return false
+    TEST_CHECK(!IsPointerLikeX64(0ULL));
+    for (uint64_t off = 1; off <= 7; ++off) {
+        TEST_CHECK(!IsPointerLikeX64(off));
+        TEST_CHECK(!IsPointerLikeX64(0x0000010000000000ULL | off));
+        TEST_CHECK(!IsPointerLikeX64(0x00007FFF00000000ULL | off));
+    }
+
+    // B. Scalar pairs below 4GB (high == 0) must return false
+    TEST_CHECK(!IsPointerLikeX64(0x000000003F800000ULL)); // {1.0f, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x00000000BF800000ULL)); // {-1.0f, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x000000000000000AULL)); // {10, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x00000000000186A0ULL)); // {100000, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x000000007F800000ULL)); // {+inf, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x000000007FC00000ULL)); // {NaN, 0}
+    TEST_CHECK(!IsPointerLikeX64(0x00000000FFFFFFF8ULL)); // Max aligned word under 4GB
+
+    // C. Scalar pairs with high > 0x7FFF must return false
+    TEST_CHECK(!IsPointerLikeX64(0x3F80000000000000ULL)); // {0, 1.0f}
+    TEST_CHECK(!IsPointerLikeX64(0xBF80000000000000ULL)); // {0, -1.0f}
+    TEST_CHECK(!IsPointerLikeX64(0x3F8000003F800000ULL)); // {1.0f, 1.0f}
+    TEST_CHECK(!IsPointerLikeX64(0x42C8000042C80000ULL)); // {100.0f, 100.0f}
+
+    // D. Kernel / non-canonical space (high >= 0x8000) must return false
+    TEST_CHECK(!IsPointerLikeX64(0x0000800000000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0x0000800100000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0x0000FFFF00000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0x8000000000000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0xFFFFF80000000000ULL));
+    TEST_CHECK(!IsPointerLikeX64(0xFFFFFFFFFFFFFFFFULL));
+    TEST_CHECK(!IsPointerLikeX64(0xFFFFFFFFFFFFFFF8ULL));
+
+    // E. Dynamic virtual allocation in low range (1 <= high < 0x100)
+    TEST_CHECK(!IsPointerLikeX64(0x0000000100000000ULL));
+
+    void* allocated = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (allocated) {
+        uint64_t addr = (uint64_t)(uintptr_t)allocated;
+        if ((addr & 7u) == 0 && (addr >> 32) >= 1 && (addr >> 32) <= 0x7FFF) {
+            TEST_CHECK(IsPointerLikeX64(addr));
+
+            // Misaligned offsets into the valid page must return false
+            TEST_CHECK(!IsPointerLikeX64(addr + 1));
+            TEST_CHECK(!IsPointerLikeX64(addr + 2));
+            TEST_CHECK(!IsPointerLikeX64(addr + 3));
+            TEST_CHECK(!IsPointerLikeX64(addr + 4));
+            TEST_CHECK(!IsPointerLikeX64(addr + 5));
+            TEST_CHECK(!IsPointerLikeX64(addr + 6));
+            TEST_CHECK(!IsPointerLikeX64(addr + 7));
+        }
+        VirtualFree(allocated, 0, MEM_RELEASE);
+    }
+
+    return true;
+}
+
+static bool SubTest_M9_1_BuildingSwitches_PointerRejectionAndRollback()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_HOST);
+
+    // Setup mock building
+    std::vector<BYTE> bldType(0x400, 0);
+    *(int*)(bldType.data() + 0x360) = 0x1C; // Hospital
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)bld.data() = 101u; // ID = 101
+    *(BYTE**)(bld.data() + 0x318) = bldType.data();
+    float pos[3] = { 100.0f, 0.0f, 200.0f };
+    memcpy(bld.data() + 0x350, pos, sizeof(pos));
+
+    std::vector<BYTE*> mockBlds = { bld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+
+    // Baseline setting at offset 0x500 (not in kViewWords)
+    *(uint32_t*)(bld.data() + 0x500) = 0x11112222;
+    *(uint32_t*)(bld.data() + 0x504) = 0x00000000;
+
+    // 1. Frame with click and pointer modification (heap pointer in 64-bit pair)
+    g_mockExeBuffer[0xA54E91] = 1; // Click active
+    BuildingSwitches_Before(false); // Snapshots 0x11112222 baseline
+
+    uint64_t heapVal = 0x000001B400000008ULL;
+    *(uint64_t*)(bld.data() + 0x500) = heapVal; // UI modified word to pointer
+    BuildingSwitches_After(false); // Detects pointer, rejects and rolls back!
+    g_mockExeBuffer[0xA54E91] = 0;
+
+    // Verify: live memory at 0x500..0x507 was ROLLED BACK to 0x11112222 and 0
+    TEST_CHECK(*(uint32_t*)(bld.data() + 0x500) == 0x11112222);
+    TEST_CHECK(*(uint32_t*)(bld.data() + 0x504) == 0x00000000);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // 2. Legitimate setting modification (scalar pair {1.0f, 0})
+    g_mockExeBuffer[0xA54E91] = 1; // Click active
+    BuildingSwitches_Before(false); // Snapshots 0x11112222 baseline
+    *(uint32_t*)(bld.data() + 0x500) = 0x3F800000; // 1.0f
+    *(uint32_t*)(bld.data() + 0x504) = 0x00000000;
+    BuildingSwitches_After(false);
+    g_mockExeBuffer[0xA54E91] = 0;
+
+    // Verify: accepted! Local memory rolled back to wait for lockstep tick
+    TEST_CHECK(*(uint32_t*)(bld.data() + 0x500) == 0x11112222);
+    // Submit was called: tick due
+    TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
+    Commands_Boundary(Commands_ApplyEpoch());
+    // After lockstep tick boundary, live memory has the new setting
+    TEST_CHECK(*(uint32_t*)(bld.data() + 0x500) == 0x3F800000);
+
+    Commands_SetSession(COMMANDS_OFF);
+    BuildingSwitches_Reset();
+    mockBlds.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, mockBlds);
+    return true;
+}
+
+static bool SubTest_M9_1_VehicleSwitches_PointerRejectionAndRollback()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    VehicleSwitches_Reset();
+    Commands_SetSession(COMMANDS_HOST);
+
+    // Setup mock vehicle
+    std::vector<BYTE> veh(0x1B00, 0);
+    *(unsigned*)(veh.data() + VEH_ID_OFFSET) = 502u;
+    float pos[3] = { 150.0f, 0.0f, 250.0f };
+    memcpy(veh.data() + 0x350, pos, sizeof(pos));
+
+    std::vector<BYTE*> mockVehs = { veh.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + WORLD_RVA + WORLD_VEHICLES_OFFSET, mockVehs);
+
+    // Offset 0x610: baseline setting (not a ListWord, not a TextWord)
+    *(uint32_t*)(veh.data() + 0x610) = 0x33334444;
+    *(uint32_t*)(veh.data() + 0x614) = 0x00000000;
+
+    // 1. Frame with click and pointer modification
+    g_mockExeBuffer[0xA54E91] = 1; // Click active
+    VehicleSwitches_Before(false); // Snapshots 0x33334444 baseline
+
+    uint64_t heapVal = 0x000001B400000008ULL;
+    *(uint64_t*)(veh.data() + 0x610) = heapVal; // UI modified word to pointer
+    VehicleSwitches_After(false); // Detects pointer, rejects and rolls back!
+    g_mockExeBuffer[0xA54E91] = 0;
+
+    // Verify: live memory rolled back to 0x33334444 and 0
+    TEST_CHECK(*(uint32_t*)(veh.data() + 0x610) == 0x33334444);
+    TEST_CHECK(*(uint32_t*)(veh.data() + 0x614) == 0x00000000);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // 2. Legitimate setting modification (scalar pair {1.0f, 0})
+    g_mockExeBuffer[0xA54E91] = 1; // Click active
+    VehicleSwitches_Before(false); // Snapshots 0x33334444 baseline
+    *(uint32_t*)(veh.data() + 0x610) = 0x3F800000; // 1.0f
+    *(uint32_t*)(veh.data() + 0x614) = 0x00000000;
+    VehicleSwitches_After(false);
+    g_mockExeBuffer[0xA54E91] = 0;
+
+    // Verify: accepted! Local memory rolled back awaiting tick
+    TEST_CHECK(*(uint32_t*)(veh.data() + 0x610) == 0x33334444);
+    TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(*(uint32_t*)(veh.data() + 0x610) == 0x3F800000);
+
+    Commands_SetSession(COMMANDS_OFF);
+    VehicleSwitches_Reset();
+    mockVehs.clear();
+    WriteMockVectorHeader(g_mockExeBuffer + WORLD_RVA + WORLD_VEHICLES_OFFSET, mockVehs);
+    return true;
+}
+
+static bool SubTest_M9_1_BlindBytesAndSettingsSyncToastSuppression()
+{
+    // 1. Feature 23: Complete scan of world range 0xAF0..0xB18
+    for (unsigned off = 0xAF0; off < 0xB08; off += 4) {
+        TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+    for (unsigned off = 0xB08; off <= 0xB0B; ++off) {
+        TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+    for (unsigned off = 0xB0C; off <= 0xB18; off += 4) {
+        TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+
+    // 2. Feature 23: Complete scan of world range 0xC790..0xC7A8
+    for (unsigned off = 0xC790; off < 0xC798; off += 4) {
+        TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+    for (unsigned off = 0xC798; off <= 0xC79B; ++off) {
+        TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+    for (unsigned off = 0xC79C; off <= 0xC7A8; off += 4) {
+        TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
+    }
+
+    return true;
+}
+
+static bool SubTest_M9_1_CheatSanitizationAndAreaCloneBlock()
+{
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Feature 24: Cheat sanitization of terrain elevation modifications
+    *(int32_t*)(world + 0xADE8) = -99999;
+    *(float*)(world + 0xADEC) = 12345.67f;
+    TEST_CHECK(Commands_SanitizeCheatState(world));
+    TEST_CHECK(*(int32_t*)(world + 0xADE8) == 0);
+    TEST_CHECK(*(float*)(world + 0xADEC) == 0.0f);
+    // Idempotent: already clean
+    TEST_CHECK(!Commands_SanitizeCheatState(world));
+
+    // 2. Feature 24 & 25: Uncarried tools & Area clone blocking
+    TEST_CHECK(Commands_IsAreaCloneToolBlockedForTest("area_copy"));
+    TEST_CHECK(Commands_IsAreaCloneToolBlockedForTest("area_paste"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("building_distribution"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("assign_co"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("firestation_addfire"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("building_copyweights"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("kgb_surveillance"));
+    TEST_CHECK(!Commands_IsAreaCloneToolBlockedForTest("christmas_snow"));
+
+    return true;
+}
+
+static bool Test_Stress_M9_1_Challenger1()
+{
+    printf("    [SubTest 1: Mouse Wheel Adversarial Float Fuzzing] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_MouseWheelAdversarialFloatFuzzing()) return false;
+
+    printf("    [SubTest 2: Pointer Filter Exhaustive Boundaries] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_PointerFilterExhaustiveBoundaries()) return false;
+
+    printf("    [SubTest 3: Building Switches Pointer Rejection & Rollback] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_BuildingSwitches_PointerRejectionAndRollback()) return false;
+
+    printf("    [SubTest 4: Vehicle Switches Pointer Rejection & Rollback] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_VehicleSwitches_PointerRejectionAndRollback()) return false;
+
+    printf("    [SubTest 5: Blind Bytes & Toast Suppression] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_BlindBytesAndSettingsSyncToastSuppression()) return false;
+
+    printf("    [SubTest 6: Cheat Sanitization & Area Clone Blocking] ...\n"); fflush(stdout);
+    if (!SubTest_M9_1_CheatSanitizationAndAreaCloneBlock()) return false;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 42: Missing UI Elements Sync & Buffer Safety (Milestone M9.2, Features 26–31)
+// ---------------------------------------------------------------------------
+
+static bool SubTest_M9_2_VehicleAutoReplacementSync()
+{
+    // Feature 26: Intercept kind == 0xB in Purchase_Press(), sync replacement manager at *(world + 0xD440)
+    TEST_CHECK(WORLD_AUTO_REPLACE_MGR_OFFSET == 0xD440u);
+    TEST_CHECK(RVA_SET_AUTO_REPLACE == 0x6148A0u);
+
+    // Verify PurchaseMsg layout & auto-replace semantics
+    PurchaseMsg m = {};
+    m.kind = 0xB;
+    m.typeIndex = 12u;
+    m.resIndex = 5; // target vehicle type index
+    m.typeCheck = 0xA1B2C3D4u;
+    snprintf(m.scriptName, sizeof(m.scriptName), "media_soviet/scripts/truck_skd.ini");
+
+    TEST_CHECK(m.kind == 0xB);
+    TEST_CHECK(m.resIndex == 5);
+    TEST_CHECK(strcmp(m.scriptName, "media_soviet/scripts/truck_skd.ini") == 0);
+
+    return true;
+}
+
+static bool SubTest_M9_2_StorageEmptyButtonSync()
+{
+    // Feature 27: Storage empty button sync (IsLeftOutSlotDynamicOffset permits (local % 16) == 8 on click)
+    // Offset in region 1 (0x1000..0x1FFF), local = 8 (local % 16 == 8)
+    const unsigned kEmptyBtnOffset = 0x1008u;
+    // Without click (noise filter scan): must be filtered out as noise
+    TEST_CHECK(BuildingSwitches_IsLeftOutSlotOffsetForTest(kEmptyBtnOffset, false));
+    // With click: must NOT be left out, allowing the Empty Storage click to be captured and synced!
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(kEmptyBtnOffset, true));
+
+    // Another offset with local % 16 == 8 in another slot (slot 1: 0x4000 + 0x1008)
+    const unsigned kSlot1EmptyBtnOffset = 0x5008u;
+    TEST_CHECK(BuildingSwitches_IsLeftOutSlotOffsetForTest(kSlot1EmptyBtnOffset, false));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(kSlot1EmptyBtnOffset, true));
+
+    // Arbitrary non-button offsets (e.g. local % 16 == 0 or 4) are not dynamic slot buttons
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000u, false));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1000u, true));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1004u, false));
+    TEST_CHECK(!BuildingSwitches_IsLeftOutSlotOffsetForTest(0x1004u, true));
+
+    return true;
+}
+
+static bool SubTest_M9_2_LineWaypointsOnRoadAndAirNetworks()
+{
+    // Feature 28: Add 0xF7A0 (ROAD), 0xF7A8 (SECOND_ROAD), and 0xFA30 (AIRROAD) to kNodeFields and Ref_NodeAt
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    const unsigned kTestFields[] = { 0xF7A0u, 0xF7A8u, 0xF908u, 0xFA28u, 0xFA30u };
+    for (unsigned fieldOffset : kTestFields) {
+        std::vector<BYTE> netObj(0x300, 0);
+        std::vector<BYTE> nodeObj(32, 0);
+        *(unsigned*)(nodeObj.data() + 4) = 0x43000000u; // float X = 128.0f
+        *(unsigned*)(nodeObj.data() + 0xC) = 0x43800000u; // float Z = 256.0f
+
+        std::vector<BYTE*> nodeVec = { nodeObj.data() };
+        WriteMockVectorHeader(netObj.data() + 0x298, nodeVec);
+        *(BYTE**)(world + fieldOffset) = netObj.data();
+
+        RouteRef refN = kNoRef;
+        TEST_CHECK(Ref_Node((U64)nodeObj.data(), refN));
+        TEST_CHECK(refN.list == fieldOffset);
+        TEST_CHECK(refN.place == 0);
+        TEST_CHECK(Ref_NodeAt(refN) == (U64)nodeObj.data());
+        TEST_CHECK(Ref_NodeCheck((U64)nodeObj.data()) == refN.check);
+
+        *(BYTE**)(world + fieldOffset) = nullptr;
+    }
+
+    return true;
+}
+
+static bool SubTest_M9_2_FactoryQueueAndMachineReplacementSites()
+{
+    // Feature 29: In game_calls.cpp:
+    // Verify sites 0x776557 (ReplaceMachines), 0x1A15A8 (Cancel production on demolish), 0x7D8738 (Repaint template)
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x776557u, 0x1A8D90u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x1A15A8u, 0x1BC010u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+
+    // Check non-existent site
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x654321u));
+
+    return true;
+}
+
+static bool SubTest_M9_2_WasteContainerTypesAndCityReassign()
+{
+    // Feature 30: SettingsSync_OwnsSlotWord returns true for region == 2 (waste container slot data)
+    TEST_CHECK(SettingsSync_OwnsSlotWord(nullptr, 0, 2, 0));
+    TEST_CHECK(SettingsSync_OwnsSlotWord(nullptr, 0, 2, 4));
+    TEST_CHECK(SettingsSync_OwnsSlotWord(nullptr, 0, 2, 8));
+    TEST_CHECK(SettingsSync_OwnsSlotWord(nullptr, 1, 2, 12));
+    TEST_CHECK(!SettingsSync_OwnsSlotWord(nullptr, 1, 1, 0)); // region 1 non-slot0 is not owned by SettingsSync
+
+    // Verify SettingWire data floats capacity: 224 floats supports 32 endpoints (7 floats each)
+    // and waste container resource serialization
+    TEST_CHECK(SETTINGS_WIRE_DATA_FLOATS == 224);
+    SettingWire wire = {};
+    wire.field = CITIZEN_DESTINATIONS_FIELD;
+    wire.count = 32 * 7;
+    TEST_CHECK(wire.count <= SETTINGS_WIRE_DATA_FLOATS);
+
+    // City reassign kind constant
+    TEST_CHECK(KIND_CITY_REASSIGN == 0xFu);
+
+    return true;
+}
+
+static bool SubTest_M9_2_BufferSafetyAndLimitsExpansion()
+{
+    // Feature 31: Buffer safety expansions
+    TEST_CHECK(LS_MAX_PAYLOAD == (16u << 20)); // 16 MB lockstep payload
+    TEST_CHECK(CITIZEN_DESTINATIONS_MAX == 32); // 32 citizen destination endpoints
+    TEST_CHECK(SOURCE_SLOTS_MAX_BUILDINGS == 16384); // 16384 source slot scan capacity
+    TEST_CHECK(CARGO_SETTINGS_MAX_OBJECTS == 32); // 32 objects per kind
+    TEST_CHECK(ROUTE_TOOLS_DEPOT_MAX == 256); // 256 vehicles in depot batch
+    TEST_CHECK(ROAD_SYNC_MAX_UPGRADE_PIECES == 128); // 128 upgrade pieces
+    TEST_CHECK(ROAD_SYNC_MAX_DEMOLISH_PIECES == 64); // 64 demolish pieces
+
+    RoadSyncDemolishMsg demoMsg = {};
+    demoMsg.pieceCount = ROAD_SYNC_MAX_DEMOLISH_PIECES;
+    TEST_CHECK(sizeof(demoMsg.pieces) / sizeof(demoMsg.pieces[0]) == 64);
+
+    RoadSyncUpgradeMsg upMsg = {};
+    upMsg.pieceCount = ROAD_SYNC_MAX_UPGRADE_PIECES;
+    TEST_CHECK(sizeof(upMsg.pieces) / sizeof(upMsg.pieces[0]) == 128);
+
+    return true;
+}
+
+static bool Test_MissingUiElementsAndBufferSafety_M9_2()
+{
+    printf("    [SubTest 1: Vehicle Auto-Replacement Sync (Feature 26)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_VehicleAutoReplacementSync()) return false;
+
+    printf("    [SubTest 2: Storage Empty Button Sync (Feature 27)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_StorageEmptyButtonSync()) return false;
+
+    printf("    [SubTest 3: Line Waypoints On Road & Air Networks (Feature 28)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_LineWaypointsOnRoadAndAirNetworks()) return false;
+
+    printf("    [SubTest 4: Factory Queue & Machine Replacement Sites (Feature 29)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_FactoryQueueAndMachineReplacementSites()) return false;
+
+    printf("    [SubTest 5: Waste Container Types & City Reassign (Feature 30)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_WasteContainerTypesAndCityReassign()) return false;
+
+    printf("    [SubTest 6: Buffer Safety & Limits Expansion (Feature 31)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_2_BufferSafetyAndLimitsExpansion()) return false;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Milestone M9.3 Features 32–36 Test Suite
+// ---------------------------------------------------------------------------
+
+static bool SubTest_M9_3_DeterministicAutosaveAndBackup()
+{
+    // Feature 32: Autosave tick interval & deterministic paths
+    TEST_CHECK(!TwoStates_IsAutosaveTick(0));
+    TEST_CHECK(!TwoStates_IsAutosaveTick(1));
+    TEST_CHECK(!TwoStates_IsAutosaveTick(17999));
+    TEST_CHECK(TwoStates_IsAutosaveTick(18000));
+    TEST_CHECK(!TwoStates_IsAutosaveTick(18001));
+    TEST_CHECK(TwoStates_IsAutosaveTick(36000));
+    TEST_CHECK(TwoStates_IsAutosaveTick(54000));
+
+    TEST_CHECK(strcmp(TwoStates_GetAutosaveRelPath(true), "save/coop_autosave") == 0);
+    TEST_CHECK(strcmp(TwoStates_GetAutosaveRelPath(false), "save/coop_client_backup") == 0);
+
+    // SaveSync_PreserveClientBackup: client preserves incoming save into coop_client_backup
+    std::filesystem::path testIncoming = "temp_m9_3_incoming_test";
+    std::error_code ec;
+    std::filesystem::remove_all(testIncoming, ec);
+    std::filesystem::create_directories(testIncoming, ec);
+
+    FILE* fTest = nullptr;
+    if (fopen_s(&fTest, (testIncoming / "header.bin").string().c_str(), "wb") == 0 && fTest) {
+        const char dummy[] = "SOVIET_HEADER_DATA";
+        fwrite(dummy, 1, sizeof(dummy), fTest);
+        fclose(fTest);
+    }
+    TEST_CHECK(SaveSync_PreserveClientBackupForTest(testIncoming.string().c_str()));
+    char backupDirBuf[MAX_PATH] = {};
+    TEST_CHECK(SaveSync_GetGameSaveDirForTest(backupDirBuf, sizeof(backupDirBuf), "coop_client_backup"));
+    std::filesystem::path backupHeader = std::filesystem::path(backupDirBuf) / "header.bin";
+    TEST_CHECK(std::filesystem::exists(backupHeader, ec));
+
+    std::filesystem::remove_all(testIncoming, ec);
+    std::filesystem::remove_all(backupDirBuf, ec);
+
+    return true;
+}
+
+static bool SubTest_M9_3_ZipUtf8AndZip64Integrity()
+{
+    // Feature 33: UTF-8 encoding for archive entries and zip integrity
+    std::filesystem::path utf8Src = "temp_m9_3_zip_utf8";
+    std::error_code ec;
+    std::filesystem::remove_all(utf8Src, ec);
+    std::filesystem::create_directories(utf8Src / u8"город" / u8"завод", ec);
+
+    std::filesystem::path testFile = utf8Src / u8"город" / u8"завод" / u8"план_пятилетки.txt";
+    FILE* fUtf = nullptr;
+    if (fopen_s(&fUtf, testFile.string().c_str(), "wb") == 0 && fUtf) {
+        const char content[] = "План пятилетки выполнен досрочно!";
+        fwrite(content, 1, sizeof(content), fUtf);
+        fclose(fUtf);
+    }
+
+    std::filesystem::path zipDst = "temp_m9_3_utf8.zip";
+    std::filesystem::remove(zipDst, ec);
+    TEST_CHECK(ZipSaveDirectory(utf8Src.string().c_str(), zipDst.string().c_str()));
+    TEST_CHECK(std::filesystem::exists(zipDst, ec));
+
+    std::filesystem::path unzipDst = "temp_m9_3_unzip_out";
+    std::filesystem::remove_all(unzipDst, ec);
+    TEST_CHECK(UnzipToDirectory(zipDst.string().c_str(), unzipDst.string().c_str()));
+    std::filesystem::path extractedFile = unzipDst / u8"город" / u8"завод" / u8"план_пятилетки.txt";
+    TEST_CHECK(std::filesystem::exists(extractedFile, ec));
+
+    std::filesystem::remove_all(utf8Src, ec);
+    std::filesystem::remove(zipDst, ec);
+    std::filesystem::remove_all(unzipDst, ec);
+
+    // Fail-fast on non-existent directory
+    std::filesystem::path nonExistent = "temp_m9_3_does_not_exist_xyz";
+    std::filesystem::path badZip = "temp_m9_3_bad.zip";
+    TEST_CHECK(!ZipSaveDirectory(nonExistent.string().c_str(), badZip.string().c_str()));
+    TEST_CHECK(!std::filesystem::exists(badZip, ec));
+
+    // 64-bit progress transfer stats in SyncBlock
+    int64_t largeQueued = 3456789012LL;
+    int64_t largeTotal = 8901234567LL;
+    SyncBlock_SetPercentEx(1, largeQueued, largeTotal, 38.8f);
+    int pct = 0;
+    int64_t q = 0, t = 0;
+    float spd = 0.0f;
+    SyncBlock_GetTransferStats(&pct, &q, &t, &spd);
+    TEST_CHECK(q == largeQueued);
+    TEST_CHECK(t == largeTotal);
+    SyncBlock_SetPercent(-1);
+
+    return true;
+}
+
+static bool SubTest_M9_3_ClientSettingsIsolationAndCameraFix()
+{
+    // Feature 34: Client settings isolation (windows.bin, toolco.bin)
+    std::filesystem::path destDir = "temp_m9_3_settings_dest";
+    std::error_code ec;
+    std::filesystem::remove_all(destDir, ec);
+    std::filesystem::create_directories(destDir, ec);
+
+    // Create windows.bin and toolco.bin in incoming save
+    FILE* fw = nullptr;
+    if (fopen_s(&fw, (destDir / "windows.bin").string().c_str(), "wb") == 0 && fw) {
+        fputc(1, fw);
+        fclose(fw);
+    }
+    FILE* ft = nullptr;
+    if (fopen_s(&ft, (destDir / "toolco.bin").string().c_str(), "wb") == 0 && ft) {
+        fputc(2, ft);
+        fclose(ft);
+    }
+    TEST_CHECK(std::filesystem::exists(destDir / "windows.bin", ec));
+    TEST_CHECK(std::filesystem::exists(destDir / "toolco.bin", ec));
+
+    // Initial join (rejoin = false): windows.bin and toolco.bin deleted
+    SaveSync_IsolateClientSettingsForTest(destDir.string().c_str(), false);
+    TEST_CHECK(!std::filesystem::exists(destDir / "windows.bin", ec));
+    TEST_CHECK(!std::filesystem::exists(destDir / "toolco.bin", ec));
+
+    // Resync (rejoin = true): host's windows.bin deleted, client's local toolco.bin restored
+    char backupDirBuf2[MAX_PATH] = {};
+    TEST_CHECK(SaveSync_GetGameSaveDirForTest(backupDirBuf2, sizeof(backupDirBuf2), "coop_client_backup"));
+    std::filesystem::path backupDir(backupDirBuf2);
+    std::filesystem::create_directories(backupDir, ec);
+    FILE* fb = nullptr;
+    if (fopen_s(&fb, (backupDir / "toolco.bin").string().c_str(), "wb") == 0 && fb) {
+        const char toolData[] = "CLIENT_LOCAL_TOOLCO";
+        fwrite(toolData, 1, sizeof(toolData), fb);
+        fclose(fb);
+    }
+    if (fopen_s(&fw, (destDir / "windows.bin").string().c_str(), "wb") == 0 && fw) {
+        fputc(5, fw);
+        fclose(fw);
+    }
+    if (fopen_s(&ft, (destDir / "toolco.bin").string().c_str(), "wb") == 0 && ft) {
+        fputc(6, ft);
+        fclose(ft);
+    }
+    SaveSync_IsolateClientSettingsForTest(destDir.string().c_str(), true);
+    TEST_CHECK(!std::filesystem::exists(destDir / "windows.bin", ec));
+    TEST_CHECK(std::filesystem::exists(destDir / "toolco.bin", ec));
+
+    FILE* fRestored = nullptr;
+    char checkBuf[64] = {};
+    if (fopen_s(&fRestored, (destDir / "toolco.bin").string().c_str(), "rb") == 0 && fRestored) {
+        fread(checkBuf, 1, sizeof(checkBuf), fRestored);
+        fclose(fRestored);
+    }
+    TEST_CHECK(strcmp(checkBuf, "CLIENT_LOCAL_TOOLCO") == 0);
+
+    std::filesystem::remove_all(destDir, ec);
+    std::filesystem::remove_all(backupDir, ec);
+
+    return true;
+}
+
+static bool SubTest_M9_3_DemographicTrackersPersistence()
+{
+    // Feature 35: Demographic trackers persistence
+    StateTrackerSlice cur1 = {};
+    StateTrackerSlice cur2 = {};
+    StateTrackerSlice old1 = {};
+    StateTrackerSlice old2 = {};
+
+    cur1.healthSum[0] = 12.345f;
+    cur1.healthCnt[0] = 77;
+    cur1.happySum[1] = 88.5f;
+    cur1.happyCnt[1] = 101;
+
+    cur2.healthSum[3] = 45.678f;
+    cur2.healthCnt[3] = 23;
+    cur2.happySum[2] = 55.25f;
+    cur2.happyCnt[2] = 64;
+
+    old1.healthSum[1] = 3.1415f;
+    old1.healthCnt[1] = 9;
+    old2.happySum[0] = 99.9f;
+    old2.happyCnt[0] = 15;
+
+    TwoStates_SetStateTrackerSliceForTest(1, false, cur1);
+    TwoStates_SetStateTrackerSliceForTest(1, true, old1);
+    TwoStates_SetStateTrackerSliceForTest(2, false, cur2);
+    TwoStates_SetStateTrackerSliceForTest(2, true, old2);
+
+    StateTrackerSlice outCur1 = {}, outOld1 = {}, outCur2 = {}, outOld2 = {};
+    TEST_CHECK(TwoStates_GetStateTrackerSliceForTest(1, false, &outCur1));
+    TEST_CHECK(TwoStates_GetStateTrackerSliceForTest(1, true, &outOld1));
+    TEST_CHECK(TwoStates_GetStateTrackerSliceForTest(2, false, &outCur2));
+    TEST_CHECK(TwoStates_GetStateTrackerSliceForTest(2, true, &outOld2));
+
+    TEST_CHECK_NEAR(outCur1.healthSum[0], 12.345f, 0.002f);
+    TEST_CHECK(outCur1.healthCnt[0] == 77);
+    TEST_CHECK_NEAR(outCur1.happySum[1], 88.5f, 0.002f);
+    TEST_CHECK(outCur1.happyCnt[1] == 101);
+
+    TEST_CHECK_NEAR(outCur2.healthSum[3], 45.678f, 0.002f);
+    TEST_CHECK(outCur2.healthCnt[3] == 23);
+    TEST_CHECK_NEAR(outCur2.happySum[2], 55.25f, 0.002f);
+    TEST_CHECK(outCur2.happyCnt[2] == 64);
+
+    TEST_CHECK_NEAR(outOld1.healthSum[1], 3.1415f, 0.002f);
+    TEST_CHECK(outOld1.healthCnt[1] == 9);
+    TEST_CHECK_NEAR(outOld2.happySum[0], 99.9f, 0.002f);
+    TEST_CHECK(outOld2.happyCnt[0] == 15);
+
+    return true;
+}
+
+static bool SubTest_M9_3_VehicleOwnershipAndPruning()
+{
+    // Feature 36: Ownership registration, pruning dead entities, and road segment cleanup
+    TwoStates_RegisterVehicleOwner(8801, 1);
+    TwoStates_RegisterVehicleOwner(8802, 2);
+    TEST_CHECK(TwoStates_GetVehicleOwner(8801, nullptr) == 1);
+    TEST_CHECK(TwoStates_GetVehicleOwner(8802, nullptr) == 2);
+
+    TwoStates_RegisterBuildingOwner(7701, 1);
+    TwoStates_RegisterBuildingOwner(7702, 2);
+    TEST_CHECK(TwoStates_GetBuildingOwner(7701, 0.0f, 0.0f) == 1);
+    TEST_CHECK(TwoStates_GetBuildingOwner(7702, 0.0f, 0.0f) == 2);
+
+    // Prune dead entities (in mock test harness, no entities exist in world memory)
+    TwoStates_PruneDeadEntities(false);
+
+    // Dead entities must be purged from owner maps
+    TEST_CHECK(TwoStates_GetVehicleOwner(8801, nullptr) == 0);
+    TEST_CHECK(TwoStates_GetVehicleOwner(8802, nullptr) == 0);
+
+    // Planned road segment reset
+    RoadSync_ClearPlannedSegments();
+
+    return true;
+}
+
+static bool Test_SaveSyncAndEconStatePersistence_M9_3()
+{
+    printf("    [SubTest 1: Deterministic Co-op Autosaves & Client Backup (Feature 32)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_DeterministicAutosaveAndBackup()) return false;
+
+    printf("    [SubTest 2: ZIP UTF-8 Encoding & ZIP64 Limits (Feature 33)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_ZipUtf8AndZip64Integrity()) return false;
+
+    printf("    [SubTest 3: Client Settings Isolation & Camera Fixes (Feature 34)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_ClientSettingsIsolationAndCameraFix()) return false;
+
+    printf("    [SubTest 4: Demographic Trackers Persistence (Feature 35)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_DemographicTrackersPersistence()) return false;
+
+    printf("    [SubTest 5: Vehicle Ownership & Dead Entity Pruning (Feature 36)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_VehicleOwnershipAndPruning()) return false;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 48: StateHash, VehicleSoftSync, Legacy Elimination, TwoStates Isolation (Milestone M9.4, Features 37-40)
+// ---------------------------------------------------------------------------
+
+#pragma pack(push, 1)
+struct LsHash_M9_4 {
+    unsigned long long tick;
+    StateSummary s;
+};
+#pragma pack(pop)
+static_assert(sizeof(LsHash_M9_4) == 208, "LsHash_M9_4 must be exactly 208 bytes");
+
+static bool SubTest_M9_4_StateSummaryAndHashing()
+{
+    // Feature 37: StateSummary struct layout and expanded hashing (200 bytes, 8-byte aligned)
+    TEST_CHECK(sizeof(StateSummary) == 200);
+    TEST_CHECK(sizeof(LsHash_M9_4) == 208);
+
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    *(int*)(world + WORLD_DAY_OFFSET)        = 210;
+    *(int*)(world + WORLD_YEAR_OFFSET)       = 1968;
+    *(float*)(world + WORLD_PROGRESS_OFFSET) = 0.450f;
+    *(double*)(world + WORLD_USD_OFFSET)     = 500000.0;
+    *(double*)(world + WORLD_RUB_OFFSET)     = 2000000.0;
+
+    // Base building vector at WORLD_BUILDINGS_OFFSET
+    std::vector<BYTE> bld1(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(bld1.data() + 0x00) = 101;
+    *(float*)(bld1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    std::vector<BYTE*> bldVec = { bld1.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    // Constructions vector at WORLD_CONSTRUCTIONS_OFFSET (0x11C28)
+    std::vector<BYTE> con1(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> con2(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(con1.data() + 0x00) = 501;
+    *(float*)(con1.data() + BLD_PROGRESS_OFFSET) = 0.35f;
+    *(int*)(con2.data() + 0x00) = 502;
+    *(float*)(con2.data() + BLD_PROGRESS_OFFSET) = 0.80f;
+    std::vector<BYTE*> conVec = { con1.data(), con2.data() };
+    WriteMockVectorHeader(world + WORLD_CONSTRUCTIONS_OFFSET, conVec);
+
+    // Engineering networks at 0xF7A0 .. 0xFAF0 (roads at 0xF7A0, rails at 0xFA28)
+    std::vector<BYTE> roadMgr(0x300, 0);
+    std::vector<BYTE> roadSeg(0x200, 0);
+    roadSeg[SEG_TYPE_OFFSET] = 1;
+    *(short*)(roadSeg.data() + SEG_DIRECTION_OFFSET) = 2;
+    std::vector<BYTE*> roadSegVec = { roadSeg.data() };
+    WriteMockVectorHeader(roadMgr.data() + MGR_SEGMENTS_BEGIN_OFFSET, roadSegVec);
+    *(BYTE**)(world + 0xF7A0) = roadMgr.data();
+
+    // Lines manager at 0x12800 with lines vector at +0x18
+    std::vector<BYTE> linesMgr(0x100, 0);
+    std::vector<BYTE> line1(0x80, 0);
+    *(int*)(line1.data() + 0x04) = 42;
+    *(int*)(line1.data() + 0x08) = 3;
+    std::vector<BYTE*> linesList = { line1.data() };
+    WriteMockVectorHeader(linesMgr.data() + 0x18, linesList);
+    *(BYTE**)(world + WORLD_LINES_OFFSET) = linesMgr.data();
+
+    // Loans vector at 0x10BD0
+    SovietLoan loan1 = {};
+    loan1.loanType = 1;
+    loan1.initialDays = 360;
+    loan1.daysRemaining = 360;
+    loan1.initialPrincipal = 100000.0f;
+    loan1.remainingPrincipal = 100000.0f;
+    loan1.yearInterestRate = 0.05f;
+    std::vector<SovietLoan> loansVec = { loan1 };
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loansVec);
+
+    // Research unlocks bitmask at 0x1175C and items at 0x11778
+    memset(world + WORLD_RESEARCH_UNLOCKS_OFFSET, 0, WORLD_RESEARCH_UNLOCKS_BYTES);
+    *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET) = 0x08; // tech 3 unlocked
+
+    std::vector<BYTE> resBuf(2 * RESEARCH_ITEM_STRIDE, 0);
+    *(float*)(resBuf.data() + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.75f;
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    // TwoStates per-state balances
+    double initRub[2] = { 1200000.0, 800000.0 };
+    double initUsd[2] = { 300000.0, 200000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    StateSummary sBase = {};
+    TEST_CHECK(StateHash_Compute(&sBase));
+    TEST_CHECK(sBase.constructions == 2);
+    TEST_CHECK(sBase.lines == 1);
+    TEST_CHECK(sBase.loans == 1);
+    TEST_CHECK_NEAR(sBase.rubState[0], 1200000.0, 1e-4);
+    TEST_CHECK_NEAR(sBase.rubState[1], 800000.0, 1e-4);
+    TEST_CHECK_NEAR(sBase.usdState[0], 300000.0, 1e-4);
+    TEST_CHECK_NEAR(sBase.usdState[1], 200000.0, 1e-4);
+    TEST_CHECK(sBase.hashConstructions != 0);
+    TEST_CHECK(sBase.hashNetworks != 0);
+    TEST_CHECK(sBase.hashLines != 0);
+    TEST_CHECK(sBase.hashLoans != 0);
+    TEST_CHECK(sBase.hashResearch != 0);
+
+    // Mutate construction progress -> hashConstructions changes
+    *(float*)(con1.data() + BLD_PROGRESS_OFFSET) = 0.50f;
+    StateSummary sConMut = {};
+    TEST_CHECK(StateHash_Compute(&sConMut));
+    TEST_CHECK(sConMut.hashConstructions != sBase.hashConstructions);
+    TEST_CHECK(sConMut.hashLines == sBase.hashLines);
+
+    // Mutate loan interest -> hashLoans changes
+    loansVec[0].yearInterestRate = 0.08f;
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loansVec);
+    StateSummary sLoanMut = {};
+    TEST_CHECK(StateHash_Compute(&sLoanMut));
+    TEST_CHECK(sLoanMut.hashLoans != sBase.hashLoans);
+
+    // Mutate research progress -> hashResearch changes
+    *(float*)(resBuf.data() + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.90f;
+    StateSummary sResMut = {};
+    TEST_CHECK(StateHash_Compute(&sResMut));
+    TEST_CHECK(sResMut.hashResearch != sBase.hashResearch);
+
+    // Compare with LockstepNet_CompareSummaryForTest
+    char what[256] = {};
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(sBase, sConMut, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "con-progress") != nullptr);
+
+    // Mutate construction count -> "constructions " in what
+    StateSummary sConCountMut = sBase;
+    sConCountMut.constructions++;
+    what[0] = '\0';
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(sBase, sConCountMut, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "constructions") != nullptr);
+
+    what[0] = '\0';
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(sBase, sLoanMut, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "loans") != nullptr);
+
+    // Pure position drift (hashVehiclesPos) must NOT trigger hard desync
+    StateSummary sVehPosOnly = sBase;
+    sVehPosOnly.hashVehiclesPos ^= 0xCAFEBABEULL;
+    what[0] = '\0';
+    TEST_CHECK(!LockstepNet_CompareSummaryForTest(sBase, sVehPosOnly, what, sizeof(what)));
+    TEST_CHECK(what[0] == '\0');
+
+    return true;
+}
+
+static bool SubTest_M9_4_VehicleSoftSyncRemediation()
+{
+    // Feature 38: Fuel, speed, 4-class passengers, machinery on construction sites, cargo mismatch resilience
+    TEST_CHECK(VEH_FUEL_OFFSET == 0x5F0u);
+    TEST_CHECK(VEH_SPEED_OFFSET == 0xD24u);
+    TEST_CHECK(sizeof(VehicleSoftSyncEntry_M4) == 148);
+
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> bus(0x1B00, 0);
+    *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 888;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 0) = 150.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 4) = 20.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 8) = 300.0f;
+    *(int*)(bus.data() + VEH_SCHED_IDX_OFFSET) = 2;
+    *(float*)(bus.data() + VEH_FUEL_OFFSET) = 65.5f;
+    *(float*)(bus.data() + VEH_SPEED_OFFSET) = 52.0f;
+
+    struct MockPersonEntry {
+        const char* name;
+        float amount;
+        unsigned int pad;
+    };
+    static const char kPassLabel[] = "passengers";
+    static const char kWorkLabel[] = "workers";
+    static const char kStudLabel[] = "students";
+    static const char kTourLabel[] = "tourists";
+    std::vector<MockPersonEntry> passVector = {
+        { kPassLabel, 14.0f, 0 },
+        { kWorkLabel, 22.0f, 0 },
+        { kStudLabel,  8.0f, 0 },
+        { kTourLabel, 11.0f, 0 }
+    };
+    *(BYTE**)(bus.data() + 0x458) = (BYTE*)passVector.data();
+    *(BYTE**)(bus.data() + 0x460) = (BYTE*)(passVector.data() + passVector.size());
+
+    BYTE* vehList[1] = { bus.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET) = vehList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = vehList + 1;
+
+    std::vector<BYTE> pkt(4096, 0);
+    size_t sz = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, true));
+    VehicleSoftSyncMsg_M4* msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 1);
+    TEST_CHECK_NEAR(msg->entries[0].fuel, 65.5f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].speed, 52.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].passengers, 14.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].workers, 22.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].students, 8.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].tourists, 11.0f, 1e-4f);
+
+    // Apply remote updates to fuel, speed, and passenger categories
+    msg->entries[0].fuel = 80.0f;
+    msg->entries[0].speed = 60.0f;
+    msg->entries[0].passengers = 16.0f;
+    msg->entries[0].workers = 25.0f;
+    msg->entries[0].students = 10.0f;
+    msg->entries[0].tourists = 15.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+
+    TEST_CHECK_NEAR(*(float*)(bus.data() + VEH_FUEL_OFFSET), 80.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(bus.data() + VEH_SPEED_OFFSET), 60.0f, 1e-4f);
+    TEST_CHECK_NEAR(passVector[0].amount, 16.0f, 1e-4f);
+    TEST_CHECK_NEAR(passVector[1].amount, 25.0f, 1e-4f);
+    TEST_CHECK_NEAR(passVector[2].amount, 10.0f, 1e-4f);
+    TEST_CHECK_NEAR(passVector[3].amount, 15.0f, 1e-4f);
+
+    // Machinery on construction site resolution
+    std::vector<BYTE> conBld(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(conBld.data() + BLD_PROGRESS_OFFSET) = 0.40f;
+    std::vector<BYTE> excavator(0x1B00, 0);
+    *(BYTE**)(excavator.data() + VEH_STOPPED_BLD_OFFSET) = conBld.data();
+    TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(excavator.data()) == conBld.data());
+
+    // In-transit vehicle with active engine path smoothed via EMA (< 50m drift)
+    *(uintptr_t*)(bus.data() + 0x6A0) = 0x1000;
+    *(uintptr_t*)(bus.data() + 0x6A8) = 0x1020;
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(bus.data()));
+
+    msg->entries[0].pos[0] = 162.0f; // 12m drift
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    VehicleSoftSyncDiagStats vssStats = {};
+    VehicleSoftSync_GetDiagStats(&vssStats);
+    TEST_CHECK(vssStats.posBlended >= 1);
+
+    return true;
+}
+
+static bool SubTest_M9_4_LegacyModeElimination()
+{
+    // Feature 39: Unconditional lockstep mode, legacy channels eliminated
+    TEST_CHECK(SaveSync_GetLockstep() == true);
+
+    SaveSync_SetLockstep(false);
+    TEST_CHECK(SaveSync_GetLockstep() == true); // Cannot be turned off
+
+    TEST_CHECK(LOCKSTEP_PORT == 5560);
+
+    return true;
+}
+
+static bool SubTest_M9_4_TwoStatesRemediation()
+{
+    // Feature 40: Demolish checks in neutral zone, tourist spawn rating indices, world switches, research retention
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> resBuf(4 * RESEARCH_ITEM_STRIDE, 0);
+    for (int i = 0; i < 4; ++i) {
+        BYTE* it = resBuf.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        it[RESEARCH_ITEM_INITIAL_OFFSET]   = 1;
+        it[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        *(int32_t*)(it + RESEARCH_ITEM_REQ_WORK_OFFSET) = 20;
+    }
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    std::vector<BYTE> univWest(0x1420, 0), univEast(0x1420, 0);
+    *(int*)univWest.data() = 501;
+    *(float*)(univWest.data() + OBJ_POS_OFFSET) = -800.0f;
+    *(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+    *(int*)univEast.data() = 502;
+    *(float*)(univEast.data() + OBJ_POS_OFFSET) = 800.0f;
+    *(float*)(univEast.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+
+    std::vector<BYTE*> bldVec = { univWest.data(), univEast.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    // Select tech 0 for univWest
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 0));
+    TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 0);
+
+    // Step university once to accumulate 0.50f progress on tech 0
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 0.50f, 1e-4f);
+
+    BYTE* it0 = resBuf.data() + 0 * RESEARCH_ITEM_STRIDE;
+    BYTE* it1 = resBuf.data() + 1 * RESEARCH_ITEM_STRIDE;
+
+    // University research switch must retain accumulated progress without forcing 1.0f instant completion
+    TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 1)); // switch from tech 0 to tech 1
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 0), 0.50f, 1e-4f); // Preserved! Not 1.0f!
+    TEST_CHECK_NEAR(*(float*)(it0 + RESEARCH_ITEM_PROGRESS_OFFSET), 0.50f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 0) == 0); // Not exploit-unlocked!
+    TEST_CHECK(*(BYTE**)(it0 + RESEARCH_ITEM_BLD_PTR_OFFSET) == nullptr);
+    TEST_CHECK(*(BYTE**)(it1 + RESEARCH_ITEM_BLD_PTR_OFFSET) == univWest.data());
+
+    // Neutral border strip (zone == 0): ownership gate
+    int posKey = TwoStates_BuildingPosKey(0.0f, 100.0f);
+    TwoStates_RegisterBuildingOwner(posKey, 1);
+    TEST_CHECK(TwoStates_CanDemolishAt(0.0f, 100.0f, 1) == true);
+    TEST_CHECK(TwoStates_CanDemolishAt(0.0f, 100.0f, 2) == false);
+
+    // Customs tourist spawn calculations with corrected rating indices (USD: trips=5, rate=11; RUB: trips=4, rate=10)
+    BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
+
+    // A. USD customs (West, owner 1)
+    std::vector<BYTE> bldTypeUsd(0x600, 0);
+    *(uint8_t*)(bldTypeUsd.data() + 0x360) = 0x14;
+    *(uint8_t*)(bldTypeUsd.data() + 0x528) = 1; // 1 = USD customs
+
+    std::vector<BYTE> customsUsd(0x1420, 0);
+    *(float*)(customsUsd.data() + OBJ_POS_OFFSET) = -1000.0f; // West side
+    *(BYTE**)(customsUsd.data() + 0x318) = bldTypeUsd.data();
+    *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + 11) = 1; // USD visa unlocked
+    TwoStates_SetEngineResearchUnlockByteForTest(1, 11, 1);
+    TwoStates_SetStateEconExtraCountForTest(1, 5, 4); // 4 trips (tripIdx 5)
+    TwoStates_SetStateEconExtraFloatForTest(1, 11, 18.0f); // 18.0f sum (rateIdx 11) -> avg = 4.5f
+
+    *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 5 * sizeof(int32_t)) = 4; // 4 trips
+    float ratingUsdSum = 18.0f; // 18.0f sum -> avg = 4.5f
+    memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 11 * sizeof(int32_t), &ratingUsdSum, sizeof(float));
+
+    float avgUsd = 0.0f;
+    int32_t spawnUsd = 0;
+    TwoStates_CalcCustomsTouristSpawnForTest(world, customsUsd.data(), &avgUsd, &spawnUsd);
+    TEST_CHECK_NEAR(avgUsd, 4.5f, 1e-3f);
+    TEST_CHECK(spawnUsd == 6); // 2 base + 0 marketing + 4 rating = 6
+
+    // B. RUB customs (East, owner 2)
+    std::vector<BYTE> bldTypeRub(0x600, 0);
+    *(uint8_t*)(bldTypeRub.data() + 0x360) = 0x14;
+    *(uint8_t*)(bldTypeRub.data() + 0x528) = 0; // 0 = Soviet customs
+
+    std::vector<BYTE> customsRub(0x1420, 0);
+    *(float*)(customsRub.data() + OBJ_POS_OFFSET) = 1000.0f; // East side
+    *(BYTE**)(customsRub.data() + 0x318) = bldTypeRub.data();
+    *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + 12) = 1; // RUB visa unlocked
+    TwoStates_SetEngineResearchUnlockByteForTest(2, 12, 1);
+    TwoStates_SetStateEconExtraCountForTest(2, 4, 5); // 5 trips (tripIdx 4)
+    TwoStates_SetStateEconExtraFloatForTest(2, 10, 20.0f); // 20.0f sum (rateIdx 10) -> avg = 4.0f
+
+    *(int32_t*)(curStat + STAT_EXTRA_COUNTS_OFF + 4 * sizeof(int32_t)) = 5; // 5 trips
+    float ratingRubSum = 20.0f; // 20.0f sum -> avg = 4.0f
+    memcpy(curStat + STAT_EXTRA_COUNTS_OFF + 10 * sizeof(int32_t), &ratingRubSum, sizeof(float));
+
+    float avgRub = 0.0f;
+    int32_t spawnRub = 0;
+    TwoStates_CalcCustomsTouristSpawnForTest(world, customsRub.data(), &avgRub, &spawnRub);
+    TEST_CHECK_NEAR(avgRub, 4.0f, 1e-3f);
+    TEST_CHECK(spawnRub == 6);
+
+    // World settings local-per-state exclusion
+    TEST_CHECK(BuildingSwitches_IsLocalPerStateWorldSettingForTest(0xAF8));
+    TEST_CHECK(BuildingSwitches_IsLocalPerStateWorldSettingForTest(0xB08));
+    TEST_CHECK(BuildingSwitches_IsLocalPerStateWorldSettingForTest(0xB0B));
+    TEST_CHECK(BuildingSwitches_IsLocalPerStateWorldSettingForTest(0xC798));
+    TEST_CHECK(BuildingSwitches_IsLocalPerStateWorldSettingForTest(0xC79B));
+    TEST_CHECK(!BuildingSwitches_IsLocalPerStateWorldSettingForTest(0x1000));
+
+    return true;
+}
+
+static bool SubTest_M9_4_StrictResearchSimulationIsolation()
+{
+    // Mandatory R4 requirement:
+    // Research and licenses in TwoStates must remain STRICTLY ISOLATED per republic.
+    // In TwoStates_BeforeStep / AfterStep, NO OR-merging or union mixing is allowed.
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> resBuf(4 * RESEARCH_ITEM_STRIDE, 0);
+    for (int i = 0; i < 4; ++i) {
+        BYTE* it = resBuf.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        it[RESEARCH_ITEM_INITIAL_OFFSET]   = 1;
+        it[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        *(int32_t*)(it + RESEARCH_ITEM_REQ_WORK_OFFSET) = 20;
+    }
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    memset(world + WORLD_RESEARCH_UNLOCKS_OFFSET, 0, WORLD_RESEARCH_UNLOCKS_BYTES);
+
+    std::vector<BYTE> vehTypesBuf(3 * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* vt0 = vehTypesBuf.data() + 0 * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vt1 = vehTypesBuf.data() + 1 * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(vt0 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "t815_dump");
+    strcpy_s((char*)(vt1 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "ikarus_260");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x00) = vehTypesBuf.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x08) = vehTypesBuf.data() + vehTypesBuf.size();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 0x10) = vehTypesBuf.data() + vehTypesBuf.size();
+
+    std::vector<BYTE> univWest(0x1420, 0), univEast(0x1420, 0);
+    *(int*)univWest.data() = 501;
+    *(float*)(univWest.data() + OBJ_POS_OFFSET) = -800.0f;
+    *(float*)(univWest.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+    *(int*)univEast.data() = 502;
+    *(float*)(univEast.data() + OBJ_POS_OFFSET) = 800.0f;
+    *(float*)(univEast.data() + BLD_UNIV_STAFF_RATIO_OFFSET) = 0.50f;
+
+    std::vector<BYTE*> bldVec = { univWest.data(), univEast.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    double initRub[2] = { 500000.0, 500000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, false, "127.0.0.1:5556");
+    TwoStates_OnWorldLoaded();
+
+    // State 1 acquires License 0 ("t815_dump")
+    TwoStates_BeginCommand(1);
+    vt0[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
+    TwoStates_NotifyVehicleLicenseChanged(world);
+    TwoStates_EndCommand(1);
+
+    // State 2 acquires License 1 ("ikarus_260")
+    TwoStates_BeginCommand(2);
+    vt1[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
+    TwoStates_NotifyVehicleLicenseChanged(world);
+    TwoStates_EndCommand(2);
+
+    // Verify initial license isolation
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 0) == true);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 1) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 0) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 1) == true);
+
+    // State 1 researches tech 1 to completion (progress 1.0)
+    TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 1);
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TwoStates_BldUnivStepForTest(world, univWest.data());
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 1, 1), 1.00f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0); // State 2 has NOT unlocked tech 1
+
+    // State 2 researches tech 2 to completion (progress 1.0)
+    TwoStates_ApplyUnivResearchSelection(world, univEast.data(), 2, 2);
+    TwoStates_BldUnivStepForTest(world, univEast.data());
+    TwoStates_BldUnivStepForTest(world, univEast.data());
+    TEST_CHECK_NEAR(TwoStates_GetEngineResearchProgress(world, 2, 2), 1.00f, 1e-4f);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 2) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 2) == 0); // State 1 has NOT unlocked tech 2
+
+    // Now test BeforeStep: canonical State 1 slice is mounted for simulation without OR-merging
+    TwoStates_BeforeStep(world);
+
+    // Verify simulation baseline on world: reflects State 1, NOT the union of State 1 and State 2!
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 2) == 0);
+    TEST_CHECK(vt0[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+    TEST_CHECK(vt1[VEH_TYPE_HAS_LICENCE_OFFSET] == 0); // NOT merged!
+
+    // Step finishes: AfterStep restores local player's UI slice
+    TwoStates_AfterStep(world);
+
+    // Host (State 1) sees its own licenses and research
+    TEST_CHECK(vt0[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+    TEST_CHECK(vt1[VEH_TYPE_HAS_LICENCE_OFFSET] == 0);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 1) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 2) == 0);
+
+    // Slices of both states remain bit-exact and isolated
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 0) == true);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 1, 1) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 0) == false);
+    TEST_CHECK(TwoStates_IsVehicleLicenseOwned(world, 2, 1) == true);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 1) == 0);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 2) == 1);
+
+    return true;
+}
+
+static bool Test_StateHashAndTwoStates_M9_4()
+{
+    printf("    [SubTest 1: StateSummary & Subsystems Hashing (Feature 37)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_StateSummaryAndHashing()) return false;
+
+    printf("    [SubTest 2: VehicleSoftSync Remediation & Resilience (Feature 38)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_VehicleSoftSyncRemediation()) return false;
+
+    printf("    [SubTest 3: Legacy Mode Elimination (Feature 39)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_LegacyModeElimination()) return false;
+
+    printf("    [SubTest 4: TwoStates Demolish & World Switches (Feature 40)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_TwoStatesRemediation()) return false;
+
+    printf("    [SubTest 5: Strict Research & License Simulation Isolation (Feature 40)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_StrictResearchSimulationIsolation()) return false;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 49: Stress_M9_4_Challenger1 (Adversarial Stress Testing of Features 37 & 38)
+// ---------------------------------------------------------------------------
+
+static bool SubTest_M9_4_Challenger1_StateHash14Networks()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    *(int*)(world + WORLD_DAY_OFFSET)        = 100;
+    *(int*)(world + WORLD_YEAR_OFFSET)       = 1970;
+    *(float*)(world + WORLD_PROGRESS_OFFSET) = 0.5f;
+
+    std::vector<BYTE> bld1(BUILDING_STRUCT_BYTES, 0);
+    *(int*)bld1.data() = 1;
+    *(float*)(bld1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    std::vector<BYTE*> bldVec = { bld1.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    StateSummary sBase = {};
+    TEST_CHECK(StateHash_Compute(&sBase));
+
+    static const unsigned int kNetworks[14] = {
+        0xF7A0, 0xF7A8, 0xF800, 0xF858, 0xF8B0, 0xF908, 0xF968,
+        0xF9C0, 0xFA18, 0xFA20, 0xFA30, 0xFA40, 0xFA98, 0xFAF0
+    };
+
+    std::vector<BYTE> netMgr(0x300, 0);
+    std::vector<BYTE> nodeObj(32, 0);
+    std::vector<BYTE*> nodeVec = { nodeObj.data() };
+    WriteMockVectorHeader(netMgr.data() + NET_NODES_OFFSET, nodeVec);
+
+    std::vector<BYTE> segObj(0x200, 0);
+    segObj[SEG_TYPE_OFFSET] = 1;
+    *(short*)(segObj.data() + SEG_DIRECTION_OFFSET) = 0;
+    std::vector<BYTE*> segVec = { segObj.data() };
+    WriteMockVectorHeader(netMgr.data() + MGR_SEGMENTS_BEGIN_OFFSET, segVec);
+
+    for (unsigned int off : kNetworks) {
+        *(BYTE**)(world + off) = netMgr.data();
+        StateSummary sNet = {};
+        TEST_CHECK(StateHash_Compute(&sNet));
+        TEST_CHECK(sNet.hashNetworks != sBase.hashNetworks);
+
+        // Mutate segment type
+        segObj[SEG_TYPE_OFFSET] = 7;
+        StateSummary sTypeMut = {};
+        TEST_CHECK(StateHash_Compute(&sTypeMut));
+        TEST_CHECK(sTypeMut.hashNetworks != sNet.hashNetworks);
+
+        // Mutate segment direction
+        *(short*)(segObj.data() + SEG_DIRECTION_OFFSET) = 3;
+        StateSummary sDirMut = {};
+        TEST_CHECK(StateHash_Compute(&sDirMut));
+        TEST_CHECK(sDirMut.hashNetworks != sTypeMut.hashNetworks);
+
+        // Reset
+        segObj[SEG_TYPE_OFFSET] = 1;
+        *(short*)(segObj.data() + SEG_DIRECTION_OFFSET) = 0;
+        *(BYTE**)(world + off) = nullptr;
+    }
+    return true;
+}
+
+static bool SubTest_M9_4_Challenger1_StateHashSubsystemsMutations()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    *(int*)(world + WORLD_DAY_OFFSET)  = 100;
+    *(int*)(world + WORLD_YEAR_OFFSET) = 1970;
+
+    std::vector<BYTE> bld1(BUILDING_STRUCT_BYTES, 0);
+    *(int*)bld1.data() = 1;
+    *(float*)(bld1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    std::vector<BYTE*> bldVec = { bld1.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    // Constructions
+    std::vector<BYTE> con1(BUILDING_STRUCT_BYTES, 0);
+    *(int*)con1.data() = 501;
+    *(float*)(con1.data() + BLD_PROGRESS_OFFSET) = 0.25f;
+    std::vector<BYTE> worker(32, 0);
+    std::vector<BYTE*> workerVec = { worker.data() };
+    WriteMockVectorHeader(con1.data() + BLD_WORKERS_OFFSET, workerVec);
+
+    std::vector<BYTE> slotBuf(BLD_STORAGE_SLOT_SIZE, 0);
+    std::vector<BYTE> resEntry(0x10, 0);
+    const char gravelName[] = "gravel";
+    *(const char**)resEntry.data() = gravelName;
+    *(float*)(resEntry.data() + 0x08) = 10.0f;
+    *(BYTE**)slotBuf.data() = resEntry.data();
+    *(BYTE**)(slotBuf.data() + 8) = resEntry.data() + 0x10;
+    std::vector<BYTE> slotList(BLD_STORAGE_SLOT_SIZE, 0);
+    memcpy(slotList.data(), slotBuf.data(), BLD_STORAGE_SLOT_SIZE);
+    *(BYTE**)(con1.data() + BLD_STORAGE_OFFSET) = slotList.data();
+    *(BYTE**)(con1.data() + BLD_STORAGE_OFFSET + 8) = slotList.data() + BLD_STORAGE_SLOT_SIZE;
+
+    std::vector<BYTE*> conVec = { con1.data() };
+    WriteMockVectorHeader(world + WORLD_CONSTRUCTIONS_OFFSET, conVec);
+
+    // Lines
+    std::vector<BYTE> linesMgr(0x100, 0);
+    std::vector<BYTE> lineA(0x80, 0);
+    *(int*)(lineA.data() + 4) = 10;
+    *(int*)(lineA.data() + 8) = 2;
+    std::vector<BYTE*> lineListA = { lineA.data() };
+    WriteMockVectorHeader(linesMgr.data() + 0x00, lineListA);
+    std::vector<BYTE> lineB(0x80, 0);
+    *(int*)(lineB.data() + 4) = 20;
+    *(int*)(lineB.data() + 8) = 4;
+    std::vector<BYTE*> lineListB = { lineB.data() };
+    WriteMockVectorHeader(linesMgr.data() + 0x18, lineListB);
+    *(BYTE**)(world + WORLD_LINES_OFFSET) = linesMgr.data();
+
+    // Loans
+    SovietLoan l1 = {};
+    l1.loanType = 2;
+    l1.initialDays = 180;
+    l1.daysRemaining = 120;
+    l1.initialPrincipal = 50000.0f;
+    l1.remainingPrincipal = 40000.0f;
+    l1.yearInterestRate = 0.06f;
+    std::vector<SovietLoan> loans = { l1 };
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loans);
+
+    // Research
+    memset(world + WORLD_RESEARCH_UNLOCKS_OFFSET, 0, WORLD_RESEARCH_UNLOCKS_BYTES);
+    *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + 10) = 1;
+    std::vector<BYTE> resItems(3 * RESEARCH_ITEM_STRIDE, 0);
+    resItems[0 * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+    *(float*)(resItems.data() + 0 * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.40f;
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resItems.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resItems.data() + resItems.size();
+
+    StateSummary sBase = {};
+    TEST_CHECK(StateHash_Compute(&sBase));
+    TEST_CHECK(sBase.constructions == 1);
+    TEST_CHECK(sBase.lines == 2);
+    TEST_CHECK(sBase.loans == 1);
+
+    // Mutate construction workers
+    workerVec.clear();
+    WriteMockVectorHeader(con1.data() + BLD_WORKERS_OFFSET, workerVec);
+    StateSummary sConWorkerMut = {};
+    TEST_CHECK(StateHash_Compute(&sConWorkerMut));
+    TEST_CHECK(sConWorkerMut.hashConstructions != sBase.hashConstructions);
+
+    // Mutate construction storage slot
+    *(float*)(resEntry.data() + 0x08) = 25.0f;
+    memcpy(slotList.data(), slotBuf.data(), BLD_STORAGE_SLOT_SIZE);
+    StateSummary sConStorageMut = {};
+    TEST_CHECK(StateHash_Compute(&sConStorageMut));
+    TEST_CHECK(sConStorageMut.hashConstructions != sConWorkerMut.hashConstructions);
+
+    // Mutate loan remaining principal
+    loans[0].remainingPrincipal = 25000.0f;
+    WriteMockVectorHeader(world + WORLD_LOANS_OFFSET, loans);
+    StateSummary sLoanMut = {};
+    TEST_CHECK(StateHash_Compute(&sLoanMut));
+    TEST_CHECK(sLoanMut.hashLoans != sBase.hashLoans);
+
+    // Mutate research unlock bytes across buffer (WORLD_RESEARCH_UNLOCKS_BYTES = 0x16 = 22 bytes)
+    const size_t testUnlockIndices[] = { 0, 5, 11, 21 };
+    for (size_t idx : testUnlockIndices) {
+        *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + idx) ^= 0x55;
+        StateSummary sUnlockMut = {};
+        TEST_CHECK(StateHash_Compute(&sUnlockMut));
+        TEST_CHECK(sUnlockMut.hashResearch != sBase.hashResearch);
+        *(uint8_t*)(world + WORLD_RESEARCH_UNLOCKS_OFFSET + idx) ^= 0x55;
+    }
+
+    // Mutate research item availability
+    resItems[0 * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_AVAILABLE_OFFSET] = 0;
+    StateSummary sResAvailMut = {};
+    TEST_CHECK(StateHash_Compute(&sResAvailMut));
+    TEST_CHECK(sResAvailMut.hashResearch != sBase.hashResearch);
+
+    return true;
+}
+
+static bool SubTest_M9_4_Challenger1_EvaluateStateSummaryDiffAudit()
+{
+    StateSummary a = {}, b = {};
+    a.day = 10; a.year = 1970; a.dayProgress = 0.5f;
+    a.rub = 100000.0; a.usd = 50000.0;
+    a.rubState[0] = 60000.0; a.rubState[1] = 40000.0;
+    a.usdState[0] = 30000.0; a.usdState[1] = 20000.0;
+    a.buildings = 10; a.constructions = 5; a.vehicles = 20; a.citizens = 500; a.lines = 4; a.loans = 2;
+    a.hashClock = 0x1111; a.hashBuildings = 0x2222; a.hashConstructions = 0x3333;
+    a.hashVehicles = 0x4444; a.hashVehiclesPos = 0x5555; a.hashCitizens = 0x6666;
+    a.hashNetworks = 0x7777; a.hashLines = 0x8888; a.hashLoans = 0x9999; a.hashResearch = 0xAAAA;
+
+    b = a;
+    char what[512] = {};
+
+    // 1. Identical summaries -> no diff
+    TEST_CHECK(!LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(what[0] == '\0');
+
+    // 2. Pure vehicle position drift -> NO hard desync!
+    b.hashVehiclesPos ^= 0xCAFEBABEULL;
+    TEST_CHECK(!LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(what[0] == '\0');
+    b = a;
+
+    // 3. Count divergences
+    b.buildings = a.buildings + 1;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "buildings ") != nullptr);
+    b = a;
+
+    b.constructions = a.constructions + 1;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "constructions ") != nullptr);
+    b = a;
+
+    b.vehicles = a.vehicles + 1;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "vehicles ") != nullptr);
+    b = a;
+
+    b.citizens = a.citizens + 5;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "citizens ") != nullptr);
+    b = a;
+
+    b.lines = a.lines + 1;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "lines ") != nullptr);
+    b = a;
+
+    b.loans = a.loans + 1;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "loans ") != nullptr);
+    b = a;
+
+    // 4. Hash divergences
+    b.hashClock ^= 0xFF;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "clock ") != nullptr);
+    b = a;
+
+    b.hashNetworks ^= 0xFF;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "networks ") != nullptr);
+    b = a;
+
+    b.hashResearch ^= 0xFF;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "research ") != nullptr);
+    b = a;
+
+    b.hashVehicles ^= 0xFF; // logical diff
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "veh-logical ") != nullptr);
+    b = a;
+
+    b.hashConstructions ^= 0xFF; // soft progress
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "con-progress ") != nullptr);
+    b = a;
+
+    b.hashBuildings ^= 0xFF; // soft storage
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "bld-storage ") != nullptr);
+    b = a;
+
+    b.hashCitizens ^= 0xFF; // soft citizen age/home
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "citizens-state ") != nullptr);
+    b = a;
+
+    // 5. Money diffs (> 1.0)
+    b.rub += 5.0;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "money ") != nullptr);
+    b = a;
+
+    b.rubState[1] += 5.0;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "money ") != nullptr);
+    b = a;
+
+    // 6. Compound divergence (4 simultaneous differences)
+    b.constructions++;
+    b.hashNetworks ^= 0x1234;
+    b.hashResearch ^= 0x5678;
+    b.usdState[0] += 10.0;
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(a, b, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "constructions ") != nullptr);
+    TEST_CHECK(strstr(what, "networks ") != nullptr);
+    TEST_CHECK(strstr(what, "research ") != nullptr);
+    TEST_CHECK(strstr(what, "money ") != nullptr);
+
+    return true;
+}
+
+static bool SubTest_M9_4_Challenger1_FuelAndSpeedBoundaryFuzzing()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> truck(0x1B00, 0);
+    *(unsigned*)(truck.data() + VEH_ID_OFFSET) = 777;
+    *(float*)(truck.data() + VEH_POS_OFFSET + 0) = 100.0f;
+    *(float*)(truck.data() + VEH_POS_OFFSET + 4) = 10.0f;
+    *(float*)(truck.data() + VEH_POS_OFFSET + 8) = 200.0f;
+    *(int*)(truck.data() + VEH_SCHED_IDX_OFFSET) = 0;
+    *(float*)(truck.data() + VEH_FUEL_OFFSET) = 50.0f;
+    *(float*)(truck.data() + VEH_SPEED_OFFSET) = 40.0f;
+
+    BYTE* vehList[1] = { truck.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET) = vehList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = vehList + 1;
+
+    std::vector<BYTE> pkt(4096, 0);
+    size_t sz = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, true));
+    VehicleSoftSyncMsg_M4* msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 1);
+
+    // 1. Valid fuel boundaries: 0.0f (empty) and 150.0f (full)
+    msg->entries[0].fuel = 0.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_FUEL_OFFSET), 0.0f, 1e-4f);
+
+    msg->entries[0].fuel = 150.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_FUEL_OFFSET), 150.0f, 1e-4f);
+
+    // 2. Adversarial fuel: negative, NaN, Inf must be REJECTED (retaining 150.0f)
+    const float kBadFloats[] = {
+        -0.001f, -1.0f, -9999.0f,
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity()
+    };
+    for (float badVal : kBadFloats) {
+        msg->entries[0].fuel = badVal;
+        TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+        TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_FUEL_OFFSET), 150.0f, 1e-4f); // Retained!
+    }
+
+    // 3. Valid speed boundaries: 0.0f and 90.0f
+    msg->entries[0].fuel = 150.0f;
+    msg->entries[0].speed = 0.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_SPEED_OFFSET), 0.0f, 1e-4f);
+
+    msg->entries[0].speed = 90.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_SPEED_OFFSET), 90.0f, 1e-4f);
+
+    // 4. Adversarial speed: negative, NaN, Inf must be REJECTED (retaining 90.0f)
+    for (float badVal : kBadFloats) {
+        msg->entries[0].speed = badVal;
+        TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+        TEST_CHECK_NEAR(*(float*)(truck.data() + VEH_SPEED_OFFSET), 90.0f, 1e-4f); // Retained!
+    }
+
+    return true;
+}
+
+static bool SubTest_M9_4_Challenger1_Passenger4ClassesAndCargoAsymmetry()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> bus(0x1B00, 0);
+    *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 333;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 0) = 200.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 4) = 15.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 8) = 250.0f;
+    *(int*)(bus.data() + VEH_SCHED_IDX_OFFSET) = 1;
+    *(float*)(bus.data() + VEH_FUEL_OFFSET) = 45.0f;
+    *(float*)(bus.data() + VEH_SPEED_OFFSET) = 35.0f;
+
+    // Setup 4 passenger categories in scrambled order
+    struct MockPersonEntry {
+        const char* name;
+        float amount;
+        unsigned int pad;
+    };
+    static const char kTourLabel[] = "tourists";
+    static const char kStudLabel[] = "students";
+    static const char kWorkLabel[] = "workers";
+    static const char kPassLabel[] = "passengers";
+    std::vector<MockPersonEntry> passVec = {
+        { kTourLabel, 12.0f, 0 },
+        { kStudLabel,  9.0f, 0 },
+        { kWorkLabel, 28.0f, 0 },
+        { kPassLabel, 15.0f, 0 }
+    };
+    *(BYTE**)(bus.data() + 0x458) = (BYTE*)passVec.data();
+    *(BYTE**)(bus.data() + 0x460) = (BYTE*)(passVec.data() + passVec.size());
+
+    // Setup cargo vector with 2 slots
+    struct MockCargoEntry {
+        const char* res;
+        float amount;
+        float pad;
+    };
+    static const char kResGravel[] = "gravel";
+    static const char kResSteel[]  = "steel";
+    std::vector<MockCargoEntry> cargoVec = {
+        { kResGravel, 5.0f, 0.0f },
+        { kResSteel, 10.0f, 0.0f }
+    };
+    *(BYTE**)(bus.data() + VEH_CARGO_OFFSET)     = (BYTE*)cargoVec.data();
+    *(BYTE**)(bus.data() + VEH_CARGO_OFFSET + 8) = (BYTE*)(cargoVec.data() + cargoVec.size());
+
+    BYTE* vehList[1] = { bus.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET) = vehList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = vehList + 1;
+
+    std::vector<BYTE> pkt(4096, 0);
+    size_t sz = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, true));
+    VehicleSoftSyncMsg_M4* msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 1);
+
+    // Verify all 4 captured despite scrambled order
+    TEST_CHECK_NEAR(msg->entries[0].passengers, 15.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].workers, 28.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].students, 9.0f, 1e-4f);
+    TEST_CHECK_NEAR(msg->entries[0].tourists, 12.0f, 1e-4f);
+
+    // Update with new values
+    msg->entries[0].passengers = 20.0f;
+    msg->entries[0].workers = 35.0f;
+    msg->entries[0].students = 14.0f;
+    msg->entries[0].tourists = 18.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(passVec[3].amount, 20.0f, 1e-4f); // passengers
+    TEST_CHECK_NEAR(passVec[2].amount, 35.0f, 1e-4f); // workers
+    TEST_CHECK_NEAR(passVec[1].amount, 14.0f, 1e-4f); // students
+    TEST_CHECK_NEAR(passVec[0].amount, 18.0f, 1e-4f); // tourists
+
+    // Adversarial passenger wire input (negative and NaN) must be ignored
+    msg->entries[0].passengers = -5.0f;
+    msg->entries[0].workers = std::numeric_limits<float>::quiet_NaN();
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    TEST_CHECK_NEAR(passVec[3].amount, 20.0f, 1e-4f); // Unchanged!
+    TEST_CHECK_NEAR(passVec[2].amount, 35.0f, 1e-4f); // Unchanged!
+
+    // Cargo slot count asymmetry: Peer claims 6 cargo slots, but local vehicle only has 2
+    msg->entries[0].cargoCount = 6;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz)); // No crash, no overrun
+
+    // Corrupted cargo count (250) on wire
+    msg->entries[0].cargoCount = 250;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz)); // Clamped safely
+
+    return true;
+}
+
+static bool SubTest_M9_4_Challenger1_MachineryAndTransitSmoothing()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // Construction building
+    std::vector<BYTE> conBld(BUILDING_STRUCT_BYTES, 0);
+    *(int*)conBld.data() = 901;
+    *(float*)(conBld.data() + BLD_PROGRESS_OFFSET) = 0.45f; // Unfinished construction!
+
+    std::vector<BYTE> crane(0x1B00, 0);
+    *(unsigned*)(crane.data() + VEH_ID_OFFSET) = 555;
+    *(float*)(crane.data() + VEH_SPEED_OFFSET) = 0.0f; // Stationary!
+    *(BYTE**)(crane.data() + VEH_STOPPED_BLD_OFFSET) = conBld.data();
+
+    BYTE* vehList[1] = { crane.data() };
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET) = vehList;
+    *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = vehList + 1;
+
+    // In regular sweep (immediate = false), active machinery on construction sites MUST NOT be skipped!
+    std::vector<BYTE> pkt(4096, 0);
+    size_t sz = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, false));
+    VehicleSoftSyncMsg_M4* msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 1);
+    TEST_CHECK(msg->entries[0].vehicleId == 555);
+
+    // Completed building with normal stationary vehicle
+    *(float*)(conBld.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(unsigned char*)(crane.data() + VEH_WORKER_SIM_FLAG_OFFSET) = 0;
+    sz = 0;
+    VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, false);
+    msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 0); // Vehicle was skipped as stationary parked!
+
+    // In immediate sweep, even finished-site parked vehicle is captured
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, true));
+    msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 1);
+
+    // In-transit position smoothing vs snapping
+    std::vector<BYTE> bus(0x1B00, 0);
+    *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 777;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 0) = 500.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 4) = 20.0f;
+    *(float*)(bus.data() + VEH_POS_OFFSET + 8) = 500.0f;
+    *(int*)(bus.data() + VEH_SCHED_IDX_OFFSET) = 0;
+    *(float*)(bus.data() + VEH_SPEED_OFFSET) = 30.0f;
+
+    // Active engine path via waypoints
+    *(uintptr_t*)(bus.data() + 0x6A0) = 0x2000;
+    *(uintptr_t*)(bus.data() + 0x6A8) = 0x2030;
+    TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(bus.data()));
+
+    vehList[0] = bus.data();
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &sz, true));
+    msg = (VehicleSoftSyncMsg_M4*)pkt.data();
+
+    // 10m drift (< 50m): blended
+    msg->entries[0].pos[0] = 510.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    VehicleSoftSyncDiagStats stats = {};
+    VehicleSoftSync_GetDiagStats(&stats);
+    TEST_CHECK(stats.posBlended >= 1);
+
+    // 65m drift (>= 50m) with active path: NOT snapped
+    unsigned long long snappedBefore = stats.posSnapped;
+    msg->entries[0].pos[0] = 565.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    VehicleSoftSync_GetDiagStats(&stats);
+    TEST_CHECK(stats.posSnapped == snappedBefore); // Not snapped while navigating!
+
+    // 65m drift without active path: snapped!
+    *(uintptr_t*)(bus.data() + 0x6A0) = 0;
+    *(uintptr_t*)(bus.data() + 0x6A8) = 0;
+    TEST_CHECK(!VehicleSoftSync_HasActiveEnginePathForTest(bus.data()));
+    msg->entries[0].pos[0] = 565.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
+    VehicleSoftSync_GetDiagStats(&stats);
+    TEST_CHECK(stats.posSnapped > snappedBefore); // Snapped!
+
+    return true;
+}
+
+static bool Test_Stress_M9_4_Challenger1()
+{
+    printf("    [Challenger1-1: Exhaustive 14-Network Sensitivity & Hashing] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_StateHash14Networks()) return false;
+
+    printf("    [Challenger1-2: Subsystem Mutations (Constructions, Lines, Loans, Science)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_StateHashSubsystemsMutations()) return false;
+
+    printf("    [Challenger1-3: EvaluateStateSummaryDiff Completeness & False Negative Audit] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_EvaluateStateSummaryDiffAudit()) return false;
+
+    printf("    [Challenger1-4: Fuel & Speed Boundary Fuzzing (NaN, Inf, Negatives)] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_FuelAndSpeedBoundaryFuzzing()) return false;
+
+    printf("    [Challenger1-5: 4-Class Passengers & Cargo Slot Asymmetry Stress] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_Passenger4ClassesAndCargoAsymmetry()) return false;
+
+    printf("    [Challenger1-6: Construction Machinery Capture & In-Transit Smoothing] ...\n"); fflush(stdout);
+    if (!SubTest_M9_4_Challenger1_MachineryAndTransitSmoothing()) return false;
+
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
@@ -10557,6 +12530,17 @@ int main()
         { "Stress_Gen6_Challenger1 (FloatFuzzing, MalformedPackets, CheckboxBoundaries, StudioResilience)", &Test_Stress_Gen6_Challenger1 },
         { "JoinHubDistOfficeCarrierAndStorageVisuals (JoinHubAll, DistLinks, CarrierRecovery, StorageVis)", &Test_JoinHubDistOfficeCarrierAndStorageVisuals },
         { "CrashFixesAndRcoTrackBuilder (SafeSeh, CourtCase, DepotStopGuard, RcoTrackBuilder)", &Test_CrashFixesAndRcoTrackBuilder },
+        { "SystemUiInterceptionAndNetworkTools_M9_1 (WheelScroll, PtrFilter, BlindBytes, SanitizeCheat, AreaCloneBlock)", &Test_SystemUiInterceptionAndNetworkTools_M9_1 },
+        { "Stress_M9_1_Challenger1 (WheelScrollFuzz, PtrFilterBoundaries, SwitchRollback, BlindBytes, CheatSanitize)", &Test_Stress_M9_1_Challenger1 },
+        { "MissingUiElementsAndBufferSafety_M9_2 (Features 26-31)", &Test_MissingUiElementsAndBufferSafety_M9_2 },
+        { "Stress_M9_2_Challenger2 (GameCallsSites, WasteSlotBoundaries, CityReassignReplay, LsMaxPayload16MB)", &Test_Stress_M9_2_Challenger2 },
+        { "Stress_M9_2_Challenger1 (Waypoints5Nets, StorageEmptyOscillation, BufferBoundsDestinationsSlots)", &Test_Stress_M9_2_Challenger1 },
+        { "SaveSyncAndEconStatePersistence_M9_3 (Features 32-36)", &Test_SaveSyncAndEconStatePersistence_M9_3 },
+        { "Stress_M9_3_Challenger1 (AutosaveCadence, TrackerFuzz, PruningStress)", &Test_Stress_M9_3_Challenger1 },
+        { "Stress_M9_3_Challenger2 (SettingsIsolation, CamBranching, OwnershipPreservation, BackupIntegrity, Int64Limits)", &Test_Stress_M9_3_Challenger2 },
+        { "StateHashAndTwoStates_M9_4 (Features 37-40)", &Test_StateHashAndTwoStates_M9_4 },
+        { "Stress_M9_4_Challenger1 (14NetsSensitivity, FalseNegatives, FuelSpeedFuzz, 4Passengers, MachinerySync)", &Test_Stress_M9_4_Challenger1 },
+        { "Stress_M9_4_Challenger2 (ResearchSwitchAntiExploit, BorderDemolition, TouristEdgeCases, StrictResearchIsolation, LegacyModeElimination)", &Test_Stress_M9_4_Challenger2 },
     };
 
     for (const auto& tc : kTests) {

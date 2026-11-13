@@ -16,6 +16,34 @@
 
 #include "tesmio_plugin.h"
 
+#define PURCHASE_MAX_TRAILERS 16
+
+#pragma pack(push, 1)
+struct PurchaseBuildingRef {
+    int place; // -1: none
+    int id;
+};
+
+struct PurchaseMsg {
+    unsigned kind;        // window kind 1/2 (rubles/dollars), 5/6 licence, 7 blueprint, 0xB auto-replace
+    unsigned typeIndex;   // in world +12840
+    unsigned typeCheck;   // FNV of the type's name
+    unsigned char refill; // realistic: the window asked for its customs houses again
+    unsigned char used;   // from the used-vehicle market
+    unsigned char pad[2];
+    PurchaseBuildingRef depot;    // depot or factory
+    PurchaseBuildingRef customsRub, customsUsd;
+    double rubles, dollars;
+    float avail;
+    int variant;
+    int resIndex;         // category 9 resource index in world +c2b0 (or -1, or target vehicle index for 0xB)
+    unsigned trailers;
+    int trailerVariant[PURCHASE_MAX_TRAILERS];
+    double usedAge, usedAge2;
+    char scriptName[64];
+};
+#pragma pack(pop)
+
 void Purchase_Bind(const TsmHost* host);
 
 // The relay at 810943 (sim_patches): the press read with the caller's context

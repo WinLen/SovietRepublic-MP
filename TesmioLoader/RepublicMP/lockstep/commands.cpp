@@ -25,6 +25,7 @@
 #include "source_slots.h"
 #include "rename.h"
 #include "../session/two_states.h"
+#include "../ui/lang.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include <vector>
@@ -468,7 +469,7 @@ static const char* const kCarriedTools[] = {
 };
 static const char* const kUncarriedTools[] = {
     "vehicle_", "worker_relocate", "building_addsource", "building_copysource", "line_addstop", "second_road", "water_square",
-    "bojka", "christmas_", "join_hub", "terrain_go_there",
+    "bojka", "join_hub", "terrain_go_there",
 };
 // The single-tree tools and the tree demolition brush (brush_tools.cpp): put away only when their routine differs.
 static const char* const kTreeTools[] = { "tree_", "palma", "jungle_", "fjord_", "afgan_", "afghan_", "tallkriak", "leafkriak" };
@@ -482,6 +483,12 @@ bool Commands_IsToolCarriedForTest(const char* name)
     return false;
 }
 
+bool Commands_IsAreaCloneToolBlockedForTest(const char* name)
+{
+    if (!name || !name[0]) return false;
+    return strcmp(name, "area_copy") == 0 || strcmp(name, "area_paste") == 0;
+}
+
 static void PutAwayUncarriedTool()
 {
     __int64* tool = (__int64*)(g_exeBase + 0x9D4F10 + 0xD428);
@@ -492,6 +499,18 @@ static void PutAwayUncarriedTool()
         if (!s[0]) return;
         for (int i = 0; i < 63 && s[i]; i++) name[i] = s[i];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    if (strcmp(name, "area_copy") == 0 || strcmp(name, "area_paste") == 0) {
+        *tool = 0;
+        Logf("republicmp  LOCKSTEP: tool [%s] put away - cloning districts is disabled in co-op", name);
+        static ULONGLONG s_lastToast = 0;
+        ULONGLONG now = GetTickCount64();
+        if (now - s_lastToast > 2000) {
+            s_lastToast = now;
+            TwoStates_AddToast(Tr("⛔ Клонирование районов (копипаст) заблокировано в коопе для предотвращения рассинхрона!",
+                                  "⛔ Area cloning (copy/paste) is disabled in co-op to prevent desync!"), 3);
+        }
         return;
     }
     for (const char* carried : kCarriedTools)
@@ -557,6 +576,11 @@ bool Commands_SanitizeCheatState(BYTE* world)
     }
     if (world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET]) {
         world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET] = 0;
+        changed = true;
+    }
+    if (*(int32_t*)(world + 0xADE8) != 0 || *(float*)(world + 0xADEC) != 0.0f) {
+        *(int32_t*)(world + 0xADE8) = 0;
+        *(float*)(world + 0xADEC) = 0.0f;
         changed = true;
     }
     int32_t subPage = *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET);

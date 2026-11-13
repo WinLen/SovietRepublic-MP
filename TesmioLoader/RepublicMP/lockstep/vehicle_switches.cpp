@@ -7,7 +7,9 @@
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
+#include <math.h>
 #include <string.h>
 #include <vector>
 
@@ -97,7 +99,10 @@ static int g_noiseLogged = 0, g_heapLogged = 0;
 
 static bool Clicked()
 {
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA];
+    float wheel = 0.0f;
+    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
+    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
+           (isfinite(wheel) && wheel != 0.0f);
 }
 
 static bool TakeSnapshot()
@@ -246,6 +251,7 @@ static void Compare(const Snap& s, int kind, bool click)
                     Logf("republicmp  SWITCH: a click changed %s +0x%X to a heap address - not carried", kKindText[kind],
                          offset % kRecordBytes[kind]);
                 }
+                *(unsigned*)(begin + offset) = wa;
                 continue;
             }
             if (!haveRef) {
@@ -276,6 +282,10 @@ void VehicleSwitches_Reset()
     g_taken = false;
     g_snaps.clear();
     g_bytes.clear();
+    for (int i = 0; i < KIND_COUNT; ++i) g_noise[i].clear();
+    g_noiseLogged = g_heapLogged = 0;
+    g_frame = 0;
+    g_epoch = 0;
 }
 
 void VehicleSwitches_Before(bool simBusy)
@@ -334,4 +344,12 @@ bool VehicleSwitches_ApplyCommand(const void* data, size_t size)
     Logf("republicmp  SWITCH: %s of vehicle #%d, %u word(s) from +0x%X%s: %s", kKindText[m.kind], m.vehicle.place, m.count,
          m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");
     return why == nullptr;
+}
+
+bool VehicleSwitches_IsNoiseEmptyForTest()
+{
+    for (int i = 0; i < KIND_COUNT; ++i) {
+        if (!g_noise[i].empty()) return false;
+    }
+    return g_noiseLogged == 0 && g_heapLogged == 0 && g_frame == 0 && g_epoch == 0;
 }

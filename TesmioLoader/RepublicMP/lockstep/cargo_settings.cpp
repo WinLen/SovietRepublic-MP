@@ -9,6 +9,7 @@
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include <algorithm>
+#include <math.h>
 #include <string.h>
 #include <vector>
 
@@ -38,7 +39,9 @@
 #define RESOURCE_STRIDE 0x340
 #define TYPES 0x12840
 #define TYPE_STRIDE 0x9F08
-#define MAX_OBJECTS 8            // per kind
+#ifndef MAX_OBJECTS
+#define MAX_OBJECTS CARGO_SETTINGS_MAX_OBJECTS
+#endif           // per kind
 #define MAX_WINDOWS 4096
 #define MAX_LIST 1000000
 #define MAX_RECORDS 256
@@ -308,7 +311,10 @@ static unsigned long long g_epoch = 0;
 
 static bool Clicked()
 {
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA];
+    float wheel = 0.0f;
+    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
+    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
+           (isfinite(wheel) && wheel != 0.0f);
 }
 
 static bool SortedList(U64 at, std::vector<U64>& out)
@@ -357,7 +363,7 @@ static void Shown(std::vector<Watched>& out)
         U64 objects[2] = {}, parent = 0;
         unsigned kinds[2] = {};
         if (!win || !SafeMemcpyPod(&kinds[0], (const void*)(win + WINDOW_KIND), 4) || !ReadQ(win + WINDOW_OBJECT, objects[0])) continue;
-        if (kinds[0] == PICKER_WINDOW && ReadQ(win + WINDOW_PARENT, parent) && parent) {
+        if ((kinds[0] == PICKER_WINDOW || kinds[0] == 0xC) && ReadQ(win + WINDOW_PARENT, parent) && parent) {
             SafeMemcpyPod(&kinds[1], (const void*)(parent + WINDOW_KIND), 4);
             ReadQ(parent + WINDOW_OBJECT, objects[1]);
         }
@@ -405,7 +411,7 @@ static void Take(const Watched& s, unsigned record, unsigned half, U64 at, const
     if (!allowed) return;
     if (why || !back) {
         const int kindIdx = (s.kind == KIND_LINK) ? 1 : 0;
-        Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s", kRecordText[kindIdx], record, half ? "unloading" : "loading",
+        Logf("republicmp  CARGO: %s %u (%s) of a %s not shared - %s (%s)", kRecordText[kindIdx], record, half ? "unloading" : "loading",
              kObjectText[kindIdx], why ? why : "it could not be put back", back ? "nothing is done" : "it stays on this PC");
         return;
     }

@@ -32,17 +32,6 @@ typedef unsigned __int64 U64;
 #define MAGIC 0x314D414E
 #define CITY_EXT_MAGIC 0x43504F53u
 
-enum {
-    KIND_BUILDING_RENAME = 0,
-    KIND_VEHICLE_RENAME = 1,
-    KIND_CITY = 3,
-    KIND_LINE = 8,
-    KIND_CROSSROAD = 0xA,
-    KIND_CITY_CREATE = 0xC,
-    KIND_CITY_DELETE = 0xD,
-    KIND_RESEARCH = 0xE
-};
-
 static const BYTE kCityCreateExpect[16] = {
     0x48, 0x89, 0x5C, 0x24, 0x10,
     0x48, 0x89, 0x6C, 0x24, 0x18,
@@ -91,6 +80,7 @@ static bool g_suppressNextCityReassign = false;
 
 static bool ApplyCityCreate(const RenameMsg& m);
 static bool ApplyCityDelete(const RenameMsg& m);
+static bool ApplyCityReassign(const RenameMsg& m);
 static int FindCityIndex(void* p);
 
 static __int64 __fastcall H_CityCreate(void* world, float* pos, const unsigned short* name);
@@ -162,6 +152,7 @@ static const char* KindLabel(unsigned kind)
         { KIND_CITY,            "city"      },
         { KIND_LINE,            "line"      },
         { KIND_CROSSROAD,       "crossroad" },
+        { KIND_CITY_REASSIGN,   "city reassign" },
     };
     for (const auto& entry : kLabels) {
         if (entry.kind == kind) return entry.label;
@@ -484,9 +475,36 @@ static void __fastcall H_CityReassignBlds(void* world, float* pos)
         g_suppressNextCityReassign = false;
         return;
     }
+    if (Commands_Capturing() && !g_inReplayCreate) {
+        float px = 0.0f, py = 0.0f, pz = 0.0f;
+        if (pos && SafeReadPod(&px, pos) && SafeReadPod(&py, pos + 1) && SafeReadPod(&pz, pos + 2)) {
+            RenameMsg m;
+            memset(&m, 0, sizeof(m));
+            m.magic = MAGIC;
+            m.kind = KIND_CITY_REASSIGN;
+            EmbedCityPosExt(m, px, py, pz);
+            Commands_Submit(LS_CMD_RENAME, &m, sizeof(m));
+            Logf("republicmp  CITY: captured reassign buildings for city at (%.1f, %.1f, %.1f)", px, py, pz);
+            return;
+        }
+    }
     if (o_cityReassignBlds) {
         o_cityReassignBlds(world, pos);
     }
+}
+
+static bool ApplyCityReassign(const RenameMsg& m)
+{
+    CityPosExt ext{};
+    if (!ReadCityPosExt(m, ext) || !o_cityReassignBlds) return false;
+    U64 world = (U64)World();
+    g_inReplayCreate = true;
+    __try {
+        o_cityReassignBlds((void*)world, ext.pos);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    g_inReplayCreate = false;
+    Logf("republicmp  CITY: reassigned buildings for city at (%.1f, %.1f, %.1f)", ext.pos[0], ext.pos[1], ext.pos[2]);
+    return true;
 }
 
 static bool ApplyCityCreate(const RenameMsg& m)
@@ -631,6 +649,9 @@ bool Rename_ApplyCommand(const void* data, size_t size)
     }
     if (m.kind == KIND_CITY_DELETE) {
         return ApplyCityDelete(m);
+    }
+    if (m.kind == KIND_CITY_REASSIGN) {
+        return ApplyCityReassign(m);
     }
     if (m.kind == KIND_RESEARCH) {
         return TwoStates_ApplyResearchCommand(*(const LsResearchCommand*)m.text);

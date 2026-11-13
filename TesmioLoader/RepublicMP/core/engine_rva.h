@@ -227,6 +227,9 @@
 #ifndef WORLD_SELECTED_TOOL_PTR_OFF
 #define WORLD_SELECTED_TOOL_PTR_OFF 0xD428
 #endif
+#ifndef WORLD_AUTO_REPLACE_MGR_OFFSET
+#define WORLD_AUTO_REPLACE_MGR_OFFSET 0xD440u
+#endif
 #ifndef WORLD_FORCE_TERRAIN_SAVE_OFF
 #define WORLD_FORCE_TERRAIN_SAVE_OFF 0xFC90
 #endif
@@ -793,6 +796,12 @@ struct SovietStatResEntry {
 #ifndef RVA_HELI_REROUTE
 #define RVA_HELI_REROUTE            0x6DE400
 #endif
+#ifndef VEH_FUEL_OFFSET
+#define VEH_FUEL_OFFSET             0x5F0u
+#endif
+#ifndef VEH_SPEED_OFFSET
+#define VEH_SPEED_OFFSET            0xD24u
+#endif
 #ifndef VEH_WORKER_SIM_FLAG_OFFSET
 #define VEH_WORKER_SIM_FLAG_OFFSET  0xD41
 #endif
@@ -1029,6 +1038,21 @@ struct SovietStatResEntry {
 #endif
 #ifndef CIT_PARENT_PTR_OFF
 #define CIT_PARENT_PTR_OFF                  0x0C8
+#endif
+#ifndef NET_NODES_OFFSET
+#define NET_NODES_OFFSET                    0x298u
+#endif
+#ifndef MGR_SEGMENTS_BEGIN_OFFSET
+#define MGR_SEGMENTS_BEGIN_OFFSET           0x2B0u
+#endif
+#ifndef MGR_SEGMENTS_END_OFFSET
+#define MGR_SEGMENTS_END_OFFSET             0x2B8u
+#endif
+#ifndef SEG_TYPE_OFFSET
+#define SEG_TYPE_OFFSET                     0x120u
+#endif
+#ifndef SEG_DIRECTION_OFFSET
+#define SEG_DIRECTION_OFFSET                0x1BCu
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1520,6 +1544,9 @@ static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOA
 #ifndef HUD_MOUSE_LCLICK_EDGE_RVA
 #define HUD_MOUSE_LCLICK_EDGE_RVA           0xA54E91u
 #endif
+#ifndef MOUSE_WHEEL_DELTA_RVA
+#define MOUSE_WHEEL_DELTA_RVA               0xA54EC0u
+#endif
 #ifndef RVA_IAT_CREATE_MANAGED_TEX
 #define RVA_IAT_CREATE_MANAGED_TEX          0x86C4C0u
 #endif
@@ -1764,6 +1791,9 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #ifndef RVA_VEH_BUILD_WAYPOINTS
 #define RVA_VEH_BUILD_WAYPOINTS              0x683240u // void __fastcall(void* veh, uint8_t a2)
 #endif
+#ifndef RVA_SET_AUTO_REPLACE
+#define RVA_SET_AUTO_REPLACE                 0x6148A0u // void __fastcall(void* mgr, void* targetType, void* newType)
+#endif
 #ifndef VEH_DEPOT_SLOT_IDX_OFFSET
 #define VEH_DEPOT_SLOT_IDX_OFFSET            0x0510u   // int32_t depot / construction slot index (-1 when none)
 #endif
@@ -1796,6 +1826,7 @@ static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC750u &&
               RVA_IS_VEHICLE_AT_DEPOT_OR_STOP == 0x3BB580u &&
               RVA_VEH_FIND_PATH == 0x680AC0u &&
-              RVA_VEH_BUILD_WAYPOINTS == 0x683240u,
-              "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, and building copy tool RVAs must match 1.1.1.9 layout");
+              RVA_VEH_BUILD_WAYPOINTS == 0x683240u &&
+              RVA_SET_AUTO_REPLACE == 0x6148A0u,
+              "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, auto replacement RVA, and building copy tool RVAs must match 1.1.1.9 layout");
 

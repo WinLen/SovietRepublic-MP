@@ -68,7 +68,9 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define HOVER_ROAD_NODE_RVA 0x9E45A0   // road node under the cursor
 #define MGR_ROAD_LINK_POINT_OFFSET 0x368
 #define ROAD_NETWORK_OFFSET 0xf7a0      // world+0xf7a0 = DAT_1409e46b0, the road network
+#ifndef NET_NODES_OFFSET
 #define NET_NODES_OFFSET 0x298          // committed nodes: begin, end
+#endif
 #define HOVER_NODE_RVA 0x9E4560  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
 #define HOVER_PORT_BUILDING_RVA 0x9E45B0  // building whose connection port is hovered
 #define HOVER_PORT_INDEX_RVA 0x9E45B8     // that port's index
@@ -95,8 +97,12 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 // The network's committed edges. (+0xaa0/+0xaa8 is only what the local
 // camera sees - lookups there missed every piece the player looked away
 // from; see view_list_scope.h.)
+#ifndef MGR_SEGMENTS_BEGIN_OFFSET
 #define MGR_SEGMENTS_BEGIN_OFFSET 0x2b0
+#endif
+#ifndef MGR_SEGMENTS_END_OFFSET
 #define MGR_SEGMENTS_END_OFFSET 0x2b8
+#endif
 // Upgrade branch of the commit (FUN_140518a80 line 303).
 #define MGR_UPG_SEGMENT_OFFSET 0x380
 #define MGR_UPG_RANGE_START_OFFSET 0x388
@@ -115,7 +121,9 @@ static const unsigned int kHoverPtrRvas[] = { 0x9E45E8, 0x9E4560, 0x9E4558, 0x9E
 #define SEG_POINTS_END_OFFSET 0x10
 #define SEG_NODE0_OFFSET 0x20
 #define SEG_NODE1_OFFSET 0x28
+#ifndef SEG_TYPE_OFFSET
 #define SEG_TYPE_OFFSET 0x120
+#endif
 #define SEG_VARIANT_OFFSET 0x124
 #define SEG_OWNER_OFFSET 0x138
 #define EDGE_PLANNED_OFFSET 0x140
@@ -760,6 +768,11 @@ int RoadSync_GetPlannedSegmentOwner(__int64 seg)
     if (ReadSegOwnerCoords(seg, &mx, &mz))
         return TwoStates_GetBuildingOwner(0, mx, mz);
     return 0;
+}
+
+void RoadSync_ClearPlannedSegments()
+{
+    g_plannedSegOwner.clear();
 }
 
 static void SnapshotManagerSegments(__int64 manager, std::vector<__int64>& out)
@@ -1929,7 +1942,7 @@ static bool ApplyDemolishPieces(const RoadSyncDemolishMsg& m, bool* outRemoved)
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
     if (!info || !info->enabled) return false;
     bool ok = true;
-    for (int i = 0; i < m.pieceCount && i < 8; i++) {
+    for (int i = 0; i < m.pieceCount && i < ROAD_SYNC_MAX_DEMOLISH_PIECES; i++) {
         RoadSyncDemolishMsg one = {};
         one.seq = m.seq;
         one.category = m.category;
@@ -1979,7 +1992,7 @@ static __int64 FindDemolishPiece(const RoadSyncDemolishMsg& m)
         __int64 manager = *(__int64*)(GetWorldThisPtr() + info->managerOffset);
         if (!manager) return 0;
         if (m.pieceCount > 0) {
-            for (int i = 0; i < m.pieceCount && i < 8; i++) {
+            for (int i = 0; i < m.pieceCount && i < ROAD_SYNC_MAX_DEMOLISH_PIECES; i++) {
                 bool reversed = false;
                 __int64 seg = FindLocalSegment(manager, m.pieces[i], &reversed);
                 if (seg) return seg;
@@ -2532,7 +2545,7 @@ int RoadSync_SendDemolish(int category, const float cursor[3], const float* rang
         memcpy(s_item.dem.rangeB, rangeB, sizeof(s_item.dem.rangeB));
     }
     if (pieces && pieceCount > 0) {
-        int n = pieceCount < 8 ? pieceCount : 8;
+        int n = pieceCount < ROAD_SYNC_MAX_DEMOLISH_PIECES ? pieceCount : ROAD_SYNC_MAX_DEMOLISH_PIECES;
         memcpy(s_item.dem.pieces, pieces, n * sizeof(RoadSyncUpgradePiece));
         s_item.dem.pieceCount = n;
     }
@@ -2832,7 +2845,9 @@ bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
 // Factory connection direction (game thread only, see RoadSyncDirectionMsg)
 // ---------------------------------------------------------------------------
 
+#ifndef SEG_DIRECTION_OFFSET
 #define SEG_DIRECTION_OFFSET 0x1bc       // int: 0 both ways, 1 / 2 one way (node 0 / node 1 relative)
+#endif
 #define NODE_BUILDINGS_BEGIN_OFFSET 0x70 // node: buildings attached to it
 #define NODE_BUILDINGS_END_OFFSET 0x78
 #define REFRESH_BUILDING_RVA 0x191970    // FUN_140191950(thisPtr, building)

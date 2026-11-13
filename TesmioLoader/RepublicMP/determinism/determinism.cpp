@@ -1465,6 +1465,7 @@ void Determinism_AfterLate()
                     if (g_stepCount % (LOCKSTEP_HASH_TICKS * 5) == 0) LogSessionProgress(s);
                 }
             }
+            TwoStates_CheckAndTriggerAutosave(g_exeBase + WORLD_RVA, g_stepCount, g_sessionHost);
         }
         if (GetProbeState() == PROBE_RUNNING) {
             ++g_runStep;

@@ -4,16 +4,19 @@
 #include "source_slots.h"
 #include "commands.h"
 #include "world_refs.h"
+#include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include <algorithm>
+#include <math.h>
 #include <string.h>
 #include <vector>
 
 #define WORLD_RVA 0x9D4F10
 #define WINDOW_BUILDING 0xD298   // the building of the window the tool serves
-#define BUILDINGS_OFFSET 0x11B08
+#define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
+#define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define DOWN_RVA 0xA54E90
 #define PRESS_RVA 0xA54E91
 #define ENTER_RVA 0xA54CAC
@@ -21,7 +24,9 @@
 #define SLOTS_OFFSET 0xF78
 #define SLOT_BYTES 0x10
 #define MAX_SLOTS 64
-#define MAX_BUILDINGS 2048
+#ifndef MAX_BUILDINGS
+#define MAX_BUILDINGS SOURCE_SLOTS_MAX_BUILDINGS
+#endif
 #define MAX_LIST 1000000
 #define ADD_SOURCE_RVA 0x1D5120
 #define COPY_SOURCE_RVA 0x1D67A0
@@ -158,19 +163,24 @@ static void Take(const Slots& before, const char* where)
 static void CollectSlotBuildings(std::vector<Slots>& out)
 {
     out.clear();
-    U64 v[2] = {};
-    if (!SafeMemcpyPod(v, World() + BUILDINGS_OFFSET, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) return;
-    std::vector<U64> buildings((size_t)((v[1] - v[0]) / 8));
-    if (buildings.empty() || !SafeMemcpyPod(buildings.data(), (const void*)v[0], buildings.size() * 8)) return;
     U64 winBld = 0;
     if (SafeMemcpyPod(&winBld, World() + WINDOW_BUILDING, 8) && winBld) {
         Slots s;
         if (ReadSlots(winBld, s) && s.count) out.push_back(s);
     }
-    for (U64 b : buildings) {
-        if (!b || b == winBld || out.size() >= MAX_BUILDINGS) continue;
-        Slots s;
-        if (ReadSlots(b, s) && s.count) out.push_back(s);
+    const unsigned offsets[2] = { BUILDINGS_OFFSET, CONSTRUCTIONS_OFFSET };
+    for (int idx = 0; idx < 2; idx++) {
+        U64 v[2] = {};
+        if (!SafeMemcpyPod(v, World() + offsets[idx], 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) continue;
+        size_t count = (size_t)((v[1] - v[0]) / 8);
+        if (!count) continue;
+        std::vector<U64> buildings(count);
+        if (!SafeMemcpyPod(buildings.data(), (const void*)v[0], count * 8)) continue;
+        for (U64 b : buildings) {
+            if (!b || b == winBld || out.size() >= MAX_BUILDINGS) continue;
+            Slots s;
+            if (ReadSlots(b, s) && s.count) out.push_back(s);
+        }
     }
 }
 
@@ -204,7 +214,10 @@ static unsigned long long g_epoch = 0;
 
 static bool Clicked()
 {
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA];
+    float wheel = 0.0f;
+    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
+    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
+           (isfinite(wheel) && wheel != 0.0f);
 }
 
 void SourceSlots_Before(bool simBusy)

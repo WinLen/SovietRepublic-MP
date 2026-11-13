@@ -21,8 +21,8 @@ static char g_text[160] = "Syncing...";
 static int g_step = 0;
 static int g_totalSteps = 0;
 static int g_percent = -1;
-static int g_queuedBytes = 0;
-static int g_totalBytes = 0;
+static int64_t g_queuedBytes = 0;
+static int64_t g_totalBytes = 0;
 static float g_speedMbSec = 0.0f;
 
 void SyncBlock_SetActive(bool active, const char* reason)
@@ -63,7 +63,7 @@ void SyncBlock_SetPercent(int percent)
     }
 }
 
-void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec)
+void SyncBlock_SetPercentEx(int percent, int64_t queuedBytes, int64_t totalBytes, float speedMbSec)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_percent = percent;
@@ -72,13 +72,26 @@ void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float 
     g_speedMbSec = speedMbSec;
 }
 
-void SyncBlock_GetTransferStats(int* outPercent, int* outQueuedBytes, int* outTotalBytes, float* outSpeedMbSec)
+void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec)
+{
+    SyncBlock_SetPercentEx(percent, (int64_t)queuedBytes, (int64_t)totalBytes, speedMbSec);
+}
+
+void SyncBlock_GetTransferStats(int* outPercent, int64_t* outQueuedBytes, int64_t* outTotalBytes, float* outSpeedMbSec)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (outPercent) *outPercent = g_percent;
     if (outQueuedBytes) *outQueuedBytes = g_queuedBytes;
     if (outTotalBytes) *outTotalBytes = g_totalBytes;
     if (outSpeedMbSec) *outSpeedMbSec = g_speedMbSec;
+}
+
+void SyncBlock_GetTransferStats(int* outPercent, int* outQueuedBytes, int* outTotalBytes, float* outSpeedMbSec)
+{
+    int64_t q = 0, t = 0;
+    SyncBlock_GetTransferStats(outPercent, &q, &t, outSpeedMbSec);
+    if (outQueuedBytes) *outQueuedBytes = (int)q;
+    if (outTotalBytes) *outTotalBytes = (int)t;
 }
 
 bool SyncBlock_IsActive()
@@ -307,7 +320,7 @@ static void DrawLobbyPlayersBox(SessionState st, bool isReconnect, float winW)
 }
 
 static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent,
-                                     int queuedBytes, int totalBytes, float speedMbSec,
+                                     int64_t queuedBytes, int64_t totalBytes, float speedMbSec,
                                      const char* text, float winW)
 {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.10f, 0.08f, 0.95f));
@@ -362,7 +375,7 @@ static void DrawLobbySyncProgressBox(int step, int totalSteps, int percent,
             if (barFraction > 1.0f) barFraction = 1.0f;
             if (barFraction < 0.0f) barFraction = 0.0f;
             if (totalBytes > 0) {
-                int sentBytes = totalBytes - queuedBytes;
+                int64_t sentBytes = totalBytes - queuedBytes;
                 if (sentBytes < 0) sentBytes = 0;
                 if (sentBytes > totalBytes) sentBytes = totalBytes;
                 double mbSent = (double)sentBytes / (1024.0 * 1024.0);
@@ -747,7 +760,8 @@ void SyncBlock_Draw()
     }
 
     char text[160];
-    int step, totalSteps, percent, queuedBytes, totalBytes;
+    int step, totalSteps, percent;
+    int64_t queuedBytes, totalBytes;
     float speedMbSec;
     {
         std::lock_guard<std::mutex> lock(g_mutex);

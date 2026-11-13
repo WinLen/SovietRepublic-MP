@@ -14,6 +14,7 @@
 #include "../../session/settings_sync.h"
 
 constexpr int CITIZEN_DESTINATIONS_FIELD = 1001;
+constexpr int CITIZEN_DESTINATIONS_MAX = 32;
 void CitizenDestinations_Bind(const TsmHost* host);
 void CitizenDestinations_Reset();
 void CitizenDestinations_Scan(BYTE** buildings, int count, bool sendChanges, bool clicked);

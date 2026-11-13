@@ -46,7 +46,7 @@ static const unsigned kRegionEach[4] = { SLOT_BYTES, 0x10, 0x10, 4 };
 struct WorldRange {
     unsigned at, size;
 };
-static const WorldRange kWorldRanges[] = { { 0xAF8, 0x14 }, { 0xC798, 4 } };
+static const WorldRange kWorldRanges[] = { { 0xAF8, 0x10 }, { 0xB08, 4 }, { 0xC798, 4 } };
 
 // Building words that are this PC's view (camera visibility and distance,
 // animation phase, ambience timer, piece index, the window's cost display)
@@ -149,7 +149,10 @@ static int Category(U64 building)
 
 static bool Clicked()
 {
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA];
+    float wheel = 0.0f;
+    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
+    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
+           (isfinite(wheel) && wheel != 0.0f);
 }
 
 static void Add(U64 building, int kind, unsigned base, U64 at, unsigned bytes, unsigned shape)
@@ -208,18 +211,18 @@ bool BuildingSwitches_IsExcludedBuildingOffset(unsigned offset)
     return InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
 }
 
-static bool IsLeftOutSlotDynamicOffset(unsigned offset)
+static bool IsLeftOutSlotDynamicOffset(unsigned offset, bool click = false)
 {
     unsigned region = (offset % SLOT_STRIDE) / REGION_STRIDE;
     unsigned local = offset % REGION_STRIDE;
     if (region == 0 && local < 0x48) return true;
-    if (region == 1 && (local % 16) == 8) return true;
+    if (region == 1 && (local % 16) == 8) return !click;
     return false;
 }
 
-bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset)
+bool BuildingSwitches_IsLeftOutSlotOffsetForTest(unsigned offset, bool click)
 {
-    return IsLeftOutSlotDynamicOffset(offset);
+    return IsLeftOutSlotDynamicOffset(offset, click);
 }
 
 void BuildingSwitches_RevertBuildingName(unsigned long long building)
@@ -249,18 +252,19 @@ static bool IsNeverNoiseWord(const Range& r, unsigned offset)
                offset == BLD_UNIV_STAFF_RATIO_OFFSET || offset == BLD_SEARCH_RANGE_OFFSET ||
                IsNonPointerBuildingWord(r.kind, offset);
     if (r.kind == KIND_SLOT)
-        return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) && ((offset % 16) == 0x0C);
+        return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) &&
+               (((offset % 16) == 0x0C) || ((offset % 16) == 8));
     return false;
 }
 
 // Words this module leaves alone: the settings sync's own, and the view's.
-static bool LeftOut(const Range& r, unsigned offset)
+static bool LeftOut(const Range& r, unsigned offset, bool click = false)
 {
     if (r.kind == KIND_BUILDING)
         return SettingsSync_OwnsBuildingWord((const BYTE*)r.building, offset) ||
                InRanges(kViewWords, sizeof(kViewWords) / sizeof(kViewWords[0]), offset);
     if (r.kind == KIND_SLOT)
-        return IsLeftOutSlotDynamicOffset(offset) ||
+        return IsLeftOutSlotDynamicOffset(offset, click) ||
                SettingsSync_OwnsSlotWord((const BYTE*)r.building, offset / SLOT_STRIDE, (offset % SLOT_STRIDE) / REGION_STRIDE,
                                          offset % REGION_STRIDE);
     return false;
@@ -336,7 +340,7 @@ static void Compare(const Range& r, bool click)
         if (wa == wb) continue;
         unsigned offset = r.base + q;
         unsigned word = NoiseIndex(r, q);
-        if (LeftOut(r, offset)) {
+        if (LeftOut(r, offset, click)) {
             if (click && g_leftLogged < 40) {
                 ++g_leftLogged;
                 Logf("republicmp  SWITCH: a click changed %s +0x%X (category 0x%X) - left to the building settings sync",
@@ -365,6 +369,7 @@ static void Compare(const Range& r, bool click)
                 ++g_heapLogged;
                 Logf("republicmp  SWITCH: a click changed %s +0x%X to a heap address - not carried", kKindText[r.kind], offset);
             }
+            *(unsigned*)(r.at + q) = wa;
             continue;
         }
         if (!haveRef) {
@@ -406,7 +411,7 @@ static void Compare(const Range& r, bool click)
 // authority: every interface frame a different value is put back, and only a
 // click that writes a new value (not the one the menu kept writing before the
 // click) becomes a command.
-#define WORLD_WORDS 6
+#define WORLD_WORDS 12
 static unsigned g_worldAt[WORLD_WORDS];
 static int g_worldCount = 0;
 static unsigned g_auth[WORLD_WORDS], g_stale[WORLD_WORDS], g_sent[WORLD_WORDS];
@@ -420,23 +425,43 @@ void BuildingSwitches_Reset()
     g_ranges.clear();
     g_bytes.clear();
     memset(g_sentValid, 0, sizeof(g_sentValid));
+    g_noiseBuilding.clear();
+    for (int i = 0; i < 4; ++i) g_noiseSlot[i].clear();
+    g_noiseWorld.clear();
+    g_noiseLogged = g_heapLogged = g_leftLogged = 0;
+    g_frame = 0;
+    g_epoch = 0;
+}
+
+static bool IsOneByteWorldSetting(unsigned at)
+{
+    return (at >= 0xB08 && at <= 0xB0B) || (at >= 0xC798 && at <= 0xC79B);
 }
 
 static void WorldWords()
 {
     if (g_worldCount) return;
-    for (const WorldRange& w : kWorldRanges)
-        for (unsigned at = w.at; at + 4 <= w.at + w.size && g_worldCount < WORLD_WORDS; at += 4) g_worldAt[g_worldCount++] = at;
-}
-
-static bool IsOneByteWorldSetting(unsigned at)
-{
-    return at == 0xB08 || at == 0xC798;
+    for (const WorldRange& w : kWorldRanges) {
+        unsigned at = w.at;
+        while (at < w.at + w.size && g_worldCount < WORLD_WORDS) {
+            if (IsOneByteWorldSetting(at)) {
+                g_worldAt[g_worldCount++] = at;
+                at += 1;
+            } else {
+                if (at + 4 <= w.at + w.size) {
+                    g_worldAt[g_worldCount++] = at;
+                }
+                at += 4;
+            }
+        }
+    }
 }
 
 static bool IsLocalPerStateWorldSetting(unsigned at)
 {
-    return TwoStates_IsActive() && at >= 0xAF8 && at < 0xB08;
+    return TwoStates_IsActive() &&
+           ((at >= 0xAF8 && at <= 0xB0B) ||
+            (at >= 0xC798 && at <= 0xC79B));
 }
 
 static bool ReadWorldSetting(BYTE* world, unsigned at, unsigned& out)
@@ -533,8 +558,10 @@ void BuildingSwitches_After(bool simBusy)
 static U64 WordAddress(U64 building, const SwitchMsg& m, unsigned offset)
 {
     if (m.kind == KIND_WORLD) {
-        for (const WorldRange& w : kWorldRanges)
-            if (offset >= w.at && offset + 4 <= w.at + w.size) return (U64)World() + offset;
+        for (const WorldRange& w : kWorldRanges) {
+            unsigned need = IsOneByteWorldSetting(offset) ? 1 : 4;
+            if (offset >= w.at && offset + need <= w.at + w.size) return (U64)World() + offset;
+        }
         return 0;
     }
     if (m.kind == KIND_BUILDING) return offset + 4 <= BUILDING_BYTES ? building + offset : 0;
@@ -732,11 +759,12 @@ static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
     if (m.kind != KIND_WORLD && !building) return "the building is gone";
     for (unsigned i = 0; i < m.count; i++) {
         unsigned off = m.words[i].offset;
-        if (off % 4 || !WordAddress(building, m, off))
+        bool isOneByteWorld = (m.kind == KIND_WORLD && IsOneByteWorldSetting(off));
+        if ((!isOneByteWorld && (off % 4)) || !WordAddress(building, m, off))
             return "a word is not there (another shape here)";
         if (m.kind != KIND_WORLD) {
             Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
-            if (LeftOut(checkR, off))
+            if (LeftOut(checkR, off, true))
                 return "a word is in a view/vector range";
             bool nonPtrPair = IsNonPointerBuildingWord((int)m.kind, off);
             U64 pairAddr = WordAddress(building, m, off & ~7u);
@@ -809,4 +837,28 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
          m.kind == KIND_WORLD ? "" : " of a building", m.kind == KIND_WORLD ? 0 : Category(Ref_BuildingAt(m.building)), m.count,
          m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");
     return why == nullptr;
+}
+
+bool BuildingSwitches_IsOneByteWorldSettingForTest(unsigned at)
+{
+    return IsOneByteWorldSetting(at);
+}
+
+bool BuildingSwitches_IsLocalPerStateWorldSettingForTest(unsigned at)
+{
+    return IsLocalPerStateWorldSetting(at);
+}
+
+bool BuildingSwitches_IsNoiseEmptyForTest()
+{
+    if (!g_noiseBuilding.empty() || !g_noiseWorld.empty()) return false;
+    for (int i = 0; i < 4; ++i) {
+        if (!g_noiseSlot[i].empty()) return false;
+    }
+    return g_noiseLogged == 0 && g_heapLogged == 0 && g_leftLogged == 0 && g_frame == 0 && g_epoch == 0;
+}
+
+bool BuildingSwitches_ClickedForTest()
+{
+    return Clicked();
 }

@@ -174,6 +174,8 @@ static bool SubTest_M4_Challenger1_R3_ConcurrencyUnderCsLock()
     fflush(stdout);
 
     std::atomic<bool> stopFlag{ false };
+    std::atomic<int> readersReady{ 0 };
+    std::atomic<bool> startFlag{ false };
     std::atomic<uint64_t> writeCount{ 0 };
     std::atomic<uint64_t> readCount1{ 0 };
     std::atomic<uint64_t> readCount2{ 0 };
@@ -195,6 +197,10 @@ static bool SubTest_M4_Challenger1_R3_ConcurrencyUnderCsLock()
 
     // Writer thread (simulating game thread executing SimPatches_RecordPlacementForTest)
     std::thread writer([&]() {
+        while (readersReady.load(std::memory_order_relaxed) < 2) {
+            std::this_thread::yield();
+        }
+        startFlag.store(true, std::memory_order_release);
         for (uint32_t i = 1; i <= 20000 && !stopFlag.load(std::memory_order_relaxed); ++i) {
             const char* name = candidateNames[i % numCandidates];
             float baseCoord = (float)(i * 5);
@@ -211,6 +217,10 @@ static bool SubTest_M4_Challenger1_R3_ConcurrencyUnderCsLock()
         char nameBuf[128] = {};
         char cleanBuf[128] = {};
         float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+        readersReady.fetch_add(1, std::memory_order_relaxed);
+        while (!startFlag.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
         while (!stopFlag.load(std::memory_order_relaxed)) {
             if (SimPatches_GetActivePlacementInfo(nameBuf, sizeof(nameBuf), &ox, &oy, &oz)) {
                 readCount1.fetch_add(1, std::memory_order_relaxed);
@@ -231,6 +241,10 @@ static bool SubTest_M4_Challenger1_R3_ConcurrencyUnderCsLock()
     std::thread reader2([&]() {
         char nameBuf[128] = {};
         float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+        readersReady.fetch_add(1, std::memory_order_relaxed);
+        while (!startFlag.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
         while (!stopFlag.load(std::memory_order_relaxed)) {
             if (SimPatches_GetActivePlacementInfo(nameBuf, sizeof(nameBuf), &ox, &oy, &oz)) {
                 readCount2.fetch_add(1, std::memory_order_relaxed);
@@ -244,6 +258,10 @@ static bool SubTest_M4_Challenger1_R3_ConcurrencyUnderCsLock()
     });
 
     writer.join();
+    // Ensure reader threads have been scheduled and executed at least one read pass
+    for (int waitMs = 0; waitMs < 500 && (readCount1.load(std::memory_order_relaxed) == 0 || readCount2.load(std::memory_order_relaxed) == 0); ++waitMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     stopFlag.store(true, std::memory_order_relaxed);
     reader1.join();
     reader2.join();

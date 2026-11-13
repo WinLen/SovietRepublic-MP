@@ -19,6 +19,8 @@
 
 #include "tesmio_plugin.h"
 
+#define CARGO_SETTINGS_MAX_OBJECTS 32
+
 void CargoSettings_Bind(const TsmHost* host);
 
 // Render thread, around the interface routine. simBusy: the simulation's phase

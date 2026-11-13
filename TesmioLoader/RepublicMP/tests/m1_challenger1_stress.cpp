@@ -298,19 +298,19 @@ struct PedMgrFixture {
     }
 };
 
-static RoadSyncUpgradeMsg MakeUpgradeMessage(int rangeStart = -1, int rangeEnd = 5)
+static std::unique_ptr<RoadSyncUpgradeMsg> MakeUpgradeMessage(int rangeStart = -1, int rangeEnd = 5)
 {
-    RoadSyncUpgradeMsg msg = {};
-    msg.category = ROAD_SYNC_CATEGORY_ROAD;
-    msg.newType = 3; // Asphalt lighted
-    msg.newVariant = 0;
-    msg.pieceCount = 1;
-    msg.pieces[0].segStart[0] = 100.0f; msg.pieces[0].segStart[2] = 200.0f;
-    msg.pieces[0].segEnd[0] = 300.0f; msg.pieces[0].segEnd[2] = 200.0f;
-    msg.pieces[0].segPointCount = 5;
-    msg.pieces[0].rangeStart = rangeStart;
-    msg.pieces[0].rangeEnd = rangeEnd;
-    msg.pieces[0].oldType = 1;
+    auto msg = std::make_unique<RoadSyncUpgradeMsg>();
+    msg->category = ROAD_SYNC_CATEGORY_ROAD;
+    msg->newType = 3; // Asphalt lighted
+    msg->newVariant = 0;
+    msg->pieceCount = 1;
+    msg->pieces[0].segStart[0] = 100.0f; msg->pieces[0].segStart[2] = 200.0f;
+    msg->pieces[0].segEnd[0] = 300.0f; msg->pieces[0].segEnd[2] = 200.0f;
+    msg->pieces[0].segPointCount = 5;
+    msg->pieces[0].rangeStart = rangeStart;
+    msg->pieces[0].rangeEnd = rangeEnd;
+    msg->pieces[0].oldType = 1;
     return msg;
 }
 
@@ -340,8 +340,8 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
 
-    RoadSyncUpgradeMsg msg1 = MakeUpgradeMessage(-1, 5);
-    bool ok1 = RoadSync_ApplyCommandUpgrade(msg1);
+    auto msg1 = MakeUpgradeMessage(-1, 5);
+    bool ok1 = RoadSync_ApplyCommandUpgrade(*msg1);
     TEST_CHECK(ok1);
     TEST_CHECK(s_lastSegSeenInCommit == (__int64)fix.roadSeg.data());
     TEST_CHECK(s_lastAnchorSeenInCommit == (__int64)fix.node0.data());
@@ -354,8 +354,8 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
 
-    RoadSyncUpgradeMsg msg2 = MakeUpgradeMessage(-1, 5);
-    bool ok2 = RoadSync_ApplyCommandUpgrade(msg2);
+    auto msg2 = MakeUpgradeMessage(-1, 5);
+    bool ok2 = RoadSync_ApplyCommandUpgrade(*msg2);
     TEST_CHECK(ok2);
     TEST_CHECK(s_lastSegSeenInCommit == (__int64)fix.roadSeg.data());
     TEST_CHECK(s_lastAnchorSeenInCommit == (__int64)fix.node1.data());
@@ -368,15 +368,15 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
 
-    RoadSyncUpgradeMsg msg3Head = MakeUpgradeMessage(-1, 5);
-    bool ok3Head = RoadSync_ApplyCommandUpgrade(msg3Head);
+    auto msg3Head = MakeUpgradeMessage(-1, 5);
+    bool ok3Head = RoadSync_ApplyCommandUpgrade(*msg3Head);
     TEST_CHECK(ok3Head);
     TEST_CHECK(s_lastAnchorSeenInCommit == (__int64)fix.node0.data());
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);
 
-    RoadSyncUpgradeMsg msg3Tail = MakeUpgradeMessage(2, 5);
-    bool ok3Tail = RoadSync_ApplyCommandUpgrade(msg3Tail);
+    auto msg3Tail = MakeUpgradeMessage(2, 5);
+    bool ok3Tail = RoadSync_ApplyCommandUpgrade(*msg3Tail);
     TEST_CHECK(ok3Tail);
     TEST_CHECK(s_lastAnchorSeenInCommit == (__int64)fix.node1.data());
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
@@ -388,8 +388,8 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
 
-    RoadSyncUpgradeMsg msg4 = MakeUpgradeMessage(-1, 5);
-    bool ok4 = RoadSync_ApplyCommandUpgrade(msg4);
+    auto msg4 = MakeUpgradeMessage(-1, 5);
+    bool ok4 = RoadSync_ApplyCommandUpgrade(*msg4);
     TEST_CHECK(ok4);
     TEST_CHECK(s_lastAnchorSeenInCommit == (__int64)fix.node0.data());
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
@@ -405,7 +405,7 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     fix.pedSegList = { (__int64)fix.pedSeg0.data() };
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
-    bool okSeh0 = RoadSync_ApplyCommandUpgrade(msg1);
+    bool okSeh0 = RoadSync_ApplyCommandUpgrade(*msg1);
     TEST_CHECK(!okSeh0); // Gracefully returned false via __except
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);
@@ -414,7 +414,7 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     fix.pedSegList = { (__int64)fix.pedSeg1.data() };
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
-    bool okSeh1 = RoadSync_ApplyCommandUpgrade(msg2);
+    bool okSeh1 = RoadSync_ApplyCommandUpgrade(*msg2);
     TEST_CHECK(!okSeh1);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);
@@ -423,7 +423,7 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     fix.pedSegList = { (__int64)fix.pedSeg0.data(), (__int64)fix.pedSeg1.data() };
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
-    bool okSehBoth = RoadSync_ApplyCommandUpgrade(msg3Head);
+    bool okSehBoth = RoadSync_ApplyCommandUpgrade(*msg3Head);
     TEST_CHECK(!okSehBoth);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);
@@ -432,7 +432,7 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     fix.pedSegList = { (__int64)fix.pedSegUnrelated.data() };
     *(const __int64**)(fix.pedMgr.data() + 0x2B0) = fix.pedSegList.data();
     *(const __int64**)(fix.pedMgr.data() + 0x2B8) = fix.pedSegList.data() + fix.pedSegList.size();
-    bool okSehNeither = RoadSync_ApplyCommandUpgrade(msg4);
+    bool okSehNeither = RoadSync_ApplyCommandUpgrade(*msg4);
     TEST_CHECK(!okSehNeither);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x360) == 0);
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);

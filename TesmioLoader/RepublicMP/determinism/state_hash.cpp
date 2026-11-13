@@ -70,11 +70,141 @@ static void MixEntries(unsigned long long& h, BYTE* vec, double& total)
     }
 }
 
+static void HashConstructions(BYTE* w, StateSummary* out)
+{
+    long long nc = Count(w + WORLD_CONSTRUCTIONS_OFFSET, 8);
+    out->constructions = (int)nc;
+    if (nc <= 0) return;
+    BYTE** cl = *(BYTE***)(w + WORLD_CONSTRUCTIONS_OFFSET);
+    if (!cl) return;
+    long long limit = (nc > 1024) ? 1024 : nc;
+    for (long long i = 0; i < limit; i++) {
+        BYTE* b = cl[i];
+        if (!b) { MixInt(out->hashConstructions, -1); continue; }
+        MixInt(out->hashConstructions, *(int*)(b + BLD_INDEX_OFFSET));
+        MixFloat(out->hashConstructions, *(float*)(b + BLD_PROGRESS_OFFSET));
+        MixInt(out->hashConstructions, (int)Count(b + BLD_WORKERS_OFFSET, 8));
+        BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+        long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
+        if (ns > 64) ns = 64;
+        for (long long s = 0; s < ns; s++) {
+            double dummy = 0;
+            MixEntries(out->hashConstructions, slots + s * BLD_STORAGE_SLOT_SIZE, dummy);
+        }
+    }
+}
+
+static void HashNetworks(BYTE* w, StateSummary* out)
+{
+    static const unsigned int kNetworks[14] = {
+        0xF7A0, 0xF7A8, 0xF800, 0xF858, 0xF8B0, 0xF908, 0xF968,
+        0xF9C0, 0xFA18, 0xFA20, 0xFA30, 0xFA40, 0xFA98, 0xFAF0
+    };
+    for (unsigned int off : kNetworks) {
+        BYTE* mgr = *(BYTE**)(w + off);
+        if (!mgr) { MixInt(out->hashNetworks, -1); continue; }
+        long long nNodes = Count(mgr + NET_NODES_OFFSET, 8);
+        long long nSegs  = Count(mgr + MGR_SEGMENTS_BEGIN_OFFSET, 8);
+        MixInt(out->hashNetworks, (int)nNodes);
+        MixInt(out->hashNetworks, (int)nSegs);
+        if (nSegs > 0) {
+            BYTE** segList = *(BYTE***)(mgr + MGR_SEGMENTS_BEGIN_OFFSET);
+            if (segList) {
+                long long limit = (nSegs > 256) ? 256 : nSegs;
+                for (long long s = 0; s < limit; s++) {
+                    BYTE* seg = segList[s];
+                    if (!seg) { MixInt(out->hashNetworks, -1); continue; }
+                    MixInt(out->hashNetworks, *(int*)(seg + SEG_TYPE_OFFSET));
+                    MixInt(out->hashNetworks, *(int*)(seg + SEG_DIRECTION_OFFSET));
+                }
+            }
+        }
+    }
+}
+
+static void HashLines(BYTE* w, StateSummary* out)
+{
+    BYTE* linesMgr = *(BYTE**)(w + WORLD_LINES_OFFSET);
+    if (!linesMgr) { MixInt(out->hashLines, -1); return; }
+    int total = 0;
+    for (unsigned k = 0; k < 2; k++) {
+        BYTE* vec = linesMgr + k * 0x18;
+        long long nl = Count(vec, 8);
+        total += (int)nl;
+        MixInt(out->hashLines, (int)nl);
+        BYTE** ll = *(BYTE***)vec;
+        if (ll && nl > 0) {
+            long long limit = (nl > 256) ? 256 : nl;
+            for (long long i = 0; i < limit; i++) {
+                BYTE* l = ll[i];
+                if (!l) { MixInt(out->hashLines, -1); continue; }
+                MixInt(out->hashLines, *(int*)(l + 4));
+                MixInt(out->hashLines, *(int*)(l + 8));
+            }
+        }
+    }
+    out->lines = total;
+}
+
+static void HashLoans(BYTE* w, StateSummary* out)
+{
+    SovietLoan* b = *(SovietLoan**)(w + WORLD_LOANS_OFFSET);
+    SovietLoan* e = *(SovietLoan**)(w + WORLD_LOANS_OFFSET + 8);
+    if (!b || e < b) { out->loans = 0; return; }
+    uintptr_t diff = (uintptr_t)e - (uintptr_t)b;
+    if ((diff % sizeof(SovietLoan)) != 0) { out->loans = 0; return; }
+    long long count = (long long)(diff / sizeof(SovietLoan));
+    if (count < 0) count = 0;
+    out->loans = (int)count;
+    MixInt(out->hashLoans, (int)count);
+    long long limit = (count > 256) ? 256 : count;
+    for (long long i = 0; i < limit; i++) {
+        Mix(out->hashLoans, &b[i], sizeof(SovietLoan));
+    }
+}
+
+static void HashResearch(BYTE* w, StateSummary* out)
+{
+    Mix(out->hashResearch, w + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+    long long n = Count(w + WORLD_RESEARCH_VEC_BEGIN_OFFSET, RESEARCH_ITEM_STRIDE);
+    if (n < 0) n = 0;
+    long long limit = (n > 256) ? 256 : n;
+    MixInt(out->hashResearch, (int)limit);
+    if (limit > 0) {
+        BYTE* items = *(BYTE**)(w + WORLD_RESEARCH_VEC_BEGIN_OFFSET);
+        if (items) {
+            for (long long i = 0; i < limit; i++) {
+                BYTE* it = items + i * RESEARCH_ITEM_STRIDE;
+                Mix(out->hashResearch, it + RESEARCH_ITEM_AVAILABLE_OFFSET, 1);
+                MixFloat(out->hashResearch, *(float*)(it + RESEARCH_ITEM_PROGRESS_OFFSET));
+            }
+        }
+    }
+}
+
+static void HashBalances(BYTE* w, StateSummary* out)
+{
+    (void)w;
+    if (TwoStates_IsActive()) {
+        out->rubState[0] = TwoStates_GetRubles(1);
+        out->rubState[1] = TwoStates_GetRubles(2);
+        out->usdState[0] = TwoStates_GetDollars(1);
+        out->usdState[1] = TwoStates_GetDollars(2);
+    } else {
+        out->rubState[0] = out->rub;
+        out->rubState[1] = 0.0;
+        out->usdState[0] = out->usd;
+        out->usdState[1] = 0.0;
+    }
+}
+
 bool StateHash_Compute(StateSummary* out)
 {
     memset(out, 0, sizeof(*out));
     const unsigned long long seed = 0xcbf29ce484222325ull;
-    out->hashClock = out->hashBuildings = out->hashVehicles = out->hashVehiclesPos = out->hashCitizens = seed;
+    out->hashClock = out->hashBuildings = out->hashConstructions = out->hashVehicles =
+        out->hashVehiclesPos = out->hashCitizens = out->hashNetworks = out->hashLines =
+        out->hashLoans = out->hashResearch = seed;
     BYTE* w = g_exeBase + WORLD_RVA;
     bool ok = false;
     DiagLog_BeginSafeSeh();
@@ -87,6 +217,8 @@ bool StateHash_Compute(StateSummary* out)
         MixInt(out->hashClock, out->day);
         MixInt(out->hashClock, out->year);
         MixFloat(out->hashClock, out->dayProgress);
+
+        HashBalances(w, out);
 
         BYTE* bvec = w + WORLD_BUILDINGS_OFFSET;
         long long nb = Count(bvec, 8);
@@ -108,6 +240,8 @@ bool StateHash_Compute(StateSummary* out)
                 for (long long s = 0; s < ns; s++)
                     MixEntries(out->hashBuildings, slots + s * BLD_STORAGE_SLOT_SIZE, out->storageTotal);
             }
+
+            HashConstructions(w, out);
 
             long long nv = Count(w + WORLD_VEHICLES_OFFSET, 8);
             out->vehicles = (int)nv;
@@ -140,6 +274,12 @@ bool StateHash_Compute(StateSummary* out)
                 MixFloat(out->hashCitizens, age);
                 out->ageTotal += age;
             }
+
+            HashNetworks(w, out);
+            HashLines(w, out);
+            HashLoans(w, out);
+            HashResearch(w, out);
+
             ok = true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -291,8 +431,13 @@ unsigned long long StateHash_All(const StateSummary& s)
     unsigned long long h = 0xcbf29ce484222325ull;
     Mix(h, &s.hashClock, 8);
     Mix(h, &s.hashBuildings, 8);
+    Mix(h, &s.hashConstructions, 8);
     Mix(h, &s.hashVehicles, 8);
     Mix(h, &s.hashVehiclesPos, 8);
     Mix(h, &s.hashCitizens, 8);
+    Mix(h, &s.hashNetworks, 8);
+    Mix(h, &s.hashLines, 8);
+    Mix(h, &s.hashLoans, 8);
+    Mix(h, &s.hashResearch, 8);
     return h;
 }

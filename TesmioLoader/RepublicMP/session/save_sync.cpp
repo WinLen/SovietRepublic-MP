@@ -19,6 +19,7 @@
 #include "../transport/network.h"
 #include "../transport/steam_p2p.h"
 #include "../world_sync/buildings/build_sync.h"
+#include "../world_sync/buildings/build_mode.h"
 #include "../world_sync/networks/road_sync.h"
 #include "../world_sync/terrain/terrain_sync.h"
 #include "../determinism/determinism.h"
@@ -104,7 +105,7 @@ static volatile ULONGLONG g_lastWorldSentTick = 0; // host: when the player last
 // The host chooses; the player follows the host's hello.
 static volatile bool g_lockstepChosen = true;
 static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
-static volatile bool g_lockstep = false; // the current session's mode
+static volatile bool g_lockstep = true; // the current session's mode (lockstep is permanent)
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
 static const char* const kResyncReason = "re-sync";
@@ -277,7 +278,7 @@ static void MakeHello(SessionHello* h)
     h->protocol = REPUBLICMP_PROTOCOL;
     strncpy_s(h->version, REPUBLICMP_VERSION, _TRUNCATE);
     h->dllCrc = SaveSync_GetLocalDllCrc();
-    h->lockstep = g_lockstepChosen ? 1 : 0;
+    h->lockstep = 1;
     h->twoStatesMode = TwoStates_GetMode();
     h->expandBorders = TwoStates_GetExpandBorders() ? 1 : 0;
     h->borderHalfWidth = TwoStates_GetBorderHalfWidth();
@@ -312,11 +313,6 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 // Live sync channels
 // ---------------------------------------------------------------------------
 
-static bool AllChannelsConnected()
-{
-    return BuildSync_IsConnected() && RoadSync_IsConnected() && TerrainSync_IsConnected();
-}
-
 // Closes every channel, connected or still waiting for its peer.
 static void ResetChannels()
 {
@@ -325,79 +321,6 @@ static void ResetChannels()
     TerrainSync_Reset();
     LockstepNet_Close();
     Determinism_EndSession();
-}
-
-static void StartChannelsHost()
-{
-    BuildSync_StartHost();
-    RoadSync_StartHost();
-    TerrainSync_StartHost();
-}
-
-// Re-tries every channel that is neither connected nor connecting (the host
-// may not be listening yet when the first attempt goes out).
-static void StartChannelsClient()
-{
-    if (!BuildSync_IsConnected() && !BuildSync_IsConnecting()) BuildSync_StartClient(g_targetIp);
-    if (!RoadSync_IsConnected() && !RoadSync_IsConnecting()) RoadSync_StartClient(g_targetIp);
-    if (!TerrainSync_IsConnected() && !TerrainSync_IsConnecting()) TerrainSync_StartClient(g_targetIp);
-}
-
-// Waits until all channels are up. Client side keeps re-trying.
-static bool WaitForChannels(bool client)
-{
-    ULONGLONG start = GetTickCount64();
-    ULONGLONG lastTry = 0;
-    while (!g_disconnectRequested) {
-        if (AllChannelsConnected()) return true;
-        ULONGLONG now = GetTickCount64();
-        if (now - start > CHANNELS_CONNECT_TIMEOUT_MS) return false;
-        if (client && now - lastTry >= CHANNELS_RETRY_MS) {
-            StartChannelsClient();
-            lastTry = now;
-        }
-        Sleep(100);
-    }
-    return false;
-}
-
-// Names of the channels that are down, e.g. "roads, terrain".
-static void DownChannels(char* out, size_t outSize)
-{
-    out[0] = 0;
-    if (!BuildSync_IsConnected()) strncat_s(out, outSize, "buildings ", _TRUNCATE);
-    if (!RoadSync_IsConnected()) strncat_s(out, outSize, "roads ", _TRUNCATE);
-    if (!TerrainSync_IsConnected()) strncat_s(out, outSize, "terrain ", _TRUNCATE);
-    size_t n = strlen(out);
-    if (n) out[n - 1] = 0;
-}
-
-static bool ResyncDue()
-{
-    if (g_resyncRequested) return true;
-    int minutes = g_autoResyncMinutes;
-    return minutes > 0 && GetTickCount64() - g_lastWorldSentTick >= (ULONGLONG)minutes * 60000;
-}
-
-// Host: has the game thread send the announcement and waits until it is out.
-// False (re-sync dropped) if it could not be sent.
-static bool AnnounceResync()
-{
-    g_resyncRequested = false;
-    g_resyncSent = false;
-    g_resyncSendNow = true;
-    ULONGLONG start = GetTickCount64();
-    while (!g_resyncSent && !g_disconnectRequested && GetTickCount64() - start < RESYNC_ANNOUNCE_TIMEOUT_MS)
-        Sleep(50);
-    g_resyncSendNow = false;
-    if (!g_resyncSent) {
-        SaveStatus("[HOST] couldn't announce the re-sync - skipped");
-        g_lastWorldSentTick = GetTickCount64(); // the timer tries again a full interval later
-        return false;
-    }
-    Sleep(RESYNC_ANNOUNCE_FLUSH_MS);
-    g_resyncing = true;
-    return true;
 }
 
 // Blocks while the session is live. Returns why it ended (nullptr = the
@@ -460,63 +383,12 @@ static const char* MonitorLockstep(bool client)
 
 static const char* MonitorLiveSession(bool client)
 {
-    if (g_lockstep) return MonitorLockstep(client);
-    static char s_why[160];
-    ULONGLONG downSince = 0;
-    ULONGLONG lastTry = 0;
-    for (;;) {
-        if (g_disconnectRequested) return nullptr;
-        if (client && g_resyncAnnounced) return kResyncReason;
-
-        bool b = BuildSync_IsConnected(), r = RoadSync_IsConnected(), t = TerrainSync_IsConnected();
-        if (b && r && t) {
-            if (downSince) {
-                SaveStatus("live sync restored after %llus", (GetTickCount64() - downSince) / 1000);
-                downSince = 0;
-            }
-            if (!client && ResyncDue() && AnnounceResync()) return kResyncReason;
-            Sleep(200);
-            continue;
-        }
-
-        // The announcement is noted before its connection is seen closing.
-        if (client && g_resyncAnnounced) return kResyncReason;
-
-        char down[64];
-        DownChannels(down, sizeof(down));
-        if (!b && !r && !t) {
-            // When the peer really leaves, the three drop within ~100 ms of
-            // each other; the reconnect branch below covers that gap.
-            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "all live sync connections closed");
-            return s_why;
-        }
-
-        ULONGLONG now = GetTickCount64();
-        if (!downSince) {
-            downSince = now;
-            SaveStatus("live sync channel(s) dropped: %s - reconnecting", down);
-        }
-        if (now - downSince > CHANNEL_RECONNECT_TIMEOUT_MS) {
-            _snprintf_s(s_why, sizeof(s_why), _TRUNCATE, "couldn't reconnect: %s", down);
-            return s_why;
-        }
-        if (client) {
-            if (now - lastTry >= CHANNELS_RETRY_MS) {
-                StartChannelsClient();
-                lastTry = now;
-            }
-        } else {
-            StartChannelsHost(); // no-op for channels already connected or listening
-        }
-        Sleep(200);
-    }
+    return MonitorLockstep(client);
 }
 
 // ---------------------------------------------------------------------------
 // Telemetry & SteamP2P_FlushSend Progress (R7)
 // ---------------------------------------------------------------------------
-
-extern void SyncBlock_SetPercentEx(int percent, int queuedBytes, int totalBytes, float speedMbSec);
 
 static uint64_t g_transferTotalBytes = 0;
 static uint64_t g_transferStartTime = 0;
@@ -560,7 +432,7 @@ void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished)
     if (!g_inSaveTransfer.load(std::memory_order_relaxed) || g_transferTotalBytes == 0) return;
     if (finished || queuedBytes <= 0) {
         UpdateTransferSpeed(g_transferTotalBytes);
-        SyncBlock_SetPercentEx(100, 0, (int)g_transferTotalBytes, g_transferSpeedEma);
+        SyncBlock_SetPercentEx(100, 0LL, (int64_t)g_transferTotalBytes, g_transferSpeedEma);
         return;
     }
     uint64_t done = (g_transferTotalBytes > (uint64_t)queuedBytes)
@@ -569,7 +441,7 @@ void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished)
     int percent = (int)((done * 100) / g_transferTotalBytes);
     if (percent > 99) percent = 99;
     UpdateTransferSpeed(done);
-    SyncBlock_SetPercentEx(percent, queuedBytes, (int)g_transferTotalBytes, g_transferSpeedEma);
+    SyncBlock_SetPercentEx(percent, (int64_t)queuedBytes, (int64_t)g_transferTotalBytes, g_transferSpeedEma);
 }
 
 bool SaveSync_InstallHooks()
@@ -597,8 +469,8 @@ static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long 
     if (percent > 100) percent = 100;
 
     UpdateTransferSpeed(done);
-    int queued = (int)(total > done ? total - done : 0);
-    SyncBlock_SetPercentEx(percent, queued, (int)total, g_transferSpeedEma);
+    int64_t queued = (int64_t)(total > done ? total - done : 0);
+    SyncBlock_SetPercentEx(percent, queued, (int64_t)total, g_transferSpeedEma);
 
     if (ctx && ctx->relaySock != INVALID_SOCKET && percent / 10 != ctx->lastRelayed / 10) {
         ctx->lastRelayed = percent;
@@ -626,13 +498,24 @@ static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
     if (_strnicmp(saveName, "save\\", 5) == 0 || _strnicmp(saveName, "save/", 5) == 0) {
         saveName += 5;
     }
+    if (g_baseDir && g_baseDir[0]) {
+        return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", g_baseDir, saveName) >= 0;
+    }
     char exePath[MAX_PATH] = {};
     DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) {
+        len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    }
     if (len == 0 || len == MAX_PATH) return false;
     char* lastSlash = strrchr(exePath, '\\');
     if (!lastSlash) return false;
     *lastSlash = '\0';
     return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName) >= 0;
+}
+
+bool SaveSync_GetGameSaveDirForTest(char* outPath, size_t outSize, const char* saveName)
+{
+    return GetGameSaveDir(outPath, outSize, saveName);
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,41 +1205,21 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
         }
 
         // 7. Lockstep: both loaded the same save; the channel connects.
-        if (g_lockstep) {
-            HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
-            if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
-                if (!g_disconnectRequested) {
-                    SetSessionError(Tr("Соединение Lockstep от игрока не пришло — порт TCP %d должен быть открыт у хоста",
-                                       "the player's lockstep connection didn't arrive - TCP port %d must reach the host"),
-                                    LOCKSTEP_PORT);
-                    SetState(SESSION_HOST_LISTENING);
-                    EnsureGamePaused();
-                }
-                ResetChannels();
-                ModSync_EndSession();
-                break;
-            }
-            joined = true;
-            break;
-        }
-
-        // 7. Live sync channels.
-        HostStep(sock, 7, Tr("Запуск живой синхронизации...", "Starting live sync"));
-        StartChannelsHost();
-        if (!WaitForChannels(false)) {
+        HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
+        if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
             if (!g_disconnectRequested) {
-                SetSessionError(Tr("Каналы синхронизации не подключились — порты TCP %d-%d также должны быть открыты у хоста",
-                                   "the live sync channels didn't connect - TCP ports %d-%d must reach the host too (forward them like port %d)"),
-                                BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
+                SetSessionError(Tr("Соединение Lockstep от игрока не пришло — порт TCP %d должен быть открыт у хоста",
+                                   "the player's lockstep connection didn't arrive - TCP port %d must reach the host"),
+                                LOCKSTEP_PORT);
                 SetState(SESSION_HOST_LISTENING);
                 EnsureGamePaused();
             }
             ResetChannels();
+            ModSync_EndSession();
             break;
         }
         joined = true;
-        TwoStates_OnSessionJoined(true, mine.twoStatesMode, mine.borderHalfWidth, mine.expandBorders != 0,
-                                  mine.stateRub, mine.stateUsd);
+        break;
     } while (false);
 
     // The zip and temporary staging folder only existed to transfer and load the shared world.
@@ -1555,6 +1418,85 @@ static void WaitForWorldLoadToClear(DWORD timeoutMs = 30000)
     }
 }
 
+// Feature 34: Client settings isolation
+static void SaveSync_IsolateClientSettings(const char* destDir, bool rejoin)
+{
+    if (!destDir || !destDir[0]) return;
+    std::error_code ec;
+    std::filesystem::path dir(destDir);
+
+    // 1. Always delete Host's windows.bin on Client so Host's open windows never appear.
+    std::filesystem::path winBin = dir / "windows.bin";
+    if (std::filesystem::exists(winBin, ec)) {
+        std::filesystem::remove(winBin, ec);
+        if (H && H->log) {
+            Logf("republicmp  CLIENT_SETTINGS: removed host windows.bin from incoming save (rejoin=%d)", rejoin ? 1 : 0);
+        }
+    }
+
+    // 2. Manage toolco.bin (Construction Office quick groups Ctrl+1..4)
+    std::filesystem::path toolcoBin = dir / "toolco.bin";
+    if (!rejoin) {
+        // Initial join: delete host toolco.bin so client starts with clean empty presets
+        if (std::filesystem::exists(toolcoBin, ec)) {
+            std::filesystem::remove(toolcoBin, ec);
+            if (H && H->log) {
+                Logf("republicmp  CLIENT_SETTINGS: removed host toolco.bin from incoming initial save");
+            }
+        }
+    } else {
+        // Re-sync: restore client's existing toolco.bin if backed up
+        char backupDir[MAX_PATH] = {};
+        if (GetGameSaveDir(backupDir, sizeof(backupDir), "coop_client_backup")) {
+            std::filesystem::path clientToolco = std::filesystem::path(backupDir) / "toolco.bin";
+            if (std::filesystem::exists(clientToolco, ec)) {
+                std::filesystem::copy_file(clientToolco, toolcoBin, std::filesystem::copy_options::overwrite_existing, ec);
+                if (H && H->log) {
+                    Logf("republicmp  CLIENT_SETTINGS: restored client toolco.bin from backup on resync");
+                }
+            } else if (std::filesystem::exists(toolcoBin, ec)) {
+                std::filesystem::remove(toolcoBin, ec);
+            }
+        }
+    }
+}
+
+// Feature 32: Retain client backup
+static bool SaveSync_PreserveClientBackup(const char* destDir)
+{
+    if (!destDir || !destDir[0]) return false;
+    char backupDir[MAX_PATH] = {};
+    if (!GetGameSaveDir(backupDir, sizeof(backupDir), "coop_client_backup")) return false;
+
+    std::error_code ec;
+    std::filesystem::path src(destDir);
+    std::filesystem::path dst(backupDir);
+    std::filesystem::create_directories(dst, ec);
+    std::filesystem::copy(src, dst,
+                          std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+                          ec);
+    if (!ec) {
+        if (H && H->log) {
+            Logf("republicmp  SAVE_SYNC: client backup copy preserved at [%s]", backupDir);
+        }
+        return true;
+    }
+    if (H && H->log) {
+        Logf("republicmp  SAVE_SYNC: warning: failed to preserve client backup copy: %s", ec.message().c_str());
+    }
+    return false;
+}
+
+void SaveSync_IsolateClientSettingsForTest(const char* destDir, bool rejoin)
+{
+    SaveSync_IsolateClientSettings(destDir, rejoin);
+}
+
+bool SaveSync_PreserveClientBackupForTest(const char* destDir)
+{
+    return SaveSync_PreserveClientBackup(destDir);
+}
+
 // Returns true when the player is in the host's game with all channels up.
 // rejoin: coming back for a re-sync - the host may need a moment to listen
 // again, so refused connects are retried.
@@ -1674,6 +1616,19 @@ static bool RunClientJoin(bool rejoin)
             break;
         }
 
+        // Feature 34 & 36: Isolate settings & clear road segment preview
+        SaveSync_IsolateClientSettings(destDir, rejoin);
+        RoadSync_ClearPlannedSegments();
+
+        BuildMode preResyncBuildMode = {};
+        BYTE preResyncAutoPopulate = 0;
+        if (rejoin) {
+            TwoStates_CapturePreResyncCamera();
+            preResyncBuildMode = BuildMode_Read();
+            BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+            if (w) preResyncAutoPopulate = *(w + 0xB08);
+        }
+
         // 5b. Upload client diagnostic logs (including any previous session crash/desync logs) to Host.
         if (TwoStates_GetSendClientLogs()) {
             const char* logReason = rejoin ? "RESYNC" : (DiagLog_HasPrevCrashOrDesyncLog() ? "PREV_CRASH" : "CLIENT_JOIN");
@@ -1700,12 +1655,25 @@ static bool RunClientJoin(bool rejoin)
             TwoStates_OnSessionJoined(false, theirs.twoStatesMode, theirs.borderHalfWidth, theirs.expandBorders != 0,
                                       theirs.stateRub, theirs.stateUsd);
         }
-        if (rejoin) {
-            TwoStates_CapturePreResyncCamera();
-        }
         TriggerLoadSave(receivedSaveName);
         bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
         WaitForWorldLoadToClear();
+
+        // Feature 34: Restore client BuildMode and autoPopulate
+        if (loadFinished) {
+            BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+            if (rejoin) {
+                BuildMode_Write(preResyncBuildMode);
+                if (w) *(w + 0xB08) = preResyncAutoPopulate;
+                Logf("republicmp  CLIENT_SETTINGS: restored client BuildMode & autoPopulate after resync");
+            } else {
+                BuildMode defMode = { 0, 0, 0, 0 };
+                BuildMode_Write(defMode);
+            }
+        }
+
+        // Feature 32: Retain client-side backup copy in save/coop_client_backup before removing staging folder
+        SaveSync_PreserveClientBackup(destDir);
         {
             std::error_code rmEc;
             std::filesystem::remove_all(destDir, rmEc);
@@ -1718,47 +1686,35 @@ static bool RunClientJoin(bool rejoin)
         }
 
         // 7. Ready -> the host starts listening on the channels; connect them.
-        if (g_lockstep) {
-            ClientStep(7, Tr("Ожидание загрузки мира у хоста...", "Waiting for the host to load the shared world"));
-            SendMsg(sock, MSG_READY, 7, -1, "");
-            if (!Determinism_SessionRunning()) {
-                SetSessionError(Tr("Ошибка загрузки общего мира", "loading the shared world failed"));
-                TwoStates_OnSessionEnded();
-                break;
-            }
-            // In short tries, watching the join connection: a host that
-            // crashed while loading closes it.
-            ULONGLONG joinStart = GetTickCount64();
-            bool lockstepUp = false, hostGone = false;
-            while (!g_disconnectRequested && GetTickCount64() - joinStart < LOCKSTEP_CONNECT_TIMEOUT_MS) {
-                if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
-                    lockstepUp = true;
-                    break;
-                }
-                if (JoinHostGone(&sock)) {
-                    hostGone = true;
-                    break;
-                }
-            }
-            if (!lockstepUp) {
-                if (hostGone) SetSessionError(Tr("Хост отключился во время загрузки общего мира", "the host dropped while loading the shared world"));
-                else if (!g_disconnectRequested) SetSessionError(Tr("Не удалось открыть Lockstep-канал к %s:%d", "couldn't open the lockstep connection to %s:%d"), g_targetIp, LOCKSTEP_PORT);
-                TwoStates_OnSessionEnded();
-                break;
-            }
-            joined = true;
+        ClientStep(7, Tr("Ожидание загрузки мира у хоста...", "Waiting for the host to load the shared world"));
+        SendMsg(sock, MSG_READY, 7, -1, "");
+        if (!Determinism_SessionRunning()) {
+            SetSessionError(Tr("Ошибка загрузки общего мира", "loading the shared world failed"));
+            TwoStates_OnSessionEnded();
             break;
         }
-        ClientStep(7, Tr("Запуск каналов синхронизации...", "Starting live sync"));
-        SendMsg(sock, MSG_READY, 7, -1, "");
-        if (!WaitForChannels(true)) {
-            if (!g_disconnectRequested) SetSessionError(Tr("Каналы синхронизации не подключились — TCP порты %d-%d хоста недоступны", "the live sync channels didn't connect - TCP ports %d-%d of the host are not reachable (only port %d is forwarded?)"), BUILD_SYNC_PORT, TERRAIN_SYNC_PORT, SAVE_SYNC_PORT);
-            ResetChannels();
+        // In short tries, watching the join connection: a host that
+        // crashed while loading closes it.
+        ULONGLONG joinStart = GetTickCount64();
+        bool lockstepUp = false, hostGone = false;
+        while (!g_disconnectRequested && GetTickCount64() - joinStart < LOCKSTEP_CONNECT_TIMEOUT_MS) {
+            if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
+                lockstepUp = true;
+                break;
+            }
+            if (JoinHostGone(&sock)) {
+                hostGone = true;
+                break;
+            }
+        }
+        if (!lockstepUp) {
+            if (hostGone) SetSessionError(Tr("Хост отключился во время загрузки общего мира", "the host dropped while loading the shared world"));
+            else if (!g_disconnectRequested) SetSessionError(Tr("Не удалось открыть Lockstep-канал к %s:%d", "couldn't open the lockstep connection to %s:%d"), g_targetIp, LOCKSTEP_PORT);
+            TwoStates_OnSessionEnded();
             break;
         }
         joined = true;
-        TwoStates_OnSessionJoined(false, theirs.twoStatesMode, theirs.borderHalfWidth, theirs.expandBorders != 0,
-                                  theirs.stateRub, theirs.stateUsd);
+        break;
     } while (false);
 
     g_activeSock = INVALID_SOCKET;
@@ -2060,11 +2016,11 @@ void SaveSync_Tick()
 }
 
 SessionState SaveSync_GetState() { return g_state; }
-void SaveSync_SetLockstep(bool on) { g_lockstepChosen = on; }
+void SaveSync_SetLockstep(bool on) { (void)on; g_lockstepChosen = true; g_lockstep = true; }
 void SaveSync_SetDlcCheck(bool on) { g_dlcCheck = on; }
 bool SaveSync_GetDlcCheck() { return g_dlcCheck; }
-bool SaveSync_GetLockstep() { return g_lockstepChosen; }
-bool SaveSync_IsLockstepSession() { return g_lockstep && g_state != SESSION_IDLE; }
+bool SaveSync_GetLockstep() { return true; }
+bool SaveSync_IsLockstepSession() { return g_state != SESSION_IDLE; }
 bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
 bool SaveSync_IsHostRole()       { return g_isHost; }
 ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }

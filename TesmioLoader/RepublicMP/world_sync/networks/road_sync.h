@@ -185,7 +185,8 @@ inline size_t RoadSync_PointBytes(int pointCount)
 // single-segment drag re-types segment +0x380 over the point range
 // (+0x388, +0x38c); a pathfound multi-segment drag re-types whole segments.
 // Each piece identifies its segment by node positions.
-#define ROAD_SYNC_MAX_UPGRADE_PIECES 32
+#define ROAD_SYNC_MAX_UPGRADE_PIECES 128
+#define ROAD_SYNC_MAX_DEMOLISH_PIECES 64
 struct RoadSyncUpgradePiece {
     float segStart[3];  // segment's start node position
     float segEnd[3];    // segment's end node position
@@ -238,7 +239,7 @@ struct RoadSyncDemolishMsg {
     // Multi-segment demolish (manager+0x3d0 set): whole segments, each
     // demolished on its own at the receiver.
     int pieceCount;
-    RoadSyncUpgradePiece pieces[8];
+    RoadSyncUpgradePiece pieces[ROAD_SYNC_MAX_DEMOLISH_PIECES];
 };
 
 // Acknowledgement for a segment or upgrade. success = the receiving engine
@@ -435,3 +436,4 @@ bool RoadSync_ReadDemolishHover(__int64 manager, RoadSyncDemolishHover* out);
 bool RoadSync_ApplyCommandDemolishHover(const LsDemolishHoverMsg& msg);
 int RoadSync_GetPlannedSegmentOwner(__int64 seg);
 void RoadSync_SetPlannedSegmentOwnerForTest(__int64 seg, int owner);
+void RoadSync_ClearPlannedSegments();

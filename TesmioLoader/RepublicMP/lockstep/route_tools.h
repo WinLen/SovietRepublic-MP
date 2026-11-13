@@ -29,6 +29,8 @@
 
 #include "tesmio_plugin.h"
 
+#define ROUTE_TOOLS_DEPOT_MAX 256
+
 void RouteTools_Bind(const TsmHost* host);
 
 // False when a game routine the commands call differs (the tools are then put away in lockstep).

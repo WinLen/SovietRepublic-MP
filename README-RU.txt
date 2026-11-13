@@ -1,5 +1,5 @@
 ============================================================================
-  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.5.7)
+  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.5.9)
   Правила установки и совместной игры (RU) / Installation & Co-op Guide (EN)
 ============================================================================
 

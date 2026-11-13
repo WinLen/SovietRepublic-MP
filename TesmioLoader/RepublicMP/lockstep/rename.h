@@ -16,6 +16,18 @@
 
 #include "tesmio_plugin.h"
 
+enum {
+    KIND_BUILDING_RENAME = 0,
+    KIND_VEHICLE_RENAME = 1,
+    KIND_CITY = 3,
+    KIND_LINE = 8,
+    KIND_CROSSROAD = 0xA,
+    KIND_CITY_CREATE = 0xC,
+    KIND_CITY_DELETE = 0xD,
+    KIND_RESEARCH = 0xE,
+    KIND_CITY_REASSIGN = 0xF
+};
+
 void Rename_Bind(const TsmHost* host);
 
 // Render thread, at the 5290 call (game_calls): true when the field is a city's or

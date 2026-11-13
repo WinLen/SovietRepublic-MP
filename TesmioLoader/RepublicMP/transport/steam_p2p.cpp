@@ -701,7 +701,7 @@ struct SteamSocketSlot {
 
 static SteamSocketSlot s_slots[MAX_STEAM_SOCKETS] = {};
 static std::deque<PendingSyn> s_pendingSyns;
-static const int s_activeChannels[] = { 5555, 5556, 5557, 5558, 5560 };
+static const int s_activeChannels[] = { 5555, 5556, 5560 };
 
 bool SteamP2P_IsSteamSocket(SOCKET s)
 {
