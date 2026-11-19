@@ -577,7 +577,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Hotfix: resolve save folder from SOVIET64.exe directory instead of Workshop loader baseDir (fixes host error code 3 on join), ensure media_soviet/save exists, and sync RU/EN Workshop metadata",
+                "v%s (Protocol %d) - Hotfix: restore sub-4 GB Windows x64 heap pointer support in IsPointerLikeX64 (fixes permanent dynamic lines desync on load, customs road snapping, and minimap overlay on PCs with <4 GB heap allocations)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -147,13 +147,21 @@ inline long long SafeCountStdVector(const void* vecHeader, size_t elemSize, long
     return n;
 }
 
-// Invariant #12 (AGENTS.md): Detects x64 heap/module pointers in a 64-bit word.
-// Pointers in x64 Windows user-space have high >= 1 and high <= 0x7FFF, and require 8-byte alignment.
-// Low addresses with high == 0 are pairs of 32-bit floats/integers, which are never 64-bit pointers.
+// Invariant #12 (AGENTS.md): Detects x64 heap/module pointers in a 64-bit word,
+// including low Windows x64 segment heap addresses below 4 GB (high == 0, v >= 0x00100000)
+// and in the low 1 TB range (high < 0x100). All pointers require 8-byte alignment
+// ((v & 7u) == 0u) and canonical user-space range (high <= 0x7FFF).
+// Low addresses (high < 0x100, including < 4 GB) are pre-validated with VirtualQuery
+// (MEM_COMMIT + readable non-PAGE_GUARD) + SafeMemcpyPod probe so unmapped 32-bit
+// scalar/float pairs (e.g. {1.0f, 0} = 0x3F800000, {10, 0} = 0xA, 0x0000000A00000000)
+// return false without raising a first-chance EXCEPTION_ACCESS_VIOLATION in VEH,
+// while genuine Windows x64 sub-4 GB heap pointers (e.g. 0x000000005FED0100) return true.
 inline bool IsPointerLikeX64(uint64_t v)
 {
+    if (v < 0x00100000ULL)
+        return false;
     unsigned high = (unsigned)(v >> 32);
-    if (high < 1u || high > 0x7FFFu)
+    if (high > 0x7FFFu)
         return false;
     if ((v & 7u) != 0u)
         return false;

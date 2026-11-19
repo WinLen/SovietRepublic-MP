@@ -235,6 +235,50 @@ static void WriteMockVectorHeader(BYTE* vecHeaderAddr, std::vector<T>& backingVe
 // Test 1: RVA Invariants, POD SEH Memory Helpers & Thread-Safe InitOnce Locks
 // ---------------------------------------------------------------------------
 
+static bool SubTest_Sub4GbHeapPointersAndDepotCheck()
+{
+    // Allocate a block below 4 GB (high 32 bits == 0) to simulate Windows x64 sub-4 GB heap addresses.
+    void* lowMem = nullptr;
+    for (uintptr_t addr = 0x10000000ULL; addr <= 0xEC000000ULL && !lowMem; addr += 0x04000000ULL) {
+        lowMem = VirtualAlloc((LPVOID)addr, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    }
+    if (!lowMem) {
+        // Fallback loop in case all strided slots are occupied on the host machine.
+        for (uintptr_t addr = 0x10000000ULL; addr <= 0xEFFF0000ULL && !lowMem; addr += 0x00100000ULL) {
+            lowMem = VirtualAlloc((LPVOID)addr, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        }
+    }
+    TEST_CHECK(lowMem != nullptr);
+    if (!lowMem) return false;
+
+    const uint64_t lowAddr = (uint64_t)(uintptr_t)lowMem;
+    TEST_CHECK((lowAddr >> 32) == 0ULL);
+    TEST_CHECK(IsPointerLikeX64(lowAddr));
+    TEST_CHECK(!IsPointerLikeX64(lowAddr | 1ULL));
+    TEST_CHECK(!IsPointerLikeX64(lowAddr | 4ULL));
+
+    BYTE* base = (BYTE*)lowMem;
+    memset(base, 0, 0x4000);
+    BYTE* lowBld = base;
+    BYTE* lowBldType = base + 0x0800;
+    BYTE* lowVeh = base + 0x1000;
+    BYTE* lowVehType = base + 0x2800;
+
+    *(BYTE**)(lowBld + 0x5B0) = nullptr;
+    *(BYTE**)(lowBld + 0x318) = lowBldType;
+    *(int32_t*)(lowBldType + 0x360) = 0x0E; // Road depot category
+    *(int32_t*)(lowBldType + 0x364) = 0;
+
+    *(BYTE**)(lowVeh + 0x1708) = lowVehType;
+    *(int32_t*)(lowVehType + 0x294) = 1;    // Road vehicle category
+
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(lowBld, lowVeh, 0) == 1);
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(lowBld, nullptr, 0) == 1);
+
+    TEST_CHECK(VirtualFree(lowMem, 0, MEM_RELEASE) != 0);
+    return true;
+}
+
 static bool Test_RvaAndSafeMem()
 {
     ResetMockWorldMemory();
@@ -345,7 +389,7 @@ static bool Test_RvaAndSafeMem()
     *(uintptr_t*)(vecHdr + 0x08) = 0x1000;
     TEST_CHECK(SafeCountStdVector(vecHdr, sizeof(uint64_t), 100) == 0);
 
-    // Invariant #12: IsPointerLikeX64 including low Windows x64 heap segments (high >= 1 && high < 0x100)
+    // Invariant #12: IsPointerLikeX64 including low Windows x64 heap segments (v >= 0x00100000 && high < 0x100, including < 4 GB)
     TEST_CHECK(!IsPointerLikeX64(0ULL));
     TEST_CHECK(!IsPointerLikeX64(100ULL));
     TEST_CHECK(!IsPointerLikeX64(0x00000000FFFFFFFFULL)); // two 32-bit ints/floats with high == 0
@@ -354,17 +398,7 @@ static bool Test_RvaAndSafeMem()
     // Unmapped low-heap address (high == 2, but not committed) -> must return false
     TEST_CHECK(!IsPointerLikeX64(0x00000002deadbeefULL & ~3ULL));
 
-    // Try allocating a page in low x64 address space (< 4 GB, high == 0) to verify rejection of float/int pairs
-    void* lowSub4GbPage = nullptr;
-    for (uintptr_t addr = 0x10000000ULL; addr < 0xF0000000ULL && !lowSub4GbPage; addr += 0x04000000ULL) {
-        lowSub4GbPage = VirtualAlloc((LPVOID)addr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    }
-    if (lowSub4GbPage) {
-        *(uint64_t*)lowSub4GbPage = 0xCAFEBABE12345678ULL;
-        TEST_CHECK(!IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage)); // high == 0 rejected to prevent float pair false positive
-        TEST_CHECK(!IsPointerLikeX64((uint64_t)(uintptr_t)lowSub4GbPage | 1ULL)); // unaligned low pointer rejected
-        VirtualFree(lowSub4GbPage, 0, MEM_RELEASE);
-    }
+    TEST_CHECK(SubTest_Sub4GbHeapPointersAndDepotCheck());
     void* lowPage = nullptr;
     for (uintptr_t hi = 1; hi < 0x100 && !lowPage; ++hi) {
         lowPage = VirtualAlloc((LPVOID)(hi << 32), 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -10570,17 +10604,17 @@ static bool Test_SystemUiInterceptionAndNetworkTools_M9_1()
     // Kernel space addresses (high > 0x7FFF) must return false
     TEST_CHECK(!IsPointerLikeX64(0x8000000000000000ULL));
     TEST_CHECK(!IsPointerLikeX64(0xFFFFF80000000000ULL));
-    // Valid module / heap pointers (8-byte aligned, high >= 1) must return true
+    // Valid module / heap pointers (8-byte aligned, >= 0x00100000) must return true
     if (g_exeBase) {
         uint64_t exePtr = (uint64_t)(uintptr_t)g_exeBase;
-        if ((exePtr & 7u) == 0 && (exePtr >> 32) >= 1) {
+        if ((exePtr & 7u) == 0 && exePtr >= 0x00100000ULL && (exePtr >> 32) <= 0x7FFF) {
             TEST_CHECK(IsPointerLikeX64(exePtr));
         }
     }
     void* heapBuf = malloc(64);
     if (heapBuf) {
         uint64_t heapPtr = (uint64_t)(uintptr_t)heapBuf;
-        if ((heapPtr & 7u) == 0 && (heapPtr >> 32) >= 1) {
+        if ((heapPtr & 7u) == 0 && heapPtr >= 0x00100000ULL && (heapPtr >> 32) <= 0x7FFF) {
             TEST_CHECK(IsPointerLikeX64(heapPtr));
         }
         free(heapBuf);
@@ -10743,7 +10777,7 @@ static bool SubTest_M9_1_PointerFilterExhaustiveBoundaries()
         TEST_CHECK(!IsPointerLikeX64(0x00007FFF00000000ULL | off));
     }
 
-    // B. Scalar pairs below 4GB (high == 0) must return false
+    // B. Unmapped scalar pairs below 4GB (high == 0) must return false
     TEST_CHECK(!IsPointerLikeX64(0x000000003F800000ULL)); // {1.0f, 0}
     TEST_CHECK(!IsPointerLikeX64(0x00000000BF800000ULL)); // {-1.0f, 0}
     TEST_CHECK(!IsPointerLikeX64(0x000000000000000AULL)); // {10, 0}
@@ -10767,13 +10801,13 @@ static bool SubTest_M9_1_PointerFilterExhaustiveBoundaries()
     TEST_CHECK(!IsPointerLikeX64(0xFFFFFFFFFFFFFFFFULL));
     TEST_CHECK(!IsPointerLikeX64(0xFFFFFFFFFFFFFFF8ULL));
 
-    // E. Dynamic virtual allocation in low range (1 <= high < 0x100)
+    // E. Dynamic virtual allocation in low range (v >= 0x00100000 && high <= 0x7FFF)
     TEST_CHECK(!IsPointerLikeX64(0x0000000100000000ULL));
 
     void* allocated = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (allocated) {
         uint64_t addr = (uint64_t)(uintptr_t)allocated;
-        if ((addr & 7u) == 0 && (addr >> 32) >= 1 && (addr >> 32) <= 0x7FFF) {
+        if ((addr & 7u) == 0 && addr >= 0x00100000ULL && (addr >> 32) <= 0x7FFF) {
             TEST_CHECK(IsPointerLikeX64(addr));
 
             // Misaligned offsets into the valid page must return false
