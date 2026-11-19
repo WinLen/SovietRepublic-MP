@@ -1769,12 +1769,12 @@ static bool ShouldReleaseCorridorLock(BYTE* bld, BYTE* lockVeh)
 {
     if (!IsPointerLikeX64((uintptr_t)lockVeh)) return true;
     if (*(BYTE**)(lockVeh + VEH_CORRIDOR_LOCK_BLD_OFFSET) != bld) return true;
-    if (lockVeh[VEH_IS_RAIL_FLAG_OFFSET] != 0 || GetVehicleCategory(lockVeh) == 4) return false;
+    const int cat = GetVehicleCategory(lockVeh);
+    if (lockVeh[VEH_IS_RAIL_FLAG_OFFSET] != 0 || cat == 3 || cat == 4) return false;
     if (*(int32_t*)(lockVeh + VEH_BAY_SLOT_IDX_OFFSET) <= -10) return false;
     if (IsPointerLikeX64((uintptr_t)bld) && *(uintptr_t*)(bld + BLD_CONSTR_SITE_PTR_OFFSET) != 0) return false;
-    if (*(int32_t*)(lockVeh + VEH_HELI_FLIGHT_STATE_OFF) != 0) return true;
-    if (*(float*)(lockVeh + VEH_WAIT_TIMER_OFFSET) > 0.0f) return true;
-    if (GetVehicleCategory(lockVeh) == 8 &&
+    if ((cat == 8 || cat == 10) && *(int32_t*)(lockVeh + VEH_HELI_FLIGHT_STATE_OFF) != 0) return true;
+    if (cat == 8 &&
         *(uintptr_t*)(bld + BLD_ATTACHED_END_OFFSET) > *(uintptr_t*)(bld + BLD_ATTACHED_BEGIN_OFFSET)) {
         return true;
     }
@@ -1919,44 +1919,9 @@ static void AssignReservedAircraftStandIfReady(BYTE* veh, BYTE* bld)
     PushVehicleWaypoint3f(veh, (const float*)(slotPts + 0x00));
 }
 
-static void SanitizeRailVehicleStuckState(BYTE* veh)
-{
-    if (!IsPointerLikeX64((uintptr_t)veh)) return;
-    if (veh[VEH_IS_RAIL_FLAG_OFFSET] == 0 && GetVehicleCategory(veh) != 4) return;
-    if (*(BYTE**)(veh + VEH_CUR_BLD_OFFSET) != nullptr) return;
-
-    uintptr_t wpBegin = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
-    uintptr_t wpEnd   = *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET);
-    int wpCount = (wpEnd > wpBegin && IsPointerLikeX64(wpBegin)) ? (int)((wpEnd - wpBegin) / 12u) : 0;
-    int32_t wpIdx = *(int32_t*)(veh + VEH_WAYPOINT_INDEX_OFFSET);
-
-    if (wpCount > 0 && wpIdx >= wpCount && veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] != 0 &&
-        *(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) == -1 &&
-        *(int32_t*)(veh + VEH_DEPOT_SLOT_IDX_OFFSET) == -1) {
-        uintptr_t ordBegin = *(uintptr_t*)(veh + VEH_ORDERS_BEGIN_OFFSET);
-        uintptr_t ordEnd   = *(uintptr_t*)(veh + VEH_ORDERS_END_OFFSET);
-        if (ordEnd > ordBegin && (ordEnd - ordBegin) >= 240u) {
-            *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET) = wpBegin;
-            *(int32_t*)(veh + VEH_WAYPOINT_INDEX_OFFSET) = 0;
-            veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] = 0;
-            *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) = nullptr;
-            veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
-            return;
-        }
-    }
-
-    if (wpCount == 0 && *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) != nullptr &&
-        *(int32_t*)(veh + VEH_BAY_SLOT_IDX_OFFSET) == -1 &&
-        *(int32_t*)(veh + VEH_DEPOT_SLOT_IDX_OFFSET) == -1) {
-        *(BYTE**)(veh + VEH_BAY_TARGET_BLD_OFFSET) = nullptr;
-        veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
-    }
-}
-
 static void SanitizeVehicleArrivalBeforeStep(BYTE* veh)
 {
     if (!IsPointerLikeX64((uintptr_t)veh)) return;
-    SanitizeRailVehicleStuckState(veh);
     BYTE* lockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
     if (IsPointerLikeX64((uintptr_t)lockBld)) {
         SanitizeBuildingCorridorLock(lockBld);
@@ -1971,6 +1936,11 @@ static void SanitizeVehicleArrivalBeforeStep(BYTE* veh)
 static void SanitizeVehicleArrivalAfterStep(BYTE* veh)
 {
     if (!IsPointerLikeX64((uintptr_t)veh)) return;
+    // Do NOT wipe targetBld (+0x528) or force +0xD39 = 1 on rail vehicles:
+    // - RCO track builders (vehCat == 4 + rail construction skill at vehType + 0x85E0) rely on +0x528 != nullptr
+    //   when wpCount == 0 for AssignBayPath (0x6B2C00), and wiping +0x528 with +0xD39 = 1 triggers 0x147B1F unassign/recall.
+    // - Scheduled rail trains (vehCat == 3/4) natively handle wpIdx >= wpCount && (+0xD39 || +0xD3A) via
+    //   0x6CE5FA..0x6CE67B -> 0x6D7DE0(veh, -1, 1), where 0x6D85EF reads +0x528 before orders[orderIdx - 1].
     BYTE* lockBld = *(BYTE**)(veh + VEH_CORRIDOR_LOCK_BLD_OFFSET);
     if (IsPointerLikeX64((uintptr_t)lockBld)) {
         SanitizeBuildingCorridorLock(lockBld);
@@ -1979,26 +1949,42 @@ static void SanitizeVehicleArrivalAfterStep(BYTE* veh)
 
 static void __fastcall HookedVehicleArrivalStep(void* vehicle)
 {
-    DiagLog_BeginSafeSeh();
-    __try {
-        SanitizeVehicleArrivalBeforeStep((BYTE*)vehicle);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    const bool sanitize = Determinism_IsActive();
+    if (sanitize) {
+        DiagLog_BeginSafeSeh();
+        __try {
+            SanitizeVehicleArrivalBeforeStep((BYTE*)vehicle);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        DiagLog_EndSafeSeh();
     }
-    DiagLog_EndSafeSeh();
 
     if (o_vehicleArrivalStep) {
         o_vehicleArrivalStep(vehicle);
     }
 
+    if (sanitize) {
+        DiagLog_BeginSafeSeh();
+        __try {
+            SanitizeVehicleArrivalAfterStep((BYTE*)vehicle);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        DiagLog_EndSafeSeh();
+    }
+}
+
+void SimPatches_TestSanitizeVehicleArrival(void* vehicle)
+{
     DiagLog_BeginSafeSeh();
     __try {
+        SanitizeVehicleArrivalBeforeStep((BYTE*)vehicle);
         SanitizeVehicleArrivalAfterStep((BYTE*)vehicle);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     DiagLog_EndSafeSeh();
 }
 
-void SimPatches_TestSanitizeVehicleArrival(void* vehicle)
+void SimPatches_TestHookedVehicleArrivalStep(void* vehicle)
 {
     HookedVehicleArrivalStep(vehicle);
 }
@@ -2076,42 +2062,12 @@ unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void*
     return HookedIsVehicleAtDepotOrStop(nullptr, (const BYTE*)bld, (const BYTE*)veh, a4);
 }
 
-static const unsigned char kBuildVehWaypointsExpect[19] = {
-    0x48, 0x8B, 0xC4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
-    0x41, 0x57, 0x48, 0x8D, 0xA8, 0xD8, 0xF2, 0xFF, 0xFF
-};
-typedef void (__fastcall* BuildVehicleWaypointsFn)(void* vehicle, unsigned char a2);
-static BuildVehicleWaypointsFn o_buildVehicleWaypoints = nullptr;
-
-static void SanitizeBuildVehicleWaypointsPre(BYTE* veh)
-{
-    if (!IsPointerLikeX64((uintptr_t)veh)) return;
-    if (veh[VEH_IS_RAIL_FLAG_OFFSET] == 0 && GetVehicleCategory(veh) != 4) return;
-    if (veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0) return;
-    uintptr_t wpBegin = *(uintptr_t*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET);
-    uintptr_t wpEnd   = *(uintptr_t*)(veh + VEH_WAYPOINTS_END_OFFSET);
-    if (wpEnd <= wpBegin) {
-        veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
-    }
-}
-
-static void __fastcall HookedBuildVehicleWaypoints(void* vehicle, unsigned char a2)
-{
-    DiagLog_BeginSafeSeh();
-    __try {
-        SanitizeBuildVehicleWaypointsPre((BYTE*)vehicle);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    DiagLog_EndSafeSeh();
-
-    if (o_buildVehicleWaypoints) {
-        o_buildVehicleWaypoints(vehicle, a2);
-    }
-}
-
 void SimPatches_TestBuildVehicleWaypoints(void* vehicle, unsigned char a2)
 {
-    HookedBuildVehicleWaypoints(vehicle, a2);
+    // Native SOVIET64.exe 0x683240 early-exits at 0x6832EB when veh[0x67D] != 0 && veh[0xD39] != 0.
+    // We intentionally no longer hook RVA_VEH_BUILD_WAYPOINTS or clear +0xD39 before it runs.
+    (void)vehicle;
+    (void)a2;
 }
 
 bool SimPatches_Install()
@@ -2127,9 +2083,6 @@ bool SimPatches_Install()
     InstallInlineHook(g_exeBase + RVA_IS_VEHICLE_AT_DEPOT_OR_STOP, (void*)&HookedIsVehicleAtDepotOrStop,
                       &o_isVehicleAtDepotOrStop, kIsVehicleAtDepotOrStopExpect,
                       sizeof(kIsVehicleAtDepotOrStopExpect), "republicmp is_vehicle_at_depot");
-    InstallInlineHook(g_exeBase + RVA_VEH_BUILD_WAYPOINTS, (void*)&HookedBuildVehicleWaypoints,
-                      (void**)&o_buildVehicleWaypoints, kBuildVehWaypointsExpect,
-                      sizeof(kBuildVehWaypointsExpect), "republicmp build vehicle waypoints");
 
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&

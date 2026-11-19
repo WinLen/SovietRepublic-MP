@@ -1813,16 +1813,37 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #define VEH_IS_RAIL_FLAG_OFFSET              0x067Du   // uint8_t 1 for rail / track builder vehicles
 #endif
 #ifndef VEH_ORDERS_BEGIN_OFFSET
-#define VEH_ORDERS_BEGIN_OFFSET              0x0680u   // std::vector<VehicleOrder> begin on VEHICLE
+#define VEH_ORDERS_BEGIN_OFFSET              0x0680u   // std::vector<BUILDING*> begin on VEHICLE (8 bytes/ptr; alias of VEH_STOP_BLD_PTR_VEC_OFF)
 #endif
 #ifndef VEH_ORDERS_END_OFFSET
-#define VEH_ORDERS_END_OFFSET                0x0688u   // std::vector<VehicleOrder> end on VEHICLE
+#define VEH_ORDERS_END_OFFSET                0x0688u   // std::vector<BUILDING*> end on VEHICLE
 #endif
 #ifndef VEH_ORDER_INDEX_OFFSET
 #define VEH_ORDER_INDEX_OFFSET               0x0698u   // int32_t active order index on VEHICLE
 #endif
 #ifndef VEH_REVERSE_NEEDED_FLAG_OFFSET
 #define VEH_REVERSE_NEEDED_FLAG_OFFSET       0x0D3Au   // uint8_t 1 when rail vehicle needs reversal/repath at end of waypoints
+#endif
+#ifndef VEH_TYPE_SKILLS_BEGIN_OFFSET
+#define VEH_TYPE_SKILLS_BEGIN_OFFSET         0x85E0u   // std::vector<VehicleSkill> begin on VEHICLE_TYPE (16 bytes/entry, +0x00 int32 skillId)
+#endif
+#ifndef VEH_TYPE_SKILLS_END_OFFSET
+#define VEH_TYPE_SKILLS_END_OFFSET           0x85E8u   // std::vector<VehicleSkill> end on VEHICLE_TYPE
+#endif
+#ifndef VEH_TYPE_SKILL_ENTRY_BYTES
+#define VEH_TYPE_SKILL_ENTRY_BYTES           16u       // sizeof(VehicleSkill) in 0x66BD30..0x66BDFF (sar rax, 4)
+#endif
+#ifndef SKILL_CONSTRUCTION_RAIL_CRANE
+#define SKILL_CONSTRUCTION_RAIL_CRANE        0x16      // $SKILL_CONSTRUCTION_RAIL_CRANE (0x3EEC90 / 0x66BD55)
+#endif
+#ifndef SKILL_CONSTRUCTION_RAIL_TRACK_LAYER
+#define SKILL_CONSTRUCTION_RAIL_TRACK_LAYER  0x1A      // $SKILL_CONSTRUCTION_RAIL_TRACK_LAYER (0x3EED41 / 0x66BD9E)
+#endif
+#ifndef SKILL_CONSTRUCTION_RAIL_TUNNEL_BORING
+#define SKILL_CONSTRUCTION_RAIL_TUNNEL_BORING 0x1B     // $SKILL_CONSTRUCTION_RAIL_TUNNEL_BORING (0x3EEEBB / 0x66BDC1)
+#endif
+#ifndef SKILL_CONSTRUCTION_RAIL_CRANE2
+#define SKILL_CONSTRUCTION_RAIL_CRANE2       0x1C      // $SKILL_CONSTRUCTION_RAIL_CRANE2 (0x3EEDFE / 0x66BD7B)
 #endif
 #ifndef BLD_CONSTR_SITE_PTR_OFFSET
 #define BLD_CONSTR_SITE_PTR_OFFSET           0x05D0u   // ConstructionSite* active construction site data on BUILDING
@@ -1831,8 +1852,11 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               BLD_VEHICLES_END_OFFSET == BLD_VEHICLES_BEGIN_OFFSET + 8u &&
               VEH_WORKPLACE_BLD_OFFSET == VEH_CUR_BLD_OFFSET + 8u &&
+              VEH_ORDERS_BEGIN_OFFSET == VEH_STOP_BLD_PTR_VEC_OFF &&
               VEH_ORDERS_END_OFFSET == VEH_ORDERS_BEGIN_OFFSET + 8u &&
               VEH_REVERSE_NEEDED_FLAG_OFFSET == VEH_BAY_ARRIVED_FLAG_OFFSET + 1u &&
+              VEH_TYPE_SKILLS_END_OFFSET == VEH_TYPE_SKILLS_BEGIN_OFFSET + 8u &&
+              VEH_TYPE_SKILL_ENTRY_BYTES == 16u &&
               FN_COPY_DIST_OFFICE_RVA == 0x2B8A90u &&
               FN_COPY_WASTE_SETTINGS_RVA == 0x1DC550u &&
               FN_COPY_TRANSFER_SETTINGS_RVA == 0x1DC750u &&

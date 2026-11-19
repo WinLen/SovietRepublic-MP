@@ -577,7 +577,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix: separate per-state free/limited building pools ($COUNT_LIMIT) in Two States build menu tooltips/cards (hook inlined 0x7AC6B7 lookup across all 13 callers of 0x7ABF20) and thread-safe command-owner attribution (g_cmdThread)",
+                "v%s (Protocol %d) - Fix: RCO Track Builder multi-stage stalling (remove broken 0x683240 waypoint hook & rail-stuck sanitizer), protect rail corridor locks, gate arrival-step sanitizers to MP only, tighten carrier recovery, and filter non-toggle state fields in live switches",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

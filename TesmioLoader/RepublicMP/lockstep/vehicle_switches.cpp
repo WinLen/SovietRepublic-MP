@@ -162,21 +162,22 @@ static bool TextWord(int kind, unsigned offset)
 
 // A stop record's lists (each half's +8 pairs and +38..+c8 lists): heap links,
 // their contents are cargo_settings.cpp's. The vehicle's internal vectors,
-// object pointers, dispatch/work state (+4c8..+574, +5d8..+5f0), route/rail path
-// and 75-entry rail trail buffer (+680..+1140), and dynamic simulation/render
-// fields (+1708..+1768, +17e8..+17f0, +1950..+1a10, +1a54..+1a5c, +1a7c..+1a84, +1ad0..+1ad8)
+// object pointers (+4A0 link), dispatch/work state (+4c8..+574, +5d8..+5f4 incl. fuel),
+// route/rail path, 25-entry trail buffer, 6th node, wheels vector, and dynamic
+// simulation/render matrices (+680..+1700, +1708..+1768, +17e8..+17f0,
+// +1950..+1a10, +1a54..+1a5c, +1a7c..+1a84, +1ad0..+1ad8)
 // must never be overwritten or reverted as UI switches.
 #define HALF_BYTES 0xC8
 static bool ListWord(int kind, unsigned offset)
 {
     if (kind == KIND_VEHICLE) {
         return (offset >= 0x3A0 && offset < 0x3D0) ||
-               (offset >= 0x458 && offset < 0x4A0) ||
+               (offset >= 0x458 && offset < 0x4A8) ||
                (offset >= 0x4C8 && offset < 0x574) ||
-               (offset >= 0x5D8 && offset < 0x5F0) ||
+               (offset >= 0x5D8 && offset < 0x5F4) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
-               (offset >= 0x680 && offset < 0x1140) ||
+               (offset >= 0x680 && offset < 0x1700) ||
                (offset >= 0x1708 && offset < 0x1710) ||
                (offset >= 0x1720 && offset < 0x1768) ||
                (offset >= 0x17E8 && offset < 0x17F0) ||

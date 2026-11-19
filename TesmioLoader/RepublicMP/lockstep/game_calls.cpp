@@ -629,28 +629,44 @@ static void RestoreMechToBuildingInventory(U64 mech, U64 carrier)
     }
 }
 
+static bool IsOrphanedCarriedMechanism(U64 carrier, U64 mech)
+{
+    if (!IsPointerLikeX64(carrier) || !IsPointerLikeX64(mech)) return false;
+    return *(U64*)(carrier + VEH_WORKPLACE_BLD_OFFSET) != 0 &&
+           *(U64*)(mech + VEH_LINK_PTR_OFFSET) == carrier &&
+           *(U64*)(mech + VEH_WORKPLACE_BLD_OFFSET) == 0 &&
+           *(U64*)(mech + VEH_DEPOT_PTR_OFFSET) == 0;
+}
+
 static void DetachSingleMechFromCarrier(U64 carrier, U64 mech)
 {
-    if (!carrier || !mech) return;
+    if (!IsPointerLikeX64(carrier) || !IsPointerLikeX64(mech)) return;
     U64 b = *(U64*)(carrier + VEH_CARRIED_BEGIN_OFFSET);
     U64 e = *(U64*)(carrier + VEH_CARRIED_END_OFFSET);
-    if (b && e > b && (e - b) <= 64 * 8) {
+    bool found = false;
+    if (IsPointerLikeX64(b) && e > b && (e - b) <= 64 * 8) {
         U64 writePtr = b;
         for (U64 p = b; p + 8 <= e; p += 8) {
             U64 cur = *(U64*)p;
-            if (cur != mech) {
+            if (cur == mech) {
+                found = true;
+            } else {
                 *(U64*)writePtr = cur;
                 writePtr += 8;
             }
         }
-        *(U64*)(carrier + VEH_CARRIED_END_OFFSET) = writePtr;
+        if (found && IsOrphanedCarriedMechanism(carrier, mech)) {
+            *(U64*)(carrier + VEH_CARRIED_END_OFFSET) = writePtr;
+        }
     }
-    RestoreMechToBuildingInventory(mech, carrier);
+    if (found && IsOrphanedCarriedMechanism(carrier, mech)) {
+        RestoreMechToBuildingInventory(mech, carrier);
+    }
 }
 
 static void RecoverOrphanedCarrierMechanisms(U64 veh)
 {
-    if (!veh) return;
+    if (!IsPointerLikeX64(veh)) return;
     __try {
         U64 carrier = *(U64*)(veh + VEH_LINK_PTR_OFFSET);
         if (carrier) {
@@ -658,13 +674,25 @@ static void RecoverOrphanedCarrierMechanisms(U64 veh)
         }
         U64 b = *(U64*)(veh + VEH_CARRIED_BEGIN_OFFSET);
         U64 e = *(U64*)(veh + VEH_CARRIED_END_OFFSET);
-        if (b && e > b && (e - b) <= 64 * 8) {
+        if (IsPointerLikeX64(b) && e > b && (e - b) <= 64 * 8) {
             U64 count = (e - b) / 8;
             U64 mechs[64] = {};
-            for (U64 i = 0; i < count; i++) mechs[i] = *(U64*)(b + i * 8);
-            *(U64*)(veh + VEH_CARRIED_END_OFFSET) = b;
+            U64 recoveredCount = 0;
+            U64 writePtr = b;
             for (U64 i = 0; i < count; i++) {
-                if (mechs[i]) RestoreMechToBuildingInventory(mechs[i], veh);
+                U64 cur = *(U64*)(b + i * 8);
+                if (IsOrphanedCarriedMechanism(veh, cur)) {
+                    mechs[recoveredCount++] = cur;
+                } else {
+                    *(U64*)writePtr = cur;
+                    writePtr += 8;
+                }
+            }
+            if (recoveredCount > 0) {
+                *(U64*)(veh + VEH_CARRIED_END_OFFSET) = writePtr;
+                for (U64 i = 0; i < recoveredCount; i++) {
+                    RestoreMechToBuildingInventory(mechs[i], veh);
+                }
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -676,11 +704,22 @@ void GameCalls_RecoverOrphanedCarrierMechanismsForTest(unsigned long long vehicl
     RecoverOrphanedCarrierMechanisms(vehicle);
 }
 
+static bool IsCarrierRecoverySite(unsigned site, unsigned target, const char* schema)
+{
+    if (target == SEND_TO_DEPOT || target == 0x3FB820) return true;
+    return target == 0x497AA0 && site == 0x7E761B && schema && schema[2] == 'V';
+}
+
+bool GameCalls_ShouldRecoverCarrierForSiteForTest(unsigned callAt, unsigned target, const char* schema)
+{
+    return IsCarrierRecoverySite(callAt, target, schema);
+}
+
 static U64 ExtractCarrierRecoveryVehicle(const GameCallSite& s, const U64* a)
 {
-    if (s.target == RVA_VEH_RELEASE || s.target == 0x6B7810) return a[0];
+    if (!IsCarrierRecoverySite(s.site, s.target, s.schema)) return 0;
     if (s.target == SEND_TO_DEPOT || s.target == 0x3FB820) return a[1];
-    if (s.target == 0x497AA0 && s.schema[2] == 'V') return a[2];
+    if (s.target == 0x497AA0) return a[2];
     return 0;
 }
 

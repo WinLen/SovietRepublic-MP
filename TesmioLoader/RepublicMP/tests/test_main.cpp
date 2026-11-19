@@ -2185,6 +2185,12 @@ static bool Test_BuildingSwitches_Commands_SaveZip()
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x500)); // Setting word
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(0x9E8)); // Water reservoir / heating plant setting word
     TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(BLD_SEARCH_RANGE_OFFSET)); // Working range / search distance (+0xFC8)
+    // Live building animation & bay/corridor-lock runtime fields must be excluded
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(BLD_ANIM_SUBMESH_OFFSET));
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(BLD_ANIM_FRAME_OFFSET));
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(BLD_BAY_STATE_BEGIN_OFFSET));
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(BLD_BAY_VEH_BEGIN_OFFSET));
+    TEST_CHECK(BuildingSwitches_IsExcludedBuildingOffset(BLD_CORRIDOR_LOCK_VEH_OFFSET));
     TEST_CHECK(SubTest_BuildingRangeAndAutoSearchSettingsSync());
     TEST_CHECK(SubTest_SourceSlotsAddAndCopySourceSync());
 
@@ -4905,8 +4911,15 @@ static bool SubTest_StoppedTrainAndWagonEffectiveBld()
     *(void**)(loco.data() + 0x798) = (void*)0x2000;
     TEST_CHECK(VehicleSoftSync_HasActiveEnginePathForTest(loco.data()));
 
-    // Verify VehicleSwitches excludes +0x4C8..+0x4E8 (+0x4D0 runtime state) from UI switch detection
+    // Verify VehicleSwitches excludes +0x4C8..+0x4E8 (+0x4D0 runtime state) and live motion/link/fuel fields
     TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, 0x4D0));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_LINK_PTR_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_FUEL_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_STEER_CURRENT_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_TRAIL_BUFFER_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_SIXTH_NODE_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_RENDER_VISIBLE_OFFSET));
+    TEST_CHECK(VehicleSwitches_IsListWordForTest(0 /*KIND_VEHICLE*/, VEH_WHEELS_BEGIN_OFFSET));
 
     // Verify VehicleSwitches KIND_CARGO (2) excludes Resource* (+0x00/+0x04) and dynamic amountTons (+0x08, +0x18),
     // while allowing UI cargo filterFlag (+0x0C, +0x1C)
@@ -10545,6 +10558,37 @@ static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     TEST_CHECK(*(U64*)(coBld.data() + BLD_VEHICLES_END_OFFSET) == (U64)(officeVehBuf.data() + 2));
     TEST_CHECK(officeVehBuf[1] == mech.data());
 
+    // Safety guards on carrier recovery:
+    // (a) Coupled train wagon (+0x4A0 == loco, loco +0x488..+0x490 empty) must NOT be uncoupled
+    std::vector<BYTE> railLoco(0x1AD8, 0), railWagon(0x1AD8, 0), depotBld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE*> depotVehs = { railLoco.data(), nullptr };
+    *(U64*)(depotBld.data() + BLD_VEHICLES_BEGIN_OFFSET) = (U64)depotVehs.data();
+    *(U64*)(depotBld.data() + BLD_VEHICLES_END_OFFSET)   = (U64)(depotVehs.data() + 1);
+    *(U64*)(depotBld.data() + BLD_VEHICLES_END_OFFSET + 8) = (U64)(depotVehs.data() + 2);
+    *(U64*)(railLoco.data() + VEH_WORKPLACE_BLD_OFFSET)  = (U64)depotBld.data();
+    *(U64*)(railWagon.data() + VEH_LINK_PTR_OFFSET)      = (U64)railLoco.data();
+    GameCalls_RecoverOrphanedCarrierMechanismsForTest((U64)railWagon.data());
+    TEST_CHECK(*(U64*)(railWagon.data() + VEH_LINK_PTR_OFFSET) == (U64)railLoco.data());
+    TEST_CHECK(*(U64*)(depotBld.data() + BLD_VEHICLES_END_OFFSET) == (U64)(depotVehs.data() + 1));
+
+    // (b) Normal depot flatbed (workplace == 0, depot == depotBld) carrying a mechanism preserves +0x488..+0x490
+    std::vector<BYTE> depFlatbed(0x1AD8, 0), depCargoVeh(0x1AD8, 0);
+    *(U64*)(depFlatbed.data() + VEH_DEPOT_PTR_OFFSET) = (U64)depotBld.data();
+    *(U64*)(depCargoVeh.data() + VEH_LINK_PTR_OFFSET) = (U64)depFlatbed.data();
+    std::vector<BYTE*> depCarried = { depCargoVeh.data() };
+    WriteMockVectorHeader(depFlatbed.data() + VEH_CARRIED_BEGIN_OFFSET, depCarried);
+    GameCalls_RecoverOrphanedCarrierMechanismsForTest((U64)depFlatbed.data());
+    TEST_CHECK(*(U64*)(depCargoVeh.data() + VEH_LINK_PTR_OFFSET) == (U64)depFlatbed.data());
+    TEST_CHECK(*(U64*)(depFlatbed.data() + VEH_CARRIED_END_OFFSET) == (U64)(depCarried.data() + 1));
+
+    // (c) Recovery fires ONLY on recall / send-home / clear-line, never on release (0x6C5460) / start-toggle (0x6B7810) / line copy (0x7C85F8)
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x7DA491u, RVA_VEH_RELEASE, "V"));
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x7DA322u, 0x6B7810u, "V"));
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x7C85F8u, 0x497AA0u, "MLVbo"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x7DA2B9u, 0x3FBD00u, "WVbbbb"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x7DA2C6u, 0x3FB820u, "xV"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x7E761Bu, 0x497AA0u, "MoVbo"));
+
     // 5. Meshless Free Open Storage Visual Goods (FillPrivateVisible inclusion rule)
     TEST_CHECK(SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, 350.0f));
     TEST_CHECK(SimPatches_ShouldIncludeMeshlessStorageInVisible(true, 0ULL, 0ULL, 1800.0f));
@@ -10552,6 +10596,66 @@ static bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2000ULL, 350.0f));
     TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, 1500.0f));
     TEST_CHECK(!SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, -5.0f));
+
+    return true;
+}
+
+static std::vector<void*>* g_recordedSimPatchHookTargets = nullptr;
+static int MockHost_RecordSimPatchInlineHook(void* target, void*, void**, const unsigned char*, size_t, const char*)
+{
+    if (g_recordedSimPatchHookTargets) {
+        g_recordedSimPatchHookTargets->push_back(target);
+    }
+    return 0;
+}
+
+static bool SubTest_CorridorLockPreservationAndSingleplayerIsolation()
+{
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+
+    // 1. Road truck waiting at dock/customs (waitTimer > 0 or non-air +0x1A04 != 0) keeps corridor lock
+    std::vector<BYTE> truckType(0x400, 0);
+    *(int32_t*)(truckType.data() + VEH_TYPE_CATEGORY_OFFSET) = 1; // Road
+    std::vector<BYTE> truck(0x1B00, 0);
+    *(BYTE**)(truck.data() + VEH_TYPE_PTR_OFFSET) = truckType.data();
+    *(BYTE**)(truck.data() + VEH_BAY_TARGET_BLD_OFFSET) = bld.data();
+    *(BYTE**)(truck.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = bld.data();
+    *(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = truck.data();
+    *(float*)(truck.data() + VEH_WAIT_TIMER_OFFSET) = 3.5f;
+    *(int32_t*)(truck.data() + VEH_HELI_FLIGHT_STATE_OFF) = 2;
+    *(int32_t*)(truck.data() + VEH_WAYPOINT_INDEX_OFFSET) = 5;
+
+    SimPatches_TestSanitizeVehicleArrival(truck.data());
+    TEST_CHECK(*(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == truck.data());
+    TEST_CHECK(*(BYTE**)(truck.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == bld.data());
+
+    // 2. Tram / motor rail car (vehCat == 3, even if VEH_IS_RAIL_FLAG_OFFSET == 0) keeps corridor lock
+    std::vector<BYTE> tramType(0x400, 0);
+    *(int32_t*)(tramType.data() + VEH_TYPE_CATEGORY_OFFSET) = 3;
+    std::vector<BYTE> tram(0x1B00, 0);
+    *(BYTE**)(tram.data() + VEH_TYPE_PTR_OFFSET) = tramType.data();
+    *(BYTE**)(tram.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = bld.data();
+    *(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = tram.data();
+    *(int32_t*)(tram.data() + VEH_BAY_SLOT_IDX_OFFSET) = -1;
+    *(int32_t*)(tram.data() + VEH_WAYPOINT_INDEX_OFFSET) = 5;
+
+    SimPatches_TestSanitizeVehicleArrival(tram.data());
+    TEST_CHECK(*(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == tram.data());
+    TEST_CHECK(*(BYTE**)(tram.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == bld.data());
+
+    // 3. Singleplayer isolation: when !Determinism_IsActive(), HookedVehicleArrivalStep must not mutate locks
+    std::vector<BYTE> airType(0x400, 0);
+    *(int32_t*)(airType.data() + VEH_TYPE_CATEGORY_OFFSET) = 8;
+    std::vector<BYTE> plane(0x1B00, 0);
+    *(BYTE**)(plane.data() + VEH_TYPE_PTR_OFFSET) = airType.data();
+    *(int32_t*)(plane.data() + VEH_HELI_FLIGHT_STATE_OFF) = 3;
+    *(BYTE**)(plane.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = bld.data();
+    *(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = plane.data();
+
+    Determinism_SetActiveForTest(false);
+    SimPatches_TestHookedVehicleArrivalStep(plane.data());
+    TEST_CHECK(*(BYTE**)(bld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == plane.data());
+    TEST_CHECK(*(BYTE**)(plane.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == bld.data());
 
     return true;
 }
@@ -10588,29 +10692,49 @@ static bool Test_CrashFixesAndRcoTrackBuilder()
     TEST_CHECK(TwoStates_ResolveCrimeCaseOwnerForTest(crimeCase.data()) == 1);
     TwoStates_OnSessionEnded();
 
-    // 3. IsVehicleAtDepotOrStop (0x3BB640) corrupted parentBld guard (Crash #4 at 0x3BB65C)
+    // 3. IsVehicleAtDepotOrStop (0x3BB580) corrupted parentBld guard (Crash #4 at 0x3BB65C)
     std::vector<BYTE> bldType(0x400, 0);
     *(int32_t*)(bldType.data() + 0x360) = 0x0F; // Rail depot / station category
     std::vector<BYTE> vehType(0x8700, 0);
-    *(int32_t*)(vehType.data() + 0x294) = 4;    // Track builder / rail vehicle category
+    *(int32_t*)(vehType.data() + VEH_TYPE_CATEGORY_OFFSET) = 4; // VEHICLETYPE_RAIL_LOCOMOTIVE (trains & RCO track builders)
     std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bld.data() + 0x318) = bldType.data();
     std::vector<BYTE> veh(0x1AD8, 0);
-    *(BYTE**)(veh.data() + 0x1708) = vehType.data();
+    *(BYTE**)(veh.data() + VEH_TYPE_PTR_OFFSET) = vehType.data();
 
     TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 1);
+    // Helicopter (cat == 0x0A, VEHICLETYPE_HELICOPTER) is accepted at helipad/airport (0x2F), NOT rail depot (0x0F)
+    *(int32_t*)(vehType.data() + VEH_TYPE_CATEGORY_OFFSET) = 0x0A;
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 0);
+    *(int32_t*)(bldType.data() + 0x360) = 0x2F;
+    TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 1);
+    *(int32_t*)(bldType.data() + 0x360) = 0x0F;
+    *(int32_t*)(vehType.data() + VEH_TYPE_CATEGORY_OFFSET) = 4;
     // Corrupt parentBld (+0x5B0) to 0x3E7 (999) -> must return 0 safely without AV at 0x3E7 + 0x318 = 0x705
     *(uint64_t*)(bld.data() + 0x5B0) = 0x3E7ULL;
     TEST_CHECK(SimPatches_TestIsVehicleAtDepotOrStop(bld.data(), veh.data(), 0) == 0);
     *(uint64_t*)(bld.data() + 0x5B0) = 0ULL;
 
-    // 4. Rail Construction Office (RCO) Track Builder corridor lock & stuck state recovery
+    // 4. Rail Construction Office (RCO) Track Builder corridor lock, hook scope, & multi-stage preservation
+    std::vector<BYTE> rcoBldType(0x400, 0);
+    *(int32_t*)(rcoBldType.data() + 0x360) = 0x1C; // Rail Construction Office building category
+    std::vector<BYTE> rcoBld(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(rcoBld.data() + 0x318) = rcoBldType.data();
+
+    // Real RCO track builders have vehCat == 4 (VEHICLETYPE_RAIL_LOCOMOTIVE) + 16-byte skill entry at vehType + 0x85E0
+    std::vector<BYTE> railSkills(VEH_TYPE_SKILL_ENTRY_BYTES, 0);
+    *(int32_t*)(railSkills.data() + 0) = SKILL_CONSTRUCTION_RAIL_TRACK_LAYER; // 0x1A
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_BEGIN_OFFSET) = (uintptr_t)railSkills.data();
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_END_OFFSET)   = (uintptr_t)(railSkills.data() + railSkills.size());
+
     std::vector<BYTE> railSiteBld(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> constrSiteData(0x200, 0);
     *(BYTE**)(railSiteBld.data() + BLD_CONSTR_SITE_PTR_OFFSET) = constrSiteData.data();
     *(BYTE**)(railSiteBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) = veh.data();
 
     veh[VEH_IS_RAIL_FLAG_OFFSET] = 1;
+    *(int32_t*)(vehType.data() + VEH_TYPE_CATEGORY_OFFSET) = 4;
+    *(BYTE**)(veh.data() + VEH_WORKPLACE_BLD_OFFSET) = rcoBld.data();
     *(BYTE**)(veh.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) = railSiteBld.data();
     *(int32_t*)(veh.data() + VEH_BAY_SLOT_IDX_OFFSET) = -10;
     *(int32_t*)(veh.data() + VEH_DEPOT_SLOT_IDX_OFFSET) = -1;
@@ -10622,40 +10746,113 @@ static bool Test_CrashFixesAndRcoTrackBuilder()
     TEST_CHECK(*(BYTE**)(railSiteBld.data() + BLD_CORRIDOR_LOCK_VEH_OFFSET) == veh.data());
     TEST_CHECK(*(BYTE**)(veh.data() + VEH_CORRIDOR_LOCK_BLD_OFFSET) == railSiteBld.data());
 
-    // BuildVehicleWaypoints (0x6831A0) must clear 0xD39 when waypoints are empty on a rail vehicle
+    // Verify SimPatches_Install() hooks RVA_VEH_ARRIVAL_STEP & RVA_IS_VEHICLE_AT_DEPOT_OR_STOP,
+    // and does NOT hook RVA_VEH_BUILD_WAYPOINTS (0x683240), preserving its native 0x6832EB guard.
+    std::vector<void*> installedHookTargets;
+    g_recordedSimPatchHookTargets = &installedHookTargets;
+    auto prevInstallInlineHook = g_mockHost.installInlineHook;
+    g_mockHost.installInlineHook = &MockHost_RecordSimPatchInlineHook;
+    SimPatches_Bind(&g_mockHost);
+    SimPatches_Install();
+    g_mockHost.installInlineHook = prevInstallInlineHook;
+    SimPatches_Bind(&g_mockHost);
+    g_recordedSimPatchHookTargets = nullptr;
+
+    TEST_CHECK(std::find(installedHookTargets.begin(), installedHookTargets.end(),
+                         (void*)(g_mockExeBuffer + RVA_VEH_ARRIVAL_STEP)) != installedHookTargets.end());
+    TEST_CHECK(std::find(installedHookTargets.begin(), installedHookTargets.end(),
+                         (void*)(g_mockExeBuffer + RVA_IS_VEHICLE_AT_DEPOT_OR_STOP)) != installedHookTargets.end());
+    TEST_CHECK(std::find(installedHookTargets.begin(), installedHookTargets.end(),
+                         (void*)(g_mockExeBuffer + RVA_VEH_BUILD_WAYPOINTS)) == installedHookTargets.end());
+
+    // Keep SimPatches_TestBuildVehicleWaypoints linked & verified as non-mutating
     veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 1;
     *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = 0;
     *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) = 0;
     SimPatches_TestBuildVehicleWaypoints(veh.data(), 0);
-    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 1);
 
-    // Stuck Track Builder with empty waypoints and non-null targetBld (+0x528) outside building
+    // Track builder outside RCO (+0x4F0 == nullptr) transitioning between rail stages:
+    // wpCount == 0 with targetBld (+0x528) != nullptr, +0x56C == -1, +0x510 == -1 MUST retain +0x528 and +0xD39 == 0
+    // so o_vehicleArrivalStep (0x6CD380) can reach AssignBayPath (0x6B2C00).
     *(BYTE**)(veh.data() + VEH_CUR_BLD_OFFSET) = nullptr;
     *(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) = bld.data();
     *(int32_t*)(veh.data() + VEH_BAY_SLOT_IDX_OFFSET) = -1;
     *(int32_t*)(veh.data() + VEH_DEPOT_SLOT_IDX_OFFSET) = -1;
     veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
     SimPatches_TestSanitizeVehicleArrival(veh.data());
-    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == nullptr);
-    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 1);
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
 
-    // Stuck Track Builder at end of waypoints with pending reversal (0xD3A = 1) and 2 orders
+    // Same wpCount == 0 inter-stage preservation for track builder with +0x67D == 0 and for scheduled rail train (no skills)
+    veh[VEH_IS_RAIL_FLAG_OFFSET] = 0;
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+
+    veh[VEH_IS_RAIL_FLAG_OFFSET] = 1;
+    *(BYTE**)(veh.data() + VEH_WORKPLACE_BLD_OFFSET) = nullptr;
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_BEGIN_OFFSET) = 0;
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_END_OFFSET)   = 0;
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+
+    // End-of-waypoints state (wpCount > 0, wpIdx >= wpCount, veh[0xD3A] == 1) with 1 and 2 BUILDING* orders (8B / 16B):
+    // BOTH RCO Track Builders (vehCat == 4 + construction skills 0x1A/0x1B/0x1C + RCO workplace)
+    // AND scheduled rail trains (vehCat == 4, no construction skills) MUST preserve +0x528, wpEnd, wpIdx, +0xD3A, and +0xD39 == 0
+    // so native 0x6CE65F..0x6CE67B -> 0x6D7DE0 (reading +0x528 at 0x6D85EF) and 0x147B1F..0x147D0C are not corrupted.
     std::vector<float> dummyWp(6, 100.0f); // 2 waypoints (24 bytes)
-    std::vector<BYTE> dummyOrders(240, 0); // 2 orders (2 * 120 bytes)
+    std::vector<BYTE*> orders = { bld.data(), railSiteBld.data() }; // 2 BUILDING* pointers = 16 bytes
     *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = (uintptr_t)dummyWp.data();
     *(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) = (uintptr_t)(dummyWp.data() + 6);
     *(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) = 2;
-    *(uintptr_t*)(veh.data() + VEH_ORDERS_BEGIN_OFFSET) = (uintptr_t)dummyOrders.data();
-    *(uintptr_t*)(veh.data() + VEH_ORDERS_END_OFFSET) = (uintptr_t)(dummyOrders.data() + dummyOrders.size());
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_BEGIN_OFFSET) = (uintptr_t)orders.data();
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_END_OFFSET) = (uintptr_t)(orders.data() + orders.size());
     *(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) = bld.data();
     veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] = 1;
     veh[VEH_BAY_ARRIVED_FLAG_OFFSET] = 0;
+
+    // Case A: RCO Track Builders with skills 0x1A (track layer), 0x1B (tunnel boring), 0x1C (rail crane 2)
+    *(BYTE**)(veh.data() + VEH_WORKPLACE_BLD_OFFSET) = rcoBld.data();
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_BEGIN_OFFSET) = (uintptr_t)railSkills.data();
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_END_OFFSET)   = (uintptr_t)(railSkills.data() + railSkills.size());
+    const int32_t kBuilderSkills[3] = {
+        SKILL_CONSTRUCTION_RAIL_TRACK_LAYER,
+        SKILL_CONSTRUCTION_RAIL_TUNNEL_BORING,
+        SKILL_CONSTRUCTION_RAIL_CRANE2
+    };
+    for (int32_t skillId : kBuilderSkills) {
+        *(int32_t*)(railSkills.data() + 0) = skillId;
+        SimPatches_TestSanitizeVehicleArrival(veh.data());
+        TEST_CHECK(*(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) == (uintptr_t)(dummyWp.data() + 6));
+        TEST_CHECK(*(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) == 2);
+        TEST_CHECK(veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] == 1);
+        TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+        TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+    }
+
+    // Case B: Scheduled rail train (vehCat == 4, no construction skills) with 1 order (8 bytes) and 2 orders (16 bytes)
+    *(BYTE**)(veh.data() + VEH_WORKPLACE_BLD_OFFSET) = nullptr;
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_BEGIN_OFFSET) = 0;
+    *(uintptr_t*)(vehType.data() + VEH_TYPE_SKILLS_END_OFFSET)   = 0;
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_END_OFFSET) = (uintptr_t)(orders.data() + 1);
     SimPatches_TestSanitizeVehicleArrival(veh.data());
-    TEST_CHECK(*(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) == (uintptr_t)dummyWp.data());
-    TEST_CHECK(*(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) == 0);
-    TEST_CHECK(veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] == 0);
-    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == nullptr);
-    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 1);
+    TEST_CHECK(*(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) == (uintptr_t)(dummyWp.data() + 6));
+    TEST_CHECK(*(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) == 2);
+    TEST_CHECK(veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] == 1);
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+
+    *(uintptr_t*)(veh.data() + VEH_ORDERS_END_OFFSET) = (uintptr_t)(orders.data() + orders.size());
+    SimPatches_TestSanitizeVehicleArrival(veh.data());
+    TEST_CHECK(*(uintptr_t*)(veh.data() + VEH_WAYPOINTS_END_OFFSET) == (uintptr_t)(dummyWp.data() + 6));
+    TEST_CHECK(*(int32_t*)(veh.data() + VEH_WAYPOINT_INDEX_OFFSET) == 2);
+    TEST_CHECK(veh[VEH_REVERSE_NEEDED_FLAG_OFFSET] == 1);
+    TEST_CHECK(*(BYTE**)(veh.data() + VEH_BAY_TARGET_BLD_OFFSET) == bld.data());
+    TEST_CHECK(veh[VEH_BAY_ARRIVED_FLAG_OFFSET] == 0);
+
+    TEST_CHECK(SubTest_CorridorLockPreservationAndSingleplayerIsolation());
 
     return true;
 }
