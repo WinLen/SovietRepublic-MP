@@ -10,14 +10,13 @@ call "TesmioLoader\build.bat"
 if errorlevel 1 ( pause & exit /b 1 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "steam_workshop\make_preview.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "pack_friend.ps1" -Version "1.0.0" -GithubRepo "WinLen/SovietRepublic-MP"
+powershell -NoProfile -ExecutionPolicy Bypass -File "pack_friend.ps1" -GithubRepo "WinLen/SovietRepublic-MP"
 
-if not exist "local\upload_ugc.exe" (
-    for /f "usebackq tokens=*" %%I in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do (
-        call "%%I\VC\Auxiliary\Build\vcvars64.bat" >nul
-    )
-    cl /nologo /O2 /MT /EHsc /utf-8 /Folocal\ /Felocal\upload_ugc.exe steam_workshop\upload_ugc.cpp
+for /f "usebackq tokens=*" %%I in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do (
+    call "%%I\VC\Auxiliary\Build\vcvars64.bat" >nul
 )
+cl /nologo /O2 /MT /EHsc /utf-8 /Fosteam_workshop\ /Festeam_workshop\upload_ugc.exe steam_workshop\upload_ugc.cpp
+if exist "steam_workshop\upload_ugc.obj" del /q "steam_workshop\upload_ugc.obj"
 
-"local\upload_ugc.exe" 3823543010
+"steam_workshop\upload_ugc.exe" 3823543010 --meta
 pause

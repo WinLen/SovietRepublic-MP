@@ -1,5 +1,5 @@
 ============================================================================
-  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.5.9)
+  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.6.0)
   Правила установки и совместной игры (RU) / Installation & Co-op Guide (EN)
 ============================================================================
 
@@ -7,7 +7,7 @@
 
 1. КАК УСТАНОВИТЬ И ЗАПУСТИТЬ ИГРУ:
    - Способ А (Steam Workshop): Подпишитесь на мод в Steam Workshop, откройте папку
-     мода (Steam\steamapps\workshop\content\784150\3834234182\) и ОДИН РАЗ запустите
+     мода (Steam\steamapps\workshop\content\784150\3823543010\) и ОДИН РАЗ запустите
      START-COOP.bat (он скопирует dinput8.dll и иконки меню в папку игры SOVIET64.exe).
      После этого игру всегда можно запускать напрямую кнопкой «Играть» в Steam —
      все обновления мода подхватываются из Steam Workshop автоматически!
@@ -46,7 +46,7 @@
 
 1. HOW TO INSTALL & LAUNCH:
    - Method A (Steam Workshop): Subscribe to the mod on Steam Workshop, open the mod
-     folder (Steam\steamapps\workshop\content\784150\3834234182\) and run START-COOP.bat
+     folder (Steam\steamapps\workshop\content\784150\3823543010\) and run START-COOP.bat
      ONCE (it copies dinput8.dll and menu icons into your SOVIET64.exe game folder).
      After that, always launch the game normally via the "Play" button in Steam —
      all future Workshop updates are loaded automatically!
@@ -78,7 +78,14 @@
    - Alt + LMB : Place a 3D map ping (20 sec beacon) for your partner
    - Tab       : Collapse / expand the waiting lobby window to inspect the map
 
-5. LICENSE & SOURCE CODE (GNU GPL v3.0):
+5. ОСОБЕННОСТИ СИНХРОНИЗАЦИИ И АВТОСОХРАНЕНИЯ (v1.6.0):
+   - Совместимость с актуальной версией игры v1.1.1.13 (0x6A8D4087).
+   - Детерминированные автосохранения каждые 10 минут: save/coop_autosave (Хост)
+     и save/coop_client_backup (Клиент), поддержка ZIP64 и UTF-8 путей.
+   - В режиме «Два государства» изолированы исследования, лицензии, лимиты зданий,
+     экономическая статистика (кредиты/инфляция), общежития, здоровье и миникарта.
+
+6. LICENSE & SOURCE CODE (GNU GPL v3.0):
    - Distributed under the GNU General Public License v3.0 (GPL-3.0-only, see LICENSE file).
    - Full source code (Corresponding Source): https://github.com/WinLen/SovietRepublic-MP
    - Modified and extended (Oct-Nov 2026 by WinLen); includes open-source GPL-3.0 components

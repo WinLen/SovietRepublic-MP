@@ -1,6 +1,6 @@
 <div align="center">
 
-# ☭ RepublicMP v1.3.1 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
+# ☭ RepublicMP v1.6.0 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
 ### Co-op Multiplayer Mod for Workers & Resources: Soviet Republic (RU / EN)
 
 ![RepublicMP Cover](steam_workshop/preview.png)
@@ -27,8 +27,8 @@
 - **Два государства на одной карте (Западная ССР и Восточная ССР):**
   - Карта делится на **Западную ССР (Хост, `X < 0`)** и **Восточную ССР (Клиент, `X > 0`)** с настраиваемой **общей пограничной зоной** (`150 / 250 / 500 / 1000 м`) для стыковки дорог, ЖД-путей, ЛЭП и трубопроводов.
   - **Раздельная казна и переводы:** у каждого государства свой баланс в рублях и долларах (на выбор: **100% стартового капитала каждому** или **деление 50/50**) и мгновенные переводы финансовой помощи (`50 000 РУБ / $`) из панели `☭ -> Кооператив`.
-  - **Раздельная экономика, склады, демография и статистика:** счётчик населения на верхней панели HUD, окна «Экономика и торговля», «Статистика населения» и «Хранящиеся ресурсы» отображают данные исключительно вашей ССР. Полная синхронизация многоресурсных складов, стройплощадок, ползунков автозакупки и разовой ручной закупки ресурсов.
-  - **Раздельный банк и кредиты:** каждое государство берёт и гасит свои кредиты в рублях и долларах с индивидуальным потолком кредитования (по взрослому населению своей республики) и раздельными ежедневными списаниями.
+  - **Раздельная экономика, исследования, склады, демография и статистика:** счётчик населения на верхней панели HUD, миникарта территорий, окна «Экономика и торговля», «Статистика населения» и «Хранящиеся ресурсы» отображают данные исключительно вашей ССР. Изолированы деревья исследований, лицензии техники, лимиты бесплатных зданий, общежития и здоровье/лояльность граждан; полная синхронизация складов, стройплощадок, автозамены техники, очередей заводов, распределителей, СКБ/РСУ, ползунков колесом мыши и ручной/авто-закупки ресурсов.
+  - **Раздельный банк и кредиты:** каждое государство берёт и гасит свои кредиты в рублях и долларах с индивидуальным потолком кредитования (по взрослому населению своей республики), инфляцией и раздельным сохранением полного экономического состояния (`EconStateBlob`).
 
 #### 3. Плавность 60–144+ FPS, сохранение 3D-камер и изоляция звука
 - **Суб-тиковая интерполяция транспорта (`60–144+ FPS`):** плавное движение автомобилей, поездов, сцепленных вагонов, вращения и поворота колёс, привязанной камеры следования/вида из кабины и 3D-контуров выделения техники.
@@ -42,15 +42,15 @@
   - **«Моды: Из сейва»** — синхронизируются только моды, реально задействованные в загружаемом сохранении.
 - **Проверка ДО создания сейва:** если у Клиента не хватает модов из Мастерской Steam, открывается окно загрузки «ГОСПЛАН СССР — ЗАГРУЗКА МОДИФИКАЦИЙ» с автоматической подпиской/скачиванием и кнопкой перезапуска игры в 1 клик. Лишние моды Клиента временно скрываются на время сессии, а здания и техника из неустановленных у партнёра DLC безопасно блокируются.
 
-#### 5. Отдельный банк кооп-сохранений (`save_coop`) и подключение через Steam P2P
-- **Изолированный банк сохранений:** кооперативные сохранения (`save_coop`) полностью отделены от одиночных (`save_sp`). Доступны **«Продолжить кооп»**, быстрое сохранение из панели `☭ -> Кооператив` и безопасный **«Импорт одиночного»**.
+#### 5. Отдельный банк кооп-сохранений (`save_coop`), автосейвы и подключение через Steam P2P
+- **Изолированный банк сохранений и 10-минутные автосейвы:** кооперативные сохранения (`save_coop`) полностью отделены от одиночных (`save_sp`), поддерживают UTF-8 и ZIP64-архивы с полным переносом подпапок (`script/`, `mod_config/` и др.) и детерминированные автосейвы каждые 10 минут (`coop_autosave` у Хоста и `coop_client_backup` у Клиента). Доступны **«Продолжить кооп»**, быстрое сохранение из панели `☭ -> Кооператив` и безопасный **«Импорт одиночного»**.
 - **Подключение в 1 клик через Steam P2P:** в меню **«КООПЕРАТИВ -> Подключиться»** отображаются друзья Steam, у которых прямо сейчас открыт кооп-сервер (`Хост: <Имя>`), без VPN и проброса портов.
 
 ---
 
 ### 🚀 Правила установки и запуска (RU)
 
-> **Важно:** У обоих игроков должна быть одинаковая версия игры и мода **RepublicMP v1.3.1**.
+> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.6.0**.
 
 #### Способ 1 — Через Steam Workshop (Рекомендуется)
 1. Подпишитесь на мод в **Steam Workshop** (оба игрока).
@@ -91,8 +91,8 @@
 - **Two States on One Map (Western SSR & Eastern SSR):**
   - Splits the map into **Western SSR (Host, `X < 0`)** and **Eastern SSR (Client, `X > 0`)** with a configurable **Shared Border Zone** (`150 / 250 / 500 / 1000 m`) for connecting roads, railways, power lines, and pipelines.
   - **Separate Treasuries & Wire Transfers:** independent Ruble and Dollar balances (**100% starting capital for each player** or **50/50 split**) plus instant inter-state financial transfers (`50,000 RUB / $`) via the `☭ -> Co-op` sidebar.
-  - **Isolated Economy, Warehouses, Demographics & HUD Stats:** the top-bar HUD population counter, "Economy & Trade", "Population Statistics", and "Stored Resources" windows display exclusively your own republic's figures. Includes full multi-resource warehouse & construction site storage sync, auto-purchase sliders, and one-shot manual resource purchases.
-  - **Separate Banking & Loans:** each state borrows and repays its own RUB and USD loans with an individual credit ceiling (calculated from your own state's adult population) and separate daily loan payments.
+  - **Isolated Research, Economy, Warehouses, Demographics & HUD Stats:** the top-bar HUD population counter, minimap overlay, "Economy & Trade", "Population Statistics", and "Stored Resources" windows display exclusively your own republic's figures. University research trees, vehicle licenses, free-building limits, university hostels, and citizen health/loyalty trackers are fully isolated per state; full Lockstep sync covers multi-resource warehouses, construction/distribution/technical offices, vehicle auto-replacement, factory production queues, mouse-wheel sliders, and manual/auto-purchases.
+  - **Separate Banking, Loans & Economy Persistence:** each state borrows and repays its own RUB/USD loans with an individual credit ceiling (calculated from your own state's adult population), separate daily payments, inflation, and full persisted `EconStateBlob` state.
 
 #### 3. Smooth 60–144+ FPS Interpolation, Saved 3D Cameras & Sound Isolation
 - **Sub-tick Vehicle & Highlight Interpolation (`60–144+ FPS`):** smooth movement for road vehicles, trains, coupled wagons, wheel rotation/steering, attached follow/cabin cameras, and 3D vehicle selection/hover outlines.
@@ -106,15 +106,15 @@
   - **"Mods: From Save Only"** — syncs only the Workshop mods actively used in the loaded save.
 - **Pre-Save Handshake & Auto-Downloader:** Workshop mods are verified **before** packing the save. If the Client is missing mods, the in-game Gosplan modal automatically subscribes and downloads them from Steam Workshop and provides a 1-click game restart button. Extra Client-only mods are temporarily hidden for the session, and buildings/vehicles from unowned DLCs are safely guarded.
 
-#### 5. Isolated Co-op Save Bank (`save_coop`) & 1-Click Steam P2P Join
-- **Dedicated Save Bank:** co-op saves (`save_coop`) are completely separated from singleplayer saves (`save_sp`). Supports **"Continue Co-op"**, quick in-game saving from the `☭ -> Co-op` sidebar, and non-destructive **"Import Singleplayer Save"**.
+#### 5. Isolated Co-op Save Bank (`save_coop`), Autosaves & 1-Click Steam P2P Join
+- **Dedicated Save Bank & 10-Min Autosaves:** co-op saves (`save_coop`) are completely separated from singleplayer saves (`save_sp`), support UTF-8 / ZIP64 save archives with full subfolder transfer, and create deterministic 10-minute co-op autosaves (`coop_autosave` on Host, `coop_client_backup` on Client). Supports **"Continue Co-op"**, quick in-game saving from the `☭ -> Co-op` sidebar, and non-destructive **"Import Singleplayer Save"**.
 - **1-Click Steam P2P Networking:** the **"CO-OP -> Join Server"** menu automatically lists online Steam friends who have an open co-op server waiting (`Host: <Friend's Name>`) — no VPN, Hamachi, or port forwarding needed.
 
 ---
 
 ### 🚀 Installation & Launch Rules (EN)
 
-> **Important:** Both players must have the same game version and **RepublicMP v1.3.1**.
+> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.6.0**.
 
 #### Method 1 — Via Steam Workshop (Recommended)
 1. Subscribe to the mod on **Steam Workshop** (both players).
@@ -149,7 +149,7 @@
 TesmioLoader\build.bat
 ```
 
-Полный прогон сборки, 15 автотестов, статического анализа (`MSVC /analyze` + `LLVM clang-tidy`) и проверки чистоты кода `ub-mode`:
+Полный прогон сборки, 50 автотестов, статического анализа (`MSVC /analyze` + `LLVM clang-tidy`) и проверки чистоты кода `ub-mode`:
 
 ```bat
 TesmioLoader\run_checks.bat

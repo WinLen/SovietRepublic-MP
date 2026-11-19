@@ -5,7 +5,7 @@
 // when the player clicks "Play" in Steam (via C3DDLL64.dll -> DINPUT8.dll).
 // Before the engine initializes DirectX / DirectInput, it locates and loads
 // tesmioloader.dll (preferring the subscribed Steam Workshop folder
-// steamapps\workshop\content\784150\3822972914 if present, or local
+// steamapps\workshop\content\784150\3823543010 if present, or local
 // TesmioLoader\build\tesmioloader.dll), so no external .bat or launcher is
 // ever needed to play Co-op!
 
@@ -117,13 +117,13 @@ static void EnsureTesmioLoaderLoaded()
     char candidateBuildDirs[8][MAX_PATH] = {};
     int numCandidates = 0;
 
-    // 1. Subscribed Friends-Only Steam Workshop item 3834234182 (steamapps\workshop\content\784150\3834234182\TesmioLoader\build)
-    _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
-                "%s\\..\\..\\workshop\\content\\784150\\3834234182\\TesmioLoader\\build", gameDir);
-
-    // 2. Previous Steam Workshop item 3823543010
+    // 1. Primary public Steam Workshop item 3823543010 (steamapps\workshop\content\784150\3823543010\TesmioLoader\build)
     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
                 "%s\\..\\..\\workshop\\content\\784150\\3823543010\\TesmioLoader\\build", gameDir);
+
+    // 2. Friends-Only mirror Steam Workshop item 3834234182
+    _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,
+                "%s\\..\\..\\workshop\\content\\784150\\3834234182\\TesmioLoader\\build", gameDir);
 
     // 2. Local TesmioLoader\build inside game directory
     _snprintf_s(candidateBuildDirs[numCandidates++], MAX_PATH, _TRUNCATE,

@@ -232,10 +232,12 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
     WritePrivateProfileStringA("updater", "current_version", REPUBLICMP_VERSION, iniPath.c_str());
     printf("[UGC] Synced latest v%s DLLs into %s\n", REPUBLICMP_VERSION, contentDir.c_str());
 
-    // 2. Also sync into local subscribed Steam Workshop folders and Steam game dir if present
+    // 2. Also sync into local subscribed Steam Workshop folders (3823543010 & 3834234182) and Steam game dir if present
     SyncLocalWorkshopFolder("C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3823543010",
                             contentDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
-    if (activeId > 0 && activeId != 3823543010ULL) {
+    SyncLocalWorkshopFolder("C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\3834234182",
+                            contentDir, srcRepublicMp, srcLoader, srcLauncher, srcDinput8);
+    if (activeId > 0 && activeId != 3823543010ULL && activeId != 3834234182ULL) {
         char activeDir[MAX_PATH] = {};
         _snprintf_s(activeDir, sizeof(activeDir), _TRUNCATE,
                     "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\784150\\%llu",
@@ -368,6 +370,12 @@ int main(int argc, char** argv)
 
     if (argc >= 3 && strcmp(argv[1], "--delete") == 0) {
         uint64_t delId = _strtoui64(argv[2], nullptr, 10);
+        if (delId == 3823543010ULL) {
+            printf("[ERROR] Refusing to delete the main RepublicMP Workshop item 3823543010!\n");
+            DeleteFileA("steam_appid.txt");
+            if (pShutdown) pShutdown();
+            return 1;
+        }
         printf("[UGC] Deleting Workshop item %llu...\n", (unsigned long long)delId);
         g_deleteDone = false;
         uint64_t hDelCall = pDeleteItem(pUGC, delId);
@@ -396,8 +404,36 @@ int main(int argc, char** argv)
     std::string previewFile = wsDir + "\\preview.png";
     std::string descFile = wsDir + "\\description_ru.txt";
 
-    bool createFriendsItem = (argc > 1 && strcmp(argv[1], "--create-friends") == 0);
-    uint64_t publishedId = 0;
+    bool createFriendsItem = false;
+    bool updateMeta = false;
+    bool updatePreview = false;
+    bool setVis = false;
+    int32_t targetVis = 0;
+    uint64_t argPublishedId = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--create-friends") == 0) {
+            createFriendsItem = true;
+            updateMeta = true;
+            updatePreview = true;
+            setVis = true;
+            targetVis = 1;
+        } else if (strcmp(argv[i], "--meta") == 0) {
+            updateMeta = true;
+        } else if (strcmp(argv[i], "--preview") == 0) {
+            updatePreview = true;
+        } else if (strcmp(argv[i], "--public") == 0) {
+            setVis = true;
+            targetVis = 0;
+        } else if (strcmp(argv[i], "--friends") == 0) {
+            setVis = true;
+            targetVis = 1;
+        } else if (argv[i][0] != '-') {
+            uint64_t parsedArg = _strtoui64(argv[i], nullptr, 10);
+            if (parsedArg > 0) argPublishedId = parsedArg;
+        }
+    }
+
+    uint64_t publishedId = 3823543010ULL;
 
     if (createFriendsItem) {
         printf("[UGC] Creating new Friends-Only Steam Workshop item for AppID 784150...\n");
@@ -431,47 +467,61 @@ int main(int argc, char** argv)
             uint64_t parsedId = _strtoui64(existingIdStr.c_str(), nullptr, 10);
             if (parsedId > 0) publishedId = parsedId;
         }
-        if (argc > 1 && argv[1][0] != '-') {
-            uint64_t argId = _strtoui64(argv[1], nullptr, 10);
-            if (argId > 0) publishedId = argId;
+        if (argPublishedId > 0) {
+            publishedId = argPublishedId;
         }
     }
 
     SyncLatestModBinaries(repoRoot, wsDir, contentDir, publishedId);
 
-    printf("[UGC] Updating Friends-Only Steam Workshop item: %llu\n", (unsigned long long)publishedId);
+    printf("[UGC] Updating Steam Workshop item: %llu (updateMeta=%d updatePreview=%d setVis=%d)\n",
+           (unsigned long long)publishedId, (int)updateMeta, (int)updatePreview, (int)setVis);
 
-    std::string desc = ReadFileUtf8(descFile.c_str());
-    if (desc.empty()) {
-        desc = "Co-op multiplayer mod for Workers & Resources: Soviet Republic (Lockstep, Steam P2P, One State & Two States modes, 30x30 km maps, Auto-Updater).";
+    const bool isFriendsMirror = createFriendsItem || (publishedId == 3834234182ULL);
+    std::string titleToSet;
+    std::string descToSet;
+    if (updateMeta) {
+        if (isFriendsMirror) {
+            titleToSet = "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer";
+            descToSet =
+                "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (Friends-Only).\n"
+                "- Lockstep + 1-click Steam P2P\n"
+                "- One State / Two States on One Map\n"
+                "- Automatic Steam Workshop Mod Sync & DLC Guard";
+        } else {
+            titleToSet = "RepublicMP v" REPUBLICMP_VERSION " - Кооператив мультиплеер 1 или 2 государства на одной карте";
+            descToSet = ReadFileUtf8(descFile.c_str());
+            if (descToSet.empty() || descToSet.size() >= 8000) {
+                printf("[ERROR] Invalid %s length (%zu bytes; must be 1..7999 bytes for Steamworks ISteamUGC)!\n",
+                       descFile.c_str(), descToSet.size());
+                DeleteFileA("steam_appid.txt");
+                if (pShutdown) pShutdown();
+                return 1;
+            }
+        }
     }
 
-    bool updateMeta = createFriendsItem || (argc > 1 && strcmp(argv[1], "--meta") == 0);
-    bool updatePreview = createFriendsItem || (argc > 1 && strcmp(argv[1], "--preview") == 0);
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
-    bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer") : true;
-    const char* shortDesc =
-        "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (Friends-Only).\n"
-        "- Lockstep + 1-click Steam P2P\n"
-        "- One State / Two States on One Map\n"
-        "- Automatic Steam Workshop Mod Sync & DLC Guard";
-    bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, shortDesc) : true;
-    // Visibility is set to 1 (Friends-Only) on creation / --meta; do not re-set on content-only updates
-    // because Steam returns k_EResultAccessDenied (15) on SetItemVisibility while automated content scan is active.
-    bool bVis = updateMeta ? pSetVis(pUGC, hUpdate, 1 /* k_ERemoteStoragePublishedFileVisibilityFriendsOnly */) : true;
+    bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, titleToSet.c_str()) : true;
+    bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, descToSet.c_str()) : true;
+    // Only call SetItemVisibility when explicitly requested (--public / --friends / --create-friends)
+    // because Steam returns k_EResultAccessDenied (15) on SetItemVisibility during automated content scans.
+    bool bVis = setVis ? pSetVis(pUGC, hUpdate, targetVis) : true;
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
     bool bPreview = updatePreview ? pSetPreview(pUGC, hUpdate, previewFile.c_str()) : true;
-    printf("[UGC] SetItem (Friends-Only): title=%d desc=%d vis=%d content=%d preview=%d (uploadPreview=%d)\n",
-           (int)bTitle, (int)bDesc, (int)bVis, (int)bContent, (int)bPreview, (int)updatePreview);
+    printf("[UGC] SetItem (id=%llu): title=%d desc=%d (%zu bytes) vis=%d content=%d preview=%d (uploadPreview=%d)\n",
+           (unsigned long long)publishedId, (int)bTitle, (int)bDesc,
+           updateMeta ? descToSet.size() : (size_t)0,
+           (int)bVis, (int)bContent, (int)bPreview, (int)updatePreview);
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Full sync & save overhaul: 10-min co-op autosaves + client backup, UTF-8/ZIP64 saves, mouse-wheel sliders, vehicle auto-replacement, factory queues, road/air waypoints, expanded StateHash & isolated TwoStates research",
+                "v%s (Protocol %d) - Game v1.1.1.13 support, 10-min co-op autosaves, UTF-8/ZIP64 saves, full Two-States isolation (research, licenses, free limits, minimap, loans/stats), full Lockstep UI sync, 60-144+ FPS vehicles/animations, primary Workshop ID restored to 3823543010",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
     g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, updateMeta ? defaultNote : nullptr);
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, defaultNote);
     pSetSubmitCall(hSubmitCall, OnSubmitItem);
 
     int32_t lastStatus = -1;
@@ -498,7 +548,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    printf("[SUCCESS] Published to Steam Workshop (Friends-Only)!\n");
+    printf("[SUCCESS] Published to Steam Workshop (%llu)!\n", (unsigned long long)publishedId);
     printf("Workshop URL: https://steamcommunity.com/sharedfiles/filedetails/?id=%llu\n",
            (unsigned long long)publishedId);
     return 0;
