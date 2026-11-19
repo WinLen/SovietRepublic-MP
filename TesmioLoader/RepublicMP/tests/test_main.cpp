@@ -11380,6 +11380,49 @@ static bool SubTest_M9_3_VehicleOwnershipAndPruning()
     return true;
 }
 
+static bool SubTest_M9_3_GameSaveDirPrefersExeOverWorkshopBaseDir()
+{
+    HMODULE selfMod = GetModuleHandleA(nullptr);
+    TEST_CHECK(selfMod != nullptr);
+
+    char realExeDir[MAX_PATH] = {};
+    DWORD exeLen = GetModuleFileNameA(selfMod, realExeDir, MAX_PATH);
+    TEST_CHECK(exeLen > 0 && exeLen < MAX_PATH);
+    char* slash = strrchr(realExeDir, '\\');
+    TEST_CHECK(slash != nullptr);
+    *slash = '\0';
+
+    char buf[MAX_PATH] = {};
+    char expected[MAX_PATH] = {};
+
+    // 1. Workshop launch regression: real exe module dir must override loader baseDir.
+    TEST_CHECK(SaveSync_ResolveGameSaveDir(
+        selfMod, "C:\\FakeWorkshop\\784150\\3823543010\\TesmioLoader\\build",
+        buf, sizeof(buf), "mp_syncsave_deadbeef"));
+    _snprintf_s(expected, sizeof(expected), _TRUNCATE, "%s\\media_soviet\\save\\mp_syncsave_deadbeef", realExeDir);
+    TEST_CHECK(strcmp(buf, expected) == 0);
+    TEST_CHECK(strstr(buf, "FakeWorkshop") == nullptr);
+
+    // 2. Leading "save/" and "save\\" prefix stripping.
+    _snprintf_s(expected, sizeof(expected), _TRUNCATE, "%s\\media_soviet\\save\\coop_last_session", realExeDir);
+    TEST_CHECK(SaveSync_ResolveGameSaveDir(selfMod, g_mockBaseDir, buf, sizeof(buf), "save/coop_last_session"));
+    TEST_CHECK(strcmp(buf, expected) == 0);
+    TEST_CHECK(SaveSync_ResolveGameSaveDir(selfMod, g_mockBaseDir, buf, sizeof(buf), "save\\coop_last_session"));
+    TEST_CHECK(strcmp(buf, expected) == 0);
+
+    // 3. Mock harness fallback when exeMod is non-module VirtualAlloc memory.
+    TEST_CHECK(SaveSync_ResolveGameSaveDir(
+        (HMODULE)g_mockExeBuffer, g_mockBaseDir, buf, sizeof(buf), "coop_client_backup"));
+    _snprintf_s(expected, sizeof(expected), _TRUNCATE, "%s\\media_soviet\\save\\coop_client_backup", g_mockBaseDir);
+    TEST_CHECK(strcmp(buf, expected) == 0);
+
+    // 4. Null / empty buffer guards.
+    TEST_CHECK(!SaveSync_ResolveGameSaveDir(nullptr, nullptr, nullptr, 0, "x"));
+    TEST_CHECK(!SaveSync_ResolveGameSaveDir(selfMod, g_mockBaseDir, buf, sizeof(buf), nullptr));
+
+    return true;
+}
+
 static bool Test_SaveSyncAndEconStatePersistence_M9_3()
 {
     printf("    [SubTest 1: Deterministic Co-op Autosaves & Client Backup (Feature 32)] ...\n"); fflush(stdout);
@@ -11396,6 +11439,9 @@ static bool Test_SaveSyncAndEconStatePersistence_M9_3()
 
     printf("    [SubTest 5: Vehicle Ownership & Dead Entity Pruning (Feature 36)] ...\n"); fflush(stdout);
     if (!SubTest_M9_3_VehicleOwnershipAndPruning()) return false;
+
+    printf("    [SubTest 6: Save Directory Prefers Exe Over Workshop BaseDir] ...\n"); fflush(stdout);
+    if (!SubTest_M9_3_GameSaveDirPrefersExeOverWorkshopBaseDir()) return false;
 
     return true;
 }

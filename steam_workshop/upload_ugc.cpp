@@ -82,6 +82,7 @@ typedef uint64_t (*Fn_ISteamUGC_CreateItem)(void* self, uint32_t nConsumerAppId,
 typedef uint64_t (*Fn_ISteamUGC_StartItemUpdate)(void* self, uint32_t nConsumerAppId, uint64_t nPublishedFileID);
 typedef bool (*Fn_ISteamUGC_SetItemTitle)(void* self, uint64_t handle, const char* pchTitle);
 typedef bool (*Fn_ISteamUGC_SetItemDescription)(void* self, uint64_t handle, const char* pchDescription);
+typedef bool (*Fn_ISteamUGC_SetItemUpdateLanguage)(void* self, uint64_t handle, const char* pchLanguage);
 typedef bool (*Fn_ISteamUGC_SetItemVisibility)(void* self, uint64_t handle, int32_t eVisibility);
 typedef bool (*Fn_ISteamUGC_SetItemContent)(void* self, uint64_t handle, const char* pszContentFolder);
 typedef bool (*Fn_ISteamUGC_SetItemPreview)(void* self, uint64_t handle, const char* pszPreviewFile);
@@ -91,6 +92,8 @@ typedef uint64_t (*Fn_ISteamUGC_DeleteItem)(void* self, uint64_t nPublishedFileI
 typedef uint64_t (*Fn_ISteamUGC_SubscribeItem)(void* self, uint64_t nPublishedFileID);
 typedef bool (*Fn_ISteamUGC_DownloadItem)(void* self, uint64_t nPublishedFileID, bool bHighPriority);
 typedef uint64_t (*Fn_ISteamUGC_CreateQueryUGCDetailsRequest)(void* self, uint64_t* pvecPublishedFileID, uint32_t unNumPublishedFileIDs);
+typedef bool (*Fn_ISteamUGC_SetLanguage)(void* self, uint64_t handle, const char* pchLanguage);
+typedef bool (*Fn_ISteamUGC_SetAllowCachedResponse)(void* self, uint64_t handle, uint32_t unMaxAgeSeconds);
 typedef uint64_t (*Fn_ISteamUGC_SendQueryUGCRequest)(void* self, uint64_t handle);
 typedef bool (*Fn_ISteamUGC_GetQueryUGCResult)(void* self, uint64_t handle, uint32_t index, SteamUGCDetails_t* pDetails);
 typedef bool (*Fn_ISteamUGC_ReleaseQueryUGCRequest)(void* self, uint64_t handle);
@@ -251,6 +254,82 @@ static void SyncLatestModBinaries(const std::string& repoRoot, const std::string
     }
 }
 
+static void QueryWorkshopLanguage(
+    void* pUGC, uint64_t qId, const char* lang,
+    Fn_SteamAPI_RunCallbacks pRunCallbacks,
+    Fn_ISteamUGC_CreateQueryUGCDetailsRequest pCreateQuery,
+    Fn_ISteamUGC_SetLanguage pSetQueryLang,
+    Fn_ISteamUGC_SetAllowCachedResponse pSetAllowCached,
+    Fn_ISteamUGC_SendQueryUGCRequest pSendQuery,
+    Fn_ISteamUGC_GetQueryUGCResult pGetQueryRes,
+    Fn_ISteamUGC_ReleaseQueryUGCRequest pReleaseQuery,
+    Fn_CSteamUGCQueryCompleted_t_SetCallResult pSetQueryCall)
+{
+    uint64_t hQuery = pCreateQuery(pUGC, &qId, 1);
+    if (pSetAllowCached) pSetAllowCached(pUGC, hQuery, 0);
+    if (pSetQueryLang && lang) pSetQueryLang(pUGC, hQuery, lang);
+    g_queryDone = false;
+    g_queryIOFail = false;
+    memset(&g_queryResult, 0, sizeof(g_queryResult));
+    uint64_t hCall = pSendQuery(pUGC, hQuery);
+    pSetQueryCall(hCall, OnQueryCompleted);
+    while (!g_queryDone) {
+        pRunCallbacks();
+        Sleep(50);
+    }
+    printf("[UGC] Query(%llu, %s): queryResult=%d numResults=%u cached=%d ioFail=%d\n",
+           (unsigned long long)qId, lang ? lang : "default",
+           (int)g_queryResult.m_eResult, g_queryResult.m_unNumResultsReturned,
+           (int)g_queryResult.m_bCachedData, (int)g_queryIOFail);
+    if (g_queryResult.m_unNumResultsReturned > 0) {
+        static SteamUGCDetails_t det = {};
+        memset(&det, 0, sizeof(det));
+        if (pGetQueryRes(pUGC, hQuery, 0, &det)) {
+            printf("  [%s] itemResult=%d fileType=%d creatorApp=%u consumerApp=%u\n",
+                   lang ? lang : "default",
+                   (int)det.m_eResult, (int)det.m_eFileType, det.m_nCreatorAppID, det.m_nConsumerAppID);
+            printf("  [%s] title='%s'\n", lang ? lang : "default", det.m_rgchTitle);
+            printf("  [%s] owner=%llu created=%u updated=%u vis=%d banned=%d accepted=%d fileSize=%d prevSize=%d\n",
+                   lang ? lang : "default",
+                   (unsigned long long)det.m_ulSteamIDOwner, det.m_rtimeCreated, det.m_rtimeUpdated,
+                   (int)det.m_eVisibility, (int)det.m_bBanned, (int)det.m_bAcceptedForUse,
+                   (int)det.m_nFileSize, (int)det.m_nPreviewFileSize);
+            printf("  [%s] desc='%.120s'\n", lang ? lang : "default", det.m_rgchDescription);
+        }
+    }
+    pReleaseQuery(pUGC, hQuery);
+}
+
+static bool SubmitAndWait(
+    void* pUGC, uint64_t hUpdate, const char* changeNote,
+    Fn_ISteamUGC_SubmitItemUpdate pSubmitUpdate,
+    Fn_CSubmitItemUpdateResult_t_SetCallResult pSetSubmitCall,
+    Fn_ISteamUGC_GetItemUpdateProgress pGetProgress,
+    Fn_SteamAPI_RunCallbacks pRunCallbacks)
+{
+    g_submitDone = false;
+    g_submitIOFail = false;
+    memset(&g_submitResult, 0, sizeof(g_submitResult));
+    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, changeNote);
+    pSetSubmitCall(hSubmitCall, OnSubmitItem);
+
+    int32_t lastStatus = -1;
+    while (!g_submitDone) {
+        pRunCallbacks();
+        uint64_t processed = 0, total = 0;
+        int32_t st = pGetProgress(pUGC, hUpdate, &processed, &total);
+        if (st != lastStatus || total > 0) {
+            printf("\r[UGC] Upload progress: status=%d (%llu / %llu bytes)   ", (int)st,
+                   (unsigned long long)processed, (unsigned long long)total);
+            fflush(stdout);
+            lastStatus = st;
+        }
+        Sleep(100);
+    }
+    printf("\n");
+    return !g_submitIOFail && g_submitResult.m_eResult == 1;
+}
+
 int main(int argc, char** argv)
 {
     SetEnvironmentVariableA("SteamAppId", "784150");
@@ -292,6 +371,7 @@ int main(int argc, char** argv)
     auto pStartUpdate = (Fn_ISteamUGC_StartItemUpdate)GetProcAddress(hDll, "SteamAPI_ISteamUGC_StartItemUpdate");
     auto pSetTitle = (Fn_ISteamUGC_SetItemTitle)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemTitle");
     auto pSetDesc = (Fn_ISteamUGC_SetItemDescription)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemDescription");
+    auto pSetUpdateLang = (Fn_ISteamUGC_SetItemUpdateLanguage)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemUpdateLanguage");
     auto pSetVis = (Fn_ISteamUGC_SetItemVisibility)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemVisibility");
     auto pSetContent = (Fn_ISteamUGC_SetItemContent)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemContent");
     auto pSetPreview = (Fn_ISteamUGC_SetItemPreview)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetItemPreview");
@@ -305,6 +385,8 @@ int main(int argc, char** argv)
     auto pSubscribeItem = (Fn_ISteamUGC_SubscribeItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SubscribeItem");
     auto pDownloadItem = (Fn_ISteamUGC_DownloadItem)GetProcAddress(hDll, "SteamAPI_ISteamUGC_DownloadItem");
     auto pCreateQuery = (Fn_ISteamUGC_CreateQueryUGCDetailsRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_CreateQueryUGCDetailsRequest");
+    auto pSetQueryLang = (Fn_ISteamUGC_SetLanguage)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetLanguage");
+    auto pSetAllowCached = (Fn_ISteamUGC_SetAllowCachedResponse)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SetAllowCachedResponse");
     auto pSendQuery = (Fn_ISteamUGC_SendQueryUGCRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_SendQueryUGCRequest");
     auto pGetQueryRes = (Fn_ISteamUGC_GetQueryUGCResult)GetProcAddress(hDll, "SteamAPI_ISteamUGC_GetQueryUGCResult");
     auto pReleaseQuery = (Fn_ISteamUGC_ReleaseQueryUGCRequest)GetProcAddress(hDll, "SteamAPI_ISteamUGC_ReleaseQueryUGCRequest");
@@ -337,32 +419,10 @@ int main(int argc, char** argv)
 
     if (argc >= 3 && strcmp(argv[1], "--query") == 0) {
         uint64_t qId = _strtoui64(argv[2], nullptr, 10);
-        uint64_t hQuery = pCreateQuery(pUGC, &qId, 1);
-        g_queryDone = false;
-        uint64_t hCall = pSendQuery(pUGC, hQuery);
-        pSetQueryCall(hCall, OnQueryCompleted);
-        while (!g_queryDone) {
-            pRunCallbacks();
-            Sleep(50);
-        }
-        printf("[UGC] Query(%llu): queryResult=%d numResults=%u ioFail=%d\n",
-               (unsigned long long)qId, (int)g_queryResult.m_eResult,
-               g_queryResult.m_unNumResultsReturned, (int)g_queryIOFail);
-        if (g_queryResult.m_unNumResultsReturned > 0) {
-            static SteamUGCDetails_t det = {};
-            memset(&det, 0, sizeof(det));
-            if (pGetQueryRes(pUGC, hQuery, 0, &det)) {
-                printf("  itemResult=%d fileType=%d creatorApp=%u consumerApp=%u\n",
-                       (int)det.m_eResult, (int)det.m_eFileType, det.m_nCreatorAppID, det.m_nConsumerAppID);
-                printf("  title='%s'\n", det.m_rgchTitle);
-                printf("  owner=%llu created=%u updated=%u vis=%d banned=%d accepted=%d fileSize=%d prevSize=%d\n",
-                       (unsigned long long)det.m_ulSteamIDOwner, det.m_rtimeCreated, det.m_rtimeUpdated,
-                       (int)det.m_eVisibility, (int)det.m_bBanned, (int)det.m_bAcceptedForUse,
-                       (int)det.m_nFileSize, (int)det.m_nPreviewFileSize);
-                printf("  desc='%.120s'\n", det.m_rgchDescription);
-            }
-        }
-        pReleaseQuery(pUGC, hQuery);
+        QueryWorkshopLanguage(pUGC, qId, "english", pRunCallbacks, pCreateQuery,
+                              pSetQueryLang, pSetAllowCached, pSendQuery, pGetQueryRes, pReleaseQuery, pSetQueryCall);
+        QueryWorkshopLanguage(pUGC, qId, "russian", pRunCallbacks, pCreateQuery,
+                              pSetQueryLang, pSetAllowCached, pSendQuery, pGetQueryRes, pReleaseQuery, pSetQueryCall);
         DeleteFileA("steam_appid.txt");
         if (pShutdown) pShutdown();
         return 0;
@@ -502,6 +562,7 @@ int main(int argc, char** argv)
     }
 
     uint64_t hUpdate = pStartUpdate(pUGC, 784150, publishedId);
+    bool bLangEn = (updateMeta && pSetUpdateLang) ? pSetUpdateLang(pUGC, hUpdate, "english") : true;
     bool bTitle = updateMeta ? pSetTitle(pUGC, hUpdate, titleToSet.c_str()) : true;
     bool bDesc = updateMeta ? pSetDesc(pUGC, hUpdate, descToSet.c_str()) : true;
     // Only call SetItemVisibility when explicitly requested (--public / --friends / --create-friends)
@@ -509,44 +570,44 @@ int main(int argc, char** argv)
     bool bVis = setVis ? pSetVis(pUGC, hUpdate, targetVis) : true;
     bool bContent = pSetContent(pUGC, hUpdate, contentDir.c_str());
     bool bPreview = updatePreview ? pSetPreview(pUGC, hUpdate, previewFile.c_str()) : true;
-    printf("[UGC] SetItem (id=%llu): title=%d desc=%d (%zu bytes) vis=%d content=%d preview=%d (uploadPreview=%d)\n",
-           (unsigned long long)publishedId, (int)bTitle, (int)bDesc,
+    printf("[UGC] SetItem[en] (id=%llu): lang=%d title=%d desc=%d (%zu bytes) vis=%d content=%d preview=%d (uploadPreview=%d)\n",
+           (unsigned long long)publishedId, (int)bLangEn, (int)bTitle, (int)bDesc,
            updateMeta ? descToSet.size() : (size_t)0,
            (int)bVis, (int)bContent, (int)bPreview, (int)updatePreview);
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Game v1.1.1.13 support, 10-min co-op autosaves, UTF-8/ZIP64 saves, full Two-States isolation (research, licenses, free limits, minimap, loans/stats), full Lockstep UI sync, 60-144+ FPS vehicles/animations, primary Workshop ID restored to 3823543010",
+                "v%s (Protocol %d) - Hotfix: resolve save folder from SOVIET64.exe directory instead of Workshop loader baseDir (fixes host error code 3 on join), ensure media_soviet/save exists, and sync RU/EN Workshop metadata",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
-    g_submitDone = false;
-    uint64_t hSubmitCall = pSubmitUpdate(pUGC, hUpdate, defaultNote);
-    pSetSubmitCall(hSubmitCall, OnSubmitItem);
-
-    int32_t lastStatus = -1;
-    while (!g_submitDone) {
-        pRunCallbacks();
-        uint64_t processed = 0, total = 0;
-        int32_t st = pGetProgress(pUGC, hUpdate, &processed, &total);
-        if (st != lastStatus || total > 0) {
-            printf("\r[UGC] Upload progress: status=%d (%llu / %llu bytes)   ", (int)st,
-                   (unsigned long long)processed, (unsigned long long)total);
-            fflush(stdout);
-            lastStatus = st;
-        }
-        Sleep(100);
-    }
-    printf("\n");
-
-    DeleteFileA("steam_appid.txt");
-    if (pShutdown) pShutdown();
-
-    if (g_submitIOFail || g_submitResult.m_eResult != 1) {
+    if (!SubmitAndWait(pUGC, hUpdate, defaultNote, pSubmitUpdate, pSetSubmitCall, pGetProgress, pRunCallbacks)) {
+        DeleteFileA("steam_appid.txt");
+        if (pShutdown) pShutdown();
         printf("[ERROR] SubmitItemUpdate failed! EResult=%d, IOFail=%d\n",
                (int)g_submitResult.m_eResult, (int)g_submitIOFail);
         return 1;
     }
+
+    if (updateMeta && pSetUpdateLang) {
+        printf("[UGC] Syncing Russian language metadata slot for %llu...\n", (unsigned long long)publishedId);
+        uint64_t hUpdateRu = pStartUpdate(pUGC, 784150, publishedId);
+        bool bLangRu = pSetUpdateLang(pUGC, hUpdateRu, "russian");
+        bool bTitleRu = pSetTitle(pUGC, hUpdateRu, titleToSet.c_str());
+        bool bDescRu = pSetDesc(pUGC, hUpdateRu, descToSet.c_str());
+        printf("[UGC] SetItem[ru] (id=%llu): lang=%d title=%d desc=%d (%zu bytes)\n",
+               (unsigned long long)publishedId, (int)bLangRu, (int)bTitleRu, (int)bDescRu, descToSet.size());
+        if (!SubmitAndWait(pUGC, hUpdateRu, nullptr, pSubmitUpdate, pSetSubmitCall, pGetProgress, pRunCallbacks)) {
+            DeleteFileA("steam_appid.txt");
+            if (pShutdown) pShutdown();
+            printf("[ERROR] SubmitItemUpdate[ru] failed! EResult=%d, IOFail=%d\n",
+                   (int)g_submitResult.m_eResult, (int)g_submitIOFail);
+            return 1;
+        }
+    }
+
+    DeleteFileA("steam_appid.txt");
+    if (pShutdown) pShutdown();
 
     printf("[SUCCESS] Published to Steam Workshop (%llu)!\n", (unsigned long long)publishedId);
     printf("Workshop URL: https://steamcommunity.com/sharedfiles/filedetails/?id=%llu\n",

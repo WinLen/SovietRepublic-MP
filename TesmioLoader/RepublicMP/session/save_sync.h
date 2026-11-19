@@ -199,6 +199,8 @@ void SaveSync_SetTestDlcLists(const char* hostList, const char* clientList);
 void SaveSync_IsolateClientSettingsForTest(const char* destDir, bool rejoin);
 bool SaveSync_PreserveClientBackupForTest(const char* destDir);
 bool SaveSync_GetGameSaveDirForTest(char* outPath, size_t outSize, const char* saveName);
+bool SaveSync_ResolveGameSaveDir(HMODULE exeMod, const char* fallbackBaseDir,
+                                 char* outPath, size_t outSize, const char* saveName);
 
 // True when running in dual-window automation (REPUBLICMP_ROLE, CLI flags, or test-host/test-client).
 bool SaveSync_IsDualTestbed();

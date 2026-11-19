@@ -492,25 +492,43 @@ static void ZipProgressCb(size_t done, size_t total, void* userData)
 // Paths
 // ---------------------------------------------------------------------------
 
-static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
+bool SaveSync_ResolveGameSaveDir(HMODULE exeMod, const char* fallbackBaseDir,
+                                 char* outPath, size_t outSize, const char* saveName)
 {
-    if (!saveName) return false;
+    if (!outPath || outSize == 0 || !saveName) return false;
+    outPath[0] = '\0';
     if (_strnicmp(saveName, "save\\", 5) == 0 || _strnicmp(saveName, "save/", 5) == 0) {
         saveName += 5;
     }
-    if (g_baseDir && g_baseDir[0]) {
-        return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", g_baseDir, saveName) >= 0;
+
+    char rootDir[MAX_PATH] = {};
+    auto tryModuleDir = [&](HMODULE mod) -> bool {
+        char exePath[MAX_PATH] = {};
+        DWORD len = GetModuleFileNameA(mod, exePath, MAX_PATH);
+        if (len == 0 || len >= MAX_PATH) return false;
+        char* lastSlash = strrchr(exePath, '\\');
+        if (!lastSlash) return false;
+        *lastSlash = '\0';
+        strncpy_s(rootDir, sizeof(rootDir), exePath, _TRUNCATE);
+        return rootDir[0] != '\0';
+    };
+
+    bool hasRoot = (exeMod != nullptr && tryModuleDir(exeMod));
+    if (!hasRoot && fallbackBaseDir && fallbackBaseDir[0] != '\0') {
+        strncpy_s(rootDir, sizeof(rootDir), fallbackBaseDir, _TRUNCATE);
+        hasRoot = (rootDir[0] != '\0');
     }
-    char exePath[MAX_PATH] = {};
-    DWORD len = GetModuleFileNameA(g_exe, exePath, MAX_PATH);
-    if (len == 0 || len == MAX_PATH) {
-        len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (!hasRoot) {
+        hasRoot = tryModuleDir(nullptr);
     }
-    if (len == 0 || len == MAX_PATH) return false;
-    char* lastSlash = strrchr(exePath, '\\');
-    if (!lastSlash) return false;
-    *lastSlash = '\0';
-    return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", exePath, saveName) >= 0;
+    if (!hasRoot) return false;
+
+    return _snprintf_s(outPath, outSize, _TRUNCATE, "%s\\media_soviet\\save\\%s", rootDir, saveName) >= 0;
+}
+
+static bool GetGameSaveDir(char* outPath, size_t outSize, const char* saveName)
+{
+    return SaveSync_ResolveGameSaveDir(g_exe, g_baseDir, outPath, outSize, saveName);
 }
 
 bool SaveSync_GetGameSaveDirForTest(char* outPath, size_t outSize, const char* saveName)
@@ -1073,9 +1091,13 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
         }
         HostStep(sock, 2, Tr("Сохранение мира для передачи", "Saving the world"));
         SendMsg(sock, MSG_STEP, 2, -1, Tr("сохранение мира", "saving the world"));
+        std::error_code parentEc;
+        std::filesystem::create_directories(std::filesystem::path(saveDir).parent_path(), parentEc);
         // The engine's save writer does not create the destination folder.
         if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            SetSessionError(Tr("Не удалось создать папку сохранения (код %lu)", "couldn't create the save folder (error %lu)"), GetLastError());
+            DWORD err = GetLastError();
+            Logf("republicmp  SESSION: CreateDirectoryA failed for [%s] (err=%lu)", saveDir, (unsigned long)err);
+            SetSessionError(Tr("Не удалось создать папку сохранения (код %lu)", "couldn't create the save folder (error %lu)"), err);
             SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
             break;
         }
@@ -1521,6 +1543,8 @@ static bool RunClientJoin(bool rejoin)
         _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
         char destDir[MAX_PATH] = {};
         _snprintf_s(destDir, sizeof(destDir), _TRUNCATE, "%s%s", saveDir, SAVE_SYNC_RECEIVED_SUFFIX);
+        std::error_code parentEc;
+        std::filesystem::create_directories(std::filesystem::path(zipPath).parent_path(), parentEc);
 
         // 1. Connect + versions.
         ClientStep(1, Tr("Подключение к серверу — проверка версий", "Connecting to the host - checking versions"));

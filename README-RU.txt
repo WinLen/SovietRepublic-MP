@@ -1,5 +1,5 @@
 ============================================================================
-  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.6.0)
+  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.6.1)
   Правила установки и совместной игры (RU) / Installation & Co-op Guide (EN)
 ============================================================================
 
@@ -78,7 +78,7 @@
    - Alt + LMB : Place a 3D map ping (20 sec beacon) for your partner
    - Tab       : Collapse / expand the waiting lobby window to inspect the map
 
-5. ОСОБЕННОСТИ СИНХРОНИЗАЦИИ И АВТОСОХРАНЕНИЯ (v1.6.0):
+5. ОСОБЕННОСТИ СИНХРОНИЗАЦИИ И АВТОСОХРАНЕНИЯ (v1.6.1):
    - Совместимость с актуальной версией игры v1.1.1.13 (0x6A8D4087).
    - Детерминированные автосохранения каждые 10 минут: save/coop_autosave (Хост)
      и save/coop_client_backup (Клиент), поддержка ZIP64 и UTF-8 путей.
