@@ -354,6 +354,9 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(RVA_VEHICLE_CARGO_TRADE == 0x68B3D0u);
     TEST_CHECK(RVA_BLD_COUNT_LIMIT_CHECK == 0x5F3180u);
     TEST_CHECK(RVA_BLD_COUNT_LIMIT_GET == 0x5F3220u);
+    TEST_CHECK(RVA_BLD_COUNT_LIMIT_TOOLTIP == 0x7AC6B7u);
+    TEST_CHECK(RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND == 0x7AC748u);
+    TEST_CHECK(RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP == 0x7AC94Eu);
 
     TEST_CHECK(TwoStates_GetShowMinimapBorders() == true);
     TwoStates_SetShowMinimapBorders(false);
@@ -5333,6 +5336,21 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
     return true;
 }
 
+struct CountLimitCmdThreadSync {
+    HANDLE readyEvt;
+    HANDLE releaseEvt;
+};
+
+static DWORD WINAPI CountLimitCmdThreadWorker(LPVOID param)
+{
+    CountLimitCmdThreadSync* sync = (CountLimitCmdThreadSync*)param;
+    TwoStates_BeginCommand(2);
+    SetEvent(sync->readyEvt);
+    WaitForSingleObject(sync->releaseEvt, 5000);
+    TwoStates_EndCommand(2);
+    return 0;
+}
+
 static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
 {
     ResetMockWorldMemory();
@@ -5356,6 +5374,7 @@ static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
     *(RawLimitEntry**)(limitVecHdr + 0)  = &rawEntry;
     *(RawLimitEntry**)(limitVecHdr + 8)  = &rawEntry + 1;
     *(RawLimitEntry**)(limitVecHdr + 16) = &rawEntry + 1;
+    *(BYTE**)(world + WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET) = limitVecHdr;
 
     // Create 7 free offices on State 1 territory (West, X < 0): 5 primary + 2 mirrored
     std::vector<std::vector<BYTE>> blds(10, std::vector<BYTE>(BUILDING_STRUCT_BYTES, 0));
@@ -5379,11 +5398,19 @@ static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
     TEST_CHECK(cur1 == 7 && max1 == 7);
     TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 1));
     TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 1));
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 1, &cur1, &max1) == typeMuddyCo.data());
+    TEST_CHECK(cur1 == 7 && max1 == 7);
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCoMirror.data(), 1, &cur1, &max1) == typeMuddyCo.data());
+    TEST_CHECK(cur1 == 7 && max1 == 7);
 
     TEST_CHECK(TwoStates_GetBuildingCountLimitEntryForTest(world, limitVecHdr, typeMuddyCo.data(), 2, &cur2, &max2));
     TEST_CHECK(cur2 == 0 && max2 == 7);
     TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 2));
     TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 2));
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 0 && max2 == 7);
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCoMirror.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 0 && max2 == 7);
 
     // Add 3 free offices on State 2 territory (East, X > 0) -> State 2 now has 3/7 (still allowed)
     for (int i = 7; i < 10; ++i) {
@@ -5399,17 +5426,60 @@ static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
 
     TEST_CHECK(TwoStates_GetBuildingCountLimitEntryForTest(world, limitVecHdr, typeMuddyCoMirror.data(), 2, &cur2, &max2));
     TEST_CHECK(cur2 == 3 && max2 == 7);
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 3 && max2 == 7);
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCoMirror.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 3 && max2 == 7);
     TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 2));
     TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 1));
     TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeRegular.data(), 1));
     TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, nullptr, 1));
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeRegular.data(), 1, &cur1, &max1) == nullptr);
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, nullptr, 1, &cur1, &max1) == nullptr);
+
+    // Negative customLimitOverride (< 0) resolves from +0x208; positive override takes precedence
+    rawEntry.customLimitOverride = -2;
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 3 && max2 == 7);
+    rawEntry.customLimitOverride = 3;
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 2, &cur2, &max2) == typeMuddyCo.data());
+    TEST_CHECK(cur2 == 3 && max2 == 3);
+    TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 2));
+    rawEntry.customLimitOverride = -1;
+
+    // Cross-thread isolation: Sim-thread TwoStates_BeginCommand(2) must NOT leak State 2 into UI-thread checks/tooltips
+    CountLimitCmdThreadSync threadSync = {
+        CreateEventW(nullptr, TRUE, FALSE, nullptr),
+        CreateEventW(nullptr, TRUE, FALSE, nullptr)
+    };
+    TEST_CHECK(threadSync.readyEvt != nullptr && threadSync.releaseEvt != nullptr);
+    HANDLE cmdThread = CreateThread(nullptr, 0, &CountLimitCmdThreadWorker, &threadSync, 0, nullptr);
+    bool crossThreadOk = false;
+    if (cmdThread != nullptr && WaitForSingleObject(threadSync.readyEvt, 5000) == WAIT_OBJECT_0) {
+        int32_t uiCur = -1, uiMax = -1;
+        const BYTE* uiPrimary = TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 0, &uiCur, &uiMax);
+        bool uiCanPlace = TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 0);
+        crossThreadOk = (uiPrimary == typeMuddyCo.data() && uiCur == 7 && uiMax == 7 && !uiCanPlace);
+    }
+    SetEvent(threadSync.releaseEvt);
+    if (cmdThread != nullptr) {
+        WaitForSingleObject(cmdThread, 5000);
+        CloseHandle(cmdThread);
+    }
+    CloseHandle(threadSync.readyEvt);
+    CloseHandle(threadSync.releaseEvt);
+    TEST_CHECK(crossThreadOk);
 
     // Singleplayer / One State fallback uses global currentCount from limitTableVec
     TwoStates_OnSessionEnded();
     rawEntry.currentCount = 6;
     TEST_CHECK(TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 0));
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 0, &cur1, &max1) == typeMuddyCo.data());
+    TEST_CHECK(cur1 == 6 && max1 == 7);
     rawEntry.currentCount = 7;
     TEST_CHECK(!TwoStates_CheckBuildingCountLimitForTest(world, limitVecHdr, typeMuddyCo.data(), 0));
+    TEST_CHECK(TwoStates_ResolveTooltipCountLimitForTest(world, typeMuddyCo.data(), 0, &cur1, &max1) == typeMuddyCo.data());
+    TEST_CHECK(cur1 == 7 && max1 == 7);
 
     // 2. Verify towed child trailer (+0x3A0..+0x3A8) is translated together with parent vehicle during SoftSync
     HeldFrame_Reset();

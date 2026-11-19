@@ -1705,7 +1705,7 @@ static_assert(BLD_CONSTRUCTION_SITE_OFFSET == 0x628u &&
               BLD_PASS_BUCKET_COUNTER_RVA == 0x9962A8u,
               "Building animated sub-mesh (+0x5E0/+0x5F0), type speed (+0x428), and mesh anim controller (+0x1B0/+0x9C) offsets must match 1.1.1.9 layout");
 
-// Building per-type free / total count limit table (world + 0x58, BUILDING::TYPE + 0x208, 0x5F31F0 / 0x5F3290)
+// Building per-type free / total count limit table (world + 0x58, BUILDING::TYPE + 0x208, 0x5F3180 / 0x5F3220 / 0x7AC6B7)
 #ifndef WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET
 #define WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET 0x0058u // std::vector<SovietCountLimitEntry>* pointer on WORLD (0x1409D4F68)
 #endif
@@ -1718,11 +1718,23 @@ static_assert(BLD_CONSTRUCTION_SITE_OFFSET == 0x628u &&
 #ifndef RVA_BLD_COUNT_LIMIT_GET
 #define RVA_BLD_COUNT_LIMIT_GET              0x5F3220u // SovietCountLimitEntry* __fastcall(const void* limitTableVec, SovietCountLimitEntry* out, const void* btype)
 #endif
+#ifndef RVA_BLD_COUNT_LIMIT_TOOLTIP
+#define RVA_BLD_COUNT_LIMIT_TOOLTIP          0x7AC6B7u // Inlined $COUNT_LIMIT lookup inside building card / tooltip (0x7ABF20)
+#endif
+#ifndef RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND
+#define RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND    0x7AC748u // Resume inside 0x7ABF20 when count-limit entry is found
+#endif
+#ifndef RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP
+#define RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP     0x7AC94Eu // Resume inside 0x7ABF20 when count-limit entry is absent
+#endif
 
 static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
               BLD_TYPE_COUNT_LIMIT_OFFSET == 0x0208u &&
-              RVA_BLD_COUNT_LIMIT_GET == RVA_BLD_COUNT_LIMIT_CHECK + 0xA0u,
-              "Building count limit table pointer (+0x58), type limit (+0x208), and check/get RVAs (0x5F31F0/0x5F3290) must match 1.1.1.9 layout");
+              RVA_BLD_COUNT_LIMIT_GET == RVA_BLD_COUNT_LIMIT_CHECK + 0xA0u &&
+              RVA_BLD_COUNT_LIMIT_TOOLTIP == 0x7AC6B7u &&
+              RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND == RVA_BLD_COUNT_LIMIT_TOOLTIP + 0x91u &&
+              RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP == RVA_BLD_COUNT_LIMIT_TOOLTIP + 0x297u,
+              "Building count limit table pointer (+0x58), type limit (+0x208), and check/get/tooltip RVAs (0x5F3180/0x5F3220/0x7AC6B7) must match 1.1.1.13 layout");
 
 // Distribution office, technical services, waste/transfer copy tools, carrier mechanism & storage slot RVAs
 #ifndef RVA_VEC_CARGO_ENTRY_PUSH_BACK

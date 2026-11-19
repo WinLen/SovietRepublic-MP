@@ -577,7 +577,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Hotfix: restore sub-4 GB Windows x64 heap pointer support in IsPointerLikeX64 (fixes permanent dynamic lines desync on load, customs road snapping, and minimap overlay on PCs with <4 GB heap allocations)",
+                "v%s (Protocol %d) - Fix: separate per-state free/limited building pools ($COUNT_LIMIT) in Two States build menu tooltips/cards (hook inlined 0x7AC6B7 lookup across all 13 callers of 0x7ABF20) and thread-safe command-owner attribution (g_cmdThread)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -1514,6 +1514,11 @@ static const BYTE kBldCountLimitGetExpect[21] = {
     0x4C, 0x8B, 0x19, 0x48, 0xB8, 0xAB, 0xAA, 0xAA,
     0xAA, 0xAA, 0xAA, 0xAA, 0x2A
 };
+static const BYTE kBldCountLimitTooltipExpect[17] = {
+    0x49, 0x8B, 0x5F, 0x58, 0x45, 0x33, 0xD2, 0x48,
+    0x8B, 0x3B, 0x48, 0x8B, 0x4B, 0x08, 0x48, 0x2B,
+    0xCF
+};
 
 typedef bool (__fastcall* CourtAssignFn)(BYTE* world, BYTE* caseObj, uintptr_t a3, uintptr_t a4);
 typedef bool (__fastcall* PrisonAssignFn)(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
@@ -1642,6 +1647,7 @@ static volatile bool g_inSimStep = false;
 static volatile DWORD g_simStepThread = 0;
 static BYTE* volatile g_simLoopCurrentBuilding = nullptr;
 static bool g_inCommand = false;
+static volatile DWORD g_cmdThread = 0;
 static int g_cmdOwner = 1;
 static bool g_beforeLoadPrepared = false;
 static bool g_inStatClearTest = false;
@@ -3845,9 +3851,12 @@ static int ResolveActiveCountLimitState(int stateOverride)
 {
     if (stateOverride == 1 || stateOverride == 2) return stateOverride;
     if (!IsTwoStatesResearchOrLicenseActive()) return 0;
-    int st = g_inCommand
+    bool onCmdThread = g_inCommand && (GetCurrentThreadId() == g_cmdThread);
+    int st = onCmdThread
         ? g_cmdOwner
-        : (BuildSync_IsApplyingRemote() ? (3 - TwoStates_LocalState()) : TwoStates_LocalState());
+        : ((!g_inCommand && BuildSync_IsApplyingRemote())
+               ? (3 - TwoStates_LocalState())
+               : TwoStates_LocalState());
     return (st == 1 || st == 2) ? st : 1;
 }
 
@@ -3862,7 +3871,7 @@ static bool ResolveEffectiveCountLimitEntry(const BYTE* world, const BYTE* limit
     outEntry->customLimitOverride = -1;
     if (!LookupCountLimitEntry(limitTableVec, btype, outEntry)) return false;
 
-    if (outEntry->customLimitOverride == -1) {
+    if (outEntry->customLimitOverride < 0) {
         const BYTE* limType = outEntry->primaryType ? outEntry->primaryType : outEntry->mirroredType;
         int32_t typeLim = -1;
         if (limType && SafeReadPod((const int32_t*)(limType + BLD_TYPE_COUNT_LIMIT_OFFSET), &typeLim)) {
@@ -3888,7 +3897,7 @@ bool TwoStates_CheckBuildingCountLimitForTest(const BYTE* world, const BYTE* lim
     if (!ResolveEffectiveCountLimitEntry(world, limitTableVec, btype, stateOverride, &entry)) {
         return true;
     }
-    if (entry.customLimitOverride == -1) return true;
+    if (entry.customLimitOverride < 0) return true;
     return entry.currentCount < entry.customLimitOverride;
 }
 
@@ -3901,6 +3910,50 @@ bool TwoStates_GetBuildingCountLimitEntryForTest(const BYTE* world, const BYTE* 
     if (outCur) *outCur = entry.currentCount;
     if (outMax) *outMax = entry.customLimitOverride;
     return found;
+}
+
+static const BYTE* ResolveTooltipCountLimit(const BYTE* world, const BYTE* btype,
+                                            int stateOverride, int32_t* outCountsPair)
+{
+    if (!world || !btype || !outCountsPair) return nullptr;
+    const BYTE* limitTableVec = nullptr;
+    if (!SafeReadPod((const BYTE* const*)(world + WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET), &limitTableVec) ||
+        !limitTableVec) {
+        return nullptr;
+    }
+    int effStateOverride = 0;
+    if (stateOverride == 1 || stateOverride == 2) {
+        effStateOverride = stateOverride;
+    } else if (IsTwoStatesResearchOrLicenseActive()) {
+        int localSt = TwoStates_LocalState();
+        effStateOverride = (localSt == 1 || localSt == 2) ? localSt : 1;
+    }
+    SovietCountLimitEntry entry = {};
+    if (!ResolveEffectiveCountLimitEntry(world, limitTableVec, btype, effStateOverride, &entry)) {
+        return nullptr;
+    }
+    const BYTE* primary = entry.primaryType ? entry.primaryType : entry.mirroredType;
+    if (!primary) return nullptr;
+    outCountsPair[0] = entry.currentCount;
+    outCountsPair[1] = entry.customLimitOverride;
+    return primary;
+}
+
+static const BYTE* __fastcall H_BldCountLimitTooltipLookup(const BYTE* world, const BYTE* btype,
+                                                           int32_t* outCountsPair)
+{
+    return ResolveTooltipCountLimit(world, btype, 0, outCountsPair);
+}
+
+const BYTE* TwoStates_ResolveTooltipCountLimitForTest(const BYTE* world, const BYTE* btype,
+                                                      int stateOverride,
+                                                      int32_t* outCur, int32_t* outMax)
+{
+    int32_t countsPair[2] = { 0, -1 };
+    const BYTE* primary = ResolveTooltipCountLimit(world, btype, stateOverride, countsPair);
+    if (outCur) *outCur = countsPair[0];
+    if (outMax) *outMax = countsPair[1];
+    return primary;
 }
 
 static unsigned char __fastcall H_BldCountLimitCheck(const BYTE* limitTableVec, const BYTE* btype)
@@ -5396,68 +5449,94 @@ static void __fastcall H_MasterSave(BYTE* world)
 static BYTE*  g_econRelayStubPage = nullptr;
 static size_t g_econRelayStubUsed = 0;
 
+static bool EnsureRelayStubSpace(size_t needed)
+{
+    if (g_econRelayStubPage && g_econRelayStubUsed + needed <= 4096) return true;
+    BYTE* page = g_exeBase ? AllocNear(g_exeBase, 4096) : nullptr;
+    if (!page) {
+        page = (BYTE*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    }
+    if (!page) return false;
+    g_econRelayStubPage = page;
+    g_econRelayStubUsed = 0;
+    return needed <= 4096;
+}
+
+static void EmitSaveVolatileRegs(BYTE*& p)
+{
+    static const BYTE kSaveBytes[] = {
+        0x48, 0x89, 0x4C, 0x24, 0x20,                     // mov [rsp+0x20], rcx
+        0x48, 0x89, 0x54, 0x24, 0x28,                     // mov [rsp+0x28], rdx
+        0x4C, 0x89, 0x44, 0x24, 0x30,                     // mov [rsp+0x30], r8
+        0x4C, 0x89, 0x4C, 0x24, 0x38,                     // mov [rsp+0x38], r9
+        0x4C, 0x89, 0x54, 0x24, 0x40,                     // mov [rsp+0x40], r10
+        0x4C, 0x89, 0x5C, 0x24, 0x48,                     // mov [rsp+0x48], r11
+        0x0F, 0x11, 0x44, 0x24, 0x50,                     // movups [rsp+0x50], xmm0
+        0x0F, 0x11, 0x4C, 0x24, 0x60,                     // movups [rsp+0x60], xmm1
+        0x0F, 0x11, 0x54, 0x24, 0x70,                     // movups [rsp+0x70], xmm2
+        0x0F, 0x11, 0x9C, 0x24, 0x80, 0x00, 0x00, 0x00,   // movups [rsp+0x80], xmm3
+        0x0F, 0x11, 0xA4, 0x24, 0x90, 0x00, 0x00, 0x00,   // movups [rsp+0x90], xmm4
+        0x0F, 0x11, 0xAC, 0x24, 0xA0, 0x00, 0x00, 0x00    // movups [rsp+0xA0], xmm5
+    };
+    memcpy(p, kSaveBytes, sizeof(kSaveBytes));
+    p += sizeof(kSaveBytes);
+}
+
+static void EmitRestoreVolatileRegs(BYTE*& p, bool keepXmm0Result, bool zeroRcxOnExit)
+{
+    if (!keepXmm0Result) {
+        static const BYTE kRestXmm0[] = { 0x0F, 0x10, 0x44, 0x24, 0x50 }; // movups xmm0, [rsp+0x50]
+        memcpy(p, kRestXmm0, sizeof(kRestXmm0));
+        p += sizeof(kRestXmm0);
+    }
+    static const BYTE kRestoreBytes[] = {
+        0x0F, 0x10, 0x4C, 0x24, 0x60,                     // movups xmm1, [rsp+0x60]
+        0x0F, 0x10, 0x54, 0x24, 0x70,                     // movups xmm2, [rsp+0x70]
+        0x0F, 0x10, 0x9C, 0x24, 0x80, 0x00, 0x00, 0x00,   // movups xmm3, [rsp+0x80]
+        0x0F, 0x10, 0xA4, 0x24, 0x90, 0x00, 0x00, 0x00,   // movups xmm4, [rsp+0x90]
+        0x0F, 0x10, 0xAC, 0x24, 0xA0, 0x00, 0x00, 0x00,   // movups xmm5, [rsp+0xA0]
+        0x4C, 0x8B, 0x5C, 0x24, 0x48,                     // mov r11, [rsp+0x48]
+        0x4C, 0x8B, 0x54, 0x24, 0x40,                     // mov r10, [rsp+0x40]
+        0x4C, 0x8B, 0x4C, 0x24, 0x38,                     // mov r9,  [rsp+0x38]
+        0x4C, 0x8B, 0x44, 0x24, 0x30,                     // mov r8,  [rsp+0x30]
+        0x48, 0x8B, 0x54, 0x24, 0x28                      // mov rdx, [rsp+0x28]
+    };
+    memcpy(p, kRestoreBytes, sizeof(kRestoreBytes));
+    p += sizeof(kRestoreBytes);
+    if (zeroRcxOnExit) {
+        *p++ = 0x33; *p++ = 0xC9;                         // xor ecx, ecx
+    } else {
+        static const BYTE kRestRcx[] = { 0x48, 0x8B, 0x4C, 0x24, 0x20 }; // mov rcx, [rsp+0x20]
+        memcpy(p, kRestRcx, sizeof(kRestRcx));
+        p += sizeof(kRestRcx);
+    }
+}
+
 void* TwoStates_BuildRegPreservingRelayStub(void* targetCppFn, bool keepXmm0Result, bool zeroRcxOnExit)
 {
     if (!targetCppFn) return nullptr;
-    if (!g_econRelayStubPage) {
-        if (g_exeBase) {
-            g_econRelayStubPage = AllocNear(g_exeBase, 4096);
-        }
-        if (!g_econRelayStubPage) {
-            g_econRelayStubPage = (BYTE*)VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-        }
-        g_econRelayStubUsed = 0;
-    }
-    if (!g_econRelayStubPage || g_econRelayStubUsed + 160 > 4096) return targetCppFn;
+    if (!EnsureRelayStubSpace(192)) return targetCppFn;
 
     BYTE* stub = g_econRelayStubPage + g_econRelayStubUsed;
     BYTE* p = stub;
-    auto emit = [&](std::initializer_list<BYTE> bytes) {
-        for (BYTE b : bytes) *p++ = b;
-    };
 
     // Leaf-function LTCG callers in SOVIET64.exe (e.g. 0x334CC9, 0x32F50D, 0x33381E calling 0x2FC290)
     // assume volatile registers (rdx, r8, r9, r10, r11, xmm0..xmm5) are preserved across the call.
     // On entry rsp & 0xF == 8; sub rsp, 0xB8 aligns rsp to 16 bytes for targetCppFn.
-    emit({ 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00 });         // sub rsp, 0xB8
-    emit({ 0x48, 0x89, 0x4C, 0x24, 0x20 });                     // mov [rsp+0x20], rcx
-    emit({ 0x48, 0x89, 0x54, 0x24, 0x28 });                     // mov [rsp+0x28], rdx
-    emit({ 0x4C, 0x89, 0x44, 0x24, 0x30 });                     // mov [rsp+0x30], r8
-    emit({ 0x4C, 0x89, 0x4C, 0x24, 0x38 });                     // mov [rsp+0x38], r9
-    emit({ 0x4C, 0x89, 0x54, 0x24, 0x40 });                     // mov [rsp+0x40], r10
-    emit({ 0x4C, 0x89, 0x5C, 0x24, 0x48 });                     // mov [rsp+0x48], r11
-    emit({ 0x0F, 0x11, 0x44, 0x24, 0x50 });                     // movups [rsp+0x50], xmm0
-    emit({ 0x0F, 0x11, 0x4C, 0x24, 0x60 });                     // movups [rsp+0x60], xmm1
-    emit({ 0x0F, 0x11, 0x54, 0x24, 0x70 });                     // movups [rsp+0x70], xmm2
-    emit({ 0x0F, 0x11, 0x9C, 0x24, 0x80, 0x00, 0x00, 0x00 });   // movups [rsp+0x80], xmm3
-    emit({ 0x0F, 0x11, 0xA4, 0x24, 0x90, 0x00, 0x00, 0x00 });   // movups [rsp+0x90], xmm4
-    emit({ 0x0F, 0x11, 0xAC, 0x24, 0xA0, 0x00, 0x00, 0x00 });   // movups [rsp+0xA0], xmm5
+    static const BYTE kSubRspB8[] = { 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00 };
+    memcpy(p, kSubRspB8, sizeof(kSubRspB8));
+    p += sizeof(kSubRspB8);
+    EmitSaveVolatileRegs(p);
 
-    emit({ 0x48, 0xB8 });                                       // mov rax, imm64 (targetCppFn)
+    *p++ = 0x48; *p++ = 0xB8;                             // mov rax, imm64 (targetCppFn)
     memcpy(p, &targetCppFn, sizeof(void*));
     p += sizeof(void*);
-    emit({ 0xFF, 0xD0 });                                       // call rax
+    *p++ = 0xFF; *p++ = 0xD0;                             // call rax
 
-    if (!keepXmm0Result) {
-        emit({ 0x0F, 0x10, 0x44, 0x24, 0x50 });                 // movups xmm0, [rsp+0x50]
-    }
-    emit({ 0x0F, 0x10, 0x4C, 0x24, 0x60 });                     // movups xmm1, [rsp+0x60]
-    emit({ 0x0F, 0x10, 0x54, 0x24, 0x70 });                     // movups xmm2, [rsp+0x70]
-    emit({ 0x0F, 0x10, 0x9C, 0x24, 0x80, 0x00, 0x00, 0x00 });   // movups xmm3, [rsp+0x80]
-    emit({ 0x0F, 0x10, 0xA4, 0x24, 0x90, 0x00, 0x00, 0x00 });   // movups xmm4, [rsp+0x90]
-    emit({ 0x0F, 0x10, 0xAC, 0x24, 0xA0, 0x00, 0x00, 0x00 });   // movups xmm5, [rsp+0xA0]
-    emit({ 0x4C, 0x8B, 0x5C, 0x24, 0x48 });                     // mov r11, [rsp+0x48]
-    emit({ 0x4C, 0x8B, 0x54, 0x24, 0x40 });                     // mov r10, [rsp+0x40]
-    emit({ 0x4C, 0x8B, 0x4C, 0x24, 0x38 });                     // mov r9,  [rsp+0x38]
-    emit({ 0x4C, 0x8B, 0x44, 0x24, 0x30 });                     // mov r8,  [rsp+0x30]
-    emit({ 0x48, 0x8B, 0x54, 0x24, 0x28 });                     // mov rdx, [rsp+0x28]
-    if (zeroRcxOnExit) {
-        emit({ 0x33, 0xC9 });                                   // xor ecx, ecx
-    } else {
-        emit({ 0x48, 0x8B, 0x4C, 0x24, 0x20 });                 // mov rcx, [rsp+0x20]
-    }
-    emit({ 0x48, 0x81, 0xC4, 0xB8, 0x00, 0x00, 0x00 });         // add rsp, 0xB8
-    emit({ 0xC3 });                                             // ret
+    EmitRestoreVolatileRegs(p, keepXmm0Result, zeroRcxOnExit);
+    static const BYTE kAddRspB8Ret[] = { 0x48, 0x81, 0xC4, 0xB8, 0x00, 0x00, 0x00, 0xC3 };
+    memcpy(p, kAddRspB8Ret, sizeof(kAddRspB8Ret));
+    p += sizeof(kAddRspB8Ret);
 
     size_t stubLen = (size_t)(p - stub);
     FlushInstructionCache(GetCurrentProcess(), stub, stubLen);
@@ -5584,11 +5663,73 @@ static int InstallCitSevereIllnessHook()
                               "cit_severe_illness_tick") ? 1 : 0;
 }
 
+static void* BuildBldCountLimitTooltipStub()
+{
+    if (!g_exeBase || !EnsureRelayStubSpace(256)) return nullptr;
+
+    BYTE* stub = g_econRelayStubPage + g_econRelayStubUsed;
+    BYTE* p = stub;
+
+    // Mid-function 0x7AC6B7 inside 0x7ABF20 has (rsp & 0xF) == 0 (8 pushes + sub rsp, 0x1368).
+    // sub rsp, 0xB0 keeps 16-byte stack alignment before `call rax` while preserving live r8/r9/etc.
+    static const BYTE kSubRspB0[] = { 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00 };
+    memcpy(p, kSubRspB0, sizeof(kSubRspB0));
+    p += sizeof(kSubRspB0);
+    EmitSaveVolatileRegs(p);
+
+    static const BYTE kArgsAndTargetPrep[] = {
+        0x4C, 0x89, 0xF9,             // mov rcx, r15 (WORLD)
+        0x4C, 0x89, 0xF2,             // mov rdx, r14 (btype)
+        0x4C, 0x8D, 0x45, 0xA0        // lea r8, [rbp-0x60] (outCountsPair[2])
+    };
+    memcpy(p, kArgsAndTargetPrep, sizeof(kArgsAndTargetPrep));
+    p += sizeof(kArgsAndTargetPrep);
+
+    void* fnAddr = (void*)&H_BldCountLimitTooltipLookup;
+    *p++ = 0x48; *p++ = 0xB8;         // mov rax, imm64
+    memcpy(p, &fnAddr, sizeof(void*));
+    p += sizeof(void*);
+    *p++ = 0xFF; *p++ = 0xD0;         // call rax
+
+    EmitRestoreVolatileRegs(p, false, false);
+    static const BYTE kPostCallCommon[] = {
+        0x48, 0x81, 0xC4, 0xB0, 0x00, 0x00, 0x00, // add rsp, 0xB0
+        0x4C, 0x8B, 0x65, 0xB0,                   // mov r12, [rbp-0x50]
+        0x48, 0x85, 0xC0                          // test rax, rax
+    };
+    memcpy(p, kPostCallCommon, sizeof(kPostCallCommon));
+    p += sizeof(kPostCallCommon);
+
+    *p++ = 0x74;                      // jz rel8 skipLabel
+    BYTE* jzDisp = p++;
+
+    // Found path: set rdi = primaryType and jump to 0x7AC748
+    *p++ = 0x48; *p++ = 0x89; *p++ = 0xC7; // mov rdi, rax
+    *p++ = 0xFF; *p++ = 0x25; *(uint32_t*)p = 0; p += 4;
+    void* foundTarget = (void*)(g_exeBase + RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND);
+    memcpy(p, &foundTarget, sizeof(void*));
+    p += sizeof(void*);
+
+    // Skip path: jump to 0x7AC94E
+    BYTE* skipLabel = p;
+    *jzDisp = (BYTE)(skipLabel - (jzDisp + 1));
+    *p++ = 0xFF; *p++ = 0x25; *(uint32_t*)p = 0; p += 4;
+    void* skipTarget = (void*)(g_exeBase + RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP);
+    memcpy(p, &skipTarget, sizeof(void*));
+    p += sizeof(void*);
+
+    size_t stubLen = (size_t)(p - stub);
+    FlushInstructionCache(GetCurrentProcess(), stub, stubLen);
+    g_econRelayStubUsed += ((stubLen + 15) & ~size_t(15));
+    return stub;
+}
+
 static int InstallBldCountLimitHooks()
 {
     if (!g_exeBase) return 0;
-    void* stubCheck = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitCheck, false, false);
-    void* stubGet   = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitGet, false, false);
+    void* stubCheck   = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitCheck, false, false);
+    void* stubGet     = TwoStates_BuildRegPreservingRelayStub((void*)&H_BldCountLimitGet, false, false);
+    void* stubTooltip = BuildBldCountLimitTooltipStub();
     if (!stubCheck || !stubGet) return 0;
     int patched = 0;
     if (PatchJmp14WithNops(g_exeBase + RVA_BLD_COUNT_LIMIT_CHECK,
@@ -5603,6 +5744,14 @@ static int InstallBldCountLimitHooks()
                            kBldCountLimitGetExpect,
                            stubGet,
                            "bld_count_limit_get")) {
+        patched++;
+    }
+    if (stubTooltip &&
+        PatchJmp14WithNops(g_exeBase + RVA_BLD_COUNT_LIMIT_TOOLTIP,
+                           sizeof(kBldCountLimitTooltipExpect),
+                           kBldCountLimitTooltipExpect,
+                           stubTooltip,
+                           "bld_count_limit_tooltip")) {
         patched++;
     }
     return patched;
@@ -5821,7 +5970,7 @@ bool TwoStates_Install()
     int saveOk = InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                                    kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/63), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/66), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -6223,6 +6372,7 @@ void TwoStates_BeginCommand(int ownerState)
 {
     TwoStates_RestoreUiMoneySwap();
     g_cmdOwner = (ownerState == 2) ? 2 : 1;
+    g_cmdThread = GetCurrentThreadId();
     g_inCommand = true;
     g_cmdBuildingsBefore     = GetWorldBuildingCount();
     g_cmdConstructionsBefore = GetWorldConstructionCount();
@@ -6310,9 +6460,11 @@ void TwoStates_EndCommand(int ownerState)
             g_cmdResSnapshot.active = false;
         }
         g_inCommand = false;
+        g_cmdThread = 0;
         return;
     }
     g_inCommand = false;
+    g_cmdThread = 0;
     bool unlim = IsUnlimitedMoney();
     __try {
         if (g_exeBase) {

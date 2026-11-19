@@ -277,6 +277,9 @@ bool    TwoStates_CheckBuildingCountLimitForTest(const BYTE* world, const BYTE* 
 bool    TwoStates_GetBuildingCountLimitEntryForTest(const BYTE* world, const BYTE* limitTableVec,
                                                     const BYTE* btype, int stateOverride,
                                                     int32_t* outCur, int32_t* outMax);
+const BYTE* TwoStates_ResolveTooltipCountLimitForTest(const BYTE* world, const BYTE* btype,
+                                                      int stateOverride,
+                                                      int32_t* outCur, int32_t* outMax);
 
 // Feature 35 & 36 helpers
 void    TwoStates_PruneDeadEntities(bool checkWorldLoaded = true);

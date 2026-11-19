@@ -1,6 +1,6 @@
 <div align="center">
 
-# ☭ RepublicMP v1.6.2 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
+# ☭ RepublicMP v1.6.3 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
 ### Co-op Multiplayer Mod for Workers & Resources: Soviet Republic (RU / EN)
 
 ![RepublicMP Cover](steam_workshop/preview.png)
@@ -50,7 +50,7 @@
 
 ### 🚀 Правила установки и запуска (RU)
 
-> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.6.2**.
+> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.6.3**.
 
 #### Способ 1 — Через Steam Workshop (Рекомендуется)
 1. Подпишитесь на мод в **Steam Workshop** (оба игрока).
@@ -114,7 +114,7 @@
 
 ### 🚀 Installation & Launch Rules (EN)
 
-> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.6.2**.
+> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.6.3**.
 
 #### Method 1 — Via Steam Workshop (Recommended)
 1. Subscribe to the mod on **Steam Workshop** (both players).
