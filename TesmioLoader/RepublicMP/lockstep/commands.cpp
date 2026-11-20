@@ -697,20 +697,88 @@ void Commands_CaptureGameRules()
     Commands_Submit(LS_CMD_GAME_RULES, &m, sizeof(m));
 }
 
+static const BYTE kRebuildBldStoragesExpect[16] = {
+    0x48, 0x85, 0xD2, 0x0F, 0x84, 0x94, 0x01, 0x00,
+    0x00, 0x48, 0x89, 0x5C, 0x24, 0x20, 0x56, 0x48
+};
+
+typedef void (__fastcall* RebuildBldStoragesFn)(BYTE* world, BYTE* bld);
+static RebuildBldStoragesFn g_testRebuildBldStoragesOverride = nullptr;
+
+static RebuildBldStoragesFn ResolveRebuildBldStoragesFn()
+{
+    if (g_testRebuildBldStoragesOverride) {
+        return g_testRebuildBldStoragesOverride;
+    }
+    if (g_exeBase && SafeBytesMatch(g_exeBase + FN_REBUILD_BLD_STORAGES_RVA,
+                                    kRebuildBldStoragesExpect, sizeof(kRebuildBldStoragesExpect))) {
+        return (RebuildBldStoragesFn)(g_exeBase + FN_REBUILD_BLD_STORAGES_RVA);
+    }
+    return nullptr;
+}
+
+static void RebuildBuildingStoragesBeforeGameRules(BYTE* world)
+{
+    if (!world) return;
+    int32_t oldRule = 0;
+    int32_t newRule = 0;
+    if (!SafeReadPod(world + WORLD_RULE_COMPLEX_STORAGES_OFF, &oldRule) ||
+        !SafeReadPod(world + WORLD_RULE_COPY_COMPLEX_STORAGES_OFF, &newRule)) {
+        return;
+    }
+    if (oldRule == newRule || newRule <= 1) return;
+
+    RebuildBldStoragesFn fn = ResolveRebuildBldStoragesFn();
+    if (!fn) return;
+
+    static_assert(WORLD_RVA + WORLD_BUILDINGS_OFFSET == VEC_BUILDINGS_BEGIN_RVA,
+                  "WORLD_BUILDINGS_OFFSET must align with VEC_BUILDINGS_BEGIN_RVA");
+    U64 v[2] = {};
+    if (!SafeMemcpyPod(v, world + WORLD_BUILDINGS_OFFSET, sizeof(v))) return;
+    if (!IsPointerLikeX64(v[0]) || v[1] < v[0] || ((v[1] - v[0]) & 7u) != 0) return;
+
+    size_t count = (size_t)((v[1] - v[0]) / sizeof(BYTE*));
+    if (count > 16384u) count = 16384u;
+
+    const BYTE* const* blds = (const BYTE* const*)(uintptr_t)v[0];
+    for (size_t i = 0; i < count; ++i) {
+        BYTE* bld = nullptr;
+        if (!SafeReadPod(blds + i, &bld) || !bld) continue;
+        if (!IsPointerLikeX64((uint64_t)(uintptr_t)bld)) continue;
+        BYTE planned = 0;
+        if (SafeReadPod(bld + BLD_IS_PLANNED_OFF, &planned) && planned != 0) {
+            fn(world, bld);
+        }
+    }
+}
+
 static bool ApplyGameRules(const void* data, size_t size)
 {
-    if (size != sizeof(LsGameRules)) return false;
+    if (!data || size != sizeof(LsGameRules) || !g_exeBase) return false;
     const LsGameRules& m = *(const LsGameRules*)data;
-    BYTE* world = g_exeBase + 0x9D4F10;
+    BYTE* world = g_exeBase + WORLD_RVA;
     __try {
         for (size_t i = 0; i < sizeof(kGameRules) / sizeof(kGameRules[0]); i++)
             memcpy(world + kGameRules[i].copy, m.copy[i], kGameRules[i].bytes);
-        ((void (*)(void*))(g_exeBase + GAME_RULES_APPLY_RVA))(world);
+        RebuildBuildingStoragesBeforeGameRules(world);
+        if (g_exeBase && g_exeBase[GAME_RULES_APPLY_RVA] != 0) {
+            ((void (*)(void*))(g_exeBase + GAME_RULES_APPLY_RVA))(world);
+        }
         *(unsigned*)(world + RELOAD_FLAGS_OFFSET) = 0;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+void Commands_SetRebuildBldStoragesOverrideForTest(void (*fn)(BYTE* world, BYTE* bld))
+{
+    g_testRebuildBldStoragesOverride = fn;
+}
+
+bool Commands_ApplyGameRulesForTest(const void* data, size_t size)
+{
+    return ApplyGameRules(data, size);
 }
 
 void Commands_Collect()
@@ -797,6 +865,7 @@ void Commands_SetSession(int role)
     g_capturing = role != COMMANDS_OFF;
     Unlock();
     if (role == COMMANDS_OFF) {
+        g_testRebuildBldStoragesOverride = nullptr;
         while (Commands_IsApplyingRemote()) Commands_EndRemoteReplayScope();
     }
     Logf("republicmp  LOCKSTEP: commands %s", role == COMMANDS_HOST ? "ordered here (host)"

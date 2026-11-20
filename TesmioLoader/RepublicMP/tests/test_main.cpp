@@ -14833,6 +14833,888 @@ static bool Test_HookFixesAndRunAudit_M1()
 }
 
 // ---------------------------------------------------------------------------
+// Audit-7 Sync Fixes Test Suite (Bugs #1-#7)
+// ---------------------------------------------------------------------------
+
+static int g_a7DiscardCargoCalls = 0;
+static BYTE* g_a7DiscardLastVeh = nullptr;
+static unsigned char g_a7DiscardLastFlag = 0xFFu;
+static void __fastcall MockA7DiscardVehCargo(BYTE* veh, unsigned char flag)
+{
+    ++g_a7DiscardCargoCalls;
+    g_a7DiscardLastVeh = veh;
+    g_a7DiscardLastFlag = flag;
+}
+
+static int g_a7DiscardCarriedCalls = 0;
+static BYTE* g_a7CarriedWorld = nullptr;
+static BYTE* g_a7CarriedVeh = nullptr;
+static unsigned long long g_a7CarriedArgs[5] = {};
+static void __fastcall MockA7DiscardCarriedVeh(BYTE* world, BYTE* veh, unsigned char a3, unsigned char a4,
+                                               unsigned char a5, unsigned char a6, unsigned a7)
+{
+    ++g_a7DiscardCarriedCalls;
+    g_a7CarriedWorld = world;
+    g_a7CarriedVeh = veh;
+    g_a7CarriedArgs[0] = a3;
+    g_a7CarriedArgs[1] = a4;
+    g_a7CarriedArgs[2] = a5;
+    g_a7CarriedArgs[3] = a6;
+    g_a7CarriedArgs[4] = a7;
+}
+
+static int g_a7CanDiscardStorageCalls = 0;
+static unsigned char g_a7CanDiscardStorageRet = 1;
+static unsigned char __fastcall MockA7CanDiscardStorage(BYTE* /*slot*/)
+{
+    ++g_a7CanDiscardStorageCalls;
+    return g_a7CanDiscardStorageRet;
+}
+
+static int g_a7RepairCancelCalls = 0;
+static BYTE* g_a7RepairLastWorld = nullptr;
+static BYTE* g_a7RepairLastBld = nullptr;
+static int g_a7RepairLastIdx = -1;
+static unsigned g_a7RepairLastFlag = 0xFFu;
+static void __fastcall MockA7RepairCancelQueue(BYTE* world, BYTE* bld, int idx, unsigned flag)
+{
+    ++g_a7RepairCancelCalls;
+    g_a7RepairLastWorld = world;
+    g_a7RepairLastBld = bld;
+    g_a7RepairLastIdx = idx;
+    g_a7RepairLastFlag = flag;
+}
+
+static int g_a7PlaySoundCalls = 0;
+static unsigned char g_a7PlaySoundLastR8 = 0xFFu;
+static void __fastcall MockA7PlaySound(BYTE* /*world*/, const char* /*path*/, unsigned char flag)
+{
+    ++g_a7PlaySoundCalls;
+    g_a7PlaySoundLastR8 = flag;
+}
+
+static int g_a7CrimeExpireCalls = 0;
+static BYTE* g_a7CrimeExpireLastCase = nullptr;
+static float g_a7CrimeExpireLastArg = -1.0f;
+static void __fastcall MockA7CrimeExpireCase(BYTE* /*world*/, BYTE* caseObj, float a3)
+{
+    ++g_a7CrimeExpireCalls;
+    g_a7CrimeExpireLastCase = caseObj;
+    g_a7CrimeExpireLastArg = a3;
+}
+
+static int g_a7CrimeDeleteCalls = 0;
+static BYTE* g_a7CrimeDeleteLastCase = nullptr;
+static void __fastcall MockA7CrimeDeleteCase(BYTE* /*world*/, BYTE* caseObj)
+{
+    ++g_a7CrimeDeleteCalls;
+    g_a7CrimeDeleteLastCase = caseObj;
+    if (caseObj) memset(caseObj, 0xDD, 0x78u); // simulate heap free / clobber
+}
+
+static int g_a7PfCtorCalls = 0;
+static int g_a7PfDtorCalls = 0;
+static int g_a7DoRemoveLinkCalls = 0;
+static BYTE* g_a7DoRemoveLastDo = nullptr;
+static BYTE* g_a7DoRemoveLastTarget = nullptr;
+static int g_a7PfAddStartCalls = 0;
+static unsigned long long g_a7PfAddLastNode = 0;
+static float g_a7PfAddLastArg5 = 0.0f;
+static int g_a7PfRunCalls = 0;
+static int32_t g_a7PfSeenB4 = 0;
+static int32_t g_a7PfSeenB0 = 0;
+static float g_a7PfSeen2C = 0.0f;
+
+static std::vector<BYTE*>* g_a7PfMockResultsPtr = nullptr;
+static std::vector<BYTE*>* g_a7DoVecStoragePtr = nullptr;
+static std::vector<std::vector<BYTE>>* g_a7OpNewArenaPtr = nullptr;
+static void* __fastcall MockA7OpNew(size_t bytes)
+{
+    if (!g_a7OpNewArenaPtr) return nullptr;
+    g_a7OpNewArenaPtr->emplace_back(bytes, (BYTE)0);
+    return g_a7OpNewArenaPtr->back().data();
+}
+static void* __fastcall MockA7CfgCtor(void* cfg)
+{
+    if (cfg) {
+        *(uint64_t*)((BYTE*)cfg + 0x08) = 0x11112222ULL;
+        *(uint64_t*)((BYTE*)cfg + 0xD0) = 0x33334444ULL;
+    }
+    return cfg;
+}
+static void __fastcall MockA7VecPush(void* vec, void** elem)
+{
+    if (!vec || !elem || !g_a7DoVecStoragePtr) return;
+    g_a7DoVecStoragePtr->push_back((BYTE*)*elem);
+    BYTE** beg = g_a7DoVecStoragePtr->data();
+    BYTE** end = beg + g_a7DoVecStoragePtr->size();
+    *(BYTE***)((BYTE*)vec + 0) = beg;
+    *(BYTE***)((BYTE*)vec + 8) = end;
+    *(BYTE***)((BYTE*)vec + 16) = end;
+}
+
+static void* __fastcall MockA7PfCtor(void* pf)
+{
+    ++g_a7PfCtorCalls;
+    if (pf) memset(pf, 0, 0x400u);
+    return pf;
+}
+
+static void __fastcall MockA7PfDtor(void* /*pf*/)
+{
+    ++g_a7PfDtorCalls;
+}
+
+static void __fastcall MockA7DoRemoveLink(unsigned long long /*unused*/, BYTE* doBld, BYTE* targetBld)
+{
+    ++g_a7DoRemoveLinkCalls;
+    g_a7DoRemoveLastDo = doBld;
+    g_a7DoRemoveLastTarget = targetBld;
+}
+
+static void __fastcall MockA7PfAddStart(void* pf, unsigned long long nodePtr, float /*f3*/, int /*i4*/, float f5)
+{
+    ++g_a7PfAddStartCalls;
+    g_a7PfAddLastNode = nodePtr;
+    g_a7PfAddLastArg5 = f5;
+    if (pf) {
+        g_a7PfSeenB4 = *(const int32_t*)((const BYTE*)pf + 0xB4);
+        g_a7PfSeenB0 = *(const int32_t*)((const BYTE*)pf + 0xB0);
+        g_a7PfSeen2C = *(const float*)((const BYTE*)pf + 0x2C);
+    }
+}
+
+static void __fastcall MockA7PfRun(void* pf)
+{
+    ++g_a7PfRunCalls;
+    if (pf && g_a7PfMockResultsPtr && !g_a7PfMockResultsPtr->empty()) {
+        BYTE** beg = g_a7PfMockResultsPtr->data();
+        BYTE** end = beg + g_a7PfMockResultsPtr->size();
+        *(BYTE***)((BYTE*)pf + 0x1B0) = beg;
+        *(BYTE***)((BYTE*)pf + 0x1B8) = end;
+    }
+}
+
+static int g_a7CopyToolCalls = 0;
+static BYTE* g_a7CopyHoverDst = nullptr;
+static unsigned long long MockA7CopyWeightsTool(unsigned long long world, unsigned long long /*a2*/)
+{
+    ++g_a7CopyToolCalls;
+    if (!world) return 0;
+    *(BYTE**)(world + WORLD_HOVERED_BLD_OFF) = g_a7CopyHoverDst;
+    if (g_mockExeBuffer && g_mockExeBuffer[0xA54E91] != 0 && g_a7CopyHoverDst) {
+        BYTE* srcBld = *(BYTE**)(world + WORLD_COPY_TOOL_SRC_BLD_OFF);
+        if (srcBld && srcBld != g_a7CopyHoverDst) {
+            memcpy(g_a7CopyHoverDst + BLD_COPY_WEIGHTS_BEGIN_OFFSET,
+                   srcBld + BLD_COPY_WEIGHTS_BEGIN_OFFSET,
+                   BLD_COPY_WEIGHTS_END_OFFSET - BLD_COPY_WEIGHTS_BEGIN_OFFSET);
+        }
+    }
+    return 1;
+}
+
+static int g_a7RebuildStoragesCalls = 0;
+static std::vector<BYTE*> g_a7RebuildStoragesSeenBlds;
+static void MockA7RebuildBldStorages(BYTE* /*world*/, BYTE* bld)
+{
+    ++g_a7RebuildStoragesCalls;
+    g_a7RebuildStoragesSeenBlds.push_back(bld);
+}
+
+static bool SubTest_A7_Bug1_ResearchRecomputeAndSpIsolation()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    Commands_SetSession(COMMANDS_OFF);
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Verify exact 16-byte SOVIET64.exe v1.1.1.13 RVA_RESEARCH_RECOMPUTE prologue match & stale rejection
+    const BYTE validPrologue[16] = {
+        0x40, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83,
+        0xEC, 0x60, 0x48, 0x8D, 0x15, 0x97, 0x49, 0x5B
+    };
+    const BYTE stalePrologue[16] = {
+        0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C,
+        0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57
+    };
+    TEST_CHECK(TwoStates_MatchesResearchRecomputePrologueForTest(validPrologue, sizeof(validPrologue)));
+    TEST_CHECK(!TwoStates_MatchesResearchRecomputePrologueForTest(stalePrologue, sizeof(stalePrologue)));
+    TEST_CHECK(!TwoStates_MatchesResearchRecomputePrologueForTest(validPrologue, 15));
+
+    // 2. Fallback clears stale unlocks[] rather than preserving unlocks copied from another state/save
+    std::vector<BYTE> resBuf(8 * RESEARCH_ITEM_STRIDE, 0);
+    BYTE* t0 = resBuf.data() + 0 * RESEARCH_ITEM_STRIDE;
+    BYTE* t2 = resBuf.data() + 2 * RESEARCH_ITEM_STRIDE;
+    BYTE* t5 = resBuf.data() + 5 * RESEARCH_ITEM_STRIDE;
+    t0[RESEARCH_ITEM_INITIAL_OFFSET] = 1;
+    t2[RESEARCH_ITEM_PROGRESS_OFFSET] = 0; // set float 1.0f below
+    *(float*)(t2 + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    t2[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+    *(float*)(t5 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resBuf.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET)   = resBuf.data() + resBuf.size();
+
+    memset(world + WORLD_RESEARCH_UNLOCKS_OFFSET, 0, WORLD_RESEARCH_UNLOCKS_BYTES);
+    world[WORLD_RESEARCH_UNLOCKS_OFFSET + 5] = 1; // stale unlock on incomplete tech 5
+    g_mockExeBuffer[RVA_RESEARCH_RECOMPUTE] = 0xCC; // force fallback path
+    TwoStates_RecomputeEngineResearchForTest(world);
+    TEST_CHECK(world[WORLD_RESEARCH_UNLOCKS_OFFSET + 5] == 0);
+    TEST_CHECK(world[WORLD_RESEARCH_UNLOCKS_OFFSET + 2] == 1);
+    TEST_CHECK(t2[RESEARCH_ITEM_AVAILABLE_OFFSET] == 0);
+    TEST_CHECK(t0[RESEARCH_ITEM_AVAILABLE_OFFSET] == 1);
+
+    // 3. Singleplayer H_UnivResearchPanel isolation: never auto-completes near-complete orphaned tech in SP
+    std::vector<BYTE> univSp(BUILDING_STRUCT_BYTES, 0);
+    *(int*)univSp.data() = 510;
+    *(float*)(univSp.data() + OBJ_POS_OFFSET) = -400.0f;
+    *(float*)(t5 + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.9999f;
+    *(BYTE**)(t5 + RESEARCH_ITEM_BLD_PTR_OFFSET) = nullptr;
+    world[WORLD_RESEARCH_UNLOCKS_OFFSET + 5] = 0;
+    TwoStates_UnivResearchPanelForTest(world, univSp.data(), -1, 0.5f);
+    TEST_CHECK(*(float*)(t5 + RESEARCH_ITEM_PROGRESS_OFFSET) < 1.0f);
+    TEST_CHECK(world[WORLD_RESEARCH_UNLOCKS_OFFSET + 5] == 0);
+    return true;
+}
+
+static bool SubTest_A7_Bug2_DiscardAndEmptySites()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    GameCalls_ResetSessionState();
+    Commands_SetSession(COMMANDS_OFF);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    g_a7DiscardCargoCalls = 0;
+    g_a7DiscardCarriedCalls = 0;
+    g_a7CanDiscardStorageCalls = 0;
+    g_a7CanDiscardStorageRet = 1;
+    WriteAbsJmp12(g_mockExeBuffer + FN_DISCARD_VEH_CARGO_RVA, (void*)&MockA7DiscardVehCargo);
+    WriteAbsJmp12(g_mockExeBuffer + FN_DISCARD_CARRIED_VEH_RVA, (void*)&MockA7DiscardCarriedVeh);
+    WriteAbsJmp12(g_mockExeBuffer + FN_CAN_DISCARD_STORAGE_RVA, (void*)&MockA7CanDiscardStorage);
+
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_DISCARD_VEH_CARGO_RVA, FN_DISCARD_VEH_CARGO_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_DISCARD_CARRIED_VEH_RVA, FN_DISCARD_CARRIED_VEH_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_EMPTY_STORAGE_RVA, FN_CAN_DISCARD_STORAGE_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA, FN_DISCARD_VEH_CARGO_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA, FN_DISCARD_VEH_CARGO_RVA));
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_DISCARD_VEH_CARGO_RVA), "Vb") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_DISCARD_CARRIED_VEH_RVA), "WVbbbbI") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_EMPTY_STORAGE_RVA), "BI") == 0);
+
+    // Build West/East vehicles + wagon for unloading counter reset
+    std::vector<BYTE> vehWest(0x1B00, 0), vehWagon(0x1B00, 0), vehEast(0x1B00, 0);
+    *(int*)(vehWest.data() + VEH_ID_OFFSET) = 101;
+    *(float*)(vehWest.data() + VEH_POS_OFFSET) = -500.0f;
+    *(int*)(vehWagon.data() + VEH_ID_OFFSET) = 102;
+    *(float*)(vehWagon.data() + VEH_POS_OFFSET) = -500.0f;
+    *(int*)(vehEast.data() + VEH_ID_OFFSET) = 103;
+    *(float*)(vehEast.data() + VEH_POS_OFFSET) = 500.0f;
+    std::vector<BYTE*> wagons = { vehWagon.data() };
+    WriteMockVectorHeader(vehWest.data() + VEH_ATTACHED_WAGONS_BEGIN_OFF, wagons);
+    std::vector<BYTE*> vehs = { vehWest.data(), vehWagon.data(), vehEast.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehs);
+
+    // Build West/East buildings + storage slots
+    std::vector<BYTE> bldWest(BUILDING_STRUCT_BYTES, 0), bldEast(BUILDING_STRUCT_BYTES, 0);
+    *(int*)bldWest.data() = 201;
+    *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -500.0f;
+    *(int*)bldEast.data() = 202;
+    *(float*)(bldEast.data() + OBJ_POS_OFFSET) = 500.0f;
+    *(BYTE**)(vehWest.data() + VEH_BAY_TARGET_BLD_OFFSET) = bldWest.data();
+
+    auto setUnloadBusy = [](BYTE* v) {
+        *(uint64_t*)(v + VEH_LOAD_TIMER_55C_OFF) = 42ULL;
+        *(uint64_t*)(v + VEH_LOAD_TIMER_594_OFF) = 99ULL;
+        *(float*)(v + VEH_LOAD_RATE_568_OFF) = 7.5f;
+        *(uint32_t*)(v + VEH_LOAD_STATE_179C_OFF) = 3u;
+        *(uint32_t*)(v + VEH_LOAD_STATE_564_OFF) = 4u;
+        *(uint32_t*)(v + VEH_LOAD_STATE_1310_OFF) = 5u;
+        v[VEH_LOAD_FLAG_59C_OFF] = 1;
+    };
+    setUnloadBusy(vehWest.data());
+    setUnloadBusy(vehWagon.data());
+
+    std::vector<BYTE> slotSubWest(2 * 0x10u, 0), slotSubEast(0x10u, 0);
+    *(float*)(slotSubWest.data() + 0 * 0x10u + 8u) = 12.5f;
+    *(float*)(slotSubWest.data() + 1 * 0x10u + 8u) = 7.0f;
+    *(float*)(slotSubEast.data() + 0 * 0x10u + 8u) = 9.0f;
+    std::vector<BYTE> slotsWest(BLD_STORAGE_SLOT_SIZE, 0), slotsEast(BLD_STORAGE_SLOT_SIZE, 0);
+    *(BYTE**)(slotsWest.data() + 0) = slotSubWest.data();
+    *(BYTE**)(slotsWest.data() + 8) = slotSubWest.data() + slotSubWest.size();
+    *(BYTE**)(slotsEast.data() + 0) = slotSubEast.data();
+    *(BYTE**)(slotsEast.data() + 8) = slotSubEast.data() + slotSubEast.size();
+    *(BYTE**)(bldWest.data() + BLD_STORAGE_OFFSET + 0) = slotsWest.data();
+    *(BYTE**)(bldWest.data() + BLD_STORAGE_OFFSET + 8) = slotsWest.data() + slotsWest.size();
+    *(BYTE**)(bldEast.data() + BLD_STORAGE_OFFSET + 0) = slotsEast.data();
+    *(BYTE**)(bldEast.data() + BLD_STORAGE_OFFSET + 8) = slotsEast.data() + slotsEast.size();
+
+    std::vector<BYTE*> blds = { bldWest.data(), bldEast.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
+
+    // 1. SP pass-through on SITE_EMPTY_STORAGE_RVA returns native CanDiscardStorage result (1)
+    unsigned long long ret = 99;
+    const unsigned long long slotWestArgs[7] = { (unsigned long long)(uintptr_t)slotsWest.data(), 0, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotWestArgs, &ret));
+    TEST_CHECK(ret == 1 && g_a7CanDiscardStorageCalls == 1);
+
+    // 2. TwoStates + Lockstep Capture
+    double initRub[2] = { 100000.0, 100000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_RegisterVehicleOwner(101, 1);
+    TwoStates_RegisterVehicleOwner(102, 1);
+    TwoStates_RegisterVehicleOwner(103, 2);
+    Commands_SetSession(COMMANDS_HOST);
+
+    // Foreign refusals
+    const unsigned long long discardEast[7] = { (unsigned long long)(uintptr_t)vehEast.data(), 1, 0, 0, 0, 0, 0 };
+    const unsigned long long carriedEast[7] = { (unsigned long long)(uintptr_t)world, (unsigned long long)(uintptr_t)vehEast.data(), 1, 0, 0, 0, 0x3F800000u };
+    const unsigned long long slotEastArgs[7] = { (unsigned long long)(uintptr_t)slotsEast.data(), 0, 0, 0, 0, 0, 0 };
+    unsigned long long retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DISCARD_VEH_CARGO_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DISCARD_VEH_CARGO_RVA, discardEast, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DISCARD_VEH_CARGO_SKIP_RVA));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_DISCARD_CARRIED_VEH_RVA, carriedEast, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotEastArgs, &ret) && ret == 0);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // Waiting Lobby block on SITE_EMPTY_STORAGE_RVA
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotWestArgs, &ret) && ret == 0);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+
+    // Own West actions: capture, skip retAddr, zero local mutation before boundary
+    const unsigned long long discardWest[7] = { (unsigned long long)(uintptr_t)vehWest.data(), 1, 0, 0, 0, 0, 0 };
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DISCARD_VEH_CARGO_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DISCARD_VEH_CARGO_RVA, discardWest, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DISCARD_VEH_CARGO_SKIP_RVA));
+    TEST_CHECK(*(uint64_t*)(vehWest.data() + VEH_LOAD_TIMER_55C_OFF) == 42ULL);
+
+    const unsigned long long carriedWest[7] = { (unsigned long long)(uintptr_t)world, (unsigned long long)(uintptr_t)vehWest.data(), 1, 0, 0, 0, 0x3F800000u };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_DISCARD_CARRIED_VEH_RVA, carriedWest, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotWestArgs, &ret) && ret == 0);
+    TEST_CHECK(*(float*)(slotSubWest.data() + 0 * 0x10u + 8u) == 12.5f);
+
+    const unsigned long long emptyParkedArgs[7] = { (unsigned long long)(uintptr_t)vehWagon.data(), 0, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA, emptyParkedArgs, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA, emptyParkedArgs, &ret));
+    TEST_CHECK(g_a7DiscardCarriedCalls == 0);
+
+    // When CanDiscardStorage returns 0 at boundary, storage remains unchanged on first test
+    g_a7CanDiscardStorageRet = 0;
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(g_a7DiscardCargoCalls == 3);
+    TEST_CHECK(g_a7DiscardLastVeh == vehWagon.data() && g_a7DiscardLastFlag == 0);
+    TEST_CHECK(*(uint64_t*)(vehWest.data() + VEH_LOAD_TIMER_55C_OFF) == 0ULL);
+    TEST_CHECK(*(float*)(vehWest.data() + VEH_LOAD_RATE_568_OFF) == 1.0f);
+    TEST_CHECK(vehWest[VEH_LOAD_FLAG_59C_OFF] == 0);
+    TEST_CHECK(*(uint64_t*)(vehWagon.data() + VEH_LOAD_TIMER_55C_OFF) == 0ULL);
+    TEST_CHECK(g_a7DiscardCarriedCalls == 1 && g_a7CarriedVeh == vehWest.data() && g_a7CarriedArgs[0] == 1 && g_a7CarriedArgs[4] == 0x3F800000u);
+    TEST_CHECK(*(float*)(slotSubWest.data() + 0 * 0x10u + 8u) == 12.5f);
+
+    // Solo vehicle (empty 0x3A0..0x3A8) discarding at bay preserves unloading counters (exact parity with 0x8084DC..0x8084F0),
+    // and re-submitting empty storage with CanDiscardStorageRet == 1 zeros both subslots
+    std::vector<BYTE> soloVeh(0x1B00, 0);
+    *(int*)(soloVeh.data() + VEH_ID_OFFSET) = 104;
+    *(float*)(soloVeh.data() + VEH_POS_OFFSET) = -500.0f;
+    *(BYTE**)(soloVeh.data() + VEH_BAY_TARGET_BLD_OFFSET) = bldWest.data();
+    setUnloadBusy(soloVeh.data());
+    vehs.push_back(soloVeh.data());
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehs);
+    TwoStates_RegisterVehicleOwner(104, 1);
+    const unsigned long long discardSolo[7] = { (unsigned long long)(uintptr_t)soloVeh.data(), 1, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_DISCARD_VEH_CARGO_RVA, discardSolo, &ret));
+
+    g_a7CanDiscardStorageRet = 1;
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotWestArgs, &ret) && ret == 0);
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(g_a7DiscardCargoCalls == 4);
+    TEST_CHECK(g_a7DiscardLastVeh == soloVeh.data() && g_a7DiscardLastFlag == 1);
+    TEST_CHECK(*(uint64_t*)(soloVeh.data() + VEH_LOAD_TIMER_55C_OFF) == 42ULL);
+    TEST_CHECK(*(float*)(soloVeh.data() + VEH_LOAD_RATE_568_OFF) == 7.5f);
+    TEST_CHECK(*(float*)(slotSubWest.data() + 0 * 0x10u + 8u) == 0.0f);
+    TEST_CHECK(*(float*)(slotSubWest.data() + 1 * 0x10u + 8u) == 0.0f);
+
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool SubTest_A7_Bug3_Bug4_RepairAndCrimeCancel()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    GameCalls_ResetSessionState();
+    Commands_SetSession(COMMANDS_OFF);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    g_a7RepairCancelCalls = 0;
+    g_a7PlaySoundCalls = 0;
+    g_a7PlaySoundLastR8 = 0xFFu;
+    g_a7CrimeExpireCalls = 0;
+    g_a7CrimeDeleteCalls = 0;
+    WriteAbsJmp12(g_mockExeBuffer + FN_REPAIR_CANCEL_QUEUE_RVA, (void*)&MockA7RepairCancelQueue);
+    WriteAbsJmp12(g_mockExeBuffer + FN_UI_PLAY_SOUND_RVA, (void*)&MockA7PlaySound);
+    WriteAbsJmp12(g_mockExeBuffer + RVA_CRIME_EXPIRE_CASE, (void*)&MockA7CrimeExpireCase);
+    WriteAbsJmp12(g_mockExeBuffer + FN_CRIME_DELETE_CASE_RVA, (void*)&MockA7CrimeDeleteCase);
+
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_REPAIR_CANCEL_QUEUE_RVA, FN_REPAIR_CANCEL_QUEUE_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, FN_UI_PLAY_SOUND_RVA));
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_REPAIR_CANCEL_QUEUE_RVA), "WBII") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_CANCEL_CRIME_ASSIGN_RVA), "WxIBI") == 0);
+
+    std::vector<BYTE> bldWest(BUILDING_STRUCT_BYTES, 0), bldEast(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> region(0x200, 0), cityStats(0x400, 0);
+    *(int*)bldWest.data() = 301;
+    *(float*)(bldWest.data() + OBJ_POS_OFFSET) = -600.0f;
+    *(BYTE**)(bldWest.data() + BLD_CITY_REGION_PTR_OFF) = region.data();
+    *(BYTE**)(region.data() + REGION_CITY_STATS_PTR_OFF) = cityStats.data();
+    *(int*)bldEast.data() = 302;
+    *(float*)(bldEast.data() + OBJ_POS_OFFSET) = 600.0f;
+    std::vector<BYTE*> blds = { bldWest.data(), bldEast.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
+
+    std::vector<BYTE> crimeCase(0x78, 0);
+    *(int32_t*)(crimeCase.data() + CASE_STATUS_OFF) = 5;
+    *(BYTE**)(crimeCase.data() + CASE_BLD_OFF) = bldWest.data();
+    *(int32_t*)(crimeCase.data() + CASE_TYPE_OFF) = 2;
+    std::vector<BYTE*> cases = { crimeCase.data() };
+    WriteMockVectorHeader(world + WORLD_CRIME_CASES_BEGIN_OFF, cases);
+
+    // 1. SP path for SITE_CANCEL_CRIME_ASSIGN_RVA passes r8b == 1 to PlaySound & does not skip retAddr
+    unsigned long long ret = 0;
+    const unsigned long long crimeWestArgs[7] = {
+        (unsigned long long)(uintptr_t)world, 0,
+        (unsigned long long)(uintptr_t)crimeCase.data(),
+        (unsigned long long)(uintptr_t)bldWest.data(), 0, 0, 0
+    };
+    unsigned long long retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, crimeWestArgs, &ret, &retAddr));
+    TEST_CHECK(g_a7PlaySoundCalls == 1 && g_a7PlaySoundLastR8 == 1);
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA));
+
+    // 2. TwoStates & Lockstep Capture + Boundary Replay
+    double initRub[2] = { 100000.0, 100000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    Commands_SetSession(COMMANDS_HOST);
+
+    const unsigned long long repairEast[7] = { (unsigned long long)(uintptr_t)world, (unsigned long long)(uintptr_t)bldEast.data(), 2, 0, 0, 0, 0 };
+    const unsigned long long repairWest[7] = { (unsigned long long)(uintptr_t)world, (unsigned long long)(uintptr_t)bldWest.data(), 2, 0, 0, 0, 0 };
+    const unsigned long long crimeEastArgs[7] = {
+        (unsigned long long)(uintptr_t)world, 0,
+        (unsigned long long)(uintptr_t)crimeCase.data(),
+        (unsigned long long)(uintptr_t)bldEast.data(), 0, 0, 0
+    };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_REPAIR_CANCEL_QUEUE_RVA, repairEast, &ret));
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, crimeEastArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA));
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // Waiting Lobby block on both
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_REPAIR_CANCEL_QUEUE_RVA, repairWest, &ret));
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, crimeWestArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA));
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+
+    // Capture wrong-check rejection message while live, then submit live West repair + crime cancel
+    BYTE rawCrimeMsg[256] = {};
+    size_t crimeMsgSize = 0;
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, crimeWestArgs, rawCrimeMsg, sizeof(rawCrimeMsg), &crimeMsgSize));
+
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_REPAIR_CANCEL_QUEUE_RVA, repairWest, &ret));
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_CANCEL_CRIME_ASSIGN_RVA, crimeWestArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA));
+    TEST_CHECK(g_a7RepairCancelCalls == 0 && g_a7CrimeDeleteCalls == 0);
+
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(g_a7RepairCancelCalls == 1 && g_a7RepairLastWorld == world && g_a7RepairLastBld == bldWest.data() &&
+               g_a7RepairLastIdx == 2 && g_a7RepairLastFlag == 0);
+    TEST_CHECK(g_a7CrimeExpireCalls == 1 && g_a7CrimeExpireLastCase == crimeCase.data() && g_a7CrimeExpireLastArg == 0.0f);
+    TEST_CHECK(g_a7CrimeDeleteCalls == 1 && g_a7CrimeDeleteLastCase == crimeCase.data());
+    TEST_CHECK(*(int32_t*)(cityStats.data() + CITY_STATS_CRIME2_OFF) == 1);
+    TEST_CHECK(*(int32_t*)(world + WORLD_CRIME_EXPIRED_STAT2_OFF) == 1);
+    TEST_CHECK(*(uint16_t*)(bldWest.data() + BLD_CRIME_CANCEL_COUNTERS_OFF + 2u * 4u) == 1u);
+
+    // Mismatched crimeCase check must cleanly abort without calling expire/delete or bumping stats again
+    TEST_CHECK(GameCalls_ApplyCommand(rawCrimeMsg, crimeMsgSize));
+    TEST_CHECK(g_a7CrimeExpireCalls == 1 && g_a7CrimeDeleteCalls == 1);
+    TEST_CHECK(*(int32_t*)(world + WORLD_CRIME_EXPIRED_STAT2_OFF) == 1);
+
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool SubTest_A7_Bug5_DoFindConnections()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    GameCalls_ResetSessionState();
+    Commands_SetSession(COMMANDS_OFF);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    g_a7PfCtorCalls = 0;
+    g_a7PfDtorCalls = 0;
+    g_a7DoRemoveLinkCalls = 0;
+    g_a7PfAddStartCalls = 0;
+    g_a7PfAddLastNode = 0;
+    g_a7PfAddLastArg5 = 0.0f;
+    g_a7PfRunCalls = 0;
+    g_a7PfSeenB4 = 0;
+    g_a7PfSeenB0 = 0;
+    g_a7PfSeen2C = 0.0f;
+    WriteAbsJmp12(g_mockExeBuffer + FN_PF_CTOR_RVA, (void*)&MockA7PfCtor);
+    WriteAbsJmp12(g_mockExeBuffer + FN_PF_DTOR_RVA, (void*)&MockA7PfDtor);
+    WriteAbsJmp12(g_mockExeBuffer + FN_DO_REMOVE_LINK_RVA, (void*)&MockA7DoRemoveLink);
+    WriteAbsJmp12(g_mockExeBuffer + FN_PF_ADD_START_RVA, (void*)&MockA7PfAddStart);
+    WriteAbsJmp12(g_mockExeBuffer + FN_PF_RUN_RVA, (void*)&MockA7PfRun);
+    WriteAbsJmp12(g_mockExeBuffer + FN_GAME_OP_NEW_RVA, (void*)&MockA7OpNew);
+    WriteAbsJmp12(g_mockExeBuffer + FN_DO_VEC_PUSH_RVA, (void*)&MockA7VecPush);
+    WriteAbsJmp12(g_mockExeBuffer + FN_DO_CFG_CTOR_RVA, (void*)&MockA7CfgCtor);
+    *(float*)(g_mockExeBuffer + FLT_NEG_ONE_RVA) = -1.0f;
+
+    std::vector<BYTE*> pfResults;
+    std::vector<BYTE*> doVecStorage;
+    std::vector<std::vector<BYTE>> opNewArena;
+    opNewArena.reserve(64);
+    g_a7PfMockResultsPtr = &pfResults;
+    g_a7DoVecStoragePtr = &doVecStorage;
+    g_a7OpNewArenaPtr = &opNewArena;
+
+    // 8 candidate path results: [0] is depot (cat 0x2D, skipped), [1..7] are 7 factories (cat 5, max 6 attached)
+    std::vector<BYTE> btypeDepot(0x400, 0), btypeFactory(0x400, 0);
+    *(int32_t*)(btypeDepot.data() + 0x360) = 0x2D;
+    *(int32_t*)(btypeFactory.data() + 0x360) = 5;
+    std::vector<BYTE> resNodes(8 * 0x80u, 0);
+    std::vector<BYTE*> resTargets(8, nullptr);
+    std::vector<BYTE> candBlds(8 * BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> resStructs(8 * 0x48u, 0);
+    std::vector<BYTE*> resLastPtrs(8, nullptr);
+    for (int i = 0; i < 8; ++i) {
+        BYTE* cb = candBlds.data() + (size_t)i * BUILDING_STRUCT_BYTES;
+        *(int32_t*)cb = 450 + i;
+        *(BYTE**)(cb + BLD_TYPE_OFFSET) = (i == 0) ? btypeDepot.data() : btypeFactory.data();
+        BYTE* rn = resNodes.data() + (size_t)i * 0x80u;
+        resTargets[i] = cb;
+        *(BYTE***)(rn + 0x70) = &resTargets[i];
+        resLastPtrs[i] = rn;
+        BYTE* rs = resStructs.data() + (size_t)i * 0x48u;
+        *(BYTE***)(rs + 0x00) = &resLastPtrs[i];
+        *(BYTE***)(rs + 0x08) = &resLastPtrs[i] + 1;
+        *(BYTE**)(rs + 0x40) = cb;
+        pfResults.push_back(rs);
+    }
+
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_DO_FIND_CONNECTIONS_RVA, FN_PF_CTOR_RVA));
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_DO_FIND_CONNECTIONS_RVA), "xWB") == 0);
+
+    std::vector<BYTE> doWest(BUILDING_STRUCT_BYTES, 0), doEast(BUILDING_STRUCT_BYTES, 0), facBld(BUILDING_STRUCT_BYTES, 0);
+    *(int*)doWest.data() = 401;
+    *(float*)(doWest.data() + OBJ_POS_OFFSET) = -700.0f;
+    *(int*)doEast.data() = 402;
+    *(float*)(doEast.data() + OBJ_POS_OFFSET) = 700.0f;
+    *(int*)facBld.data() = 403;
+    std::vector<BYTE*> blds = { doWest.data(), doEast.data(), facBld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
+
+    std::vector<BYTE> oldLinkEntry(0x18, 0);
+    *(BYTE**)(oldLinkEntry.data() + 8) = facBld.data();
+    std::vector<BYTE*> oldLinks = { oldLinkEntry.data() };
+    WriteMockVectorHeader(doWest.data() + BLD_DO_CONNECTIONS_BEGIN_OFF, oldLinks);
+
+    std::vector<BYTE> roadNode(0x80, 0);
+    std::vector<BYTE> vehEntry(BLD_DO_VEH_ENTRY_STRIDE, 0);
+    *(int32_t*)(vehEntry.data() + 0) = 3;
+    *(BYTE**)(vehEntry.data() + 0x30) = roadNode.data();
+    *(BYTE**)(doWest.data() + BLD_DO_VEH_ENTRIES_BEGIN_OFF) = vehEntry.data();
+    *(BYTE**)(doWest.data() + BLD_DO_VEH_ENTRIES_END_OFF) = vehEntry.data() + vehEntry.size();
+
+    // 1. SP pass-through invokes native PF ctor without skipping retAddr
+    alignas(16) BYTE spPf[0x400] = {};
+    unsigned long long ret = 0;
+    const unsigned long long doWestArgs[7] = {
+        (unsigned long long)(uintptr_t)spPf, (unsigned long long)(uintptr_t)world,
+        (unsigned long long)(uintptr_t)doWest.data(), 0, 0, 0, 0
+    };
+    const unsigned long long doEastArgs[7] = {
+        (unsigned long long)(uintptr_t)spPf, (unsigned long long)(uintptr_t)world,
+        (unsigned long long)(uintptr_t)doEast.data(), 0, 0, 0, 0
+    };
+    unsigned long long retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DO_FIND_CONNECTIONS_RVA, doWestArgs, &ret, &retAddr));
+    TEST_CHECK(g_a7PfCtorCalls == 1 && retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA));
+
+    // 2. TwoStates, WaitingLobby & Capture/Replay
+    double initRub[2] = { 100000.0, 100000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    Commands_SetSession(COMMANDS_HOST);
+
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DO_FIND_CONNECTIONS_RVA, doEastArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_SKIP_RVA));
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DO_FIND_CONNECTIONS_RVA, doWestArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_SKIP_RVA));
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+
+    retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
+    TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DO_FIND_CONNECTIONS_RVA, doWestArgs, &ret, &retAddr));
+    TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_SKIP_RVA));
+    TEST_CHECK(g_a7DoRemoveLinkCalls == 0);
+
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(g_a7DoRemoveLinkCalls == 1 && g_a7DoRemoveLastDo == doWest.data() && g_a7DoRemoveLastTarget == facBld.data());
+    TEST_CHECK(g_a7PfCtorCalls == 2 && g_a7PfAddStartCalls == 1 && g_a7PfRunCalls == 1 && g_a7PfDtorCalls == 1);
+    TEST_CHECK(g_a7PfSeenB4 == 4 && g_a7PfSeenB0 == 2 && fabsf(g_a7PfSeen2C - 30.0f) < 1e-4f);
+    TEST_CHECK(g_a7PfAddLastNode == (unsigned long long)(uintptr_t)roadNode.data() &&
+               fabsf(g_a7PfAddLastArg5 - (-1.0f)) < 1e-4f);
+    // Depot [0] excluded and attachment capped at 6 connections ([1..6] out of 7 valid factories)
+    TEST_CHECK(doVecStorage.size() == 6);
+    TEST_CHECK(doWest[BLD_DO_HAS_CONN_FLAG_OFF] == 1);
+    TEST_CHECK(fabsf(*(float*)(doWest.data() + BLD_DO_TIMER_OFF) - 3.0f) < 1e-4f);
+    for (size_t i = 0; i < 6; ++i) {
+        BYTE* entry = doVecStorage[i];
+        TEST_CHECK(*(BYTE**)(entry + 0x08) == candBlds.data() + (i + 1) * BUILDING_STRUCT_BYTES);
+        BYTE* cfg = *(BYTE**)(entry + 0x10);
+        TEST_CHECK(cfg != nullptr && cfg[0x00] == 1 && cfg[0xC8] == 1 && cfg[0x28] == 1 && cfg[0xF0] == 1);
+        TEST_CHECK(*(uint64_t*)(cfg + 0x10) == 0x11112222ULL && *(uint64_t*)(cfg + 0xD8) == 0x33334444ULL);
+    }
+
+    g_a7PfMockResultsPtr = nullptr;
+    g_a7DoVecStoragePtr = nullptr;
+    g_a7OpNewArenaPtr = nullptr;
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool SubTest_A7_Bug6_CopyWeightsTool()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_OFF);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    g_a7CopyToolCalls = 0;
+    g_a7CopyHoverDst = nullptr;
+    BuildingSwitches_SetCopyWeightsOverrideForTest(&MockA7CopyWeightsTool);
+
+    std::vector<BYTE> btype5(0x440, 0), btype9(0x440, 0);
+    *(int32_t*)(btype5.data() + 0x360) = 5;
+    *(int32_t*)(btype9.data() + 0x360) = 9;
+
+    std::vector<BYTE> srcBld(BUILDING_STRUCT_BYTES, 0), dstWest(BUILDING_STRUCT_BYTES, 0),
+                      dstEast(BUILDING_STRUCT_BYTES, 0), dstPlanned(BUILDING_STRUCT_BYTES, 0),
+                      dstWrongCat(BUILDING_STRUCT_BYTES, 0);
+    auto initBld = [](BYTE* b, int id, float x, BYTE* btype, BYTE planned, float built) {
+        *(int32_t*)b = id;
+        *(float*)(b + OBJ_POS_OFFSET) = x;
+        *(BYTE**)(b + 0x318) = btype;
+        b[BLD_IS_PLANNED_OFF] = planned;
+        *(float*)(b + BLD_BUILT_PROGRESS_OFF) = built;
+    };
+    initBld(srcBld.data(), 601, -400.0f, btype5.data(), 0, 1.0f);
+    initBld(dstWest.data(), 602, -350.0f, btype5.data(), 0, 1.0f);
+    initBld(dstEast.data(), 603, 450.0f, btype5.data(), 0, 1.0f);
+    initBld(dstPlanned.data(), 604, -360.0f, btype5.data(), 1, 1.0f);
+    initBld(dstWrongCat.data(), 605, -370.0f, btype9.data(), 0, 1.0f);
+
+    // Put a pointer-like 64-bit value across weights [0..1] to verify IsNonPointerBuildingWord allows it
+    *(uint64_t*)(srcBld.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) = 0x00007FF812345678ULL;
+    for (unsigned i = 2; i < 9; ++i) {
+        *(uint32_t*)(srcBld.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET + i * 4u) = 100u + i;
+    }
+
+    std::vector<BYTE*> blds = { srcBld.data(), dstWest.data(), dstEast.data(), dstPlanned.data(), dstWrongCat.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
+    *(BYTE**)(world + WORLD_COPY_TOOL_SRC_BLD_OFF) = srcBld.data();
+
+    // 1. SP path mutates directly without lockstep command
+    g_a7CopyHoverDst = dstPlanned.data();
+    g_mockExeBuffer[0xA54E91] = 1;
+    TEST_CHECK(BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0) == 1);
+    TEST_CHECK(*(uint32_t*)(dstPlanned.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET + 8u) == 102u);
+    memset(dstPlanned.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET, 0, BLD_COPY_WEIGHTS_END_OFFSET - BLD_COPY_WEIGHTS_BEGIN_OFFSET);
+
+    // 2. Waiting lobby block clears PRESS_RVA temporarily and notifies without mutating or submitting
+    Commands_SetSession(COMMANDS_HOST);
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    g_a7CopyHoverDst = dstWest.data();
+    g_mockExeBuffer[0xA54E91] = 1;
+    TEST_CHECK(BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0) == 1);
+    TEST_CHECK(g_mockExeBuffer[0xA54E91] == 1);
+    TEST_CHECK(*(uint64_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) == 0ULL);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+
+    // 3. Hover without press (PRESS_RVA == 0) submits nothing
+    g_mockExeBuffer[0xA54E91] = 0;
+    TEST_CHECK(BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0) == 1);
+    TEST_CHECK(*(uint64_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) == 0ULL);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // 4. Null dst restores prevHover; invalid planned/wrongCat/foreign targets submit nothing
+    double initRub[2] = { 100000.0, 100000.0 };
+    double initUsd[2] = { 100000.0, 100000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    g_mockExeBuffer[0xA54E91] = 1;
+    *(BYTE**)(world + WORLD_HOVERED_BLD_OFF) = srcBld.data();
+    g_a7CopyHoverDst = nullptr;
+    TEST_CHECK(BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0) == 1);
+    TEST_CHECK(*(BYTE**)(world + WORLD_HOVERED_BLD_OFF) == srcBld.data());
+
+    BYTE* const kRejected[3] = { dstPlanned.data(), dstWrongCat.data(), dstEast.data() };
+    for (BYTE* badDst : kRejected) {
+        g_a7CopyHoverDst = badDst;
+        BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0);
+        TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+    }
+
+    // 5. Valid click on dstWest defers local mutation & replays all 9 dwords at Commands_Boundary
+    g_a7CopyHoverDst = dstWest.data();
+    TEST_CHECK(BuildingSwitches_CopyWeightsTool((unsigned long long)(uintptr_t)world, 0) == 1);
+    TEST_CHECK(*(uint64_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) == 0ULL);
+    TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
+
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(*(uint64_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) == 0x00007FF812345678ULL);
+    for (unsigned i = 2; i < 9; ++i) {
+        TEST_CHECK(*(uint32_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET + i * 4u) == 100u + i);
+    }
+
+    BuildingSwitches_SetCopyWeightsOverrideForTest(nullptr);
+    g_mockExeBuffer[0xA54E91] = 0;
+    Commands_SetSession(COMMANDS_OFF);
+    BuildingSwitches_Reset();
+    TwoStates_OnSessionEnded();
+    return true;
+}
+
+static bool SubTest_A7_Bug7_GameRulesRebuildStorages()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    GameCalls_ResetSessionState();
+    Commands_SetSession(COMMANDS_OFF);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    g_a7RebuildStoragesCalls = 0;
+    g_a7RebuildStoragesSeenBlds.clear();
+    WriteAbsJmp12(g_mockExeBuffer + FN_REBUILD_BLD_STORAGES_RVA, (void*)&MockA7RebuildBldStorages);
+    Commands_SetRebuildBldStoragesOverrideForTest(&MockA7RebuildBldStorages);
+
+    const unsigned kRebuildSites[3] = {
+        SITE_GAME_RULES_REBUILD_1_RVA, SITE_GAME_RULES_REBUILD_2_RVA, SITE_GAME_RULES_REBUILD_3_RVA
+    };
+    for (unsigned site : kRebuildSites) {
+        TEST_CHECK(GameCalls_HasCallSiteForTest(site, FN_REBUILD_BLD_STORAGES_RVA));
+        TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(site), "WB") == 0);
+    }
+
+    std::vector<BYTE> plannedBld(BUILDING_STRUCT_BYTES, 0), builtBld(BUILDING_STRUCT_BYTES, 0);
+    plannedBld[BLD_IS_PLANNED_OFF] = 1;
+    builtBld[BLD_IS_PLANNED_OFF] = 0;
+    std::vector<BYTE*> blds = { plannedBld.data(), builtBld.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
+
+    // 1. SP path invokes native FN_REBUILD_BLD_STORAGES_RVA
+    unsigned long long ret = 0;
+    const unsigned long long rebuildArgs[7] = {
+        (unsigned long long)(uintptr_t)world, (unsigned long long)(uintptr_t)plannedBld.data(), 0, 0, 0, 0, 0
+    };
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_GAME_RULES_REBUILD_1_RVA, rebuildArgs, &ret));
+    TEST_CHECK(g_a7RebuildStoragesCalls == 1);
+
+    // 2. Lockstep UI & WaitingLobby no-op all 3 sites without calling 0x1A11E0 or queueing commands
+    Commands_SetSession(COMMANDS_HOST);
+    for (unsigned site : kRebuildSites) {
+        TEST_CHECK(GameCalls_RunSiteForTest(site, rebuildArgs, &ret));
+    }
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    for (unsigned site : kRebuildSites) {
+        TEST_CHECK(GameCalls_RunSiteForTest(site, rebuildArgs, &ret));
+    }
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    TEST_CHECK(g_a7RebuildStoragesCalls == 1);
+    TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
+
+    // 3. ApplyGameRules invokes 0x1A11E0 ONLY on planned buildings when old5B8 != newC848 && newC848 > 1
+    BYTE rulesCopy[16 * 4] = {};
+    *(int32_t*)(world + WORLD_RULE_COMPLEX_STORAGES_OFF) = 1;
+    *(int32_t*)(rulesCopy + 2 * 4) = 2; // kGameRules[2] maps 0xC848 -> 0x5B8
+    g_a7RebuildStoragesSeenBlds.clear();
+    TEST_CHECK(Commands_ApplyGameRulesForTest(rulesCopy, sizeof(rulesCopy)));
+    TEST_CHECK(g_a7RebuildStoragesCalls == 2);
+    TEST_CHECK(g_a7RebuildStoragesSeenBlds.size() == 1 && g_a7RebuildStoragesSeenBlds[0] == plannedBld.data());
+
+    // Equal or <= 1 copy does not trigger rebuild
+    *(int32_t*)(world + WORLD_RULE_COMPLEX_STORAGES_OFF) = 2;
+    *(int32_t*)(rulesCopy + 2 * 4) = 2;
+    TEST_CHECK(Commands_ApplyGameRulesForTest(rulesCopy, sizeof(rulesCopy)));
+    TEST_CHECK(g_a7RebuildStoragesCalls == 2);
+
+    *(int32_t*)(world + WORLD_RULE_COMPLEX_STORAGES_OFF) = 0;
+    *(int32_t*)(rulesCopy + 2 * 4) = 1;
+    TEST_CHECK(Commands_ApplyGameRulesForTest(rulesCopy, sizeof(rulesCopy)));
+    TEST_CHECK(g_a7RebuildStoragesCalls == 2);
+
+    Commands_SetRebuildBldStoragesOverrideForTest(nullptr);
+    Commands_SetSession(COMMANDS_OFF);
+    return true;
+}
+
+static bool Test_Audit7Fixes_M1()
+{
+    printf("    [Audit7-1: RVA_RESEARCH_RECOMPUTE Prologue, Fallback Clear & SP Isolation] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug1_ResearchRecomputeAndSpIsolation()) return false;
+
+    printf("    [Audit7-2: Discard Cargo, Empty Storage & Empty Parked Vehicles] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug2_DiscardAndEmptySites()) return false;
+
+    printf("    [Audit7-3/4: Repair Queue Cancel & Crime/Emergency Cancel Assignment] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug3_Bug4_RepairAndCrimeCancel()) return false;
+
+    printf("    [Audit7-5: Distribution Office Find Connections] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug5_DoFindConnections()) return false;
+
+    printf("    [Audit7-6: building_copyweights Late Tool] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug6_CopyWeightsTool()) return false;
+
+    printf("    [Audit7-7: Pre-0x3370F0 Building Storage Rebuild & ApplyGameRules] ...\n"); fflush(stdout);
+    if (!SubTest_A7_Bug7_GameRulesRebuildStorages()) return false;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Test Runner Entry Point
 // ---------------------------------------------------------------------------
 
@@ -14906,6 +15788,7 @@ int main()
         { "R3Bugs_PersonalCarAutoBuyFactoryQueue (M2 Bugs #5-#7)", &Test_R3Bugs_PersonalCarAutoBuyFactoryQueue },
         { "R1SecondPass_WasteSetForBioCrossroadEditor (M3 R1-1A..2B)", &Test_R1SecondPass_WasteSetForBioCrossroadEditor },
         { "HookFixesAndRunAudit_M1 (Removed9, FireDispatch, AssignCo, RunAudit)", &Test_HookFixesAndRunAudit_M1 },
+        { "Audit7Fixes_M1 (Bugs #1-#7 Sync, Skip, CopyWeights, Pre-GameRules)", &Test_Audit7Fixes_M1 },
     };
 
     for (const auto& tc : kTests) {

@@ -1484,10 +1484,9 @@ static const BYTE kResearchDailyUpdateExpect[19] = {
     0x45, 0x33, 0xDB,
     0x48, 0x2B, 0x91, 0x78, 0x17, 0x01, 0x00
 };
-static const BYTE kResearchRecomputeExpect[15] = {
-    0x48, 0x89, 0x5C, 0x24, 0x10,
-    0x48, 0x89, 0x6C, 0x24, 0x18,
-    0x48, 0x89, 0x74, 0x24, 0x20
+static const BYTE kResearchRecomputeExpect[16] = {
+    0x40, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83,
+    0xEC, 0x60, 0x48, 0x8D, 0x15, 0x97, 0x49, 0x5B
 };
 static const BYTE kUnivResearchPanelExpect[15] = {
     0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57,
@@ -2998,7 +2997,6 @@ static void RecomputeEngineResearchFallback(BYTE* world)
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) return;
     uint8_t unlocks[WORLD_RESEARCH_UNLOCKS_BYTES] = {};
-    SafeMemcpyPod(unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
     for (int i = 0; i < count; ++i) {
         BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
         float prog = 0.0f;
@@ -3020,8 +3018,8 @@ static void RecomputeEngineResearchFallback(BYTE* world)
 static void RecomputeEngineResearch(BYTE* world)
 {
     if (!world) return;
-    if (g_exeBase && SafeBytesMatch(g_exeBase + RVA_RESEARCH_RECOMPUTE,
-                                    kResearchRecomputeExpect, sizeof(kResearchRecomputeExpect))) {
+    if (g_exeBase && TwoStates_MatchesResearchRecomputePrologueForTest(
+                         g_exeBase + RVA_RESEARCH_RECOMPUTE, sizeof(kResearchRecomputeExpect))) {
         DiagLog_BeginSafeSeh();
         __try {
             ResearchRecomputeFn fn = (ResearchRecomputeFn)(g_exeBase + RVA_RESEARCH_RECOMPUTE);
@@ -3403,6 +3401,10 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
         return o_univResearchPanel ? o_univResearchPanel(world, building, window, xPtr, yPtr, a6) : nullptr;
     }
     bool twoStates = IsTwoStatesResearchOrLicenseActive();
+    if (!twoStates && !Commands_Capturing() && !Determinism_SessionRunning() &&
+        SaveSync_GetState() == SESSION_IDLE && !g_testUnivClickActive) {
+        return o_univResearchPanel ? o_univResearchPanel(world, building, window, xPtr, yPtr, a6) : nullptr;
+    }
     int bldOwner = twoStates ? ResolveBuildingOwnerFast(building) : 1;
     if (bldOwner != 1 && bldOwner != 2) bldOwner = 1;
     int localState = TwoStates_LocalState();
@@ -3410,7 +3412,7 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[bldOwner - 1]);
-    } else {
+    } else if (Commands_Capturing() || Determinism_SessionRunning()) {
         HealWorldOrphanedNearCompleteResearch(world);
     }
 
@@ -3558,6 +3560,17 @@ int TwoStates_GetBuildingOwnerSlot(const BYTE* buildingPtr)
 void TwoStates_ResearchDailyUpdateForTest(BYTE* world)
 {
     H_ResearchDailyUpdate(world);
+}
+
+void TwoStates_RecomputeEngineResearchForTest(BYTE* world)
+{
+    RecomputeEngineResearch(world);
+}
+
+bool TwoStates_MatchesResearchRecomputePrologueForTest(const BYTE* bytes, size_t len)
+{
+    if (!bytes || len < sizeof(kResearchRecomputeExpect)) return false;
+    return SafeBytesMatch(bytes, kResearchRecomputeExpect, sizeof(kResearchRecomputeExpect));
 }
 
 // ---------------------------------------------------------------------------

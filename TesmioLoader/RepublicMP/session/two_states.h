@@ -243,6 +243,8 @@ void   TwoStates_SetEngineResearchUnlockByteForTest(int stateOwner, unsigned byt
 void   TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio);
 void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
 void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
+void   TwoStates_RecomputeEngineResearchForTest(BYTE* world);
+bool   TwoStates_MatchesResearchRecomputePrologueForTest(const BYTE* bytes, size_t len);
 bool   TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
                                                  unsigned char checkFilters, unsigned char isDemolishOffice,
                                                  uintptr_t callerRvaOverride = 0);

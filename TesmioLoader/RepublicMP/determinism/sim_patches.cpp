@@ -756,7 +756,7 @@ static const unsigned kToolCalls[][2] = {
     { 0x3146F4, 0x3C9070 }, { 0x314719, 0x3C9070 }, { 0x31473E, 0x3C9070 }, { 0x314763, 0x3C9070 },
     { 0x314789, 0x3C9070 }, { 0x3147A9, 0x2B6EB0 }, { 0x3147C9, 0x2B7830 }, { 0x3147E9, 0x2B8700 },
     { 0x314809, 0x216700 }, { 0x314829, 0x2168F0 }, { 0x3148B0, 0x3CA4A0 }, { 0x3148CD, 0x3CB010 },
-    { 0x3148DE, 0x2144B0 }, { 0x3148E8, 0x2137F0 },
+    { 0x3148DE, 0x2144B0 }, { 0x3148E8, 0x2137F0 }, { SITE_TOOL_COPY_WEIGHTS_RVA, FN_TOOL_COPY_WEIGHTS_RVA },
 };
 #define TOOL_CALL_COUNT (sizeof(kToolCalls) / sizeof(kToolCalls[0]))
 #define TOOL_STUB_SIZE 32
@@ -1067,6 +1067,7 @@ static bool InstallToolStubs()
                                   : kToolCalls[i][1] == 0x2BAD60 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
                                   : kToolCalls[i][1] == 0x216700 ? (unsigned __int64)&SimPatches_AreaCopyTool
                                   : kToolCalls[i][1] == 0x2168F0 ? (unsigned __int64)&SimPatches_AreaPasteTool
+                                  : kToolCalls[i][1] == FN_TOOL_COPY_WEIGHTS_RVA ? (unsigned __int64)&BuildingSwitches_CopyWeightsTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
         p = EmitImm(p, 0x49, 0xBA, (unsigned __int64)common);                        // mov r10, common

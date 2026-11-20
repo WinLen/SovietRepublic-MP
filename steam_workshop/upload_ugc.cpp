@@ -577,7 +577,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Sync & audit fixes: currency denomination (with Two States scaling), factory ReplaceMachines (both currencies & schema fix), auto-replace clear, line_set, personal car recall, auto-buy/export sliders, factory queue worker limit, waste split/merge, SetForBio, crossroad_add, map-editor guards, removed 9 broken game_calls hooks + relocated firestation/assign_co click mutators",
+                "v%s (Protocol %d) - Sync & audit fixes: research recompute prologue/fallback/SP isolation (0x2F6C10), discard cargo / empty storage / parked vehicle cargo (0x8084CA/0x8086A6/0x80874D/0x8087F0/0x7497E2), repair station queue cancel (0x7A87DE), crime cancel assignment (0x76874C), distribution office find connections (0x74AA16), building_copyweights Late tool (0x314356 -> 0x1D7140), and deterministic pre-ApplyGameRules building storage rebuild (0x1A11E0)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

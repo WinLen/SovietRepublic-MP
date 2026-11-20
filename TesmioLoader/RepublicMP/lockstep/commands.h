@@ -185,4 +185,6 @@ bool  Commands_IsToolCarriedForTest(const char* name);
 bool  Commands_IsAreaCloneToolBlockedForTest(const char* name);
 bool  Commands_IsEditorBrushToolBlockedForTest(const char* name);
 void  Commands_PutAwayUncarriedToolForTest();
+void  Commands_SetRebuildBldStoragesOverrideForTest(void (*fn)(BYTE* world, BYTE* bld));
+bool  Commands_ApplyGameRulesForTest(const void* data, size_t size);
 

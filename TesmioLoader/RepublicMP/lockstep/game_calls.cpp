@@ -86,6 +86,11 @@ enum {
     CALL_WASTE_CONTAINER,
     CALL_SET_FOR_BIO,
     CALL_FIRE_DISPATCH,
+    CALL_DISCARD_VEH_CARGO,
+    CALL_EMPTY_STORAGE,
+    CALL_CANCEL_CRIME_ASSIGN,
+    CALL_DO_FIND_CONNECTIONS,
+    CALL_GAME_RULES_REBUILD_STORAGES,
 };
 
 // Appended only: a command names its site by index.
@@ -229,6 +234,17 @@ static const GameCallSite kSites[] = {
     { SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "assign co tool: assign rail office (rect)", "WOOFbb", 0, 0, false },
     { SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA, RVA_UNASSIGN_CONSTRUCTION_OFFICE, "assign co tool: unassign office (single)", "WOO", 0, 0, false },
     { SITE_ASSIGN_CO_RECT_UNASSIGN_RVA, RVA_UNASSIGN_CONSTRUCTION_OFFICE, "assign co tool: unassign office (rect)", "WOO", 0, 0, false },
+    { SITE_DISCARD_VEH_CARGO_RVA, FN_DISCARD_VEH_CARGO_RVA, "discard popup: discard vehicle cargo", "Vb", 0, 0, false, CALL_DISCARD_VEH_CARGO },
+    { SITE_DISCARD_CARRIED_VEH_RVA, FN_DISCARD_CARRIED_VEH_RVA, "discard popup: discard carried vehicle", "WVbbbbI", 0, 0, false },
+    { SITE_EMPTY_STORAGE_RVA, FN_CAN_DISCARD_STORAGE_RVA, "discard popup: empty whole building storage", "BI", 0, 0, false, CALL_EMPTY_STORAGE },
+    { SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA, FN_DISCARD_VEH_CARGO_RVA, "discard popup: empty parked vehicle cargo", "Vb", 0, 0, false },
+    { SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA, FN_DISCARD_VEH_CARGO_RVA, "building confirm: empty parked vehicle cargo", "Vb", 0, 0, false },
+    { SITE_REPAIR_CANCEL_QUEUE_RVA, FN_REPAIR_CANCEL_QUEUE_RVA, "repair station: cancel vehicle repair queue item", "WBII", 0, 0, false },
+    { SITE_CANCEL_CRIME_ASSIGN_RVA, FN_UI_PLAY_SOUND_RVA, "crime window: cancel case assignment", "WxIBI", 0, 0, false, CALL_CANCEL_CRIME_ASSIGN },
+    { SITE_DO_FIND_CONNECTIONS_RVA, FN_PF_CTOR_RVA, "distribution office: find factory/storage connections", "xWB", 0, 0, false, CALL_DO_FIND_CONNECTIONS },
+    { SITE_GAME_RULES_REBUILD_1_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings page: rebuild storages before close", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
+    { SITE_GAME_RULES_REBUILD_2_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings page: rebuild storages before save", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
+    { SITE_GAME_RULES_REBUILD_3_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings popup: rebuild storages before apply", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -629,7 +645,9 @@ static bool IsCommandSpecialSite(int special)
            special == CALL_DELETE_STOP || special == CALL_CHANGE_STOP || special == CALL_RELEASE_VEHICLE ||
            special == CALL_DENOMINATION || special == CALL_DETACH_PERSONAL_CAR ||
            special == CALL_WASTE_CONTAINER || special == CALL_SET_FOR_BIO ||
-           special == CALL_FIRE_DISPATCH;
+           special == CALL_FIRE_DISPATCH || special == CALL_DISCARD_VEH_CARGO ||
+           special == CALL_EMPTY_STORAGE || special == CALL_CANCEL_CRIME_ASSIGN ||
+           special == CALL_DO_FIND_CONNECTIONS;
 }
 
 static void RestoreMechToBuildingInventory(U64 mech, U64 carrier)
@@ -849,25 +867,54 @@ static U64 FindWorldBuilding(Pred pred)
     return 0;
 }
 
+static bool ReadPtrVectorRange(U64 vecAddr, U64 outVec[2], U64& outCount)
+{
+    outVec[0] = 0;
+    outVec[1] = 0;
+    outCount = 0;
+    if (!SafeMemcpyPod(outVec, (const void*)vecAddr, 2u * sizeof(U64))) return false;
+    if (!IsPointerLikeX64(outVec[0]) || outVec[1] <= outVec[0] || ((outVec[1] - outVec[0]) & 7u) != 0) {
+        return false;
+    }
+    outCount = (outVec[1] - outVec[0]) / sizeof(U64);
+    return true;
+}
+
+static bool FindBuildingOwningSingleSlot(U64 slotPtr, U64& outBld, unsigned& outSlotIdx)
+{
+    outBld = 0;
+    outSlotIdx = 0;
+    if (!g_exeBase || !IsPointerLikeX64(slotPtr)) return false;
+    U64 activeBld = 0;
+    if (SafeReadPod(World() + WORLD_ACTIVE_WINDOW_BLD_OFF, &activeBld) &&
+        FindSlotIndexInBuilding(activeBld, slotPtr, outSlotIdx)) {
+        outBld = activeBld;
+        return true;
+    }
+    const U64 matched = FindWorldBuilding([&](U64 b) {
+        return FindSlotIndexInBuilding(b, slotPtr, outSlotIdx);
+    });
+    if (!matched) return false;
+    outBld = matched;
+    return true;
+}
+
 static bool FindBuildingOwningSlots(U64 srcSlot, U64 dstSlot, U64& outBld, unsigned& outSrcIdx, unsigned& outDstIdx)
 {
     outBld = 0;
     outSrcIdx = 0;
     outDstIdx = 0;
     if (!g_exeBase || !IsPointerLikeX64(srcSlot) || !IsPointerLikeX64(dstSlot) || srcSlot == dstSlot) return false;
-    U64 activeBld = 0;
-    if (SafeReadPod(World() + WORLD_ACTIVE_WINDOW_BLD_OFF, &activeBld) &&
-        FindSlotIndexInBuilding(activeBld, srcSlot, outSrcIdx) &&
-        FindSlotIndexInBuilding(activeBld, dstSlot, outDstIdx)) {
-        outBld = activeBld;
-        return true;
+    U64 bld = 0;
+    unsigned srcIdx = 0;
+    unsigned dstIdx = 0;
+    if (!FindBuildingOwningSingleSlot(srcSlot, bld, srcIdx) ||
+        !FindSlotIndexInBuilding(bld, dstSlot, dstIdx)) {
+        return false;
     }
-    const U64 matched = FindWorldBuilding([&](U64 b) {
-        return FindSlotIndexInBuilding(b, srcSlot, outSrcIdx) &&
-               FindSlotIndexInBuilding(b, dstSlot, outDstIdx);
-    });
-    if (!matched) return false;
-    outBld = matched;
+    outBld = bld;
+    outSrcIdx = srcIdx;
+    outDstIdx = dstIdx;
     return true;
 }
 
@@ -939,6 +986,342 @@ static void ExecuteFireDispatchNow(const GameCallSite& s, const U64* a)
     }
 }
 
+static void ResetVehicleUnloadingCounters(U64 veh)
+{
+    if (!IsPointerLikeX64(veh)) return;
+    SafeWritePod((U64*)(veh + VEH_LOAD_TIMER_55C_OFF), (U64)0);
+    SafeWritePod((U64*)(veh + VEH_LOAD_TIMER_594_OFF), (U64)0);
+    SafeWritePod((float*)(veh + VEH_LOAD_RATE_568_OFF), 1.0f);
+    SafeWritePod((uint32_t*)(veh + VEH_LOAD_STATE_179C_OFF), (uint32_t)0);
+    SafeWritePod((uint32_t*)(veh + VEH_LOAD_STATE_564_OFF), (uint32_t)0);
+    SafeWritePod((uint32_t*)(veh + VEH_LOAD_STATE_1310_OFF), (uint32_t)0);
+    SafeWritePod((BYTE*)(veh + VEH_LOAD_FLAG_59C_OFF), (BYTE)0);
+}
+
+static void ExecuteDiscardVehCargoNow(const GameCallSite& s, const U64* a)
+{
+    const U64 veh = a[0];
+    if (!IsPointerLikeX64(veh)) return;
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        CallSite(s, a);
+    }
+    U64 bayTargetBld = 0;
+    if (!SafeReadPod((const U64*)(veh + VEH_BAY_TARGET_BLD_OFFSET), &bayTargetBld) || bayTargetBld == 0) {
+        return;
+    }
+    U64 wagonsVec[2] = {};
+    U64 count = 0;
+    // Mirror 0x8084DC..0x8084F0 (je 0x808598): game resets unloading counters only when 0x3A0..0x3A8 is non-empty.
+    if (!ReadPtrVectorRange(veh + VEH_ATTACHED_WAGONS_BEGIN_OFF, wagonsVec, count)) return;
+    const U64 limit = count < 256u ? count : 256u;
+    ResetVehicleUnloadingCounters(veh);
+    for (U64 i = 0; i < limit; ++i) {
+        U64 wagon = 0;
+        if (SafeReadPod((const U64*)(wagonsVec[0] + i * sizeof(U64)), &wagon)) {
+            ResetVehicleUnloadingCounters(wagon);
+        }
+    }
+}
+
+static bool CanDiscardStorageSlot(U64 slotPtr)
+{
+    if (!IsPointerLikeX64(slotPtr)) return false;
+    if (g_exeBase && g_exeBase[FN_CAN_DISCARD_STORAGE_RVA] != 0) {
+        typedef unsigned char (*CanDiscardStorageFn)(U64 slot);
+        if ((((CanDiscardStorageFn)(g_exeBase + FN_CAN_DISCARD_STORAGE_RVA))(slotPtr) & 0xFFu) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void ExecuteEmptyStorageNow(const U64* a)
+{
+    const U64 slotPtr = ResolveBuildingSlotPtr(a[0], (unsigned)a[1]);
+    if (!CanDiscardStorageSlot(slotPtr)) return;
+    U64 vec[2] = {};
+    if (!SafeMemcpyPod(vec, (const void*)slotPtr, sizeof(vec)) ||
+        !IsPointerLikeX64(vec[0]) || vec[1] <= vec[0] || ((vec[1] - vec[0]) & 0xFu) != 0) {
+        return;
+    }
+    const U64 count = (vec[1] - vec[0]) / 16u;
+    const U64 limit = count < 256u ? count : 256u;
+    for (U64 i = 0; i < limit; ++i) {
+        SafeWritePod((uint32_t*)(vec[0] + i * 16u + 8u), (uint32_t)0);
+    }
+}
+
+static bool ComputeCrimeCaseCheck(U64 crimeCase, unsigned& outCheck)
+{
+    outCheck = 0;
+    if (!IsPointerLikeX64(crimeCase)) return false;
+    int32_t status = 0;
+    int32_t crimeType = 0;
+    U64 crimeBld = 0;
+    if (!SafeReadPod((const int32_t*)(crimeCase + CASE_STATUS_OFF), &status) ||
+        !SafeReadPod((const int32_t*)(crimeCase + CASE_TYPE_OFF), &crimeType) ||
+        !SafeReadPod((const U64*)(crimeCase + CASE_BLD_OFF), &crimeBld)) {
+        return false;
+    }
+    uint32_t crimeBldId = 0;
+    if (crimeBld != 0) {
+        if (!IsPointerLikeX64(crimeBld) ||
+            !SafeReadPod((const uint32_t*)crimeBld, &crimeBldId)) {
+            return false;
+        }
+    }
+    outCheck = ((unsigned)crimeType & 0xFFu) |
+               (((unsigned)status & 0xFFu) << 8) |
+               ((crimeBldId & 0xFFFFu) << 16);
+    return true;
+}
+
+static void IncrementCrimeTypeStat(U64 baseAddr, int32_t crimeType, unsigned off0, unsigned off2, unsigned off3)
+{
+    unsigned off = 0;
+    if (crimeType == 2) off = off2;
+    else if (crimeType == 3) off = off3;
+    else if (crimeType == 0) off = off0;
+    else return;
+    uint32_t val = 0;
+    if (SafeReadPod((const uint32_t*)(baseAddr + off), &val)) {
+        SafeWritePod((uint32_t*)(baseAddr + off), val + 1u);
+    }
+}
+
+static void ExecuteCancelCrimeAssignNow(const U64* a)
+{
+    const U64 world = a[0];
+    const U64 caseIdx = a[2];
+    const U64 windowBld = a[3];
+    const unsigned expectedCheck = (unsigned)a[4];
+    if (world != (U64)World() || !IsPointerLikeX64(windowBld)) return;
+
+    U64 casesVec[2] = {};
+    U64 count = 0;
+    if (!ReadPtrVectorRange(world + WORLD_CRIME_CASES_BEGIN_OFF, casesVec, count) ||
+        caseIdx >= count || caseIdx >= 65536u) {
+        return;
+    }
+
+    U64 crimeCase = 0;
+    unsigned actualCheck = 0;
+    if (!SafeReadPod((const U64*)(casesVec[0] + caseIdx * sizeof(U64)), &crimeCase) ||
+        !ComputeCrimeCaseCheck(crimeCase, actualCheck) || actualCheck != expectedCheck) {
+        return;
+    }
+
+    int32_t status = 0;
+    int32_t crimeType = 0;
+    U64 crimeBld = 0;
+    if (!SafeReadPod((const int32_t*)(crimeCase + CASE_STATUS_OFF), &status) ||
+        !SafeReadPod((const int32_t*)(crimeCase + CASE_TYPE_OFF), &crimeType) ||
+        !SafeReadPod((const U64*)(crimeCase + CASE_BLD_OFF), &crimeBld)) {
+        return;
+    }
+
+    if (IsPointerLikeX64(crimeBld)) {
+        U64 region = 0;
+        U64 cityStats = 0;
+        if (SafeReadPod((const U64*)(crimeBld + BLD_CITY_REGION_PTR_OFF), &region) && IsPointerLikeX64(region) &&
+            SafeReadPod((const U64*)(region + REGION_CITY_STATS_PTR_OFF), &cityStats) && IsPointerLikeX64(cityStats)) {
+            IncrementCrimeTypeStat(cityStats, crimeType, CITY_STATS_CRIME0_OFF, CITY_STATS_CRIME2_OFF, CITY_STATS_CRIME3_OFF);
+        }
+    }
+    IncrementCrimeTypeStat(world, crimeType, WORLD_CRIME_EXPIRED_STAT0_OFF, WORLD_CRIME_EXPIRED_STAT2_OFF, WORLD_CRIME_EXPIRED_STAT3_OFF);
+
+    if (g_exeBase && g_exeBase[RVA_CRIME_EXPIRE_CASE] != 0) {
+        typedef void (*CrimeExpireFn)(U64 w, U64 cc, float zero);
+        ((CrimeExpireFn)(g_exeBase + RVA_CRIME_EXPIRE_CASE))(world, crimeCase, 0.0f);
+    }
+    if (g_exeBase && g_exeBase[FN_CRIME_DELETE_CASE_RVA] != 0) {
+        typedef void (*CrimeDeleteFn)(U64 w, U64 cc);
+        ((CrimeDeleteFn)(g_exeBase + FN_CRIME_DELETE_CASE_RVA))(world, crimeCase);
+    }
+    if (status >= 3 && status <= 12) {
+        const U64 counterOff = BLD_CRIME_CANCEL_COUNTERS_OFF + (U64)(status - 3) * 4u;
+        uint16_t cnt = 0;
+        if (SafeReadPod((const uint16_t*)(windowBld + counterOff), &cnt)) {
+            SafeWritePod((uint16_t*)(windowBld + counterOff), (uint16_t)(cnt + 1u));
+        }
+    }
+}
+
+static void ClearExistingDoConnections(U64 doBld)
+{
+    U64 connVec[2] = {};
+    U64 count = 0;
+    if (ReadPtrVectorRange(doBld + BLD_DO_CONNECTIONS_BEGIN_OFF, connVec, count) &&
+        g_exeBase && g_exeBase[FN_DO_REMOVE_LINK_RVA] != 0) {
+        typedef void (*DoRemoveLinkFn)(U64 unused, U64 doBuilding, U64 targetBuilding);
+        const auto removeFn = (DoRemoveLinkFn)(g_exeBase + FN_DO_REMOVE_LINK_RVA);
+        const U64 limit = count < 256u ? count : 256u;
+        for (U64 i = 0; i < limit; ++i) {
+            U64 entry = 0;
+            U64 targetBld = 0;
+            if (SafeReadPod((const U64*)(connVec[0] + i * sizeof(U64)), &entry) && IsPointerLikeX64(entry) &&
+                SafeReadPod((const U64*)(entry + 8u), &targetBld) && IsPointerLikeX64(targetBld)) {
+                removeFn(0, doBld, targetBld);
+            }
+        }
+    }
+    U64 begPtr = 0;
+    if (SafeReadPod((const U64*)(doBld + BLD_DO_CONNECTIONS_BEGIN_OFF), &begPtr) &&
+        (begPtr == 0 || IsPointerLikeX64(begPtr))) {
+        SafeWritePod((U64*)(doBld + BLD_DO_CONNECTIONS_END_OFF), begPtr);
+    }
+}
+
+static void SeedDoPathfinderStarts(U64 doBld, BYTE* pf)
+{
+    if (!g_exeBase || g_exeBase[FN_PF_ADD_START_RVA] == 0) return;
+    U64 vehVec[2] = {};
+    if (!SafeMemcpyPod(vehVec, (const void*)(doBld + BLD_DO_VEH_ENTRIES_BEGIN_OFF), sizeof(vehVec)) ||
+        !IsPointerLikeX64(vehVec[0]) || vehVec[1] <= vehVec[0] ||
+        ((vehVec[1] - vehVec[0]) % BLD_DO_VEH_ENTRY_STRIDE) != 0) {
+        return;
+    }
+    float negOne = -1.0f;
+    float romNegOne = 0.0f;
+    if (SafeReadPod(g_exeBase + FLT_NEG_ONE_RVA, &romNegOne) && isfinite(romNegOne) && romNegOne < 0.0f) {
+        negOne = romNegOne;
+    }
+    typedef void (*PfAddStartFn)(void* pfPtr, U64 nodePtr, float startCost, int zeroFlag, float maxCost);
+    const auto addStartFn = (PfAddStartFn)(g_exeBase + FN_PF_ADD_START_RVA);
+    const U64 count = (vehVec[1] - vehVec[0]) / BLD_DO_VEH_ENTRY_STRIDE;
+    const U64 limit = count < 256u ? count : 256u;
+    for (U64 i = 0; i < limit; ++i) {
+        const U64 entryAddr = vehVec[0] + i * BLD_DO_VEH_ENTRY_STRIDE;
+        int32_t entryKind = 0;
+        U64 nodePtr = 0;
+        if (SafeReadPod((const int32_t*)entryAddr, &entryKind) && entryKind == 3 &&
+            SafeReadPod((const U64*)(entryAddr + 0x30), &nodePtr) && IsPointerLikeX64(nodePtr)) {
+            addStartFn(pf, nodePtr, 0.0f, 0, negOne);
+        }
+    }
+}
+
+static U64 ResolveDoResultTargetBuilding(U64 res)
+{
+    U64 pathBld = 0;
+    U64 bldType = 0;
+    int32_t bldCat = 0;
+    if (!IsPointerLikeX64(res) ||
+        !SafeReadPod((const U64*)(res + 0x40), &pathBld) || !IsPointerLikeX64(pathBld) ||
+        !SafeReadPod((const U64*)(pathBld + BLD_TYPE_OFFSET), &bldType) || !IsPointerLikeX64(bldType) ||
+        !SafeReadPod((const int32_t*)(bldType + 0x360), &bldCat) || bldCat == 0x2D) {
+        return 0;
+    }
+    U64 nodesVec[2] = {};
+    U64 count = 0;
+    if (!ReadPtrVectorRange(res, nodesVec, count)) return 0;
+    U64 lastNode = 0;
+    U64 bldListPtr = 0;
+    U64 resolvedBld = 0;
+    if (!SafeReadPod((const void*)(nodesVec[1] - sizeof(U64)), &lastNode) || !IsPointerLikeX64(lastNode) ||
+        !SafeReadPod((const U64*)(lastNode + 0x70), &bldListPtr) || !IsPointerLikeX64(bldListPtr) ||
+        !SafeReadPod((const U64*)bldListPtr, &resolvedBld) || !IsPointerLikeX64(resolvedBld)) {
+        return 0;
+    }
+    return resolvedBld;
+}
+
+static void InitDoConnectionCfg(BYTE* cfg)
+{
+    cfg[0x00] = 1;
+    cfg[0xC8] = 1;
+    *(float*)(cfg + 0x04) = 1.0f;
+    *(U64*)(cfg + 0x10) = *(const U64*)(cfg + 0x08);
+    *(float*)(cfg + 0xCC) = 1.0f;
+    *(U64*)(cfg + 0xD8) = *(const U64*)(cfg + 0xD0);
+    *(U64*)(cfg + 0x190) = 0;
+    *(U64*)(cfg + 0x20) = 0;
+    cfg[0x28] = 1;
+    *(U64*)(cfg + 0xE8) = 0;
+    cfg[0xF0] = 1;
+}
+
+static bool AttachSingleDoConnection(U64 doBld, U64 res)
+{
+    const U64 targetBld = ResolveDoResultTargetBuilding(res);
+    if (!targetBld) return false;
+    typedef void* (*OpNewFn)(size_t bytes);
+    typedef void (*VecPushFn)(void* vec, void** elem);
+    typedef void* (*CfgCtorFn)(void* cfg);
+    const auto opNew = (OpNewFn)(g_exeBase + FN_GAME_OP_NEW_RVA);
+    const auto vecPush = (VecPushFn)(g_exeBase + FN_DO_VEC_PUSH_RVA);
+    const auto cfgCtor = (CfgCtorFn)(g_exeBase + FN_DO_CFG_CTOR_RVA);
+
+    void* rawCfg = opNew(0x198u);
+    if (!rawCfg) return false;
+    memset(rawCfg, 0, 0x198u);
+    BYTE* cfg = (BYTE*)cfgCtor(rawCfg);
+    if (!cfg) return false;
+    InitDoConnectionCfg(cfg);
+
+    BYTE* doEntry = (BYTE*)opNew(0x18u);
+    if (!doEntry) return false;
+    doEntry[0] = 0;
+    *(U64*)(doEntry + 0x08) = targetBld;
+    *(U64*)(doEntry + 0x10) = (U64)(uintptr_t)cfg;
+
+    void* pushVal = doEntry;
+    vecPush((void*)(doBld + BLD_DO_CONNECTIONS_BEGIN_OFF), &pushVal);
+
+    SafeWritePod((BYTE*)(doBld + BLD_DO_HAS_CONN_FLAG_OFF), (BYTE)1);
+    SafeWritePod((float*)(doBld + BLD_DO_TIMER_OFF), 3.0f);
+    return true;
+}
+
+static void AttachDoFindConnectionResults(U64 doBld, const BYTE* pf)
+{
+    if (!g_exeBase || g_exeBase[FN_GAME_OP_NEW_RVA] == 0 ||
+        g_exeBase[FN_DO_VEC_PUSH_RVA] == 0 || g_exeBase[FN_DO_CFG_CTOR_RVA] == 0) {
+        return;
+    }
+    U64 resVec[2] = {};
+    U64 count = 0;
+    if (!ReadPtrVectorRange((U64)(uintptr_t)(pf + 0x1B0), resVec, count)) return;
+    const U64 limit = count < 1024u ? count : 1024u;
+    int attached = 0;
+    for (U64 i = 0; i < limit; ++i) {
+        U64 res = 0;
+        if (!SafeReadPod((const U64*)(resVec[0] + i * sizeof(U64)), &res)) continue;
+        if (AttachSingleDoConnection(doBld, res)) {
+            ++attached;
+            if (attached > 5) break;
+        }
+    }
+}
+
+static void ExecuteDoFindConnectionsNow(const U64* a)
+{
+    const U64 world = a[1];
+    const U64 doBld = a[2];
+    if (world != (U64)World() || !IsPointerLikeX64(doBld)) return;
+    if (!g_exeBase || g_exeBase[FN_PF_CTOR_RVA] == 0) return;
+
+    alignas(16) BYTE pf[0x400] = {};
+    typedef void* (*PfCtorFn)(void* pfPtr);
+    typedef void (*PfDtorFn)(void* pfPtr);
+    ((PfCtorFn)(g_exeBase + FN_PF_CTOR_RVA))(pf);
+
+    ClearExistingDoConnections(doBld);
+    *(int32_t*)(pf + 0xB4) = 4;
+    *(int32_t*)(pf + 0xB0) = 2;
+    *(float*)(pf + 0x2C) = 30.0f;
+    SeedDoPathfinderStarts(doBld, pf);
+    if (g_exeBase[FN_PF_RUN_RVA] != 0) {
+        typedef void (*PfRunFn)(void* pfPtr);
+        ((PfRunFn)(g_exeBase + FN_PF_RUN_RVA))(pf);
+    }
+    AttachDoFindConnectionResults(doBld, pf);
+
+    if (g_exeBase[FN_PF_DTOR_RVA] != 0) {
+        ((PfDtorFn)(g_exeBase + FN_PF_DTOR_RVA))(pf);
+    }
+}
+
 static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U64*& drag, U64& dragged)
 {
     U64 recoveryVeh = ExtractCarrierRecoveryVehicle(s, a);
@@ -973,6 +1356,18 @@ static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U
         return;
     case CALL_FIRE_DISPATCH:
         ExecuteFireDispatchNow(s, a);
+        return;
+    case CALL_DISCARD_VEH_CARGO:
+        ExecuteDiscardVehCargoNow(s, a);
+        return;
+    case CALL_EMPTY_STORAGE:
+        ExecuteEmptyStorageNow(a);
+        return;
+    case CALL_CANCEL_CRIME_ASSIGN:
+        ExecuteCancelCrimeAssignNow(a);
+        return;
+    case CALL_DO_FIND_CONNECTIONS:
+        ExecuteDoFindConnectionsNow(a);
         return;
     default:
         break;
@@ -1142,6 +1537,12 @@ static void SkipCallSitePostMutation(int special, uintptr_t* retAddr)
         SkipIfAtReturnRva(retAddr, SITE_AUTO_BUY_APPLY_AFTER_RVA, SITE_AUTO_BUY_APPLY_SKIP_RVA);
     } else if (special == CALL_FIRE_DISPATCH) {
         SkipIfAtReturnRva(retAddr, SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA, SITE_FIRESTATION_DISPATCH_HELI_SKIP_RVA);
+    } else if (special == CALL_DISCARD_VEH_CARGO) {
+        SkipIfAtReturnRva(retAddr, SITE_DISCARD_VEH_CARGO_AFTER_RVA, SITE_DISCARD_VEH_CARGO_SKIP_RVA);
+    } else if (special == CALL_CANCEL_CRIME_ASSIGN) {
+        SkipIfAtReturnRva(retAddr, SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA, SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA);
+    } else if (special == CALL_DO_FIND_CONNECTIONS) {
+        SkipIfAtReturnRva(retAddr, SITE_DO_FIND_CONNECTIONS_AFTER_RVA, SITE_DO_FIND_CONNECTIONS_SKIP_RVA);
     }
 }
 
@@ -1278,6 +1679,11 @@ static U64 ExecuteNonCaptureCall(const GameCallSite& s, const U64* a)
         memcpy(&bits, &rf, 4);
         return (U64)bits;
     }
+    if (s.special == CALL_CANCEL_CRIME_ASSIGN) {
+        if (!g_exeBase || g_exeBase[s.target] == 0) return 0;
+        const U64 soundArgs[MAX_ARGS] = { a[0], a[1], 1, 0, 0, 0, 0 };
+        return CallSite(s, soundArgs);
+    }
     return CallSite(s, a);
 }
 
@@ -1294,6 +1700,35 @@ static U64 HandleAutoReplaceClearCapture(const U64* a)
 {
     Purchase_SubmitAutoReplaceClear((BYTE*)a[1]);
     return 0;
+}
+
+static const char* PrepareCancelCrimeAssignArgs(U64* args)
+{
+    const U64 world = (U64)World();
+    if (args[0] != world || !IsPointerLikeX64(args[2]) || !IsPointerLikeX64(args[3])) {
+        return "invalid crime case or building";
+    }
+    U64 casesVec[2] = {};
+    U64 count = 0;
+    if (!ReadPtrVectorRange(world + WORLD_CRIME_CASES_BEGIN_OFF, casesVec, count)) {
+        return "crime cases vector invalid";
+    }
+    const U64 limit = count < 65536u ? count : 65536u;
+    U64 caseIdx = limit;
+    for (U64 i = 0; i < limit; ++i) {
+        U64 curCase = 0;
+        if (SafeReadPod((const U64*)(casesVec[0] + i * sizeof(U64)), &curCase) && curCase == args[2]) {
+            caseIdx = i;
+            break;
+        }
+    }
+    if (caseIdx >= limit) return "crime case not found in world";
+    unsigned check = 0;
+    if (!ComputeCrimeCaseCheck(args[2], check)) return "invalid crime case data";
+    args[1] = 0;
+    args[2] = caseIdx;
+    args[4] = check;
+    return nullptr;
 }
 
 static const char* PrepareSpecialCaptureArgs(const GameCallSite& s, U64* args)
@@ -1332,6 +1767,20 @@ static const char* PrepareSpecialCaptureArgs(const GameCallSite& s, U64* args)
         if (!bld) return "fire target building not found";
         args[0] = 0;
         args[1] = bld;
+    } else if (s.special == CALL_EMPTY_STORAGE) {
+        if (!IsPointerLikeX64(args[0])) return "invalid storage slot";
+        if (!CanDiscardStorageSlot(args[0])) return "storage cannot be emptied";
+        U64 bld = 0;
+        unsigned slotIdx = 0;
+        if (!FindBuildingOwningSingleSlot(args[0], bld, slotIdx)) {
+            return "storage slot does not belong to a world building";
+        }
+        args[0] = bld;
+        args[1] = slotIdx;
+    } else if (s.special == CALL_CANCEL_CRIME_ASSIGN) {
+        return PrepareCancelCrimeAssignArgs(args);
+    } else if (s.special == CALL_DO_FIND_CONNECTIONS) {
+        if (!IsPointerLikeX64(args[2])) return "invalid distribution office building";
     }
     return nullptr;
 }
@@ -1400,6 +1849,8 @@ static U64 Run(unsigned index, const U64* a, uintptr_t* retAddr = nullptr)
         return HandleBuildingResBuyCapture(s, a, retAddr);
     case CALL_AUTO_REPLACE_CLEAR:
         return HandleAutoReplaceClearCapture(a);
+    case CALL_GAME_RULES_REBUILD_STORAGES:
+        return s.result;
     default:
         return CaptureAndSubmitPlainCall(index, s, a, retAddr);
     }
@@ -1485,11 +1936,23 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     return why == nullptr;
 }
 
+static void EmitRelay20(BYTE* r, const BYTE prefix[6], void* to)
+{
+    memcpy(r, prefix, 6);
+    r[6] = 0xFF;
+    r[7] = 0x25;
+    memset(r + 8, 0, 4);
+    memcpy(r + 12, &to, 8);
+}
+
 bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
     static const auto thunksF4 = MakeThunksF4(std::make_index_sequence<SITE_COUNT>());
     static const auto thunksFloatRet = MakeThunksFloatRet(std::make_index_sequence<SITE_COUNT>());
+    static const BYTE kDepotUncouplePrefix[6] = { 0x4D, 0x89, 0xF8, 0x4D, 0x89, 0xF1 };
+    static const BYTE kCancelCrimePrefix[6]   = { 0x4D, 0x89, 0xE0, 0x4D, 0x89, 0xF1 };
+    static const BYTE kDoFindConnPrefix[6]    = { 0x4C, 0x89, 0xF2, 0x4D, 0x89, 0xE8 };
     static_assert(SITE_COUNT * 32 <= 16384, "kSites relay allocation overflow");
     BYTE* relay = AllocNear(g_exeBase, 16384);
     if (!relay) {
@@ -1514,11 +1977,11 @@ bool GameCalls_Install()
             r[11] = 0xFF; r[12] = 0x25; r[13] = r[14] = r[15] = r[16] = 0;
             memcpy(r + 17, &to, 8);
         } else if (kSites[i].special == CALL_DEPOT_ROW_UNCOUPLE) {
-            // mov r8, r15 (4D 89 F8); mov r9, r14 (4D 89 F1); jmp qword ptr [rip+0]
-            r[0] = 0x4D; r[1] = 0x89; r[2] = 0xF8;
-            r[3] = 0x4D; r[4] = 0x89; r[5] = 0xF1;
-            r[6] = 0xFF; r[7] = 0x25; r[8] = r[9] = r[10] = r[11] = 0;
-            memcpy(r + 12, &to, 8);
+            EmitRelay20(r, kDepotUncouplePrefix, to);
+        } else if (kSites[i].special == CALL_CANCEL_CRIME_ASSIGN) {
+            EmitRelay20(r, kCancelCrimePrefix, to);
+        } else if (kSites[i].special == CALL_DO_FIND_CONNECTIONS) {
+            EmitRelay20(r, kDoFindConnPrefix, to);
         } else {
             r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
             memcpy(r + 6, &to, 8);

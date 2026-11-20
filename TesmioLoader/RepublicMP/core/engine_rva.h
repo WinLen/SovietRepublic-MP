@@ -2130,3 +2130,280 @@ static_assert(FN_FIRE_DISPATCH_RVA == 0x258260u &&
               SITE_ASSIGN_CO_RECT_UNASSIGN_RVA == 0x5EA366u,
               "Firestation dispatch & assign_co click mutator RVAs/offsets must match 1.1.1.13 layout");
 
+// ---------------------------------------------------------------------------
+// Audit-7 Sync Fixes (SOVIET64.exe v1.1.1.13)
+// ---------------------------------------------------------------------------
+
+// Bug #2: Discard cargo / Empty storage / Empty parked vehicles
+#ifndef FN_DISCARD_VEH_CARGO_RVA
+#define FN_DISCARD_VEH_CARGO_RVA                0x6BF080u // void __fastcall(VEHICLE* veh, uint8_t includeNonType11)
+#endif
+#ifndef FN_DISCARD_CARRIED_VEH_RVA
+#define FN_DISCARD_CARRIED_VEH_RVA              0x3E0670u // void __fastcall(WORLD*, VEHICLE* veh, uint8_t, uint8_t, uint8_t, uint8_t, float)
+#endif
+#ifndef FN_CAN_DISCARD_STORAGE_RVA
+#define FN_CAN_DISCARD_STORAGE_RVA              0x10C7B0u // bool __fastcall(STORAGE* slot)
+#endif
+#ifndef SITE_DISCARD_VEH_CARGO_RVA
+#define SITE_DISCARD_VEH_CARGO_RVA              0x8084CAu // discard popup: vehicle discard cargo -> FN_DISCARD_VEH_CARGO_RVA
+#endif
+#ifndef SITE_DISCARD_VEH_CARGO_AFTER_RVA
+#define SITE_DISCARD_VEH_CARGO_AFTER_RVA        0x8084CFu // immediately after 0x8084CA
+#endif
+#ifndef SITE_DISCARD_VEH_CARGO_SKIP_RVA
+#define SITE_DISCARD_VEH_CARGO_SKIP_RVA         0x808598u // skips unloading-counter reset 0x8084CF..0x808596 before carried-veh loop
+#endif
+#ifndef SITE_DISCARD_CARRIED_VEH_RVA
+#define SITE_DISCARD_CARRIED_VEH_RVA            0x8086A6u // discard popup: discard carried vehicle -> FN_DISCARD_CARRIED_VEH_RVA
+#endif
+#ifndef SITE_EMPTY_STORAGE_RVA
+#define SITE_EMPTY_STORAGE_RVA                  0x80874Du // discard popup: empty whole storage check -> FN_CAN_DISCARD_STORAGE_RVA
+#endif
+#ifndef SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA
+#define SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA      0x8087F0u // discard popup: empty parked vehicle cargo -> FN_DISCARD_VEH_CARGO_RVA
+#endif
+#ifndef SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA
+#define SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA    0x7497E2u // building confirm: empty parked vehicle cargo -> FN_DISCARD_VEH_CARGO_RVA
+#endif
+#ifndef VEH_ATTACHED_WAGONS_BEGIN_OFF
+#define VEH_ATTACHED_WAGONS_BEGIN_OFF           0x03A0u   // std::vector<VEHICLE*> begin on VEHICLE*
+#endif
+#ifndef VEH_ATTACHED_WAGONS_END_OFF
+#define VEH_ATTACHED_WAGONS_END_OFF             0x03A8u   // std::vector<VEHICLE*> end on VEHICLE*
+#endif
+#ifndef VEH_LOAD_TIMER_55C_OFF
+#define VEH_LOAD_TIMER_55C_OFF                  0x055Cu   // qword cleared in 0x8084F6
+#endif
+#ifndef VEH_LOAD_STATE_564_OFF
+#define VEH_LOAD_STATE_564_OFF                  0x0564u   // dword cleared in 0x808514
+#endif
+#ifndef VEH_LOAD_RATE_568_OFF
+#define VEH_LOAD_RATE_568_OFF                   0x0568u   // float reset to 1.0f in 0x808504
+#endif
+#ifndef VEH_LOAD_TIMER_594_OFF
+#define VEH_LOAD_TIMER_594_OFF                  0x0594u   // qword cleared in 0x8084FD
+#endif
+#ifndef VEH_LOAD_FLAG_59C_OFF
+#define VEH_LOAD_FLAG_59C_OFF                   0x059Cu   // byte cleared in 0x808520
+#endif
+#ifndef VEH_LOAD_STATE_1310_OFF
+#define VEH_LOAD_STATE_1310_OFF                 0x1310u   // dword cleared in 0x80851A
+#endif
+#ifndef VEH_LOAD_STATE_179C_OFF
+#define VEH_LOAD_STATE_179C_OFF                 0x179Cu   // dword cleared in 0x80850E
+#endif
+
+// Bug #3: Repair Station vehicle queue cancellation
+#ifndef FN_REPAIR_CANCEL_QUEUE_RVA
+#define FN_REPAIR_CANCEL_QUEUE_RVA              0x1AE220u // void __fastcall(WORLD*, BUILDING*, int idx, uint8_t flag)
+#endif
+#ifndef SITE_REPAIR_CANCEL_QUEUE_RVA
+#define SITE_REPAIR_CANCEL_QUEUE_RVA            0x7A87DEu // repair station queue cancel -> FN_REPAIR_CANCEL_QUEUE_RVA
+#endif
+
+// Bug #4: Crime/Emergency Cancel assignment
+#ifndef FN_UI_PLAY_SOUND_RVA
+#define FN_UI_PLAY_SOUND_RVA                    0x3FFA10u // UI sound helper (world, strPtr, uint8_t)
+#endif
+#ifndef FN_CRIME_DELETE_CASE_RVA
+#define FN_CRIME_DELETE_CASE_RVA                0x258050u // void __fastcall(WORLD*, CrimeCase*)
+#endif
+#ifndef SITE_CANCEL_CRIME_ASSIGN_RVA
+#define SITE_CANCEL_CRIME_ASSIGN_RVA            0x76874Cu // crime window: cancel assignment -> FN_UI_PLAY_SOUND_RVA
+#endif
+#ifndef SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA
+#define SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA      0x768751u // immediately after 0x76874C
+#endif
+#ifndef SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA
+#define SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA       0x768821u // register-identical to non-clicked branch 0x768739 -> 0x768821
+#endif
+#ifndef WORLD_CRIME_CASES_BEGIN_OFF
+#define WORLD_CRIME_CASES_BEGIN_OFF             0xD268u   // std::vector<CrimeCase*> begin
+#endif
+#ifndef WORLD_CRIME_CASES_END_OFF
+#define WORLD_CRIME_CASES_END_OFF               0xD270u   // std::vector<CrimeCase*> end
+#endif
+#ifndef WORLD_CRIME_EXPIRED_STAT0_OFF
+#define WORLD_CRIME_EXPIRED_STAT0_OFF           0x11658u  // world dword stat (crimeType == 0)
+#endif
+#ifndef WORLD_CRIME_EXPIRED_STAT2_OFF
+#define WORLD_CRIME_EXPIRED_STAT2_OFF           0x1165Cu  // world dword stat (crimeType == 2)
+#endif
+#ifndef WORLD_CRIME_EXPIRED_STAT3_OFF
+#define WORLD_CRIME_EXPIRED_STAT3_OFF           0x11660u  // world dword stat (crimeType == 3)
+#endif
+#ifndef CASE_STATUS_OFF
+#define CASE_STATUS_OFF                         0x04u     // int32 status on CrimeCase*
+#endif
+#ifndef CASE_BLD_OFF
+#define CASE_BLD_OFF                            0x08u     // BUILDING* on CrimeCase*
+#endif
+#ifndef CASE_TYPE_OFF
+#define CASE_TYPE_OFF                           0x70u     // int32 crimeType on CrimeCase*
+#endif
+#ifndef BLD_CRIME_CANCEL_COUNTERS_OFF
+#define BLD_CRIME_CANCEL_COUNTERS_OFF           0x13F8u   // uint16[status-3] at stride 4 on BUILDING*
+#endif
+#ifndef BLD_CITY_REGION_PTR_OFF
+#define BLD_CITY_REGION_PTR_OFF                 0x0108u   // Region* on BUILDING*
+#endif
+#ifndef REGION_CITY_STATS_PTR_OFF
+#define REGION_CITY_STATS_PTR_OFF               0x01B8u   // CityStats* on Region*
+#endif
+#ifndef CITY_STATS_CRIME0_OFF
+#define CITY_STATS_CRIME0_OFF                   0x0330u   // CityStats dword (crimeType == 0)
+#endif
+#ifndef CITY_STATS_CRIME2_OFF
+#define CITY_STATS_CRIME2_OFF                   0x0334u   // CityStats dword (crimeType == 2)
+#endif
+#ifndef CITY_STATS_CRIME3_OFF
+#define CITY_STATS_CRIME3_OFF                   0x0338u   // CityStats dword (crimeType == 3)
+#endif
+
+// Bug #5: Distribution Office "Find connections with factories and storages"
+#ifndef SITE_DO_FIND_CONNECTIONS_RVA
+#define SITE_DO_FIND_CONNECTIONS_RVA            0x74AA16u // DO window: Pathfinder ctor -> FN_PF_CTOR_RVA
+#endif
+#ifndef SITE_DO_FIND_CONNECTIONS_AFTER_RVA
+#define SITE_DO_FIND_CONNECTIONS_AFTER_RVA      0x74AA1Bu // immediately after 0x74AA16
+#endif
+#ifndef SITE_DO_FIND_CONNECTIONS_SKIP_RVA
+#define SITE_DO_FIND_CONNECTIONS_SKIP_RVA       0x74AD35u // register-identical to non-clicked branch 0x74AA09 -> 0x74AD35
+#endif
+#ifndef FN_PF_CTOR_RVA
+#define FN_PF_CTOR_RVA                          0x0ED750u // Pathfinder* __fastcall(void* pf)
+#endif
+#ifndef FN_PF_DTOR_RVA
+#define FN_PF_DTOR_RVA                          0x0ED890u // void __fastcall(void* pf)
+#endif
+#ifndef FN_DO_REMOVE_LINK_RVA
+#define FN_DO_REMOVE_LINK_RVA                   0x1C7D20u // void __fastcall(U64 unused, BUILDING* doBld, BUILDING* targetBld)
+#endif
+#ifndef FN_PF_ADD_START_RVA
+#define FN_PF_ADD_START_RVA                     0x583AB0u // void __fastcall(void* pf, U64 nodePtr, float, int, float)
+#endif
+#ifndef FN_PF_RUN_RVA
+#define FN_PF_RUN_RVA                           0x582390u // void __fastcall(void* pf)
+#endif
+#ifndef FN_DO_VEC_PUSH_RVA
+#define FN_DO_VEC_PUSH_RVA                      0x08E050u // std::vector<DOEntry*>::push_back(&vec, &entry)
+#endif
+#ifndef FN_GAME_OP_NEW_RVA
+#define FN_GAME_OP_NEW_RVA                      0x84E06Cu // void* __fastcall(size_t bytes)
+#endif
+#ifndef FN_DO_CFG_CTOR_RVA
+#define FN_DO_CFG_CTOR_RVA                      0x1512A0u // DOCfg* __fastcall(void* cfg)
+#endif
+#ifndef FLT_NEG_ONE_RVA
+#define FLT_NEG_ONE_RVA                         0x90B310u // float -1.0f constant in .rdata
+#endif
+#ifndef BLD_DO_CONNECTIONS_BEGIN_OFF
+#define BLD_DO_CONNECTIONS_BEGIN_OFF            0x0D38u   // std::vector<DOEntry*> begin on DO BUILDING*
+#endif
+#ifndef BLD_DO_CONNECTIONS_END_OFF
+#define BLD_DO_CONNECTIONS_END_OFF              0x0D40u   // std::vector<DOEntry*> end on DO BUILDING*
+#endif
+#ifndef BLD_DO_HAS_CONN_FLAG_OFF
+#define BLD_DO_HAS_CONN_FLAG_OFF                0x0D50u   // byte flag set to 1 on DO BUILDING*
+#endif
+#ifndef BLD_DO_TIMER_OFF
+#define BLD_DO_TIMER_OFF                        0x0FC0u   // float timer set to 3.0f on DO BUILDING*
+#endif
+#ifndef BLD_DO_VEH_ENTRIES_BEGIN_OFF
+#define BLD_DO_VEH_ENTRIES_BEGIN_OFF            0x0A10u   // parked vehicle entries begin on DO BUILDING*
+#endif
+#ifndef BLD_DO_VEH_ENTRIES_END_OFF
+#define BLD_DO_VEH_ENTRIES_END_OFF              0x0A18u   // parked vehicle entries end on DO BUILDING*
+#endif
+#ifndef BLD_DO_VEH_ENTRY_STRIDE
+#define BLD_DO_VEH_ENTRY_STRIDE                 0x60u     // stride of each entry in DO_VEH_ENTRIES
+#endif
+
+// Bug #6: building_copyweights Late tool
+#ifndef SITE_TOOL_COPY_WEIGHTS_RVA
+#define SITE_TOOL_COPY_WEIGHTS_RVA              0x314356u // Late tool dispatch -> FN_TOOL_COPY_WEIGHTS_RVA
+#endif
+#ifndef FN_TOOL_COPY_WEIGHTS_RVA
+#define FN_TOOL_COPY_WEIGHTS_RVA                0x1D7140u // U64 __fastcall(WORLD*, U64)
+#endif
+#ifndef WORLD_COPY_TOOL_SRC_BLD_OFF
+#define WORLD_COPY_TOOL_SRC_BLD_OFF             0xD298u   // source BUILDING* on WORLD*
+#endif
+#ifndef WORLD_HOVERED_BLD_OFF
+#define WORLD_HOVERED_BLD_OFF                   0xF5B8u   // hovered BUILDING* written by 0x1D7140
+#endif
+#ifndef BLD_COPY_WEIGHTS_BEGIN_OFFSET
+#define BLD_COPY_WEIGHTS_BEGIN_OFFSET           0x11F4u   // first of 9 dwords copied by 0x1D7140
+#endif
+#ifndef BLD_COPY_WEIGHTS_END_OFFSET
+#define BLD_COPY_WEIGHTS_END_OFFSET             0x1218u   // exclusive end (9 * 4 = 36 bytes)
+#endif
+#ifndef BLD_IS_PLANNED_OFF
+#define BLD_IS_PLANNED_OFF                      0x0EA8u   // non-zero while building is planned construction
+#endif
+#ifndef BLD_BUILT_PROGRESS_OFF
+#define BLD_BUILT_PROGRESS_OFF                  0x0604u   // float built progress (>= 1.0f when completed)
+#endif
+
+// Bug #7: Pre-0x3370F0 building storage container rebuild loop
+#ifndef FN_REBUILD_BLD_STORAGES_RVA
+#define FN_REBUILD_BLD_STORAGES_RVA             0x1A11E0u // void __fastcall(WORLD*, BUILDING*)
+#endif
+#ifndef SITE_GAME_RULES_REBUILD_1_RVA
+#define SITE_GAME_RULES_REBUILD_1_RVA           0x33706Cu // settings page close loop -> FN_REBUILD_BLD_STORAGES_RVA
+#endif
+#ifndef SITE_GAME_RULES_REBUILD_2_RVA
+#define SITE_GAME_RULES_REBUILD_2_RVA           0x33A52Cu // settings page save loop -> FN_REBUILD_BLD_STORAGES_RVA
+#endif
+#ifndef SITE_GAME_RULES_REBUILD_3_RVA
+#define SITE_GAME_RULES_REBUILD_3_RVA           0x7FEBBCu // settings popup apply loop -> FN_REBUILD_BLD_STORAGES_RVA
+#endif
+#ifndef WORLD_RULE_COMPLEX_STORAGES_OFF
+#define WORLD_RULE_COMPLEX_STORAGES_OFF         0x05B8u   // active rule dword compared with WORLD+0xC848
+#endif
+#ifndef WORLD_RULE_COPY_COMPLEX_STORAGES_OFF
+#define WORLD_RULE_COPY_COMPLEX_STORAGES_OFF    0xC848u   // edited copy dword (> 1 triggers 0x1A11E0)
+#endif
+
+static_assert(FN_DISCARD_VEH_CARGO_RVA == 0x6BF080u &&
+              FN_DISCARD_CARRIED_VEH_RVA == 0x3E0670u &&
+              FN_CAN_DISCARD_STORAGE_RVA == 0x10C7B0u &&
+              SITE_DISCARD_VEH_CARGO_RVA == 0x8084CAu &&
+              SITE_DISCARD_VEH_CARGO_AFTER_RVA == SITE_DISCARD_VEH_CARGO_RVA + 5u &&
+              SITE_DISCARD_VEH_CARGO_SKIP_RVA == 0x808598u &&
+              SITE_DISCARD_CARRIED_VEH_RVA == 0x8086A6u &&
+              SITE_EMPTY_STORAGE_RVA == 0x80874Du &&
+              SITE_EMPTY_BLD_VEH_CARGO_POPUP_RVA == 0x8087F0u &&
+              SITE_EMPTY_BLD_VEH_CARGO_CONFIRM_RVA == 0x7497E2u &&
+              FN_REPAIR_CANCEL_QUEUE_RVA == 0x1AE220u &&
+              SITE_REPAIR_CANCEL_QUEUE_RVA == 0x7A87DEu &&
+              FN_UI_PLAY_SOUND_RVA == 0x3FFA10u &&
+              FN_CRIME_DELETE_CASE_RVA == 0x258050u &&
+              SITE_CANCEL_CRIME_ASSIGN_RVA == 0x76874Cu &&
+              SITE_CANCEL_CRIME_ASSIGN_AFTER_RVA == SITE_CANCEL_CRIME_ASSIGN_RVA + 5u &&
+              SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA == 0x768821u &&
+              WORLD_CRIME_CASES_END_OFF == WORLD_CRIME_CASES_BEGIN_OFF + 8u &&
+              SITE_DO_FIND_CONNECTIONS_RVA == 0x74AA16u &&
+              SITE_DO_FIND_CONNECTIONS_AFTER_RVA == SITE_DO_FIND_CONNECTIONS_RVA + 5u &&
+              SITE_DO_FIND_CONNECTIONS_SKIP_RVA == 0x74AD35u &&
+              FN_PF_CTOR_RVA == 0x0ED750u &&
+              FN_PF_DTOR_RVA == 0x0ED890u &&
+              FN_DO_REMOVE_LINK_RVA == 0x1C7D20u &&
+              FN_PF_ADD_START_RVA == 0x583AB0u &&
+              FN_PF_RUN_RVA == 0x582390u &&
+              FN_DO_VEC_PUSH_RVA == 0x08E050u &&
+              FN_GAME_OP_NEW_RVA == 0x84E06Cu &&
+              FN_DO_CFG_CTOR_RVA == 0x1512A0u &&
+              FLT_NEG_ONE_RVA == 0x90B310u &&
+              BLD_DO_CONNECTIONS_END_OFF == BLD_DO_CONNECTIONS_BEGIN_OFF + 8u &&
+              BLD_DO_VEH_ENTRIES_END_OFF == BLD_DO_VEH_ENTRIES_BEGIN_OFF + 8u &&
+              SITE_TOOL_COPY_WEIGHTS_RVA == 0x314356u &&
+              FN_TOOL_COPY_WEIGHTS_RVA == 0x1D7140u &&
+              BLD_COPY_WEIGHTS_END_OFFSET == BLD_COPY_WEIGHTS_BEGIN_OFFSET + 36u &&
+              FN_REBUILD_BLD_STORAGES_RVA == 0x1A11E0u &&
+              SITE_GAME_RULES_REBUILD_1_RVA == 0x33706Cu &&
+              SITE_GAME_RULES_REBUILD_2_RVA == 0x33A52Cu &&
+              SITE_GAME_RULES_REBUILD_3_RVA == 0x7FEBBCu,
+              "Audit-7 sync fix RVAs and offsets must match 1.1.1.13 layout");
+
+

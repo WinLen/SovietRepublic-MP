@@ -5,8 +5,10 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../session/settings_sync.h"
+#include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
+#include "../ui/native_menu.h"
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
@@ -243,7 +245,8 @@ static bool IsNonPointerBuildingWord(int kind, unsigned offset)
     if (kind != KIND_BUILDING) return false;
     return offset == BLD_SEARCH_RANGE_OFFSET ||
            (offset >= NAME_AT && offset < NAME_END) ||
-           (offset >= BLD_CITIZEN_FILTER_AT && offset < BLD_CITIZEN_FILTER_END);
+           (offset >= BLD_CITIZEN_FILTER_AT && offset < BLD_CITIZEN_FILTER_END) ||
+           (offset >= BLD_COPY_WEIGHTS_BEGIN_OFFSET && offset < BLD_COPY_WEIGHTS_END_OFFSET);
 }
 
 static bool IsNeverNoiseWord(const Range& r, unsigned offset)
@@ -305,6 +308,16 @@ static bool GuardedRef(U64 building, RouteRef& ref)
     }
     DiagLog_EndSafeSeh();
     return ok;
+}
+
+static bool CheckBuildingControlAllowed(U64 building, const char* actionDesc)
+{
+    int bldId = 0;
+    float bx = 0.0f, bz = 0.0f;
+    Copy(&bldId, (const void*)building, 4);
+    Copy(&bx, (const void*)(building + OBJ_POS_OFFSET), 4);
+    Copy(&bz, (const void*)(building + OBJ_POS_OFFSET + 8), 4);
+    return TwoStates_CheckBuildingControlAllowed(bldId, bx, bz, actionDesc);
 }
 
 static void Submit(const SwitchMsg& m)
@@ -374,12 +387,7 @@ static void Compare(const Range& r, bool click)
             continue;
         }
         if (!haveRef) {
-            int bldId = 0;
-            float bx = 0.0f, bz = 0.0f;
-            Copy(&bldId, (const void*)r.building, 4);
-            Copy(&bx, (const void*)(r.building + 0x350), 4);
-            Copy(&bz, (const void*)(r.building + 0x358), 4);
-            if (!TwoStates_CheckBuildingControlAllowed(bldId, bx, bz, Tr("изменение настроек чужого здания", "changing foreign building settings"))) {
+            if (!CheckBuildingControlAllowed(r.building, Tr("изменение настроек чужого здания", "changing foreign building settings"))) {
                 Copy((void*)r.at, old, r.bytes);
                 return;
             }
@@ -418,11 +426,16 @@ static int g_worldCount = 0;
 static unsigned g_auth[WORLD_WORDS], g_stale[WORLD_WORDS], g_sent[WORLD_WORDS];
 static bool g_sentValid[WORLD_WORDS], g_authReady = false, g_worldFrame = false;
 
+typedef unsigned long long (*CopyWeightsToolFn)(unsigned long long world, unsigned long long a2);
+static CopyWeightsToolFn g_testCopyWeightsOverride = nullptr;
+static int g_copyWeightsReady = -1;
+
 void BuildingSwitches_Reset()
 {
     g_taken = false;
     g_worldFrame = false;
     g_authReady = false;
+    g_copyWeightsReady = -1;
     g_ranges.clear();
     g_bytes.clear();
     memset(g_sentValid, 0, sizeof(g_sentValid));
@@ -921,6 +934,115 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
          m.kind == KIND_WORLD ? "" : " of a building", m.kind == KIND_WORLD ? 0 : Category(Ref_BuildingAt(m.building)), m.count,
          m.words[0].offset, differing ? " (some read neither value)" : "", why ? why : "made");
     return why == nullptr;
+}
+
+static const TsmRoutineSig kCopyWeightsSig[] = {
+    { FN_TOOL_COPY_WEIGHTS_RVA,
+      { 0x4C, 0x8B, 0xDC, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x80, 0xB9, 0xBC, 0x0F, 0x00 },
+      16 },
+};
+
+void BuildingSwitches_SetCopyWeightsOverrideForTest(unsigned long long (*fn)(unsigned long long world, unsigned long long a2))
+{
+    g_testCopyWeightsOverride = fn;
+    g_copyWeightsReady = -1;
+}
+
+static bool CopyWeightsReady()
+{
+    if (g_testCopyWeightsOverride) return true;
+    return Ref_CheckRoutineTable(&g_copyWeightsReady, kCopyWeightsSig,
+                                 sizeof(kCopyWeightsSig) / sizeof(kCopyWeightsSig[0]),
+                                 "BUILDING_SWITCHES");
+}
+
+static bool IsWaitingLobbyBlockedForTools()
+{
+    return SaveSync_IsWaitingLobbyActive() ||
+           (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded());
+}
+
+static bool IsValidCopyWeightsTarget(U64 srcBld, U64 dstBld)
+{
+    if (!IsPointerLikeX64(srcBld) || !IsPointerLikeX64(dstBld) || srcBld == dstBld) return false;
+    BYTE isPlanned = 0;
+    float progress = 0.0f;
+    if (!Copy(&isPlanned, (const void*)(dstBld + BLD_IS_PLANNED_OFF), sizeof(isPlanned)) || isPlanned != 0)
+        return false;
+    if (!Copy(&progress, (const void*)(dstBld + BLD_BUILT_PROGRESS_OFF), sizeof(progress)) ||
+        !isfinite(progress) || progress < 1.0f)
+        return false;
+    int srcCat = Category(srcBld);
+    return srcCat >= 0 && srcCat == Category(dstBld);
+}
+
+static void SubmitCopyWeightsMsg(U64 srcBld, U64 dstBld)
+{
+    if (!CheckBuildingControlAllowed(dstBld, Tr("копирование весов в чужое здание", "copying weights to a foreign building")))
+        return;
+    SwitchMsg m = {};
+    m.building = kNoRef;
+    m.kind = KIND_BUILDING;
+    if (!GuardedRef(dstBld, m.building)) return;
+    for (unsigned off = BLD_COPY_WEIGHTS_BEGIN_OFFSET;
+         off + 4 <= BLD_COPY_WEIGHTS_END_OFFSET && m.count < MAX_WORDS;
+         off += 4) {
+        unsigned srcWord = 0, dstWord = 0;
+        if (!Copy(&srcWord, (const void*)(srcBld + off), sizeof(srcWord)) ||
+            !Copy(&dstWord, (const void*)(dstBld + off), sizeof(dstWord))) {
+            return;
+        }
+        if (srcWord != dstWord) {
+            m.words[m.count++] = { off, dstWord, srcWord };
+        }
+    }
+    if (m.count > 0) Submit(m);
+}
+
+static unsigned long long CallToolWithClearedPress(CopyWeightsToolFn tool, unsigned long long world,
+                                                   unsigned long long a2, BYTE origPress)
+{
+    g_exeBase[PRESS_RVA] = 0;
+    unsigned long long r = tool(world, a2);
+    g_exeBase[PRESS_RVA] = origPress;
+    return r;
+}
+
+unsigned long long BuildingSwitches_CopyWeightsTool(unsigned long long world, unsigned long long a2)
+{
+    if (!world || !g_exeBase) return 0;
+    CopyWeightsToolFn tool = g_testCopyWeightsOverride
+                                 ? g_testCopyWeightsOverride
+                                 : (CopyWeightsToolFn)(g_exeBase + FN_TOOL_COPY_WEIGHTS_RVA);
+    if (IsWaitingLobbyBlockedForTools()) {
+        BYTE origPress = g_exeBase[PRESS_RVA];
+        unsigned long long r = CallToolWithClearedPress(tool, world, a2, origPress);
+        if (origPress != 0) SaveSync_NotifyWaitingLobbyActionBlocked();
+        return r;
+    }
+    if (!Commands_TakeLocal() || !CopyWeightsReady()) return tool(world, a2);
+    BYTE origPress = g_exeBase[PRESS_RVA];
+    if (origPress == 0) return tool(world, a2);
+
+    U64 prevHover = 0;
+    const bool haveHover = Copy(&prevHover, (const void*)(world + WORLD_HOVERED_BLD_OFF), sizeof(prevHover));
+    if (haveHover) {
+        const U64 zero = 0;
+        Copy((void*)(world + WORLD_HOVERED_BLD_OFF), &zero, sizeof(zero));
+    }
+    unsigned long long r = CallToolWithClearedPress(tool, world, a2, origPress);
+
+    U64 dstBld = 0;
+    if (!Copy(&dstBld, (const void*)(world + WORLD_HOVERED_BLD_OFF), sizeof(dstBld)) || !dstBld) {
+        if (haveHover) Copy((void*)(world + WORLD_HOVERED_BLD_OFF), &prevHover, sizeof(prevHover));
+        return r;
+    }
+    U64 srcBld = 0;
+    if (Copy(&srcBld, (const void*)(world + WORLD_COPY_TOOL_SRC_BLD_OFF), sizeof(srcBld)) &&
+        IsValidCopyWeightsTarget(srcBld, dstBld)) {
+        SubmitCopyWeightsMsg(srcBld, dstBld);
+    }
+    return r;
 }
 
 bool BuildingSwitches_IsOneByteWorldSettingForTest(unsigned at)
