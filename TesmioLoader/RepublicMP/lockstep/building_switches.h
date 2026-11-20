@@ -33,6 +33,9 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size);
 // Captures manual one-time resource purchase sliders from world + WORLD_UI_RES_SLIDERS_OFFSET.
 bool BuildingSwitches_CaptureManualBuy(unsigned long long world, unsigned long long building, int currencyMode);
 
+// Captures auto-buy / auto-export resource sliders (+0x0C) or auto-buy disable for building +0x9E8/+0x9EC.
+bool BuildingSwitches_CaptureAutoBuy(unsigned long long world, unsigned long long building, int currencyMode, bool isDisable);
+
 // Captures University (category 0x1B) research program selection and professor ratio (+0x11A8).
 bool BuildingSwitches_CaptureUnivResearch(unsigned long long building, int ownerState,
                                           int oldTechIdx, int newTechIdx,

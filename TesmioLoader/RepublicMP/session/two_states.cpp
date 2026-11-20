@@ -6496,6 +6496,107 @@ void TwoStates_EndCommand(int ownerState)
     }
 }
 
+void TwoStates_CloseDenominationPopups(BYTE* world)
+{
+    if (!world) return;
+    BYTE* const* begin = nullptr;
+    BYTE* const* end = nullptr;
+    if (!SafeReadPod(world + WORLD_OPEN_WINDOWS_BEGIN_OFFSET, &begin) ||
+        !SafeReadPod(world + WORLD_OPEN_WINDOWS_END_OFFSET, &end)) {
+        return;
+    }
+    if (!begin || !end || end <= begin) return;
+    const uintptr_t byteSpan = (uintptr_t)end - (uintptr_t)begin;
+    if ((byteSpan % sizeof(BYTE*)) != 0 || byteSpan > 4096u * sizeof(BYTE*)) return;
+
+    const size_t count = (size_t)(byteSpan / sizeof(BYTE*));
+    for (size_t i = 0; i < count; ++i) {
+        BYTE* win = nullptr;
+        if (!SafeReadPod(begin + i, &win) || !IsPointerLikeX64((uint64_t)(uintptr_t)win)) continue;
+        int32_t winType = 0;
+        if (SafeReadPod(win + WINDOW_POPUP_TYPE_OFFSET, &winType) &&
+            winType == WINDOW_POPUP_TYPE_DENOMINATION) {
+            SafeWritePod(win, (BYTE)1);
+        }
+    }
+}
+
+static void DivideFloatSlice(float* arr, size_t count, float divisor)
+{
+    if (!arr || divisor == 0.0f) return;
+    for (size_t i = 0; i < count; ++i) {
+        if (isfinite(arr[i])) arr[i] /= divisor;
+    }
+}
+
+static void DivideStateEconPeriodBy100(StateEconPeriodStats* st)
+{
+    if (!st) return;
+    const float divF = (float)CURRENCY_DENOMINATION_DIVISOR;
+    // Matches 0x2F9E50: divides moneyValue (+0x0C) in resVecs[0..7] only (leaves amountTons and resVecs[8..15] untouched).
+    for (size_t v = 0; v < 8; ++v) {
+        for (size_t i = 0; i < st->resVecs[v].size(); ++i) {
+            if (isfinite(st->resVecs[v][i].moneyValue)) {
+                st->resVecs[v][i].moneyValue /= divF;
+            }
+        }
+    }
+    DivideFloatSlice(st->scalars.vehicles, 4, divF);
+    DivideFloatSlice(st->scalars.immigrantSpend, 2, divF);
+    DivideFloatSlice(st->scalars.tourism, 44, divF);
+    DivideFloatSlice(st->scalars.loans, 4, divF);
+}
+
+void TwoStates_ApplyDenomination(BYTE* world)
+{
+    TwoStates_CloseDenominationPopups(world);
+    if (!TwoStates_IsActive() || !world || !g_exeBase) return;
+    TwoStates_RestoreUiMoneySwap();
+
+    const double divD = CURRENCY_DENOMINATION_DIVISOR;
+    for (int i = 0; i < 2; ++i) {
+        g_netTradeRub[i] /= divD;
+        g_netTradeUsd[i] /= divD;
+    }
+    if (!IsUnlimitedMoney()) {
+        for (int i = 0; i < 2; ++i) {
+            g_stateRub[i] /= divD;
+            g_stateUsd[i] /= divD;
+        }
+        const double totalRub = g_stateRub[0] + g_stateRub[1];
+        const double totalUsd = g_stateUsd[0] + g_stateUsd[1];
+        SafeWritePod(WorldRubles(), totalRub);
+        SafeWritePod(WorldDollars(), totalUsd);
+        g_lastWorldRub = totalRub;
+        g_lastWorldUsd = totalUsd;
+    } else {
+        SafeReadPod(WorldRubles(), &g_lastWorldRub);
+        SafeReadPod(WorldDollars(), &g_lastWorldUsd);
+    }
+    g_unattributedRub = 0.0;
+    g_unattributedUsd = 0.0;
+
+    if (g_stateEconInitialized) {
+        DivideStateEconPeriodBy100(&g_stateCurEcon[0]);
+        DivideStateEconPeriodBy100(&g_stateCurEcon[1]);
+        for (int s = 0; s < 2; ++s) {
+            for (size_t i = 0; i < g_stateHistEcon[s].size(); ++i) {
+                DivideStateEconPeriodBy100(&g_stateHistEcon[s][i]);
+            }
+        }
+    } else {
+        EnsureStateEconInitialized(world);
+    }
+    SafeReadStatScalars(world + WORLD_STAT_CURRENT_OFFSET, &g_lastWorldScalars);
+    g_unattributedScalars = {};
+}
+
+void TwoStates_GetNetTradeForTest(int state, double* outRub, double* outUsd)
+{
+    if (outRub) *outRub = (state == 1 || state == 2) ? g_netTradeRub[state - 1] : 0.0;
+    if (outUsd) *outUsd = (state == 1 || state == 2) ? g_netTradeUsd[state - 1] : 0.0;
+}
+
 bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t)
 {
     if (!TwoStates_IsActive()) return false;

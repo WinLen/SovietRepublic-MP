@@ -29,7 +29,7 @@ struct PurchaseMsg {
     unsigned typeIndex;   // in world +12840
     unsigned typeCheck;   // FNV of the type's name
     unsigned char refill; // realistic: the window asked for its customs houses again
-    unsigned char used;   // from the used-vehicle market
+    unsigned char used;   // 1 = from the used-vehicle market, 2 = clear auto-replace rule (kind == 0xB)
     unsigned char pad[2];
     PurchaseBuildingRef depot;    // depot or factory
     PurchaseBuildingRef customsRub, customsUsd;
@@ -52,6 +52,12 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller);
 
 // The command (lockstep/commands): every PC buys.
 bool Purchase_ApplyCommand(const void* data, size_t size);
+
+// Submits a lockstep clear-auto-replace command (kind == 0xB, used == 2) for targetType.
+bool Purchase_SubmitAutoReplaceClear(BYTE* targetType);
+
+// Test helper: invokes ReplayAutoReplace directly (bypasses RoutinesOk() table cache in unit tests).
+bool Purchase_ApplyAutoReplaceForTest(const PurchaseMsg& m);
 
 // Canonical scriptName resolution: scans WORLD_VEHICLE_TYPES_OFFSET (+0x12840)
 // and returns pointer to the VehicleType whose scriptName (+0x200) matches `scriptName`.

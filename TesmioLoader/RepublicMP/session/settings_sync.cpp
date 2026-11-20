@@ -28,7 +28,7 @@
 #define AUTO_PURCHASE_RVA 0x1754F0      // FUN_1401754d0(world, bld, value)
 
 enum FieldKind { FIELD_BYTES, FIELD_SLOT0 };   // SLOT0: offset is inside storage slot 0
-enum FollowUp { FOLLOW_NONE, FOLLOW_PIPELINE, FOLLOW_AUTO_PURCHASE };
+enum FollowUp { FOLLOW_NONE, FOLLOW_PIPELINE, FOLLOW_AUTO_PURCHASE, FOLLOW_FACTORY_QUEUE };
 
 struct WatchedField {
     const char* name;
@@ -49,7 +49,7 @@ static const WatchedField kFields[] = {
     { "max import/export share", 0x80,   4, FIELD_SLOT0, FOLLOW_NONE,          { 0x1F, 0x20, -1 } },
     { "pipeline resource",       0x133C, 1, FIELD_BYTES, FOLLOW_PIPELINE,      { 0x6B, -1 } },
     { "higher priority",         0x134C, 4, FIELD_BYTES, FOLLOW_NONE,          { 0x5B, 0x47, 0x12, 0x13, 0x23, -1 } },
-    { "workers / visitors",      0xDEC,  8, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
+    { "workers / visitors",      0xDEC,  8, FIELD_BYTES, FOLLOW_FACTORY_QUEUE, { ANY, -1 } },
     { "construction workers",    0x630,  4, FIELD_BYTES, FOLLOW_NONE,          { ANY, -1 } },
     { "auto purchase",           0x11B8, 4, FIELD_BYTES, FOLLOW_AUTO_PURCHASE, { ANY, -1 } },
     { "collect from vehicles",   BLD_COLLECT_FLAGS_OFFSET,          2, FIELD_BYTES, FOLLOW_NONE, { ANY, -1 } },
@@ -327,6 +327,13 @@ static bool WriteField(BYTE* b, const WatchedField& f, unsigned long long value)
                 else if (*(int*)(b + 0x9E8)) ((BuildingFn)(g_exeBase + PIPELINE_TO_IMPORT_RVA))(world, (__int64)b);
             } else if (f.followUp == FOLLOW_AUTO_PURCHASE) {
                 ((AutoPurchaseFn)(g_exeBase + AUTO_PURCHASE_RVA))(world, (__int64)b, (int)value);
+            } else if (f.followUp == FOLLOW_FACTORY_QUEUE) {
+                unsigned long long qBeg = 0, qEnd = 0;
+                memcpy(&qBeg, b + BLD_FACTORY_QUEUE_BEGIN_OFFSET, sizeof(qBeg));
+                memcpy(&qEnd, b + BLD_FACTORY_QUEUE_END_OFFSET, sizeof(qEnd));
+                if (qBeg && qEnd > qBeg && g_exeBase && g_exeBase[RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT] != 0) {
+                    ((BuildingFn)(g_exeBase + RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT))(world, (__int64)b);
+                }
             }
             ok = true;
         }

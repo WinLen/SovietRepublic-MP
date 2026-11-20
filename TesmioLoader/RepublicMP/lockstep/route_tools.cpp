@@ -91,6 +91,11 @@ bool RouteTools_Ready()
     return Ref_CheckRoutineTable(&g_ready, kRoutines, sizeof(kRoutines) / sizeof(kRoutines[0]), "ROUTE");
 }
 
+void RouteTools_ResetReadyForTest()
+{
+    g_ready = -1;
+}
+
 static BYTE* World() { return g_exeBase + WORLD_RVA; }
 static U64 Q(U64 at) { return *(U64*)at; }
 
@@ -548,6 +553,22 @@ U64 RouteTools_BojkaTool(U64 world, U64 mode)
     return r;
 }
 
+static bool NodeInHubVector(U64 node, U64 beg, U64 end)
+{
+    for (U64 p = beg; p && p < end; p += 8) {
+        if (Q(p) == node) return true;
+    }
+    return false;
+}
+
+static bool IsOtherMultiNodeHub(U64 stopNode, U64 liveHub)
+{
+    U64 otherHub = Q(stopNode + 0xC0);
+    if (!otherHub || otherHub == liveHub) return false;
+    U64 oBeg = Q(otherHub + 0x88), oEnd = Q(otherHub + 0x90);
+    return oBeg && oEnd > oBeg && ((oEnd - oBeg) >> 3) > 1;
+}
+
 U64 RouteTools_JoinHubStopTool(U64 world)
 {
     ToolFn tool = (ToolFn)(g_exeBase + 0x2B2330);
@@ -559,12 +580,20 @@ U64 RouteTools_JoinHubStopTool(U64 world)
     *press = kept;
     __try {
         U64 hub = Q(world + TARGET_OFFSET);
+        U64 win = Q(world + WINDOW_OFFSET);
         U64 stopNode = Q(world + 0xF650);
         if (!hub || !stopNode) return r;
         U64 hubBeg = Q(hub + 0x88), hubEnd = Q(hub + 0x90);
         if (!hubBeg || hubEnd <= hubBeg) return r;
         U64 firstNode = Q(hubBeg);
         if (!firstNode) return r;
+        bool inHub = NodeInHubVector(stopNode, hubBeg, hubEnd);
+        if (inHub) {
+            if (((hubEnd - hubBeg) >> 3) < 2) return r;
+        } else {
+            U64 liveHub = (win && Q(win + 0x240)) ? Q(win + 0x240) : Q(firstNode + 0xC0);
+            if (IsOtherMultiNodeHub(stopNode, liveHub)) return r;
+        }
         const char* joinHubDesc = Tr("объединение перекрёстков", "joining intersections");
         if (!TwoStates_CheckBuildAllowed(*(float*)(firstNode + 4), *(float*)(firstNode + 0xC), joinHubDesc) ||
             !TwoStates_CheckBuildAllowed(*(float*)(stopNode + 4), *(float*)(stopNode + 0xC), joinHubDesc))
@@ -1095,6 +1124,39 @@ unsigned __int64 RouteTools_FindNetworkNodeByPosForTest(unsigned __int64 world, 
     return FindNetworkNodeByPos(world, pos, outNet);
 }
 
+static void SyncJunctionCopyIfOpen(U64 world, U64 liveHub, U64 stopNode, bool remove)
+{
+    U64 copy = Q(world + TARGET_OFFSET);
+    U64 win = Q(world + WINDOW_OFFSET);
+    if (!copy || copy == liveHub || !win) return;
+    if (Q(win + 0x240) != liveHub || Q(win + 0x270) != copy) return;
+    U64 cBeg = Q(copy + 0x88), cEnd = Q(copy + 0x90);
+    if (!cBeg || cEnd <= cBeg) return;
+    if (remove) {
+        if (((cEnd - cBeg) >> 3) >= 2 && NodeInHubVector(stopNode, cBeg, cEnd)) {
+            ((void (*)(U64, U64))(g_exeBase + 0x0F98D0))(stopNode, copy + 0x88);
+            unsigned char ok = ((unsigned char (*)(U64, U64))(g_exeBase + 0x222AD0))(copy, 0);
+            *(int*)(win + 0x264) = ok ? 0 : 1;
+        }
+    } else if (!NodeInHubVector(stopNode, cBeg, cEnd)) {
+        ((void (*)(U64, U64, unsigned char))(g_exeBase + 0x223320))(copy, stopNode, 0);
+        unsigned char ok = ((unsigned char (*)(U64, U64))(g_exeBase + 0x222AD0))(copy, 0);
+        *(int*)(win + 0x264) = ok ? 0 : 1;
+    }
+}
+
+static void UpdateMatchingHubWindowStatus(U64 world, U64 liveHub, U64 stopNode, bool remove, unsigned char ok)
+{
+    U64 copy = Q(world + TARGET_OFFSET);
+    U64 win = Q(world + WINDOW_OFFSET);
+    if (!win) return;
+    if (copy == liveHub && Q(win + 0x240) == liveHub) {
+        *(int*)(win + 0x264) = ok ? 0 : 1;
+        return;
+    }
+    SyncJunctionCopyIfOpen(world, liveHub, stopNode, remove);
+}
+
 static const char* ApplyJoinHubStop(const RouteMsg& m)
 {
     U64 world = (U64)World();
@@ -1104,32 +1166,32 @@ static const char* ApplyJoinHubStop(const RouteMsg& m)
         U64 hub = firstNode ? Q(firstNode + 0xC0) : 0;
         if (!hub || !stopNode) return "the hub or stop is gone";
         U64 beg = Q(hub + 0x88), end = Q(hub + 0x90);
-        bool inHub = false;
-        for (U64 p = beg; p && p < end; p += 8) {
-            if (Q(p) == stopNode) {
-                inHub = true;
-                break;
-            }
-        }
+        bool inHub = NodeInHubVector(stopNode, beg, end);
         typedef void (*RemoveFromHubFn)(U64 node, U64 hubVec);
         typedef unsigned char (*UpdateHubFn)(U64 hub, U64 zero);
         typedef unsigned char (*CanJoinHubFn)(U64 hub, U64 node);
         typedef float (*HubDistFn)(U64 hub, U64 node);
-        typedef void (*AddToHubFn)(U64 hub, U64 node, unsigned char zero);
+        typedef void (*AddToHubFn)(U64 hub, U64 node, unsigned char setOwner);
         if (inHub) {
-            if ((end - beg) / 8 >= 2) {
+            if (((end - beg) >> 3) >= 2) {
                 ((RemoveFromHubFn)(g_exeBase + 0x0F98D0))(stopNode, hub + 0x88);
+                if (Q(stopNode + 0xC0) == hub) *(U64*)(stopNode + 0xC0) = 0;
                 unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222AD0))(hub, 0);
-                if (m.origin == g_origin && Q(world + WINDOW_OFFSET))
-                    *(int*)(Q(world + WINDOW_OFFSET) + 0x264) = ok ? 0 : 1;
+                if (m.origin == g_origin) UpdateMatchingHubWindowStatus(world, hub, stopNode, true, ok);
             }
         } else {
+            if (IsOtherMultiNodeHub(stopNode, hub)) return "the stop belongs to another junction";
             if (((CanJoinHubFn)(g_exeBase + 0x225150))(hub, stopNode) &&
                 ((HubDistFn)(g_exeBase + 0x2254B0))(hub, stopNode) <= *(float*)(g_exeBase + 0x90AA00)) {
-                ((AddToHubFn)(g_exeBase + 0x223320))(hub, stopNode, 0);
+                U64 oldHub = Q(stopNode + 0xC0);
+                if (oldHub && oldHub != hub) {
+                    ((RemoveFromHubFn)(g_exeBase + 0x0F98D0))(stopNode, oldHub + 0x88);
+                }
+                ((AddToHubFn)(g_exeBase + 0x223320))(hub, stopNode, 1);
+                *(U64*)(stopNode + 0xC0) = hub;
                 unsigned char ok = ((UpdateHubFn)(g_exeBase + 0x222AD0))(hub, 0);
-                if (m.origin == g_origin && Q(world + WINDOW_OFFSET))
-                    *(int*)(Q(world + WINDOW_OFFSET) + 0x264) = ok ? 0 : 1;
+                if (m.origin == g_origin) UpdateMatchingHubWindowStatus(world, hub, stopNode, false, ok);
+                *(U64*)(stopNode + 0xC0) = hub;
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {

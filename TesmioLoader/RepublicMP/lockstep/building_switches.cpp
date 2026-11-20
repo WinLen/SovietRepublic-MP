@@ -33,10 +33,11 @@
 #define NAME_END (0x114 + 0x80)
 #define SAMPLE_EVERY 16
 
-enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3, KIND_UNIV_RESEARCH = 4 };
-static const char* const kKindText[5] = {
-    "building", "storage slot", "world setting", "manual resource purchase", "university research"
+enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3, KIND_UNIV_RESEARCH = 4, KIND_AUTO_BUY = 5 };
+static const char* const kKindText[6] = {
+    "building", "storage slot", "world setting", "manual resource purchase", "university research", "auto resource purchase"
 };
+#define AUTO_BUY_DISABLE_FLAG 0x100u
 
 // A slot's regions: 0 its own bytes, 1 the +00 entries, 2 the +18 entries, 3 the +30 words.
 static const unsigned kRegionAt[4] = { 0, 0x00, 0x18, 0x30 };
@@ -58,7 +59,7 @@ static const WorldRange kViewWords[] = {
     { 0xC70, 0x68 },  { 0xD38, 0xC4 },  { 0xE60, 0x48 },  { 0xEE0, 0x30 },
     { 0xF18, 0xB0 },  { 0xFCC, 0x54 },  { 0x1030, 0x18 }, { 0x1090, 0x18 }, { 0x10C8, 0x18 },
     { 0x1140, 0x18 }, { 0x1158, 8 },    { 0x1168, 0x30 }, { 0x11D8, 0x18 },
-    { 0x1238, 0x30 }, { 0x1320, 0x18 }, { 0x1344, 4 },    { 0x137C, 4 },
+    { 0x1238, 0x30 }, { 0x1308, 8 },    { 0x1320, 0x18 }, { 0x1344, 4 },    { 0x137C, 4 },
     { 0x1388, 0x18 },
 };
 
@@ -575,46 +576,62 @@ static U64 WordAddress(U64 building, const SwitchMsg& m, unsigned offset)
     return local + 4 <= elems * kRegionEach[region] ? at + local : 0;
 }
 
-bool BuildingSwitches_CaptureManualBuy(unsigned long long world, unsigned long long building, int currencyMode)
+static bool CaptureSliderAction(U64 world, U64 building, int currencyMode, unsigned kind, unsigned shape,
+                                unsigned sliderOff, bool skipSliders, bool allowEmpty)
 {
     if (!world || !building || (currencyMode != 3 && currencyMode != 4)) return false;
     RouteRef ref = kNoRef;
     if (!GuardedRef(building, ref)) return false;
 
-    U64 v[2] = {};
-    if (!Copy(v, (const void*)(world + WORLD_UI_RES_SLIDERS_OFFSET), 16) ||
-        !v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES != 0)
-        return false;
-    U64 slotCount = (v[1] - v[0]) / SLOT_BYTES;
-    if (slotCount > MAX_SLOTS) return false;
-
     SwitchMsg m = {};
     m.building = ref;
-    m.kind = KIND_MANUAL_BUY;
-    m.shape = (unsigned)currencyMode;
+    m.kind = kind;
+    m.shape = shape;
 
-    for (unsigned s = 0; s < (unsigned)slotCount && m.count < MAX_WORDS; s++) {
-        U64 uiSlot = v[0] + (U64)s * SLOT_BYTES;
-        U64 e[2] = {};
-        if (!Copy(e, (const void*)uiSlot, 16) || !e[0] || e[1] < e[0] || (e[1] - e[0]) % 0x10 != 0) continue;
-        U64 entryCount = (e[1] - e[0]) / 0x10;
-        if (entryCount > MAX_ENTRIES) continue;
-        for (unsigned k = 0; k < (unsigned)entryCount && m.count < MAX_WORDS; k++) {
-            float tons = 0.0f;
-            if (!Copy(&tons, (const void*)(e[0] + (U64)k * 0x10 + 0x08), 4)) continue;
-            if (!isfinite(tons) || tons <= 0.0f) continue;
-            unsigned floatBits = 0;
-            memcpy(&floatBits, &tons, 4);
-            unsigned off = s * SLOT_STRIDE + REGION_STRIDE + k * 0x10 + 8;
-            m.words[m.count++] = { off, 0u, floatBits };
+    if (!skipSliders) {
+        U64 v[2] = {};
+        if (!Copy(v, (const void*)(world + WORLD_UI_RES_SLIDERS_OFFSET), 16)) return false;
+        if (!v[0] && !v[1]) {
+            if (!allowEmpty) return false;
+        } else {
+            if (!v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES != 0) return false;
+            U64 slotCount = (v[1] - v[0]) / SLOT_BYTES;
+            if (slotCount > MAX_SLOTS) return false;
+            for (unsigned s = 0; s < (unsigned)slotCount && m.count < MAX_WORDS; s++) {
+                U64 uiSlot = v[0] + (U64)s * SLOT_BYTES;
+                U64 e[2] = {};
+                if (!Copy(e, (const void*)uiSlot, 16) || !e[0] || e[1] < e[0] || (e[1] - e[0]) % 0x10 != 0) continue;
+                U64 entryCount = (e[1] - e[0]) / 0x10;
+                if (entryCount > MAX_ENTRIES) continue;
+                for (unsigned k = 0; k < (unsigned)entryCount && m.count < MAX_WORDS; k++) {
+                    float tons = 0.0f;
+                    if (!Copy(&tons, (const void*)(e[0] + (U64)k * 0x10 + sliderOff), 4)) continue;
+                    if (!isfinite(tons) || tons <= 0.0f) continue;
+                    unsigned floatBits = 0;
+                    memcpy(&floatBits, &tons, 4);
+                    unsigned off = s * SLOT_STRIDE + REGION_STRIDE + k * 0x10 + sliderOff;
+                    m.words[m.count++] = { off, 0u, floatBits };
+                }
+            }
         }
     }
-    if (m.count == 0) return false;
+    if (!allowEmpty && m.count == 0) return false;
     Submit(m);
     return true;
 }
 
-static void WriteSlidersFromManualBuyMsg(BYTE* uiVecAddr, const SwitchMsg& m)
+bool BuildingSwitches_CaptureManualBuy(unsigned long long world, unsigned long long building, int currencyMode)
+{
+    return CaptureSliderAction(world, building, currencyMode, KIND_MANUAL_BUY, (unsigned)currencyMode, 0x08u, false, false);
+}
+
+bool BuildingSwitches_CaptureAutoBuy(unsigned long long world, unsigned long long building, int currencyMode, bool isDisable)
+{
+    unsigned shape = (unsigned)currencyMode | (isDisable ? AUTO_BUY_DISABLE_FLAG : 0u);
+    return CaptureSliderAction(world, building, currencyMode, KIND_AUTO_BUY, shape, 0x0Cu, isDisable, true);
+}
+
+static void WriteSlidersFromMsg(BYTE* uiVecAddr, const SwitchMsg& m, unsigned sliderOff)
 {
     U64 v[2] = {};
     if (!Copy(v, uiVecAddr, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES != 0) return;
@@ -624,14 +641,36 @@ static void WriteSlidersFromManualBuyMsg(BYTE* uiVecAddr, const SwitchMsg& m)
         unsigned s = off / SLOT_STRIDE;
         unsigned region = (off % SLOT_STRIDE) / REGION_STRIDE;
         unsigned local = off % REGION_STRIDE;
-        if (region != 1 || s >= slotCount || (local % 0x10) != 8) continue;
+        if (region != 1 || s >= slotCount || (local % 0x10) != sliderOff) continue;
         unsigned k = local / 0x10;
         U64 e[2] = {};
         U64 uiSlot = v[0] + (U64)s * SLOT_BYTES;
         if (!Copy(e, (const void*)uiSlot, 16) || !e[0] || e[1] < e[0] || (e[1] - e[0]) % 0x10 != 0) continue;
         if (k >= (e[1] - e[0]) / 0x10) continue;
-        *(unsigned*)(e[0] + (U64)k * 0x10 + 0x08) = m.words[i].now;
+        *(unsigned*)(e[0] + (U64)k * 0x10 + sliderOff) = m.words[i].now;
     }
+}
+
+static bool ApplySliderActionViaEngine(U64 building, const SwitchMsg& m, int currencyMode, unsigned actionRva,
+                                       unsigned char initZeroFlag, unsigned sliderOff, bool writeSliders)
+{
+    if (g_exeBase[actionRva] == 0 || g_exeBase[BLD_INIT_RES_SLIDERS_RVA] == 0) return false;
+    typedef void (*InitSlidersFn)(void* world, void* bld, unsigned char mode);
+    typedef void (*ActionFn)(void* world, void* bld, int currencyMode);
+    typedef void (*ClearVecFn)(void* vec);
+    BYTE* uiVecAddr = World() + WORLD_UI_RES_SLIDERS_OFFSET;
+    BYTE savedUiVec[24] = {};
+    memcpy(savedUiVec, uiVecAddr, 24);
+    memset(uiVecAddr, 0, 24);
+
+    ((InitSlidersFn)(g_exeBase + BLD_INIT_RES_SLIDERS_RVA))(World(), (void*)building, initZeroFlag);
+    if (writeSliders) WriteSlidersFromMsg(uiVecAddr, m, sliderOff);
+    ((ActionFn)(g_exeBase + actionRva))(World(), (void*)building, currencyMode);
+    if (g_exeBase[BLD_STORAGE_VEC_CLEAR_RVA] != 0) {
+        ((ClearVecFn)(g_exeBase + BLD_STORAGE_VEC_CLEAR_RVA))(uiVecAddr);
+    }
+    memcpy(uiVecAddr, savedUiVec, 24);
+    return true;
 }
 
 static const char* ApplyManualBuyFallback(U64 building, const SwitchMsg& m)
@@ -673,26 +712,69 @@ static const char* ApplyManualBuy(U64 building, const SwitchMsg& m)
 {
     if (!building) return "the building is gone";
     if (m.shape != 3 && m.shape != 4) return "invalid currency mode";
-    if (g_exeBase[BLD_MANUAL_BUY_RES_RVA] != 0 && g_exeBase[BLD_INIT_RES_SLIDERS_RVA] != 0) {
-        typedef void (*InitSlidersFn)(void* world, void* bld, unsigned char mode);
-        typedef void (*ManualBuyFn)(void* world, void* bld, int currencyMode);
-        typedef void (*ClearVecFn)(void* vec);
-        BYTE* uiVecAddr = World() + WORLD_UI_RES_SLIDERS_OFFSET;
-        BYTE savedUiVec[24] = {};
-        memcpy(savedUiVec, uiVecAddr, 24);
-        memset(uiVecAddr, 0, 24);
-
-        ((InitSlidersFn)(g_exeBase + BLD_INIT_RES_SLIDERS_RVA))(World(), (void*)building, 0);
-        WriteSlidersFromManualBuyMsg(uiVecAddr, m);
-        ((ManualBuyFn)(g_exeBase + BLD_MANUAL_BUY_RES_RVA))(World(), (void*)building, (int)m.shape);
-        if (g_exeBase[BLD_STORAGE_VEC_CLEAR_RVA] != 0) {
-            ((ClearVecFn)(g_exeBase + BLD_STORAGE_VEC_CLEAR_RVA))(uiVecAddr);
-        }
-        memcpy(uiVecAddr, savedUiVec, 24);
+    if (ApplySliderActionViaEngine(building, m, (int)m.shape, BLD_MANUAL_BUY_RES_RVA, 0, 0x08u, true)) {
         *(int*)(building + BLD_EXPORT_MODE_OFFSET) = 0;
         return nullptr;
     }
     return ApplyManualBuyFallback(building, m);
+}
+
+static const char* ApplyAutoBuyFallback(U64 building, const SwitchMsg& m, int currencyMode, bool isDisable)
+{
+    U64 slots = 0;
+    unsigned slotCount = SlotCount(building, &slots);
+    if (slots && slotCount > 0) {
+        for (unsigned s = 0; s < slotCount; s++) {
+            U64 at = 0;
+            unsigned elems = 0;
+            if (!Region(slots + (U64)s * SLOT_BYTES, 1, &at, &elems) || !at) continue;
+            for (unsigned k = 0; k < elems; k++) {
+                *(float*)(at + (U64)k * 0x10 + 0x0C) = 0.0f;
+            }
+        }
+        if (!isDisable) {
+            for (unsigned i = 0; i < m.count && i < MAX_WORDS; i++) {
+                unsigned off = m.words[i].offset;
+                unsigned s = off / SLOT_STRIDE;
+                unsigned region = (off % SLOT_STRIDE) / REGION_STRIDE;
+                unsigned local = off % REGION_STRIDE;
+                if (region != 1 || s >= slotCount || (local % 0x10) != 0x0C) continue;
+                unsigned k = local / 0x10;
+                U64 at = 0;
+                unsigned elems = 0;
+                if (!Region(slots + (U64)s * SLOT_BYTES, 1, &at, &elems) || !at || k >= elems) continue;
+                float tons = 0.0f;
+                memcpy(&tons, &m.words[i].now, 4);
+                if (!isfinite(tons) || tons <= 0.0f) continue;
+                *(unsigned*)(at + (U64)k * 0x10 + 0x0C) = m.words[i].now;
+            }
+        }
+    }
+    if (isDisable) {
+        *(int*)(building + BLD_AUTO_BUY_MODE_OFFSET) = 0;
+    } else {
+        *(int*)(building + BLD_AUTO_BUY_MODE_OFFSET) = currencyMode;
+        *(int*)(building + BLD_EXPORT_MODE_OFFSET) = 0;
+    }
+    return nullptr;
+}
+
+static const char* ApplyAutoBuy(U64 building, const SwitchMsg& m)
+{
+    if (!building) return "the building is gone";
+    if ((m.shape & ~(0xFFu | AUTO_BUY_DISABLE_FLAG)) != 0) return "invalid auto-buy flags";
+    const int currencyMode = (int)(m.shape & 0xFFu);
+    const bool isDisable = (m.shape & AUTO_BUY_DISABLE_FLAG) != 0;
+    if (currencyMode != 3 && currencyMode != 4) return "invalid currency mode";
+    if (ApplySliderActionViaEngine(building, m, currencyMode, BLD_APPLY_AUTO_BUY_RVA, 1, 0x0Cu, !isDisable)) {
+        if (isDisable) {
+            *(int*)(building + BLD_AUTO_BUY_MODE_OFFSET) = 0;
+        } else {
+            *(int*)(building + BLD_EXPORT_MODE_OFFSET) = 0;
+        }
+        return nullptr;
+    }
+    return ApplyAutoBuyFallback(building, m, currencyMode, isDisable);
 }
 
 bool BuildingSwitches_CaptureUnivResearch(unsigned long long building, int ownerState,
@@ -815,7 +897,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
     if (size != sizeof(SwitchMsg)) return false;
     SwitchMsg m;
     memcpy(&m, data, sizeof(m));
-    if (m.kind > KIND_UNIV_RESEARCH || !m.count || m.count > MAX_WORDS) return false;
+    if (m.kind > KIND_AUTO_BUY || (!m.count && m.kind != KIND_AUTO_BUY) || m.count > MAX_WORDS) return false;
     const char* why = nullptr;
     unsigned differing = 0;
     DiagLog_BeginSafeSeh();
@@ -823,6 +905,8 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
         U64 building = m.kind == KIND_WORLD ? 0 : Ref_BuildingAt(m.building);
         if (m.kind == KIND_MANUAL_BUY) {
             why = ApplyManualBuy(building, m);
+        } else if (m.kind == KIND_AUTO_BUY) {
+            why = ApplyAutoBuy(building, m);
         } else if (m.kind == KIND_UNIV_RESEARCH) {
             why = ApplyUnivResearch(building, m);
         } else {

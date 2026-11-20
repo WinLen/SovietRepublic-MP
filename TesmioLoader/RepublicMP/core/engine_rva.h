@@ -69,6 +69,11 @@
 #ifndef WORLD_FAST_CONSTRUCT_CHEAT_OFFSET
 #define WORLD_FAST_CONSTRUCT_CHEAT_OFFSET 0x1444Au
 #endif
+#ifndef WORLD_MAP_EDITOR_MODE_OFFSET
+#define WORLD_MAP_EDITOR_MODE_OFFSET      0x10398u
+#endif
+static_assert(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10398u,
+              "WORLD_MAP_EDITOR_MODE_OFFSET must match 1.1.1.13 map editor toggle (0x309EBA / 0x31ED66)");
 #ifndef WORLD_CAMERA_MGR_PTR_OFF
 #define WORLD_CAMERA_MGR_PTR_OFF    0x0018
 #endif
@@ -1141,6 +1146,21 @@ static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
 #ifndef WORLD_OPEN_WINDOWS_END_RVA
 #define WORLD_OPEN_WINDOWS_END_RVA      (WORLD_RVA + WORLD_OPEN_WINDOWS_END_OFFSET)
 #endif
+#ifndef SITE_DENOMINATION_RVA
+#define SITE_DENOMINATION_RVA           0x7FC870u
+#endif
+#ifndef FN_CURRENCY_DENOMINATION_RVA
+#define FN_CURRENCY_DENOMINATION_RVA    0x2F9E50u
+#endif
+#ifndef WINDOW_POPUP_TYPE_OFFSET
+#define WINDOW_POPUP_TYPE_OFFSET        0x34u
+#endif
+#ifndef WINDOW_POPUP_TYPE_DENOMINATION
+#define WINDOW_POPUP_TYPE_DENOMINATION  0x13
+#endif
+#ifndef CURRENCY_DENOMINATION_DIVISOR
+#define CURRENCY_DENOMINATION_DIVISOR   100.0
+#endif
 #ifndef WORLD_NOTIF_POPUPS_BEGIN_OFFSET
 #define WORLD_NOTIF_POPUPS_BEGIN_OFFSET 0xD208u
 #endif
@@ -1192,9 +1212,14 @@ static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
 
 static_assert(CAMERA_EYE_RVA == CAMERA_RVA + CAMERA_POS_OFFSET,
               "CAMERA_EYE_RVA (0x9E9D10) must equal CAMERA_RVA (0x9E9C90) + CAMERA_POS_OFFSET (0x80)");
-static_assert(WORLD_OPEN_WINDOWS_BEGIN_RVA == WORLD_RVA + WORLD_OPEN_WINDOWS_BEGIN_OFFSET &&
-              WORLD_OPEN_WINDOWS_END_RVA == WORLD_OPEN_WINDOWS_BEGIN_RVA + 8,
-              "WORLD_OPEN_WINDOWS_BEGIN/END_RVA (0x9E19D0/0x9E19D8) must match WORLD_RVA + 0xCAC0/0xCAC8");
+static_assert(WORLD_OPEN_WINDOWS_END_OFFSET == WORLD_OPEN_WINDOWS_BEGIN_OFFSET + 8 &&
+              WORLD_OPEN_WINDOWS_BEGIN_RVA == WORLD_RVA + WORLD_OPEN_WINDOWS_BEGIN_OFFSET &&
+              WORLD_OPEN_WINDOWS_END_RVA == WORLD_OPEN_WINDOWS_BEGIN_RVA + 8 &&
+              SITE_DENOMINATION_RVA == 0x7FC870u &&
+              FN_CURRENCY_DENOMINATION_RVA == 0x2F9E50u &&
+              WINDOW_POPUP_TYPE_OFFSET == 0x34u &&
+              WINDOW_POPUP_TYPE_DENOMINATION == 0x13,
+              "WORLD_OPEN_WINDOWS_BEGIN/END_RVA (0x9E19D0/0x9E19D8) and currency denomination RVAs/offsets must match 1.1.1.13 layout");
 static_assert(WORLD_NOTIF_POPUPS_END_OFFSET == WORLD_NOTIF_POPUPS_BEGIN_OFFSET + 8 &&
               WORLD_BRUSH_SOUNDS_END_OFFSET == WORLD_BRUSH_SOUNDS_BEGIN_OFFSET + 8 &&
               BRUSH_SOUND_ACTIVE_OFFSET == BRUSH_SOUND_VOL_OFFSET + 4 &&
@@ -1226,6 +1251,36 @@ static_assert(WORLD_WARNING_TIMER_OFFSET == WORLD_WARNING_TEXT_OFFSET + WORLD_WA
 #ifndef SITE_BLD_MANUAL_BUY_RES_RVA
 #define SITE_BLD_MANUAL_BUY_RES_RVA     0x711BEBu
 #endif
+#ifndef SITE_BLD_INIT_SLIDERS_DISABLE_RVA
+#define SITE_BLD_INIT_SLIDERS_DISABLE_RVA 0x711ACBu
+#endif
+#ifndef SITE_BLD_AUTO_BUY_DISABLE_RVA
+#define SITE_BLD_AUTO_BUY_DISABLE_RVA   0x711ADDu
+#endif
+#ifndef SITE_AUTO_BUY_DISABLE_AFTER_RVA
+#define SITE_AUTO_BUY_DISABLE_AFTER_RVA 0x711AE2u
+#endif
+#ifndef SITE_AUTO_BUY_DISABLE_SKIP_RVA
+#define SITE_AUTO_BUY_DISABLE_SKIP_RVA  0x711AE9u
+#endif
+#ifndef SITE_BLD_INIT_SLIDERS_CANCEL_RVA
+#define SITE_BLD_INIT_SLIDERS_CANCEL_RVA 0x711B60u
+#endif
+#ifndef SITE_MANUAL_BUY_AFTER_RVA
+#define SITE_MANUAL_BUY_AFTER_RVA       0x711BF0u
+#endif
+#ifndef SITE_MANUAL_BUY_SKIP_RVA
+#define SITE_MANUAL_BUY_SKIP_RVA        0x711BF7u
+#endif
+#ifndef SITE_BLD_AUTO_BUY_APPLY_RVA
+#define SITE_BLD_AUTO_BUY_APPLY_RVA     0x711C72u
+#endif
+#ifndef SITE_AUTO_BUY_APPLY_AFTER_RVA
+#define SITE_AUTO_BUY_APPLY_AFTER_RVA   0x711C77u
+#endif
+#ifndef SITE_AUTO_BUY_APPLY_SKIP_RVA
+#define SITE_AUTO_BUY_APPLY_SKIP_RVA    0x711C7Eu
+#endif
 #ifndef BLD_AUTO_BUY_MODE_OFFSET
 #define BLD_AUTO_BUY_MODE_OFFSET        0x9E8u
 #endif
@@ -1241,8 +1296,14 @@ static_assert(WORLD_WARNING_TIMER_OFFSET == WORLD_WARNING_TEXT_OFFSET + WORLD_WA
 
 static_assert(BLD_EXPORT_MODE_OFFSET == BLD_AUTO_BUY_MODE_OFFSET + 4 &&
               RES_PRICE_RUB_OFFSET == RES_PRICE_USD_OFFSET + 4 &&
-              BLD_MANUAL_BUY_RES_RVA == BLD_APPLY_AUTO_BUY_RVA + 0x100u,
-              "Building resource purchase offsets (+0x9E8/+0x9EC, +0x58/+0x5C, 0x174D40/0x174E40) must match 1.1.1.9 layout");
+              BLD_MANUAL_BUY_RES_RVA == BLD_APPLY_AUTO_BUY_RVA + 0x100u &&
+              SITE_AUTO_BUY_DISABLE_AFTER_RVA == SITE_BLD_AUTO_BUY_DISABLE_RVA + 5u &&
+              SITE_AUTO_BUY_DISABLE_SKIP_RVA == SITE_AUTO_BUY_DISABLE_AFTER_RVA + 7u &&
+              SITE_MANUAL_BUY_AFTER_RVA == SITE_BLD_MANUAL_BUY_RES_RVA + 5u &&
+              SITE_MANUAL_BUY_SKIP_RVA == SITE_MANUAL_BUY_AFTER_RVA + 7u &&
+              SITE_AUTO_BUY_APPLY_AFTER_RVA == SITE_BLD_AUTO_BUY_APPLY_RVA + 5u &&
+              SITE_AUTO_BUY_APPLY_SKIP_RVA == SITE_AUTO_BUY_APPLY_AFTER_RVA + 7u,
+              "Building resource purchase offsets (+0x9E8/+0x9EC, +0x58/+0x5C, 0x174D60/0x174E60) and auto-buy skip RVAs must match 1.1.1.13 layout");
 
 // ---------------------------------------------------------------------------
 // C3D Material IAT RVAs (SOVIET64.exe Import Address Table for C3DDLL64.dll)
@@ -1806,6 +1867,21 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0058u &&
 #ifndef RVA_SET_AUTO_REPLACE
 #define RVA_SET_AUTO_REPLACE                 0x6148A0u // void __fastcall(void* mgr, void* targetType, void* newType)
 #endif
+#ifndef SITE_AUTO_REPLACE_CLEAR_RVA
+#define SITE_AUTO_REPLACE_CLEAR_RVA          0x80F4FEu // purchase window: clear auto-replace rule -> RVA_SET_AUTO_REPLACE(mgr, targetType, nullptr)
+#endif
+#ifndef SITE_FACTORY_REPLACE_MACHINES_1_RVA
+#define SITE_FACTORY_REPLACE_MACHINES_1_RVA  0x7762E4u // factory window: replace machines (1st currency, r8d=0, r9b=1)
+#endif
+#ifndef SITE_FACTORY_REPLACE_MACHINES_2_RVA
+#define SITE_FACTORY_REPLACE_MACHINES_2_RVA  0x776557u // factory window: replace machines (2nd currency, r8d=1, r9b=1)
+#endif
+#ifndef SITE_LINES_LIST_ASSIGN_VEHICLE_RVA
+#define SITE_LINES_LIST_ASSIGN_VEHICLE_RVA   0x35A870u // lines list: assign line to vehicle (line_set -> 0x497AA0)
+#endif
+#ifndef RVA_LINES_ASSIGN_VEHICLE
+#define RVA_LINES_ASSIGN_VEHICLE             0x497AA0u // void __fastcall(void* linesMgr, void* line, void* veh, u8 flag, void* zero)
+#endif
 #ifndef VEH_DEPOT_SLOT_IDX_OFFSET
 #define VEH_DEPOT_SLOT_IDX_OFFSET            0x0510u   // int32_t depot / construction slot index (-1 when none)
 #endif
@@ -1863,6 +1939,194 @@ static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               RVA_IS_VEHICLE_AT_DEPOT_OR_STOP == 0x3BB580u &&
               RVA_VEH_FIND_PATH == 0x680AC0u &&
               RVA_VEH_BUILD_WAYPOINTS == 0x683240u &&
-              RVA_SET_AUTO_REPLACE == 0x6148A0u,
+              RVA_SET_AUTO_REPLACE == 0x6148A0u &&
+              SITE_AUTO_REPLACE_CLEAR_RVA == 0x80F4FEu &&
+              SITE_FACTORY_REPLACE_MACHINES_1_RVA == 0x7762E4u &&
+              SITE_FACTORY_REPLACE_MACHINES_2_RVA == 0x776557u &&
+              SITE_LINES_LIST_ASSIGN_VEHICLE_RVA == 0x35A870u &&
+              RVA_LINES_ASSIGN_VEHICLE == 0x497AA0u,
               "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, auto replacement RVA, and building copy tool RVAs must match 1.1.1.9 layout");
+
+// ---------------------------------------------------------------------------
+// R3 Medium Bugs (#5 Recall Personal Cars, #7 Factory Queue Worker Limit)
+// ---------------------------------------------------------------------------
+
+#ifndef RVA_DETACH_PERSONAL_CAR
+#define RVA_DETACH_PERSONAL_CAR              0x831DF0u // void __fastcall(void* world, void* citizen)
+#endif
+#ifndef SITE_RECALL_DETACH_PERSONAL_CAR_RVA
+#define SITE_RECALL_DETACH_PERSONAL_CAR_RVA  0x7A1C28u // building window (party_member_car): detach personal car
+#endif
+#ifndef SITE_RECALL_SEND_TO_DEPOT_RVA
+#define SITE_RECALL_SEND_TO_DEPOT_RVA        0x7A1C4Bu // building window (party_member_car): send personal car to depot
+#endif
+#ifndef VEH_OWNER_CITIZEN_OFFSET
+#define VEH_OWNER_CITIZEN_OFFSET             0x04E8u   // CITIZEN* personal car owner back-pointer on VEHICLE
+#endif
+#ifndef CIT_PERSONAL_CAR_OFFSET
+#define CIT_PERSONAL_CAR_OFFSET              0x0688u   // VEHICLE* owned personal car pointer on CITIZEN
+#endif
+
+#ifndef RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT
+#define RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT    0x1AC720u // void __fastcall(void* unused, BUILDING* bld)
+#endif
+#ifndef SITE_FACTORY_QUEUE_LIMIT_DEC_RVA
+#define SITE_FACTORY_QUEUE_LIMIT_DEC_RVA     0x7522CEu // factory window: recompute queue worker limit (-)
+#endif
+#ifndef SITE_FACTORY_QUEUE_LIMIT_INC_RVA
+#define SITE_FACTORY_QUEUE_LIMIT_INC_RVA     0x75281Bu // factory window: recompute queue worker limit (+)
+#endif
+#ifndef BLD_FACTORY_MAX_WORKERS_OFFSET
+#define BLD_FACTORY_MAX_WORKERS_OFFSET       0x0DF0u   // int32_t factory max workers limit on BUILDING
+#endif
+#ifndef BLD_FACTORY_QUEUE_BEGIN_OFFSET
+#define BLD_FACTORY_QUEUE_BEGIN_OFFSET       0x0FF0u   // std::vector<FactoryQueueEntry> begin on BUILDING
+#endif
+#ifndef BLD_FACTORY_QUEUE_END_OFFSET
+#define BLD_FACTORY_QUEUE_END_OFFSET         0x0FF8u   // std::vector<FactoryQueueEntry> end on BUILDING
+#endif
+#ifndef FACTORY_QUEUE_ENTRY_STRIDE
+#define FACTORY_QUEUE_ENTRY_STRIDE           0x48u     // sizeof(FactoryQueueEntry); +0x0C workerLimit, +0x20 templateVeh
+#endif
+
+static_assert(RVA_DETACH_PERSONAL_CAR == 0x831DF0u &&
+              SITE_RECALL_DETACH_PERSONAL_CAR_RVA == 0x7A1C28u &&
+              SITE_RECALL_SEND_TO_DEPOT_RVA == 0x7A1C4Bu &&
+              VEH_OWNER_CITIZEN_OFFSET == 0x04E8u &&
+              CIT_PERSONAL_CAR_OFFSET == 0x0688u &&
+              RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT == 0x1AC720u &&
+              SITE_FACTORY_QUEUE_LIMIT_DEC_RVA == 0x7522CEu &&
+              SITE_FACTORY_QUEUE_LIMIT_INC_RVA == 0x75281Bu &&
+              BLD_FACTORY_MAX_WORKERS_OFFSET == 0x0DF0u &&
+              BLD_FACTORY_QUEUE_END_OFFSET == BLD_FACTORY_QUEUE_BEGIN_OFFSET + 8u &&
+              FACTORY_QUEUE_ENTRY_STRIDE == 0x48u,
+              "M2 personal car recall (#5) and factory queue worker limit (#7) RVAs and offsets must match 1.1.1.13 layout");
+
+// ---------------------------------------------------------------------------
+// R1 Second-Pass Audit Fixes (BioWaste Container Split/Merge & SetForBio)
+// ---------------------------------------------------------------------------
+
+#ifndef SITE_WASTE_CONTAINER_SPLIT_RVA
+#define SITE_WASTE_CONTAINER_SPLIT_RVA       0x78EB6Au // waste/storage window: split container slot -> 0x19D8D0
+#endif
+#ifndef FN_WASTE_CONTAINER_SPLIT_RVA
+#define FN_WASTE_CONTAINER_SPLIT_RVA         0x19D8D0u // bool __fastcall(void* unused, BUILDING* bld, StorageSlot* srcSlot)
+#endif
+#ifndef SITE_WASTE_CONTAINER_MERGE_RVA
+#define SITE_WASTE_CONTAINER_MERGE_RVA       0x78ED9Bu // waste/storage window: merge container slot -> 0x19D3D0
+#endif
+#ifndef FN_WASTE_CONTAINER_MERGE_RVA
+#define FN_WASTE_CONTAINER_MERGE_RVA         0x19D3D0u // bool __fastcall(void* world, BUILDING* bld, StorageSlot* dstSlot)
+#endif
+#ifndef SITE_SET_FOR_BIO_WASTE_WIN_RVA
+#define SITE_SET_FOR_BIO_WASTE_WIN_RVA       0x708D78u // bio-waste dump window (0x706DA0): SetForBio -> 0x18A8B0
+#endif
+#ifndef SITE_SET_FOR_BIO_RES_WIN_RVA
+#define SITE_SET_FOR_BIO_RES_WIN_RVA         0x6F8480u // building resources/compost window: SetForBio -> 0x18A8B0
+#endif
+#ifndef FN_SET_FOR_BIO_RVA
+#define FN_SET_FOR_BIO_RVA                   0x18A8B0u // float __fastcall(void* unused, StorageSlot* srcSlot, StorageSlot* dstSlot, float maxReq)
+#endif
+#ifndef BLD_BIO_TRANSFER_LOG0_OFFSET
+#define BLD_BIO_TRANSFER_LOG0_OFFSET         0x1308u   // float bio-waste moved log accumulator (+moved)
+#endif
+#ifndef BLD_BIO_TRANSFER_LOG1_OFFSET
+#define BLD_BIO_TRANSFER_LOG1_OFFSET         0x130Cu   // float bio-waste scaled log accumulator (+moved * 60.0f)
+#endif
+#ifndef FLT_BIO_SCALE_130C_RVA
+#define FLT_BIO_SCALE_130C_RVA               0x90AA88u // .rdata float 60.0f multiplier for bld+0x130C at 0x6F848D
+#endif
+
+static_assert(BLD_STORAGE_OFFSET == 0x970u &&
+              BLD_STORAGE_SLOT_SIZE == 0xE0u &&
+              SITE_WASTE_CONTAINER_SPLIT_RVA == 0x78EB6Au &&
+              FN_WASTE_CONTAINER_SPLIT_RVA == 0x19D8D0u &&
+              SITE_WASTE_CONTAINER_MERGE_RVA == 0x78ED9Bu &&
+              FN_WASTE_CONTAINER_MERGE_RVA == 0x19D3D0u &&
+              SITE_SET_FOR_BIO_WASTE_WIN_RVA == 0x708D78u &&
+              SITE_SET_FOR_BIO_RES_WIN_RVA == 0x6F8480u &&
+              FN_SET_FOR_BIO_RVA == 0x18A8B0u &&
+              BLD_BIO_TRANSFER_LOG0_OFFSET == 0x1308u &&
+              BLD_BIO_TRANSFER_LOG1_OFFSET == BLD_BIO_TRANSFER_LOG0_OFFSET + 4u &&
+              FLT_BIO_SCALE_130C_RVA == 0x90AA88u,
+              "M3 R1-1A/1B waste container & SetForBio RVAs/offsets must match 1.1.1.13 layout");
+
+// ---------------------------------------------------------------------------
+// Firestation Dispatch & Assign-CO Click Mutators (SOVIET64.exe v1.1.1.13)
+// ---------------------------------------------------------------------------
+
+#ifndef FN_FIRE_DISPATCH_RVA
+#define FN_FIRE_DISPATCH_RVA                 0x258260u // void __fastcall(void* unusedRcx, FireObj* fireObj, VEHICLE* veh)
+#endif
+#ifndef SITE_FIRESTATION_DISPATCH_ROAD_RVA
+#define SITE_FIRESTATION_DISPATCH_ROAD_RVA   0x1D4E49u // firestation_addfire road dispatch -> FN_FIRE_DISPATCH_RVA
+#endif
+#ifndef SITE_FIRESTATION_DISPATCH_HELI_RVA
+#define SITE_FIRESTATION_DISPATCH_HELI_RVA   0x1D4FC8u // firestation_addfire heli dispatch -> FN_FIRE_DISPATCH_RVA
+#endif
+#ifndef SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA
+#define SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA 0x1D4FCDu // 7-byte mov byte ptr [rbx+0xD39], 0 immediately after 0x1D4FC8
+#endif
+#ifndef SITE_FIRESTATION_DISPATCH_HELI_SKIP_RVA
+#define SITE_FIRESTATION_DISPATCH_HELI_SKIP_RVA  0x1D4FD4u // resume after 0xD39 clear in firestation_addfire heli loop
+#endif
+#ifndef BLD_FIRE_OBJ_OFFSET
+#define BLD_FIRE_OBJ_OFFSET                  0x1160u   // BUILDING* -> FireObj* (distinct from VEH_STEER_TARGET_OFFSET = 0x1160 on VEHICLE*)
+#endif
+#ifndef WORLD_ASSIGN_CO_TOOL_OFFSET
+#define WORLD_ASSIGN_CO_TOOL_OFFSET          0xD448u   // AssignCoTool* on WORLD (tool + 0xD0..0xD8 = std::vector<BUILDING*>)
+#endif
+#ifndef ASSIGN_CO_TOOL_OFFICES_OFF
+#define ASSIGN_CO_TOOL_OFFICES_OFF           0x00D0u   // std::vector<BUILDING*> begin on AssignCoTool
+#endif
+#ifndef SITE_ASSIGN_CO_SINGLE_START_RVA
+#define SITE_ASSIGN_CO_SINGLE_START_RVA      0x5E9C16u // assign_co single regular -> RVA_START_PLANNED_CONSTRUCTION
+#endif
+#ifndef SITE_ASSIGN_CO_SINGLE_ASSIGN_RVA
+#define SITE_ASSIGN_CO_SINGLE_ASSIGN_RVA     0x5E9C41u // assign_co single regular -> RVA_ASSIGN_CONSTRUCTION_OFFICE
+#endif
+#ifndef SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA
+#define SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA 0x5E9D06u // assign_co single rail -> RVA_START_PLANNED_CONSTRUCTION
+#endif
+#ifndef SITE_ASSIGN_CO_SINGLE_RAIL_ASSIGN_RVA
+#define SITE_ASSIGN_CO_SINGLE_RAIL_ASSIGN_RVA 0x5E9D25u // assign_co single rail -> RVA_ASSIGN_CONSTRUCTION_OFFICE
+#endif
+#ifndef SITE_ASSIGN_CO_RECT_START_RVA
+#define SITE_ASSIGN_CO_RECT_START_RVA        0x5EA086u // assign_co rect regular -> RVA_START_PLANNED_CONSTRUCTION
+#endif
+#ifndef SITE_ASSIGN_CO_RECT_ASSIGN_RVA
+#define SITE_ASSIGN_CO_RECT_ASSIGN_RVA       0x5EA0B1u // assign_co rect regular -> RVA_ASSIGN_CONSTRUCTION_OFFICE
+#endif
+#ifndef SITE_ASSIGN_CO_RECT_RAIL_START_RVA
+#define SITE_ASSIGN_CO_RECT_RAIL_START_RVA   0x5EA176u // assign_co rect rail -> RVA_START_PLANNED_CONSTRUCTION
+#endif
+#ifndef SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA
+#define SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA  0x5EA195u // assign_co rect rail -> RVA_ASSIGN_CONSTRUCTION_OFFICE
+#endif
+#ifndef SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA
+#define SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA   0x5EA295u // assign_co single unassign -> RVA_UNASSIGN_CONSTRUCTION_OFFICE
+#endif
+#ifndef SITE_ASSIGN_CO_RECT_UNASSIGN_RVA
+#define SITE_ASSIGN_CO_RECT_UNASSIGN_RVA     0x5EA366u // assign_co rect unassign -> RVA_UNASSIGN_CONSTRUCTION_OFFICE
+#endif
+
+static_assert(FN_FIRE_DISPATCH_RVA == 0x258260u &&
+              SITE_FIRESTATION_DISPATCH_ROAD_RVA == 0x1D4E49u &&
+              SITE_FIRESTATION_DISPATCH_HELI_RVA == 0x1D4FC8u &&
+              SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA == SITE_FIRESTATION_DISPATCH_HELI_RVA + 5u &&
+              SITE_FIRESTATION_DISPATCH_HELI_SKIP_RVA == SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA + 7u &&
+              BLD_FIRE_OBJ_OFFSET == 0x1160u &&
+              WORLD_ASSIGN_CO_TOOL_OFFSET == 0xD448u &&
+              ASSIGN_CO_TOOL_OFFICES_OFF == 0x00D0u &&
+              SITE_ASSIGN_CO_SINGLE_START_RVA == 0x5E9C16u &&
+              SITE_ASSIGN_CO_SINGLE_ASSIGN_RVA == 0x5E9C41u &&
+              SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA == 0x5E9D06u &&
+              SITE_ASSIGN_CO_SINGLE_RAIL_ASSIGN_RVA == 0x5E9D25u &&
+              SITE_ASSIGN_CO_RECT_START_RVA == 0x5EA086u &&
+              SITE_ASSIGN_CO_RECT_ASSIGN_RVA == 0x5EA0B1u &&
+              SITE_ASSIGN_CO_RECT_RAIL_START_RVA == 0x5EA176u &&
+              SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA == 0x5EA195u &&
+              SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA == 0x5EA295u &&
+              SITE_ASSIGN_CO_RECT_UNASSIGN_RVA == 0x5EA366u,
+              "Firestation dispatch & assign_co click mutator RVAs/offsets must match 1.1.1.13 layout");
 

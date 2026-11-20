@@ -529,6 +529,45 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
     return false;
 }
 
+static bool BuildAutoReplaceClearMsg(BYTE* targetType, PurchaseMsg* outMsg)
+{
+    if (!g_exeBase || !targetType || !outMsg) return false;
+    memset(outMsg, 0, sizeof(*outMsg));
+    outMsg->resIndex = -1;
+    BYTE* world = g_exeBase + WORLD_RVA;
+    bool ok = false;
+    __try {
+        BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
+        BYTE* typesEnd = *(BYTE**)(world + TYPES_OFFSET + 8);
+        if (types && typesEnd > types && targetType >= types && targetType < typesEnd &&
+            ((targetType - types) % TYPE_STRIDE) == 0)
+        {
+            outMsg->kind = 0xB;
+            outMsg->used = 2;
+            outMsg->typeIndex = (unsigned)((targetType - types) / TYPE_STRIDE);
+            outMsg->typeCheck = TypeCheck(targetType);
+            SafeReadAsciiDirect((const char*)targetType + 0x200, outMsg->scriptName, sizeof(outMsg->scriptName));
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    return ok;
+}
+
+bool Purchase_SubmitAutoReplaceClear(BYTE* targetType)
+{
+    PurchaseMsg m = {};
+    if (!BuildAutoReplaceClearMsg(targetType, &m)) {
+        Logf("republicmp  PURCHASE: auto-replace clear refused (invalid target vehicle type)");
+        return false;
+    }
+    Commands_Submit(LS_CMD_PURCHASE, &m, sizeof(m));
+    DiagLog_Printf("VEH_REP", "Auto-Replace Clear Submitted: Script='%s' | TargetIdx=%u",
+                   m.scriptName, m.typeIndex);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // The replay (every PC, at the boundary)
 // ---------------------------------------------------------------------------
@@ -884,25 +923,41 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     return nullptr;
 }
 
+static const char* ReplayAutoReplace(BYTE* world, const PurchaseMsg& m)
+{
+    if (m.kind != 0xB) return "invalid auto-replace kind";
+    if (m.used != 0 && m.used != 2) return "invalid auto-replace mode";
+    BYTE* mgr = *(BYTE**)(world + WORLD_AUTO_REPLACE_MGR_OFFSET);
+    if (!mgr) return "auto-replacement manager is null";
+    typedef void (*SetAutoReplaceFn)(BYTE* mgr, BYTE* targetType, BYTE* newType);
+    if (m.used == 2) {
+        BYTE* targetType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
+        if (!targetType) return "the target vehicle type is not in this PC's list";
+        ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, nullptr);
+        DiagLog_Printf("VEH_REP", "Replay Auto-Replace Clear Success: Script='%s' | TargetIdx=%u",
+                       m.scriptName, m.typeIndex);
+        return nullptr;
+    }
+    BYTE* newType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
+    if (!newType) return "the new vehicle type is not in this PC's list";
+    BYTE* targetType = nullptr;
+    if (m.resIndex >= 0) {
+        targetType = TypeAt(world, (unsigned)m.resIndex);
+        if (!targetType) return "the target vehicle type is not in this PC's list";
+    }
+    ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, newType);
+    DiagLog_Printf("VEH_REP", "Replay Auto-Replace Success: Script='%s' | NewIdx=%u | TargetIdx=%d",
+                   m.scriptName, m.typeIndex, m.resIndex);
+    return nullptr;
+}
+
 static const char* Replay(const PurchaseMsg& m)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     __try {
-        if (m.kind == 0xB) {
-            BYTE* newType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
-            if (!newType) return "the new vehicle type is not in this PC's list";
-            BYTE* targetType = nullptr;
-            if (m.resIndex >= 0) {
-                targetType = TypeAt(world, (unsigned)m.resIndex);
-                if (!targetType) return "the target vehicle type is not in this PC's list";
-            }
-            BYTE* mgr = *(BYTE**)(world + WORLD_AUTO_REPLACE_MGR_OFFSET);
-            if (!mgr) return "auto-replacement manager is null";
-            typedef void (*SetAutoReplaceFn)(BYTE* mgr, BYTE* targetType, BYTE* newType);
-            ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, newType);
-            DiagLog_Printf("VEH_REP", "Replay Auto-Replace Success: Script='%s' | NewIdx=%u | TargetIdx=%d",
-                           m.scriptName, m.typeIndex, m.resIndex);
-            return nullptr;
+        if (m.kind == 0xB) return ReplayAutoReplace(world, m);
+        if (m.kind != 1 && m.kind != 2 && m.kind != 5 && m.kind != 6 && m.kind != 7) {
+            return "invalid window kind";
         }
         BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
         BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
@@ -970,8 +1025,21 @@ bool Purchase_ApplyCommand(const void* data, size_t size)
         "?", "?", "?", "auto replacement"
     };
     const char* kindLabel = (m.kind < sizeof(kKinds)/sizeof(kKinds[0])) ? kKinds[m.kind] : "?";
+    const char* usedLabel = (m.used == 2) ? " clear" : (m.used ? " used" : "");
     Logf("republicmp  PURCHASE: %s%s (window kind %u), type #%u, depot #%d, %.0f rubles %.0f dollars: %s",
-         kindLabel, m.used ? " used" : "", m.kind, m.typeIndex, m.depot.place, m.rubles, m.dollars,
+         kindLabel, usedLabel, m.kind, m.typeIndex, m.depot.place, m.rubles, m.dollars,
          why ? why : "made");
     return why == nullptr;
+}
+
+bool Purchase_ApplyAutoReplaceForTest(const PurchaseMsg& m)
+{
+    if (!g_exeBase) return false;
+    PurchaseMsg clean = m;
+    clean.scriptName[sizeof(clean.scriptName) - 1] = '\0';
+    __try {
+        return ReplayAutoReplace(g_exeBase + WORLD_RVA, clean) == nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }

@@ -3,6 +3,7 @@
 // game-call commands (RepublicLAN, read against the disassembly of 1.1.1.9).
 #include "game_calls.h"
 #include "commands.h"
+#include "purchase.h"
 #include "world_refs.h"
 #include "line_accept.h"
 #include "junction_accept.h"
@@ -17,6 +18,7 @@
 #include "../ui/lang.h"
 #include <array>
 #include <limits.h>
+#include <math.h>
 #include <string.h>
 #include <utility>
 #include "../determinism/determinism.h"
@@ -77,6 +79,13 @@ enum {
     CALL_CHANGE_STOP,
     CALL_RELEASE_VEHICLE,
     CALL_MANUAL_BUY_RES,
+    CALL_DENOMINATION,
+    CALL_AUTO_REPLACE_CLEAR,
+    CALL_DETACH_PERSONAL_CAR,
+    CALL_AUTO_BUY_RES,
+    CALL_WASTE_CONTAINER,
+    CALL_SET_FOR_BIO,
+    CALL_FIRE_DISPATCH,
 };
 
 // Appended only: a command names its site by index.
@@ -190,17 +199,36 @@ static const GameCallSite kSites[] = {
     { SITE_COPY_DIST_OFFICE_RVA, FN_COPY_DIST_OFFICE_RVA, "copy tool: copy distribution office settings", "WBB", 0, 0, false },
     { SITE_COPY_WASTE_SETTINGS_RVA, FN_COPY_WASTE_SETTINGS_RVA, "copy tool: copy technical services waste settings", "WBB", 0, 0, false },
     { SITE_COPY_TRANSFER_SETTINGS_RVA, FN_COPY_TRANSFER_SETTINGS_RVA, "copy tool: copy factory connection settings", "WBB", 0, 0, false },
-    { 0x31484D, 0x5EED80, "assign co tool: assign offices in rectangle", "M", 0xD448, 0, false },
-    { 0x3142D6, 0x1D4820, "firestation tool: dispatch to fire", "W", 0, 0, false },
-    { 0x3142F6, 0x1DB130, "building distribution tool: assign tasks", "W", 0, 0, false },
-    { 0x314356, 0x1D7140, "building copyweights tool: copy distribution weights", "W", 0, 0, false },
-    { 0x314893, 0x5F7860, "kgb surveillance tool: set surveillance target", "M", 0xD450, 0, false },
-    { 0x3135F9, 0x418210, "snow priority tool: set clearing priority", "WI", 0, 0, false },
-    { 0x1A131E, 0x1A0510, "building construction: clear priority on cancel", "WOb", 0, 0, false },
-    { 0x1A1343, 0x1A0510, "building construction: reset priority on finish", "WOb", 0, 0, false },
-    { 0x776557, 0x1A8D90, "factory window: replace machines", "WObx", 0, 0, false },
-    { 0x1A15A8, 0x1BC010, "building: cancel production on demolish", "WO", 0, 0, false },
+    { SITE_FACTORY_REPLACE_MACHINES_2_RVA, RVA_START_PLANNED_CONSTRUCTION, "factory window: replace machines", "WObb", 0, 0, false },
     { 0x7D8738, 0x664940, "vehicle window: repaint template", "V", 0, 0, false },
+    { SITE_DENOMINATION_RVA, FN_CURRENCY_DENOMINATION_RVA, "denomination popup: redenominate currency", "W", 0, 0, false, CALL_DENOMINATION },
+    { SITE_FACTORY_REPLACE_MACHINES_1_RVA, RVA_START_PLANNED_CONSTRUCTION, "factory window: replace machines (first currency)", "WObb", 0, 0, false },
+    { SITE_AUTO_REPLACE_CLEAR_RVA, RVA_SET_AUTO_REPLACE, "purchase window: clear auto-replace rule", "Mxx", WORLD_AUTO_REPLACE_MGR_OFFSET, 0, false, CALL_AUTO_REPLACE_CLEAR },
+    { SITE_LINES_LIST_ASSIGN_VEHICLE_RVA, RVA_LINES_ASSIGN_VEHICLE, "lines list: assign line to vehicle (line_set)", "MLVbo", WORLD_LINES_OFFSET, 0, false },
+    { SITE_RECALL_DETACH_PERSONAL_CAR_RVA, RVA_DETACH_PERSONAL_CAR, "building window: detach personal car from citizen", "WV", 0, 0, false, CALL_DETACH_PERSONAL_CAR },
+    { SITE_RECALL_SEND_TO_DEPOT_RVA, SEND_TO_DEPOT, "building window: recall personal car to depot", "WVbbbb", 0, 0, false },
+    { SITE_BLD_INIT_SLIDERS_DISABLE_RVA, BLD_INIT_RES_SLIDERS_RVA, "building window: init auto-buy disable sliders", "WBb", 0, 0, false, CALL_LOCAL },
+    { SITE_BLD_INIT_SLIDERS_CANCEL_RVA, BLD_INIT_RES_SLIDERS_RVA, "building window: restore manual-buy cancel sliders", "WBb", 0, 0, false, CALL_LOCAL },
+    { SITE_BLD_AUTO_BUY_DISABLE_RVA, BLD_APPLY_AUTO_BUY_RVA, "building window: disable auto-buy resources", "WBI", 1, 0, false, CALL_AUTO_BUY_RES },
+    { SITE_BLD_AUTO_BUY_APPLY_RVA, BLD_APPLY_AUTO_BUY_RVA, "building window: apply auto-buy resources", "WBI", 0, 0, false, CALL_AUTO_BUY_RES },
+    { SITE_FACTORY_QUEUE_LIMIT_DEC_RVA, RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT, "factory window: recompute queue worker limit (-)", "xB", 0, 0, false, CALL_PRESENTATION },
+    { SITE_FACTORY_QUEUE_LIMIT_INC_RVA, RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT, "factory window: recompute queue worker limit (+)", "xB", 0, 0, false, CALL_PRESENTATION },
+    { SITE_WASTE_CONTAINER_SPLIT_RVA, FN_WASTE_CONTAINER_SPLIT_RVA, "waste window: split waste container", "xBI", 0, 0, false, CALL_WASTE_CONTAINER },
+    { SITE_WASTE_CONTAINER_MERGE_RVA, FN_WASTE_CONTAINER_MERGE_RVA, "waste window: merge waste container", "WBI", 0, 0, false, CALL_WASTE_CONTAINER },
+    { SITE_SET_FOR_BIO_WASTE_WIN_RVA, FN_SET_FOR_BIO_RVA, "waste window: transfer bio-waste to compost/fertilizer slot", "BIIF", 0, 0, false, CALL_SET_FOR_BIO },
+    { SITE_SET_FOR_BIO_RES_WIN_RVA, FN_SET_FOR_BIO_RVA, "building window: transfer bio-waste to compost/fertilizer slot", "BIIF", 0, 0, false, CALL_SET_FOR_BIO },
+    { SITE_FIRESTATION_DISPATCH_ROAD_RVA, FN_FIRE_DISPATCH_RVA, "firestation tool: dispatch road vehicle to fire", "xBV", 0, 0, false, CALL_FIRE_DISPATCH },
+    { SITE_FIRESTATION_DISPATCH_HELI_RVA, FN_FIRE_DISPATCH_RVA, "firestation tool: dispatch helicopter to fire", "xBV", 0, 0, false, CALL_FIRE_DISPATCH },
+    { SITE_ASSIGN_CO_SINGLE_START_RVA, RVA_START_PLANNED_CONSTRUCTION, "assign co tool: start planned construction (single)", "WObx", 0, 0, false },
+    { SITE_ASSIGN_CO_SINGLE_ASSIGN_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "assign co tool: assign office (single)", "WOOFbb", 0, 0, false },
+    { SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA, RVA_START_PLANNED_CONSTRUCTION, "assign co tool: start planned construction (single rail)", "WObx", 0, 0, false },
+    { SITE_ASSIGN_CO_SINGLE_RAIL_ASSIGN_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "assign co tool: assign rail office (single)", "WOOFbb", 0, 0, false },
+    { SITE_ASSIGN_CO_RECT_START_RVA, RVA_START_PLANNED_CONSTRUCTION, "assign co tool: start planned construction (rect)", "WObx", 0, 0, false },
+    { SITE_ASSIGN_CO_RECT_ASSIGN_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "assign co tool: assign office (rect)", "WOOFbb", 0, 0, false },
+    { SITE_ASSIGN_CO_RECT_RAIL_START_RVA, RVA_START_PLANNED_CONSTRUCTION, "assign co tool: start planned construction (rect rail)", "WObx", 0, 0, false },
+    { SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "assign co tool: assign rail office (rect)", "WOOFbb", 0, 0, false },
+    { SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA, RVA_UNASSIGN_CONSTRUCTION_OFFICE, "assign co tool: unassign office (single)", "WOO", 0, 0, false },
+    { SITE_ASSIGN_CO_RECT_UNASSIGN_RVA, RVA_UNASSIGN_CONSTRUCTION_OFFICE, "assign co tool: unassign office (rect)", "WOO", 0, 0, false },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -215,8 +243,6 @@ struct GameCallMsg {
     unsigned values[MAX_ARGS];    // b / I arguments
 };
 #pragma pack(pop)
-
-static bool g_siteOn[SITE_COUNT];
 
 void GameCalls_Bind(const TsmHost* host)
 {
@@ -600,7 +626,10 @@ static bool IsCommandSpecialSite(int special)
     return special == CALL_PLAIN || special == CALL_DELETE_LINE || special == CALL_DRAG ||
            special == CALL_INVITE_CITIZENS || special == CALL_DEPOT_ROW_UNCOUPLE ||
            special == CALL_DEPOT_ROW_COUPLE || special == CALL_ADD_BORDER_STOP ||
-           special == CALL_DELETE_STOP || special == CALL_CHANGE_STOP || special == CALL_RELEASE_VEHICLE;
+           special == CALL_DELETE_STOP || special == CALL_CHANGE_STOP || special == CALL_RELEASE_VEHICLE ||
+           special == CALL_DENOMINATION || special == CALL_DETACH_PERSONAL_CAR ||
+           special == CALL_WASTE_CONTAINER || special == CALL_SET_FOR_BIO ||
+           special == CALL_FIRE_DISPATCH;
 }
 
 static void RestoreMechToBuildingInventory(U64 mech, U64 carrier)
@@ -723,6 +752,193 @@ static U64 ExtractCarrierRecoveryVehicle(const GameCallSite& s, const U64* a)
     return 0;
 }
 
+static const unsigned long long kDenominationCooldownTicks = 150ULL;
+static bool g_hasDenominationStep = false;
+static unsigned long long g_lastDenominationStep = 0;
+
+void GameCalls_ResetSessionState()
+{
+    g_hasDenominationStep = false;
+    g_lastDenominationStep = 0;
+    g_skipDepotRowCouple = false;
+}
+
+bool GameCalls_IsDenominationCommand(const void* data, size_t size)
+{
+    if (!data || size != sizeof(GameCallMsg)) return false;
+    GameCallMsg m;
+    memcpy(&m, data, sizeof(m));
+    return m.target == FN_CURRENCY_DENOMINATION_RVA && m.index < SITE_COUNT &&
+           kSites[m.index].special == CALL_DENOMINATION;
+}
+
+static void ExecuteDenominationNow(const GameCallSite& s, const U64* a)
+{
+    BYTE* world = (BYTE*)a[0];
+    const unsigned long long curStep = Determinism_StepCount();
+    if (g_hasDenominationStep && curStep >= g_lastDenominationStep &&
+        (curStep - g_lastDenominationStep) < kDenominationCooldownTicks) {
+        Logf("republicmp  GAME CALL: skipping duplicate denomination within cooldown (%llu < %llu)",
+             curStep - g_lastDenominationStep, kDenominationCooldownTicks);
+        TwoStates_CloseDenominationPopups(world);
+        return;
+    }
+    g_hasDenominationStep = true;
+    g_lastDenominationStep = curStep;
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        CallSite(s, a);
+    }
+    TwoStates_ApplyDenomination(world);
+}
+
+static void DetachPersonalCarNow(U64 world, U64 veh)
+{
+    if (!world || !IsPointerLikeX64(veh)) return;
+    U64 citizen = 0;
+    if (!SafeReadPod((const U64*)(veh + VEH_OWNER_CITIZEN_OFFSET), &citizen) || !IsPointerLikeX64(citizen)) return;
+    U64 linkedVeh = 0;
+    if (!SafeReadPod((const U64*)(citizen + CIT_PERSONAL_CAR_OFFSET), &linkedVeh) || linkedVeh != veh) return;
+    if (g_exeBase && g_exeBase[RVA_DETACH_PERSONAL_CAR] != 0) {
+        typedef void (*DetachCarFn)(U64 world, U64 citizen);
+        ((DetachCarFn)(g_exeBase + RVA_DETACH_PERSONAL_CAR))(world, citizen);
+    }
+}
+
+static bool ReadBuildingStorageRange(U64 bld, U64& outBeg, U64& outCount)
+{
+    outBeg = 0;
+    outCount = 0;
+    if (!IsPointerLikeX64(bld)) return false;
+    U64 v[2] = {};
+    if (!SafeMemcpyPod(v, (const void*)(bld + BLD_STORAGE_OFFSET), sizeof(v))) return false;
+    if (!IsPointerLikeX64(v[0]) || v[1] <= v[0] || (v[1] - v[0]) % BLD_STORAGE_SLOT_SIZE != 0) return false;
+    const U64 count = (v[1] - v[0]) / BLD_STORAGE_SLOT_SIZE;
+    if (count == 0 || count > 64) return false;
+    outBeg = v[0];
+    outCount = count;
+    return true;
+}
+
+static bool FindSlotIndexInBuilding(U64 bld, U64 slotPtr, unsigned& outIdx)
+{
+    outIdx = 0;
+    U64 beg = 0, count = 0;
+    if (!IsPointerLikeX64(slotPtr) || !ReadBuildingStorageRange(bld, beg, count)) return false;
+    const U64 end = beg + count * (U64)BLD_STORAGE_SLOT_SIZE;
+    if (slotPtr < beg || slotPtr >= end || (slotPtr - beg) % BLD_STORAGE_SLOT_SIZE != 0) return false;
+    outIdx = (unsigned)((slotPtr - beg) / BLD_STORAGE_SLOT_SIZE);
+    return true;
+}
+
+template <typename Pred>
+static U64 FindWorldBuilding(Pred pred)
+{
+    if (!g_exeBase) return 0;
+    const unsigned kVecRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+    for (unsigned vecRva : kVecRvas) {
+        U64 v[2] = {};
+        if (!SafeMemcpyPod(v, g_exeBase + vecRva, sizeof(v)) || !IsPointerLikeX64(v[0]) || v[1] <= v[0]) continue;
+        const U64 n = (v[1] - v[0]) / sizeof(U64);
+        const U64 limit = n < 16384u ? n : 16384u;
+        for (U64 i = 0; i < limit; ++i) {
+            U64 b = 0;
+            if (!SafeReadPod((const void*)(v[0] + i * sizeof(U64)), &b)) continue;
+            if (pred(b)) return b;
+        }
+    }
+    return 0;
+}
+
+static bool FindBuildingOwningSlots(U64 srcSlot, U64 dstSlot, U64& outBld, unsigned& outSrcIdx, unsigned& outDstIdx)
+{
+    outBld = 0;
+    outSrcIdx = 0;
+    outDstIdx = 0;
+    if (!g_exeBase || !IsPointerLikeX64(srcSlot) || !IsPointerLikeX64(dstSlot) || srcSlot == dstSlot) return false;
+    U64 activeBld = 0;
+    if (SafeReadPod(World() + WORLD_ACTIVE_WINDOW_BLD_OFF, &activeBld) &&
+        FindSlotIndexInBuilding(activeBld, srcSlot, outSrcIdx) &&
+        FindSlotIndexInBuilding(activeBld, dstSlot, outDstIdx)) {
+        outBld = activeBld;
+        return true;
+    }
+    const U64 matched = FindWorldBuilding([&](U64 b) {
+        return FindSlotIndexInBuilding(b, srcSlot, outSrcIdx) &&
+               FindSlotIndexInBuilding(b, dstSlot, outDstIdx);
+    });
+    if (!matched) return false;
+    outBld = matched;
+    return true;
+}
+
+static U64 FindBuildingByFireObj(U64 fireObj)
+{
+    if (!g_exeBase || !IsPointerLikeX64(fireObj)) return 0;
+    return FindWorldBuilding([fireObj](U64 b) {
+        U64 fo = 0;
+        return IsPointerLikeX64(b) &&
+               SafeReadPod((const U64*)(b + BLD_FIRE_OBJ_OFFSET), &fo) &&
+               fo == fireObj;
+    });
+}
+
+static U64 ResolveBuildingSlotPtr(U64 bld, unsigned slotIdx)
+{
+    U64 beg = 0, count = 0;
+    if (!ReadBuildingStorageRange(bld, beg, count) || (U64)slotIdx >= count) return 0;
+    return beg + (U64)slotIdx * (U64)BLD_STORAGE_SLOT_SIZE;
+}
+
+static void ExecuteWasteContainerNow(const GameCallSite& s, const U64* a, U64& r)
+{
+    U64 slotPtr = ResolveBuildingSlotPtr(a[1], (unsigned)a[2]);
+    if (!slotPtr) return;
+    U64 callArgs[MAX_ARGS] = { a[0], a[1], slotPtr, a[3], a[4], a[5], a[6] };
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        r = CallSite(s, callArgs);
+    }
+}
+
+static void ExecuteSetForBioNow(const GameCallSite& s, const U64* a, U64& r)
+{
+    const U64 bld = a[0];
+    const float maxReq = AsFloat(a[3]);
+    if (!IsPointerLikeX64(bld) || !isfinite(maxReq) || maxReq <= 0.0f || maxReq >= 1.0e7f) return;
+    const U64 srcSlot = ResolveBuildingSlotPtr(bld, (unsigned)a[1]);
+    const U64 dstSlot = ResolveBuildingSlotPtr(bld, (unsigned)a[2]);
+    if (!srcSlot || !dstSlot || srcSlot == dstSlot) return;
+    if (!g_exeBase || g_exeBase[s.target] == 0) return;
+    typedef float (*SetForBioFn)(U64 unused, U64 src, U64 dst, float maxReqArg);
+    const float moved = ((SetForBioFn)(g_exeBase + s.target))(0, srcSlot, dstSlot, maxReq);
+    unsigned bits = 0;
+    memcpy(&bits, &moved, 4);
+    r = (U64)bits;
+    if (s.site == SITE_SET_FOR_BIO_RES_WIN_RVA && isfinite(moved) && moved > 0.0f) {
+        float scale = 60.0f;
+        float romScale = 0.0f;
+        if (SafeReadPod(g_exeBase + FLT_BIO_SCALE_130C_RVA, &romScale) &&
+            isfinite(romScale) && romScale > 0.0f) {
+            scale = romScale;
+        }
+        *(float*)(bld + BLD_BIO_TRANSFER_LOG0_OFFSET) += moved;
+        *(float*)(bld + BLD_BIO_TRANSFER_LOG1_OFFSET) += moved * scale;
+    }
+}
+
+static void ExecuteFireDispatchNow(const GameCallSite& s, const U64* a)
+{
+    U64 fireObj = 0;
+    if (!IsPointerLikeX64(a[1]) || !IsPointerLikeX64(a[2])) return;
+    if (!SafeReadPod((const U64*)(a[1] + BLD_FIRE_OBJ_OFFSET), &fireObj) || !IsPointerLikeX64(fireObj)) return;
+    U64 callArgs[MAX_ARGS] = { 0, fireObj, a[2], 0, 0, 0, 0 };
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        CallSite(s, callArgs);
+    }
+    if (s.site == SITE_FIRESTATION_DISPATCH_HELI_RVA) {
+        SafeWritePod((BYTE*)(a[2] + VEH_BAY_ARRIVED_FLAG_OFFSET), (BYTE)0);
+    }
+}
+
 static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U64*& drag, U64& dragged)
 {
     U64 recoveryVeh = ExtractCarrierRecoveryVehicle(s, a);
@@ -742,6 +958,21 @@ static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U
         return;
     case CALL_RELEASE_VEHICLE:
         ReleaseVehicleNow(a[0]);
+        return;
+    case CALL_DENOMINATION:
+        ExecuteDenominationNow(s, a);
+        return;
+    case CALL_DETACH_PERSONAL_CAR:
+        DetachPersonalCarNow(a[0], a[1]);
+        return;
+    case CALL_WASTE_CONTAINER:
+        ExecuteWasteContainerNow(s, a, r);
+        return;
+    case CALL_SET_FOR_BIO:
+        ExecuteSetForBioNow(s, a, r);
+        return;
+    case CALL_FIRE_DISPATCH:
+        ExecuteFireDispatchNow(s, a);
         return;
     default:
         break;
@@ -803,6 +1034,40 @@ bool GameCalls_CheckOfficeCallAllowedForTest(unsigned targetRva, const BYTE* off
     return CheckTwoStatesOfficeCallAllowed(targetRva, officeBld, targetBld, isDemolishOffice);
 }
 
+static bool IsAssignCoStartPlanSite(unsigned siteRva)
+{
+    return siteRva == SITE_ASSIGN_CO_SINGLE_START_RVA ||
+           siteRva == SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA ||
+           siteRva == SITE_ASSIGN_CO_RECT_START_RVA ||
+           siteRva == SITE_ASSIGN_CO_RECT_RAIL_START_RVA;
+}
+
+static const BYTE* ResolveAssignCoStartOffice()
+{
+    if (!g_exeBase) return nullptr;
+    U64 toolPtr = 0;
+    if (!SafeReadPod((const U64*)(World() + WORLD_ASSIGN_CO_TOOL_OFFSET), &toolPtr) || !IsPointerLikeX64(toolPtr)) {
+        return nullptr;
+    }
+    U64 vec[2] = {};
+    if (!SafeMemcpyPod(vec, (const void*)(toolPtr + ASSIGN_CO_TOOL_OFFICES_OFF), sizeof(vec)) ||
+        !IsPointerLikeX64(vec[0]) || vec[1] <= vec[0] || ((vec[1] - vec[0]) & 7u) != 0) {
+        return nullptr;
+    }
+    const U64 count = (vec[1] - vec[0]) / sizeof(U64);
+    const U64 limit = count < 256u ? count : 256u;
+    const int localSt = TwoStates_LocalState();
+    const BYTE* firstValidCo = nullptr;
+    for (U64 i = 0; i < limit; ++i) {
+        U64 coPtr = 0;
+        if (!SafeReadPod((const U64*)(vec[0] + i * sizeof(U64)), &coPtr) || !IsPointerLikeX64(coPtr)) continue;
+        const BYTE* co = (const BYTE*)coPtr;
+        if (!firstValidCo) firstValidCo = co;
+        if (TwoStates_GetBuildingOwnerSlot(co) == localSt) return co;
+    }
+    return firstValidCo;
+}
+
 static bool CheckTwoStatesArgsAllowed(const GameCallMsg& m, const U64* args)
 {
     if (!TwoStates_IsActive()) return true;
@@ -810,10 +1075,17 @@ static bool CheckTwoStatesArgsAllowed(const GameCallMsg& m, const U64* args)
         return CheckTwoStatesOfficeCallAllowed(m.target, (const BYTE*)args[1], (const BYTE*)args[2],
                                                (unsigned char)(m.values[5] & 0xFF));
     }
-    if (m.target == RVA_START_PLANNED_CONSTRUCTION) {
-        const BYTE* activeOffice = nullptr;
-        SafeReadPod((const BYTE* const*)(World() + WORLD_ACTIVE_WINDOW_BLD_OFF), &activeOffice);
-        return CheckTwoStatesOfficeCallAllowed(m.target, activeOffice, (const BYTE*)args[1], 0);
+    if (m.index < SITE_COUNT) {
+        const unsigned siteRva = kSites[m.index].site;
+        if (siteRva == SITE_CONSTRUCT_TOOL_START_PLAN_RVA) {
+            const BYTE* activeOffice = nullptr;
+            SafeReadPod((const BYTE* const*)(World() + WORLD_ACTIVE_WINDOW_BLD_OFF), &activeOffice);
+            return CheckTwoStatesOfficeCallAllowed(m.target, activeOffice, (const BYTE*)args[1], 0);
+        }
+        if (IsAssignCoStartPlanSite(siteRva)) {
+            const BYTE* office = ResolveAssignCoStartOffice();
+            return CheckTwoStatesOfficeCallAllowed(m.target, office, (const BYTE*)args[1], 0);
+        }
     }
     for (int j = 0; j < MAX_ARGS; j++) {
         if (m.kinds[j] == OBJ_VEHICLE && args[j]) {
@@ -822,8 +1094,13 @@ static bool CheckTwoStatesArgsAllowed(const GameCallMsg& m, const U64* args)
                 return false;
         } else if (m.kinds[j] == OBJ_BUILDING && args[j]) {
             const BYTE* b = (const BYTE*)args[j];
-            if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
-                Tr("управление чужим зданием", "controlling a foreign building")))
+            int bldId = 0;
+            float bx = 0.0f, bz = 0.0f;
+            if (SafeReadPod((const int*)b, &bldId) &&
+                SafeReadPod((const float*)(b + 0x350), &bx) &&
+                SafeReadPod((const float*)(b + 0x358), &bz) &&
+                !TwoStates_CheckBuildingControlAllowed(bldId, bx, bz,
+                    Tr("управление чужим зданием", "controlling a foreign building")))
                 return false;
         }
     }
@@ -847,8 +1124,30 @@ static void PrepareUiSpecialCapture(const GameCallSite& s, const U64* a)
     }
 }
 
-static U64 HandleManualBuyCapture(const U64* a)
+static void SkipIfAtReturnRva(uintptr_t* retAddr, unsigned afterRva, unsigned skipRva)
 {
+    if (retAddr && g_exeBase && *retAddr == (uintptr_t)(g_exeBase + afterRva)) {
+        *retAddr = (uintptr_t)(g_exeBase + skipRva);
+    }
+}
+
+static void SkipCallSitePostMutation(int special, uintptr_t* retAddr)
+{
+    if (special == CALL_RENAME) {
+        SkipIfAtReturnRva(retAddr, SITE_RENAME_AFTER_CALL_RVA, SITE_RENAME_SKIP_MUTATION_RVA);
+    } else if (special == CALL_MANUAL_BUY_RES) {
+        SkipIfAtReturnRva(retAddr, SITE_MANUAL_BUY_AFTER_RVA, SITE_MANUAL_BUY_SKIP_RVA);
+    } else if (special == CALL_AUTO_BUY_RES) {
+        SkipIfAtReturnRva(retAddr, SITE_AUTO_BUY_DISABLE_AFTER_RVA, SITE_AUTO_BUY_DISABLE_SKIP_RVA);
+        SkipIfAtReturnRva(retAddr, SITE_AUTO_BUY_APPLY_AFTER_RVA, SITE_AUTO_BUY_APPLY_SKIP_RVA);
+    } else if (special == CALL_FIRE_DISPATCH) {
+        SkipIfAtReturnRva(retAddr, SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA, SITE_FIRESTATION_DISPATCH_HELI_SKIP_RVA);
+    }
+}
+
+static U64 HandleBuildingResBuyCapture(const GameCallSite& s, const U64* a, uintptr_t* retAddr)
+{
+    SkipCallSitePostMutation(s.special, retAddr);
     if (TwoStates_IsActive() && a[1]) {
         const BYTE* b = (const BYTE*)a[1];
         int bldId = 0;
@@ -856,85 +1155,234 @@ static U64 HandleManualBuyCapture(const U64* a)
         if (SafeReadPod((const int*)b, &bldId) &&
             SafeReadPod((const float*)(b + 0x350), &bx) &&
             SafeReadPod((const float*)(b + 0x358), &bz)) {
-            if (!TwoStates_CheckBuildingControlAllowed(bldId, bx, bz,
-                    Tr("закупка ресурсов в чужом здании", "purchasing resources in foreign building")))
+            const char* msg = (s.special == CALL_AUTO_BUY_RES)
+                ? Tr("настройка автозакупки ресурсов в чужом здании", "configuring resource auto-buy in foreign building")
+                : Tr("закупка ресурсов в чужом здании", "purchasing resources in foreign building");
+            if (!TwoStates_CheckBuildingControlAllowed(bldId, bx, bz, msg))
                 return 0;
         }
     }
-    BuildingSwitches_CaptureManualBuy(a[0], a[1], (int)a[2]);
+    if (s.special == CALL_AUTO_BUY_RES) {
+        BuildingSwitches_CaptureAutoBuy(a[0], a[1], (int)a[2], s.worldPointer != 0);
+    } else {
+        BuildingSwitches_CaptureManualBuy(a[0], a[1], (int)a[2]);
+    }
     return 0;
 }
 
-static void SkipRenamePostMutationIfAtCallSite(uintptr_t* retAddr)
+static bool HandleWaitingLobbyBlock(const GameCallSite& s, const U64* a, uintptr_t* retAddr, U64* outRet)
 {
-    if (retAddr && g_exeBase && *retAddr == (uintptr_t)(g_exeBase + SITE_RENAME_AFTER_CALL_RVA)) {
-        *retAddr = (uintptr_t)(g_exeBase + SITE_RENAME_SKIP_MUTATION_RVA);
+    if (s.special == CALL_LOCAL) return false;
+    bool lobbyActive = SaveSync_IsWaitingLobbyActive() ||
+                       (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded());
+    if (!lobbyActive) return false;
+    g_skipDepotRowCouple = false;
+    if (s.special == CALL_DELETE_LINE && a[1]) {
+        __try { *(BYTE*)(a[1] + 1) = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
+    SkipCallSitePostMutation(s.special, retAddr);
+    SaveSync_NotifyWaitingLobbyActionBlocked();
+    *outRet = s.result;
+    return true;
+}
+
+static bool HandleDepotRowDrop(const GameCallSite& s, const U64* a, U64* outRet)
+{
+    if (s.special == CALL_DEPOT_ROW_UNCOUPLE && Commands_TakeUi()) {
+        g_skipDepotRowCouple = GameCalls_IsDepotRowSelfDrop(a[1], a[2], a[3], 0);
+        if (g_skipDepotRowCouple) {
+            *outRet = s.result;
+            return true;
+        }
+    } else if (s.special == CALL_DEPOT_ROW_COUPLE && Commands_TakeUi()) {
+        bool skip = g_skipDepotRowCouple || GameCalls_IsDepotRowSelfDrop(a[2], 0, 0, a[1]);
+        g_skipDepotRowCouple = false;
+        if (skip) {
+            *outRet = s.result;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void SafeInviteCitizensNow(U64 world, U64 building, unsigned mode)
+{
+    DiagLog_BeginSafeSeh();
+    __try {
+        InviteCitizensNow(world, building, mode);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static U64 SafeExecuteSpecialSiteNow(const GameCallSite& s, const U64* a)
+{
+    U64 r = 0;
+    U64* drag = nullptr;
+    U64 dragged = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        ExecuteSpecialSiteNow(s, a, r, drag, dragged);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (drag) *drag = dragged;
+    }
+    DiagLog_EndSafeSeh();
+    return r;
+}
+
+static bool HandleInviteCitizensUi(const GameCallSite& s, const U64* a, U64* outRet)
+{
+    if (s.special != CALL_INVITE_CITIZENS) return false;
+    if (TwoStates_IsActive() && a[3]) {
+        const BYTE* b = (const BYTE*)a[3];
+        int bldId = 0;
+        float bx = 0.0f, bz = 0.0f;
+        if (SafeReadPod((const int*)b, &bldId) &&
+            SafeReadPod((const float*)(b + 0x350), &bx) &&
+            SafeReadPod((const float*)(b + 0x358), &bz) &&
+            !TwoStates_CheckBuildingControlAllowed(bldId, bx, bz,
+                Tr("приглашение жителей в чужое здание", "inviting citizens to a foreign building"))) {
+            *outRet = 0;
+            return true;
+        }
+    }
+    CallSite(s, a); // play click sound locally
+    if (!Commands_TakeUi()) {
+        SafeInviteCitizensNow(a[0], a[3], s.worldPointer);
+        *outRet = 0;
+        return true;
+    }
+    return false;
+}
+
+static U64 ExecuteNonCaptureCall(const GameCallSite& s, const U64* a)
+{
+    static int s_logged = 0;
+    if ((s.special == CALL_JUNCTION_ACCEPT || s.special == CALL_GAME_RULES) && Commands_Capturing() && s_logged < 16) {
+        ++s_logged;
+        Logf("republicmp  GAME CALL: %s made on this PC only (while a command was being made)", s.name);
+    }
+    if (s.special == CALL_CHANGE_STOP && !SessionPatches_IsApplied()) {
+        return CallSite(s, a);
+    }
+    if (s.special == CALL_ADD_BORDER_STOP || s.special == CALL_DELETE_STOP ||
+        s.special == CALL_CHANGE_STOP || s.special == CALL_RELEASE_VEHICLE) {
+        return SafeExecuteSpecialSiteNow(s, a);
+    }
+    if (s.special == CALL_SET_FOR_BIO) {
+        if (!g_exeBase || g_exeBase[s.target] == 0) return 0;
+        typedef float (*CallF4FloatRetFn)(U64, U64, U64, float, U64, U64, U64);
+        const float rf = ((CallF4FloatRetFn)(g_exeBase + s.target))(
+            a[0], a[1], a[2], AsFloat(a[3]), a[4], a[5], a[6]);
+        unsigned bits = 0;
+        memcpy(&bits, &rf, 4);
+        return (U64)bits;
+    }
+    return CallSite(s, a);
+}
+
+static U64 HandleRenameCapture(const GameCallSite& s, const U64* a, uintptr_t* retAddr)
+{
+    if (Rename_Capture(a[0], a[1], a[2])) {
+        SkipCallSitePostMutation(s.special, retAddr);
+        return 0;
+    }
+    return CallSite(s, a);
+}
+
+static U64 HandleAutoReplaceClearCapture(const U64* a)
+{
+    Purchase_SubmitAutoReplaceClear((BYTE*)a[1]);
+    return 0;
+}
+
+static const char* PrepareSpecialCaptureArgs(const GameCallSite& s, U64* args)
+{
+    if (s.special == CALL_DRAG) {
+        if (!(args[0] = *(U64*)(g_exeBase + DRAG_RVA))) return "no vehicle is dragged";
+    } else if (s.special == CALL_DETACH_PERSONAL_CAR) {
+        U64 citizen = args[1];
+        U64 veh = 0;
+        if (!IsPointerLikeX64(citizen) ||
+            !SafeReadPod((const U64*)(citizen + CIT_PERSONAL_CAR_OFFSET), &veh) ||
+            !IsPointerLikeX64(veh)) {
+            return "citizen has no personal car";
+        }
+        args[1] = veh;
+    } else if (s.special == CALL_WASTE_CONTAINER) {
+        unsigned slotIdx = 0;
+        if (!FindSlotIndexInBuilding(args[1], args[2], slotIdx)) return "waste slot is not in the building";
+        args[2] = slotIdx;
+    } else if (s.special == CALL_SET_FOR_BIO) {
+        const float maxReq = AsFloat(args[3]);
+        if (!isfinite(maxReq) || maxReq <= 0.0f || maxReq >= 1.0e7f) return "invalid bio-waste transfer amount";
+        U64 bld = 0;
+        unsigned srcIdx = 0, dstIdx = 0;
+        if (!FindBuildingOwningSlots(args[1], args[2], bld, srcIdx, dstIdx)) {
+            return "bio-waste slots do not belong to a world building";
+        }
+        args[0] = bld;
+        args[1] = srcIdx;
+        args[2] = dstIdx;
+    } else if (s.special == CALL_FIRE_DISPATCH) {
+        if (!IsPointerLikeX64(args[1]) || !IsPointerLikeX64(args[2])) {
+            return "invalid fire dispatch target or vehicle";
+        }
+        const U64 bld = FindBuildingByFireObj(args[1]);
+        if (!bld) return "fire target building not found";
+        args[0] = 0;
+        args[1] = bld;
+    }
+    return nullptr;
+}
+
+static const char* CaptureSiteArgs(unsigned index, const U64* inArgs, U64* outArgs, GameCallMsg& m)
+{
+    memcpy(outArgs, inArgs, MAX_ARGS * sizeof(U64));
+    const char* why = PrepareSpecialCaptureArgs(kSites[index], outArgs);
+    if (!why) why = Capture(index, outArgs, m);
+    return why;
+}
+
+static U64 CaptureAndSubmitPlainCall(unsigned index, const GameCallSite& s, const U64* a, uintptr_t* retAddr)
+{
+    U64 args[MAX_ARGS] = {};
+    GameCallMsg m;
+    const char* why = nullptr;
+    bool refusedByTwoStates = false;
+    __try {
+        why = CaptureSiteArgs(index, a, args, m);
+        if (!why && !CheckTwoStatesArgsAllowed(m, args)) refusedByTwoStates = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        why = "a fault while reading the arguments";
+    }
+    SkipCallSitePostMutation(s.special, retAddr);
+    if (refusedByTwoStates) return s.result;
+    if (why)
+        Logf("republicmp  GAME CALL: %s not shared - %s; nothing is done", s.name, why);
+    else {
+        PrepareUiSpecialCapture(s, a);
+        Commands_Submit(LS_CMD_GAME_CALL, &m, sizeof(m));
+    }
+    return s.result;
 }
 
 static U64 Run(unsigned index, const U64* a, uintptr_t* retAddr = nullptr)
 {
     const GameCallSite& s = kSites[index];
-    if (s.special != CALL_LOCAL &&
-        (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded()))) {
-        if (s.special == CALL_DELETE_LINE && a[1]) {
-            __try { *(BYTE*)(a[1] + 1) = 1; } __except (EXCEPTION_EXECUTE_HANDLER) {}
-        }
-        if (s.special == CALL_RENAME) {
-            SkipRenamePostMutationIfAtCallSite(retAddr);
-        }
-        SaveSync_NotifyWaitingLobbyActionBlocked();
-        return s.result;
-    }
-    if (s.special == CALL_DEPOT_ROW_UNCOUPLE && Commands_TakeUi()) {
-        g_skipDepotRowCouple = GameCalls_IsDepotRowSelfDrop(a[1], a[2], a[3], 0);
-        if (g_skipDepotRowCouple) return s.result;
-    } else if (s.special == CALL_DEPOT_ROW_COUPLE && Commands_TakeUi()) {
-        bool skip = g_skipDepotRowCouple || GameCalls_IsDepotRowSelfDrop(a[2], 0, 0, a[1]);
-        g_skipDepotRowCouple = false;
-        if (skip) return s.result;
-    }
-    if (s.special == CALL_INVITE_CITIZENS) {
-        if (TwoStates_IsActive() && a[3]) {
-            const BYTE* b = (const BYTE*)a[3];
-            if (!TwoStates_CheckBuildingControlAllowed(*(const int*)b, *(const float*)(b + 0x350), *(const float*)(b + 0x358),
-                                                       Tr("приглашение жителей в чужое здание", "inviting citizens to a foreign building")))
-                return 0;
-        }
-        CallSite(s, a); // play click sound locally
-        if (!Commands_TakeUi()) {
-            InviteCitizensNow(a[0], a[3], s.worldPointer);
-            return 0;
-        }
-    }
-    if (!Commands_TakeUi()) {
-        static int s_logged = 0;
-        if ((s.special == CALL_JUNCTION_ACCEPT || s.special == CALL_GAME_RULES) && Commands_Capturing() && s_logged < 16) {
-            ++s_logged;
-            Logf("republicmp  GAME CALL: %s made on this PC only (while a command was being made)", s.name);
-        }
-        if (s.special == CALL_CHANGE_STOP && !SessionPatches_IsApplied()) {
-            return CallSite(s, a);
-        }
-        if (s.special == CALL_ADD_BORDER_STOP || s.special == CALL_DELETE_STOP ||
-            s.special == CALL_CHANGE_STOP || s.special == CALL_RELEASE_VEHICLE) {
-            U64 r = 0, *drag = nullptr, dragged = 0;
-            ExecuteSpecialSiteNow(s, a, r, drag, dragged);
-            return r;
-        }
-        return CallSite(s, a);
-    }
+    U64 outRet = s.result;
+    if (HandleWaitingLobbyBlock(s, a, retAddr, &outRet)) return outRet;
+    if (HandleDepotRowDrop(s, a, &outRet)) return outRet;
+    if (HandleInviteCitizensUi(s, a, &outRet)) return outRet;
+    if (!Commands_TakeUi()) return ExecuteNonCaptureCall(s, a);
+
     switch (s.special) {
     case CALL_PRESENTATION:
         return s.result;
     case CALL_LOCAL:
         return CallSite(s, a);
     case CALL_RENAME:
-        if (Rename_Capture(a[0], a[1], a[2])) {
-            SkipRenamePostMutationIfAtCallSite(retAddr);
-            return 0;
-        }
-        return CallSite(s, a);
+        return HandleRenameCapture(s, a, retAddr);
     case CALL_ACCEPT_MEASURES:
         LineAccept_RestoreMeasures();
         return s.result;
@@ -948,29 +1396,13 @@ static U64 Run(unsigned index, const U64* a, uintptr_t* retAddr = nullptr)
         Commands_CaptureGameRules();
         return s.result;
     case CALL_MANUAL_BUY_RES:
-        return HandleManualBuyCapture(a);
+    case CALL_AUTO_BUY_RES:
+        return HandleBuildingResBuyCapture(s, a, retAddr);
+    case CALL_AUTO_REPLACE_CLEAR:
+        return HandleAutoReplaceClearCapture(a);
     default:
-        PrepareUiSpecialCapture(s, a);
-        break;
+        return CaptureAndSubmitPlainCall(index, s, a, retAddr);
     }
-    U64 args[MAX_ARGS];
-    memcpy(args, a, sizeof(args));
-    GameCallMsg m;
-    const char* why = nullptr;
-    bool refusedByTwoStates = false;
-    __try {
-        if (s.special == CALL_DRAG && !(args[0] = *(U64*)(g_exeBase + DRAG_RVA))) why = "no vehicle is dragged";
-        if (!why) why = Capture(index, args, m);
-        if (!why && !CheckTwoStatesArgsAllowed(m, args)) refusedByTwoStates = true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        why = "a fault while reading the arguments";
-    }
-    if (refusedByTwoStates) return s.result;
-    if (why)
-        Logf("republicmp  GAME CALL: %s not shared - %s; nothing is done", s.name, why);
-    else
-        Commands_Submit(LS_CMD_GAME_CALL, &m, sizeof(m));
-    return s.result;
 }
 
 template <unsigned I>
@@ -996,6 +1428,15 @@ static U64 ThunkF4(U64 a1, U64 a2, U64 a3, float a4, U64 a5, U64 a6, U64 a7)
     return Run(I, a);
 }
 
+template <unsigned I>
+static float ThunkFloatRet(U64 a1, U64 a2, U64 a3, float a4, U64 a5, U64 a6, U64 a7)
+{
+    unsigned bits = 0;
+    memcpy(&bits, &a4, 4);
+    U64 a[MAX_ARGS] = { a1, a2, a3, bits, a5, a6, a7 };
+    return AsFloat(Run(I, a));
+}
+
 template <size_t... I>
 static constexpr std::array<void*, sizeof...(I)> MakeThunks(std::index_sequence<I...>)
 {
@@ -1006,6 +1447,12 @@ template <size_t... I>
 static constexpr std::array<void*, sizeof...(I)> MakeThunksF4(std::index_sequence<I...>)
 {
     return { { (void*)&ThunkF4<(unsigned)I>... } };
+}
+
+template <size_t... I>
+static constexpr std::array<void*, sizeof...(I)> MakeThunksFloatRet(std::index_sequence<I...>)
+{
+    return { { (void*)&ThunkFloatRet<(unsigned)I>... } };
 }
 
 bool GameCalls_ApplyCommand(const void* data, size_t size)
@@ -1042,6 +1489,7 @@ bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
     static const auto thunksF4 = MakeThunksF4(std::make_index_sequence<SITE_COUNT>());
+    static const auto thunksFloatRet = MakeThunksFloatRet(std::make_index_sequence<SITE_COUNT>());
     static_assert(SITE_COUNT * 32 <= 16384, "kSites relay allocation overflow");
     BYTE* relay = AllocNear(g_exeBase, 16384);
     if (!relay) {
@@ -1052,7 +1500,9 @@ bool GameCalls_Install()
     VirtualProtect(relay, SITE_COUNT * 32, PAGE_EXECUTE_READWRITE, &old);
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* r = relay + i * 32;
-        void* to = Float4(kSites[i]) ? thunksF4[i] : thunks[i];
+        void* to = (kSites[i].special == CALL_SET_FOR_BIO)
+            ? thunksFloatRet[i]
+            : (Float4(kSites[i]) ? thunksF4[i] : thunks[i]);
         if (IsReturnSkipSite(kSites[i].special)) {
             // mov r9, r12 (4D 89 E1)
             // add qword ptr [rsp], skipImm32 (48 81 04 24 <imm32>)
@@ -1095,7 +1545,6 @@ bool GameCalls_Install()
         memcpy(at, call, 5);
         VirtualProtect(at, 5, prot, &prot);
         FlushInstructionCache(GetCurrentProcess(), at, 5);
-        g_siteOn[i] = true;
         on++;
     }
     Logf("republicmp  GAME CALL: %d of %d window call sites relayed", on, (int)SITE_COUNT);
@@ -1108,4 +1557,68 @@ bool GameCalls_HasCallSiteForTest(unsigned atSiteRva, unsigned targetRoutineRva)
         if (kSites[i].site == atSiteRva && kSites[i].target == targetRoutineRva) return true;
     }
     return false;
+}
+
+static int FindSiteIndexByRva(unsigned atSiteRva)
+{
+    for (size_t i = 0; i < SITE_COUNT; ++i) {
+        if (kSites[i].site == atSiteRva) return (int)i;
+    }
+    return -1;
+}
+
+const char* GameCalls_GetSiteSchemaForTest(unsigned atSiteRva)
+{
+    const int idx = FindSiteIndexByRva(atSiteRva);
+    return (idx >= 0) ? kSites[idx].schema : nullptr;
+}
+
+bool GameCalls_CheckTwoStatesArgsForTest(unsigned atSiteRva, const unsigned long long* args)
+{
+    const int idx = FindSiteIndexByRva(atSiteRva);
+    if (idx < 0 || !args) return false;
+    U64 prepared[MAX_ARGS] = {};
+    GameCallMsg m = {};
+    if (CaptureSiteArgs((unsigned)idx, args, prepared, m) != nullptr) return false;
+    return CheckTwoStatesArgsAllowed(m, prepared);
+}
+
+bool GameCalls_CaptureAndRebuildForTest(unsigned atSiteRva, const unsigned long long* inArgs, unsigned long long* outArgs)
+{
+    const int idx = FindSiteIndexByRva(atSiteRva);
+    if (idx < 0 || !inArgs || !outArgs) return false;
+    U64 prepared[MAX_ARGS] = {};
+    GameCallMsg m = {};
+    if (CaptureSiteArgs((unsigned)idx, inArgs, prepared, m) != nullptr) return false;
+    return Rebuild(m, outArgs) == nullptr;
+}
+
+bool GameCalls_CaptureMsgForTest(unsigned atSiteRva, const unsigned long long* inArgs,
+                                 void* outMsg, size_t maxBytes, size_t* outSize)
+{
+    const int idx = FindSiteIndexByRva(atSiteRva);
+    if (idx < 0 || !inArgs || !outMsg || maxBytes < sizeof(GameCallMsg)) return false;
+    U64 prepared[MAX_ARGS] = {};
+    GameCallMsg m = {};
+    if (CaptureSiteArgs((unsigned)idx, inArgs, prepared, m) != nullptr) return false;
+    memcpy(outMsg, &m, sizeof(m));
+    if (outSize) *outSize = sizeof(m);
+    return true;
+}
+
+bool GameCalls_RunSiteWithRetAddrForTest(unsigned atSiteRva, const unsigned long long* args,
+                                         unsigned long long* outRet, unsigned long long* inOutRetAddr)
+{
+    const int idx = FindSiteIndexByRva(atSiteRva);
+    if (idx < 0 || !args) return false;
+    uintptr_t retAddr = inOutRetAddr ? (uintptr_t)*inOutRetAddr : 0;
+    const U64 ret = Run((unsigned)idx, args, inOutRetAddr ? &retAddr : nullptr);
+    if (outRet) *outRet = ret;
+    if (inOutRetAddr) *inOutRetAddr = (unsigned long long)retAddr;
+    return true;
+}
+
+bool GameCalls_RunSiteForTest(unsigned atSiteRva, const unsigned long long* args, unsigned long long* outRet)
+{
+    return GameCalls_RunSiteWithRetAddrForTest(atSiteRva, args, outRet, nullptr);
 }

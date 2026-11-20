@@ -577,7 +577,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fix: RCO Track Builder multi-stage stalling (remove broken 0x683240 waypoint hook & rail-stuck sanitizer), protect rail corridor locks, gate arrival-step sanitizers to MP only, tighten carrier recovery, and filter non-toggle state fields in live switches",
+                "v%s (Protocol %d) - Sync & audit fixes: currency denomination (with Two States scaling), factory ReplaceMachines (both currencies & schema fix), auto-replace clear, line_set, personal car recall, auto-buy/export sliders, factory queue worker limit, waste split/merge, SetForBio, crossroad_add, map-editor guards, removed 9 broken game_calls hooks + relocated firestation/assign_co click mutators",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -300,6 +300,26 @@ static void Apply(const Command& c)
         Commands_RecordMoney();
         return;
     }
+    if (c.kind == LS_CMD_GAME_CALL && GameCalls_IsDenominationCommand(p, n)) {
+        TwoStates_RestoreUiMoneySwap();
+        bool isRemote = (c.owner != 0 && (int)c.owner != TwoStates_LocalState());
+        g_applyThread = GetCurrentThreadId();
+        InterlockedIncrement(&g_applying);
+        InterlockedIncrement64(&g_applyEpoch);
+        InputBlock_BeginNeutral();
+        ReplayUiScope menus;
+        if (isRemote) Commands_BeginRemoteReplayScope();
+        bool ok = DispatchCommandPayload(c.kind, p, n);
+        if (isRemote) Commands_EndRemoteReplayScope();
+        if (g_exeBase) TwoStates_CloseDenominationPopups(g_exeBase + WORLD_RVA);
+        InputBlock_EndNeutral();
+        InterlockedDecrement(&g_applying);
+        g_madeThisFrame = true;
+        Commands_RecordMoney();
+        Logf("republicmp  LOCKSTEP: #%u %s after tick %llu - %s (denomination)",
+             c.seq, KindName(c.kind), c.afterTick, ok ? "made" : "not made");
+        return;
+    }
     int owner = (c.owner == 2) ? 2 : 1;
     g_applyThread = GetCurrentThreadId();
     InterlockedIncrement(&g_applying);
@@ -489,8 +509,38 @@ bool Commands_IsAreaCloneToolBlockedForTest(const char* name)
     return strcmp(name, "area_copy") == 0 || strcmp(name, "area_paste") == 0;
 }
 
+static bool IsEditorBrushToolName(const char* name)
+{
+    if (!name || !name[0]) return false;
+    if (strncmp(name, "paint_", 6) == 0) return true;
+    if (strncmp(name, "erase_", 6) == 0 &&
+        strcmp(name, "erase_airroad") != 0 &&
+        strcmp(name, "erase_cableway") != 0)
+        return true;
+    const size_t len = strlen(name);
+    if (len > 15 && strncmp(name, "terrain_", 8) == 0 && strcmp(name + len - 7, "_editor") == 0)
+        return true;
+    return strcmp(name, "building_near_road") == 0 ||
+           strcmp(name, "random_selected_building") == 0;
+}
+
+bool Commands_IsEditorBrushToolBlockedForTest(const char* name)
+{
+    return IsEditorBrushToolName(name);
+}
+
+static void ShowBlockedToolToast(ULONGLONG* lastToast, const char* msg)
+{
+    ULONGLONG now = GetTickCount64();
+    if (now - *lastToast > 2000) {
+        *lastToast = now;
+        TwoStates_AddToast(msg, 3);
+    }
+}
+
 static void PutAwayUncarriedTool()
 {
+    if (!g_capturing || !g_exeBase) return;
     __int64* tool = (__int64*)(g_exeBase + 0x9D4F10 + 0xD428);
     char name[64] = {};
     __try {
@@ -505,12 +555,18 @@ static void PutAwayUncarriedTool()
         *tool = 0;
         Logf("republicmp  LOCKSTEP: tool [%s] put away - cloning districts is disabled in co-op", name);
         static ULONGLONG s_lastToast = 0;
-        ULONGLONG now = GetTickCount64();
-        if (now - s_lastToast > 2000) {
-            s_lastToast = now;
-            TwoStates_AddToast(Tr("⛔ Клонирование районов (копипаст) заблокировано в коопе для предотвращения рассинхрона!",
-                                  "⛔ Area cloning (copy/paste) is disabled in co-op to prevent desync!"), 3);
-        }
+        ShowBlockedToolToast(&s_lastToast,
+            Tr("⛔ Клонирование районов (копипаст) заблокировано в коопе для предотвращения рассинхрона!",
+               "⛔ Area cloning (copy/paste) is disabled in co-op to prevent desync!"));
+        return;
+    }
+    if (IsEditorBrushToolName(name)) {
+        *tool = 0;
+        Logf("republicmp  LOCKSTEP: tool [%s] put away - editor brushes are disabled in co-op", name);
+        static ULONGLONG s_lastEditorToast = 0;
+        ShowBlockedToolToast(&s_lastEditorToast,
+            Tr("⛔ Инструменты редактора карт заблокированы в коопе для предотвращения рассинхрона!",
+               "⛔ Map editor brushes are disabled in co-op to prevent desync!"));
         return;
     }
     for (const char* carried : kCarriedTools)
@@ -529,6 +585,11 @@ static void PutAwayUncarriedTool()
         Logf("republicmp  LOCKSTEP: tool [%s] put away - its actions are not shared in lockstep yet", name);
         return;
     }
+}
+
+void Commands_PutAwayUncarriedToolForTest()
+{
+    PutAwayUncarriedTool();
 }
 
 // The game rules (the game menu's settings page: realistic mode, traffic,
@@ -576,6 +637,10 @@ bool Commands_SanitizeCheatState(BYTE* world)
     }
     if (world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET]) {
         world[WORLD_FAST_CONSTRUCT_CHEAT_OFFSET] = 0;
+        changed = true;
+    }
+    if (world[WORLD_MAP_EDITOR_MODE_OFFSET]) {
+        world[WORLD_MAP_EDITOR_MODE_OFFSET] = 0;
         changed = true;
     }
     if (*(int32_t*)(world + 0xADE8) != 0 || *(float*)(world + 0xADEC) != 0.0f) {
@@ -721,6 +786,7 @@ void Commands_SetSession(int role)
     SettingsSync_LockstepReset();
     BuildingSwitches_Reset();
     VehicleSwitches_Reset();
+    GameCalls_ResetSessionState();
     Lock();
     g_outbox.clear();
     g_record.clear();

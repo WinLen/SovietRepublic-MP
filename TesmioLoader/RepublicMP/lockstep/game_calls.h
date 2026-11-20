@@ -20,6 +20,8 @@ bool GameCalls_Install();
 
 // The command (lockstep/commands).
 bool GameCalls_ApplyCommand(const void* data, size_t size);
+bool GameCalls_IsDenominationCommand(const void* data, size_t size);
+void GameCalls_ResetSessionState();
 
 // Pure helper for rail/road depot row drag-drop self-drop filtering (0x7C7E87 / 0x7C7ED8).
 bool GameCalls_IsDepotRowSelfDrop(unsigned long long dragged, unsigned long long hoveredResolved,
@@ -39,4 +41,12 @@ bool GameCalls_CheckOfficeCallAllowedForTest(unsigned targetRva, const BYTE* off
 void GameCalls_RecoverOrphanedCarrierMechanismsForTest(unsigned long long vehicle);
 bool GameCalls_ShouldRecoverCarrierForSiteForTest(unsigned callAt, unsigned target, const char* schema);
 bool GameCalls_HasCallSiteForTest(unsigned atSiteRva, unsigned targetRoutineRva);
+const char* GameCalls_GetSiteSchemaForTest(unsigned atSiteRva);
+bool GameCalls_CheckTwoStatesArgsForTest(unsigned atSiteRva, const unsigned long long* args);
+bool GameCalls_CaptureAndRebuildForTest(unsigned atSiteRva, const unsigned long long* inArgs, unsigned long long* outArgs);
+bool GameCalls_CaptureMsgForTest(unsigned atSiteRva, const unsigned long long* inArgs,
+                                 void* outMsg, size_t maxBytes, size_t* outSize);
+bool GameCalls_RunSiteForTest(unsigned atSiteRva, const unsigned long long* args, unsigned long long* outRet);
+bool GameCalls_RunSiteWithRetAddrForTest(unsigned atSiteRva, const unsigned long long* args,
+                                         unsigned long long* outRet, unsigned long long* inOutRetAddr);
 

@@ -183,4 +183,6 @@ bool  TwoStates_ApplyResearchCommand(const LsResearchCommand& cmd);
 void  TwoStates_ResetResearch();
 bool  Commands_IsToolCarriedForTest(const char* name);
 bool  Commands_IsAreaCloneToolBlockedForTest(const char* name);
+bool  Commands_IsEditorBrushToolBlockedForTest(const char* name);
+void  Commands_PutAwayUncarriedToolForTest();
 
