@@ -92,3 +92,7 @@ void SimPatches_TestHookedVehicleArrivalStep(void* vehicle);
 void SimPatches_TestBuildVehicleWaypoints(void* vehicle, unsigned char a2 = 0);
 unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void* veh, unsigned char a4 = 0);
 bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned __int64 storageBegin, unsigned __int64 storageEnd, float cameraZDist);
+
+// Crash A: validates a rail segment + signal block (+0xB8, +0x08/+0x14) or connected-node vector (+0x10/+0x18).
+bool SimPatches_IsSignalSegmentSafe(const void* segPtr);
+bool SimPatches_TestHookedUpdateSignalBlock(void* world, void* segPtr);

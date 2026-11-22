@@ -43,6 +43,14 @@ void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends);
 // Returns true (and clears the flag) if a P2P host probe reply arrived since the last check.
 bool SteamP2P_ConsumeHostProbeDirty();
 
+// Resets cached P2P friend host probe replies so fresh pings are sent cleanly.
+void SteamP2P_ResetHostProbes();
+
+// Pure decision helper combining Steam Rich Presence with recent P2P probe PONG replies.
+bool SteamP2P_ResolveFriendHostingState(bool rpHosting, bool hasPong, bool pongIsOpen,
+                                        ULONGLONG pongAgeMs, ULONGLONG pingSentTick,
+                                        ULONGLONG pongRecvTick);
+
 // Sends a Steam game invite to a friend.
 bool SteamP2P_InviteFriend(uint64_t friendSteamId);
 
@@ -76,6 +84,7 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
 bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size);
 bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs);
 bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size);
+int SteamP2P_PollReadable(SOCKET s, DWORD timeoutMs, size_t minBytes = 1);
 bool SteamP2P_PeerGone(SOCKET s);
 void SteamP2P_ShutdownSocket(SOCKET s);
 void SteamP2P_CloseSocket(SOCKET s);

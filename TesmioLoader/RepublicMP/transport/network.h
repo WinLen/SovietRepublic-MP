@@ -46,6 +46,17 @@ bool NetworkSendFile(SOCKET sock, const char* filePath,
 bool NetworkReceiveFile(SOCKET sock, const char* outFilePath,
                         NetworkProgressFn onProgress = nullptr, void* userData = nullptr);
 
+// Application-ACK-paced file transfer for accurate sender progress/speed reporting
+// over buffered Steam P2P or OS TCP buffers. Receiver confirms written bytes via uint64 ACK.
+bool NetworkSendFileAckPaced(SOCKET sock, const char* filePath,
+                             NetworkProgressFn onProgress = nullptr, void* userData = nullptr,
+                             volatile bool* cancelFlag = nullptr,
+                             size_t maxWindowBytes = (1024u * 1024u),
+                             DWORD ackTimeoutMs = 60000u);
+bool NetworkReceiveFileAckPaced(SOCKET sock, const char* outFilePath,
+                                NetworkProgressFn onProgress = nullptr, void* userData = nullptr,
+                                volatile bool* cancelFlag = nullptr);
+
 // Sends/receives exactly `size` bytes; false on error or timeout.
 bool NetworkSendExact(SOCKET sock, const void* data, size_t size);
 bool NetworkRecvExact(SOCKET sock, void* data, size_t size);
@@ -59,6 +70,8 @@ bool NetworkPeerGone(SOCKET sock);
 // 0 = timeout, -1 = error or INVALID_SOCKET). SteamP2P sockets return 1 immediately
 // because SteamP2P_RecvExact polls internally and exits on localClosed/remoteFin.
 int NetworkPollReadable(SOCKET sock, DWORD timeoutMs);
+// Bounded poll waiting for at least `minBytes` readable bytes (or EOF/error -> -1).
+int NetworkPollReadableBytes(SOCKET sock, DWORD timeoutMs, size_t minBytes = 1);
 void NetworkDrainReadable(SOCKET sock, size_t maxBytes = 65536u);
 void NetworkShutdownSocket(SOCKET sock, int how = SD_BOTH);
 void NetworkCloseSocket(SOCKET sock);

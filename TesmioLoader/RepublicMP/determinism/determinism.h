@@ -144,3 +144,7 @@ public:
     Determinism_PrivateScope(const Determinism_PrivateScope&) = delete;
     Determinism_PrivateScope& operator=(const Determinism_PrivateScope&) = delete;
 };
+
+// Crash B / Exit cleanup: clears the Filling worker's transient pointer queues
+// (0x9E7738, [0x9E7710]+0x60, [0x9E2350]+0x40) on exeBase (or g_exeBase if null).
+void Determinism_ClearFillingWorkQueues(unsigned char* exeBase = nullptr);

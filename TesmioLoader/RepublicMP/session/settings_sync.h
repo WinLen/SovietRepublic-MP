@@ -51,6 +51,9 @@ struct SettingWire {
 
 void SettingsSync_Bind(const TsmHost* host);
 bool SettingsSync_InstallHooks();
+bool SettingsSync_IsSiteStopUiCallerRva(unsigned callerRva);
+bool SettingsSync_IsSiteResumeUiCallerRva(unsigned callerRva);
+bool SettingsSync_TestSiteCallFilter(BYTE* site, bool isStop, int stopVal, bool captureUi, unsigned callerRva);
 void SettingsSync_TestSiteUiClick(BYTE* site, bool isStop, int stopVal, bool captureLocal);
 
 // Per-frame (game thread, Present hook, after BuildSync_Tick): scans for local

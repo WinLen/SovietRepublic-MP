@@ -255,6 +255,7 @@ static void SetNativeMenuPage(NativeMenuPage nextPage)
     g_nativePage = nextPage;
     if (nextPage == NATIVE_PAGE_JOIN && prevPage != NATIVE_PAGE_JOIN) {
         s_lastJoinEntries.clear();
+        SteamP2P_ResetHostProbes();
         LanDiscovery_StartScan();
         LanDiscovery_ProbeNow();
         g_lanScanRunningForJoin = true;
@@ -837,7 +838,7 @@ std::vector<JoinPlanEntry> NativeMenu_PlanJoinEntries(
             char target[64] = {};
             _snprintf_s(target, sizeof(target), _TRUNCATE, "steam:%llu", static_cast<unsigned long long>(f.steamId));
             const std::string cleanFriend = SanitizeMenuLabelText(f.name);
-            const std::wstring lbl = (isEnglish ? L"Host: " : L"Хост: ") + NativeMenu_Utf8ToWideSafe(cleanFriend.c_str());
+            const std::wstring lbl = L"[Steam] " + NativeMenu_Utf8ToWideSafe(cleanFriend.c_str());
             head.push_back(MakePlanEntry(JOIN_ACT_STEAM_FRIEND, f.steamId, target, lbl));
             ++actualHostCount;
         }
@@ -848,8 +849,10 @@ std::vector<JoinPlanEntry> NativeMenu_PlanJoinEntries(
                                      isEnglish ? L"Steam Offline (LAN)" : L"Steam офлайн (LAN)"));
     }
     if (actualHostCount == 0 && head.size() < hostBudget) {
-        head.push_back(MakePlanEntry(JOIN_ACT_INFO_NO_HOSTS, 0, nullptr,
-                                     isEnglish ? L"Scanning LAN hosts..." : L"Поиск серверов LAN..."));
+        const std::wstring noHostsLbl = steamAvailable
+            ? (isEnglish ? L"No LAN/Steam hosts" : L"Нет LAN/Steam хостов")
+            : (isEnglish ? L"Scanning LAN hosts..." : L"Поиск серверов LAN...");
+        head.push_back(MakePlanEntry(JOIN_ACT_INFO_NO_HOSTS, 0, nullptr, noHostsLbl));
     }
 
     head.insert(head.end(), fixedTail.begin(), fixedTail.end());
@@ -955,6 +958,7 @@ static void HandleJoinMenuClick(BYTE* menuObj, bool hasContinue, const JoinPlanE
         TwoStates_SetSavedJoinAddress(g_joinAddress);
         TwoStates_SaveSettings();
     } else if (sel.kind == JOIN_ACT_REFRESH_HOSTS) {
+        SteamP2P_ResetHostProbes();
         LanDiscovery_StartScan();
         LanDiscovery_ProbeNow();
         g_lanScanRunningForJoin = true;
@@ -977,9 +981,11 @@ static void HandleJoinMenuClick(BYTE* menuObj, bool hasContinue, const JoinPlanE
         TwoStates_AddToast(Tr("Steam не в сети — доступно подключение по LAN и вручную по IP",
                               "Steam offline — LAN discovery and manual IP join active"), 0);
     } else if (sel.kind == JOIN_ACT_INFO_NO_HOSTS) {
+        SteamP2P_ResetHostProbes();
         LanDiscovery_ProbeNow();
-        TwoStates_AddToast(Tr("Идёт поиск серверов в локальной сети...",
-                              "Scanning local network for Co-op hosts..."), 0);
+        RefreshFriendsIfNeeded(true);
+        TwoStates_AddToast(Tr("Поиск серверов в Steam (друзья) и локальной сети...",
+                              "Refreshing Steam Friends & LAN Co-op hosts..."), 0);
     }
 }
 

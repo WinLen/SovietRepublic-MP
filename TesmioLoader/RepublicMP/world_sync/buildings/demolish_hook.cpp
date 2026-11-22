@@ -103,7 +103,8 @@ static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigne
     if (msg.assignFromTool) {
         U64 office = *(U64*)(thisPtr + 0xD298);
         if (office && Ref_Building(office, msg.assignOffice)) {
-            msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == 104) ? 1 : 0;
+            // Native 0x1DAFFD passes (office->cat == 0x1C [RCO]) ? 1 : 0 as 0x161CB0's triggerImmediateScan.
+            msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == (int)BLD_CAT_RAIL_CO) ? 1 : 0;
         }
         if (callerRva == 0x1DAF7E)
             msg.assignDist = *(float*)(thisPtr + 0xF5C0);

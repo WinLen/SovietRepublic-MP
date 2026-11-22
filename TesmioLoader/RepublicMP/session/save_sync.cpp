@@ -79,6 +79,7 @@ static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overrida
 static char g_peerIp[64] = "";
 static char g_lastPartnerPeer[64] = "";
 static char g_lastError[256] = "";
+static ClientHostLostInfo g_clientHostLost = {};
 
 // Set by SaveSync_RequestDisconnect; reset at the start of every session.
 static volatile bool g_disconnectRequested = false;
@@ -117,7 +118,7 @@ static volatile bool g_lockstepChosen = true;
 static volatile bool g_dlcCheck = true; // refuse a join when the DLCs differ (both players' choice)
 static volatile bool g_lockstep = true; // the current session's mode (lockstep is permanent)
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
-#define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
+#define LOCKSTEP_SILENCE_MS 8000           // a game that sent nothing (not even a keepalive) is gone
 static const char* const kResyncReason = "re-sync";
 static std::atomic<uint16_t> g_testTcpPortOverride{0};
 static HANDLE g_localHostOpenEvent = nullptr;
@@ -235,6 +236,27 @@ static void SetPeerIp(const char* ip)
 static void SetLastPartnerPeer(const char* peer)
 {
     WriteProtectedString(g_lastPartnerPeer, sizeof(g_lastPartnerPeer), peer);
+}
+
+static void ClearClientHostLost()
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    memset(&g_clientHostLost, 0, sizeof(g_clientHostLost));
+    LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static void RecordClientHostLost(const char* addr, const char* label, const char* reason)
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    g_clientHostLost.active = true;
+    strncpy_s(g_clientHostLost.hostAddress, sizeof(g_clientHostLost.hostAddress), addr ? addr : "", _TRUNCATE);
+    strncpy_s(g_clientHostLost.hostLabel, sizeof(g_clientHostLost.hostLabel),
+              (label && label[0]) ? label : (addr ? addr : ""), _TRUNCATE);
+    strncpy_s(g_clientHostLost.reason, sizeof(g_clientHostLost.reason), reason ? reason : "", _TRUNCATE);
+    g_clientHostLost.lostTick = GetTickCount64();
+    LeaveCriticalSection(&g_saveSyncStrLock);
 }
 
 static void SetSessionError(const char* fmt, ...)
@@ -437,7 +459,11 @@ static const char* MonitorLockstep(bool client)
         }
         // A game that froze or crashed keeps its socket open while Windows
         // reports it: it is gone once it stays silent.
-        if (LockstepNet_MsSinceReceived() > LOCKSTEP_SILENCE_MS) return Tr("второй игрок перестал отвечать", "the other game stopped answering");
+        if (LockstepNet_MsSinceReceived() > LOCKSTEP_SILENCE_MS) {
+            return client ? Tr("хост не отвечает (потеряна связь или закрыта игра)",
+                               "host stopped responding (connection lost or closed)")
+                          : Tr("второй игрок перестал отвечать", "the other game stopped answering");
+        }
         if (client && LockstepNet_TakeResync()) {
             SaveSync_OnResyncAnnounced();
             return kResyncReason;
@@ -466,7 +492,9 @@ static const char* MonitorLockstep(bool client)
         SaveSync_OnResyncAnnounced();
         return kResyncReason;
     }
-    return g_disconnectRequested ? nullptr : Tr("Lockstep-соединение закрыто", "the lockstep connection closed");
+    if (g_disconnectRequested) return nullptr;
+    return client ? Tr("хост закрыл сервер или разорвал соединение", "host closed the server or dropped connection")
+                  : Tr("Lockstep-соединение закрыто", "the lockstep connection closed");
 }
 
 static const char* MonitorLiveSession(bool client)
@@ -479,10 +507,79 @@ static const char* MonitorLiveSession(bool client)
 // ---------------------------------------------------------------------------
 
 static uint64_t g_transferTotalBytes = 0;
-static uint64_t g_transferStartTime = 0;
-static uint64_t g_transferLastTick = 0;
-static uint64_t g_transferLastDone = 0;
-static float g_transferSpeedEma = 0.0f;
+static SaveTransferSpeedMeter g_transferMeter = {};
+static std::atomic<bool> g_ackPacedSaveTransfer{false};
+
+struct AckPacedTransferGuard {
+    AckPacedTransferGuard() { g_ackPacedSaveTransfer.store(true, std::memory_order_release); }
+    ~AckPacedTransferGuard() { g_ackPacedSaveTransfer.store(false, std::memory_order_release); }
+};
+
+void SaveSync_SpeedMeterReset(SaveTransferSpeedMeter* meter, ULONGLONG nowMs)
+{
+    if (!meter) return;
+    memset(meter, 0, sizeof(*meter));
+    if (nowMs > 0) {
+        meter->samples[0].tickMs = nowMs;
+        meter->samples[0].bytesDone = 0;
+        meter->count = 1;
+        meter->lastUpdateTick = nowMs;
+    }
+}
+
+float SaveSync_SpeedMeterUpdate(SaveTransferSpeedMeter* meter, uint64_t doneBytes, ULONGLONG nowMs)
+{
+    if (!meter) return 0.0f;
+    if (doneBytes > meter->maxBytesSeen) {
+        meter->maxBytesSeen = doneBytes;
+    }
+    const uint64_t monotonicDone = meter->maxBytesSeen;
+    if (meter->count == 0) {
+        meter->head = 0;
+        meter->count = 1;
+        meter->samples[0] = { nowMs, monotonicDone };
+        meter->lastUpdateTick = nowMs;
+        return 0.0f;
+    }
+    const ULONGLONG dtLast = (nowMs >= meter->lastUpdateTick) ? (nowMs - meter->lastUpdateTick) : 0ULL;
+    if (dtLast < SaveTransferSpeedMeter::kMinSampleIntervalMs) {
+        return meter->speedEmaMbSec;
+    }
+
+    int insertPos = (meter->head + meter->count) % SaveTransferSpeedMeter::kCapacity;
+    if (meter->count == SaveTransferSpeedMeter::kCapacity) {
+        insertPos = meter->head;
+        meter->head = (meter->head + 1) % SaveTransferSpeedMeter::kCapacity;
+    } else {
+        ++meter->count;
+    }
+    meter->samples[insertPos] = { nowMs, monotonicDone };
+
+    int baselinePos = (meter->head + meter->count - 2) % SaveTransferSpeedMeter::kCapacity;
+    for (int i = 0; i < meter->count - 1; ++i) {
+        const int pos = (meter->head + i) % SaveTransferSpeedMeter::kCapacity;
+        const ULONGLONG age = (nowMs >= meter->samples[pos].tickMs) ? (nowMs - meter->samples[pos].tickMs) : 0ULL;
+        if (age <= SaveTransferSpeedMeter::kWindowMs && age >= SaveTransferSpeedMeter::kMinSampleIntervalMs) {
+            baselinePos = pos;
+            break;
+        }
+    }
+
+    const SaveTransferSpeedSample& base = meter->samples[baselinePos];
+    const ULONGLONG winDt = (nowMs > base.tickMs) ? (nowMs - base.tickMs) : 0ULL;
+    if (winDt >= SaveTransferSpeedMeter::kMinSampleIntervalMs) {
+        const uint64_t dBytes = (monotonicDone > base.bytesDone) ? (monotonicDone - base.bytesDone) : 0ULL;
+        const double instMbSec = (static_cast<double>(dBytes) / (1024.0 * 1024.0)) /
+                                 (static_cast<double>(winDt) / 1000.0);
+        if (meter->speedEmaMbSec <= 0.001f) {
+            meter->speedEmaMbSec = static_cast<float>(instMbSec);
+        } else {
+            meter->speedEmaMbSec = 0.7f * meter->speedEmaMbSec + 0.3f * static_cast<float>(instMbSec);
+        }
+    }
+    meter->lastUpdateTick = nowMs;
+    return meter->speedEmaMbSec;
+}
 
 static uint64_t GetFileSize64(const char* path)
 {
@@ -499,28 +596,16 @@ static uint64_t GetFileSize64(const char* path)
 
 static void UpdateTransferSpeed(uint64_t done)
 {
-    ULONGLONG now = GetTickCount64();
-    if (g_transferLastTick == 0) g_transferLastTick = now;
-    ULONGLONG dt = now - g_transferLastTick;
-    if (dt >= 150) {
-        double bytesDelta = (double)(done > g_transferLastDone ? done - g_transferLastDone : 0);
-        double curSpeed = (bytesDelta / (1024.0 * 1024.0)) / ((double)dt / 1000.0);
-        if (g_transferSpeedEma <= 0.001f) {
-            g_transferSpeedEma = (float)curSpeed;
-        } else {
-            g_transferSpeedEma = 0.7f * g_transferSpeedEma + 0.3f * (float)curSpeed;
-        }
-        g_transferLastTick = now;
-        g_transferLastDone = done;
-    }
+    (void)SaveSync_SpeedMeterUpdate(&g_transferMeter, done, GetTickCount64());
 }
 
 void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished)
 {
+    if (g_ackPacedSaveTransfer.load(std::memory_order_acquire)) return;
     if (!g_inSaveTransfer.load(std::memory_order_relaxed) || g_transferTotalBytes == 0) return;
     if (finished || queuedBytes <= 0) {
         UpdateTransferSpeed(g_transferTotalBytes);
-        SyncBlock_SetPercentEx(100, 0LL, (int64_t)g_transferTotalBytes, g_transferSpeedEma);
+        SyncBlock_SetPercentEx(100, 0LL, (int64_t)g_transferTotalBytes, g_transferMeter.speedEmaMbSec);
         return;
     }
     uint64_t done = (g_transferTotalBytes > (uint64_t)queuedBytes)
@@ -529,7 +614,7 @@ void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished)
     int percent = (int)((done * 100) / g_transferTotalBytes);
     if (percent > 99) percent = 99;
     UpdateTransferSpeed(done);
-    SyncBlock_SetPercentEx(percent, (int64_t)queuedBytes, (int64_t)g_transferTotalBytes, g_transferSpeedEma);
+    SyncBlock_SetPercentEx(percent, (int64_t)queuedBytes, (int64_t)g_transferTotalBytes, g_transferMeter.speedEmaMbSec);
 }
 
 bool SaveSync_InstallHooks()
@@ -558,7 +643,7 @@ static void OnProgress(ProgressCtx* ctx, unsigned long long done, unsigned long 
 
     UpdateTransferSpeed(done);
     int64_t queued = (int64_t)(total > done ? total - done : 0);
-    SyncBlock_SetPercentEx(percent, queued, (int64_t)total, g_transferSpeedEma);
+    SyncBlock_SetPercentEx(percent, queued, (int64_t)total, g_transferMeter.speedEmaMbSec);
 
     if (ctx && ctx->relaySock != INVALID_SOCKET && percent / 10 != ctx->lastRelayed / 10) {
         ctx->lastRelayed = percent;
@@ -1302,15 +1387,22 @@ static bool HostSendWorldZip(SOCKET sock, const char* zipPath)
     HostStep(sock, 4, Tr("Передача мира второму игроку", "Sending the world to the player"), 0);
     SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
     ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
-    g_transferTotalBytes = GetFileSize64(zipPath);
-    g_transferStartTime = GetTickCount64();
-    g_transferLastTick = g_transferStartTime;
-    g_transferLastDone = 0;
-    g_transferSpeedEma = 0.0f;
+    const uint64_t totalSize = GetFileSize64(zipPath);
+    g_transferTotalBytes = totalSize;
+    const ULONGLONG startTick = GetTickCount64();
+    SaveSync_SpeedMeterReset(&g_transferMeter, startTick);
     bool sendOk = false;
     {
         SaveTransferGuard transferGuard;
-        sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
+        AckPacedTransferGuard ackGuard;
+        sendOk = NetworkSendFileAckPaced(sock, zipPath, NetworkProgressCb, &sendCtx, &g_disconnectRequested);
+    }
+    const ULONGLONG elapsedMs = GetTickCount64() - startTick;
+    if (sendOk && totalSize > 0 && elapsedMs > 0) {
+        const double avgMbSec = (static_cast<double>(totalSize) / (1024.0 * 1024.0)) /
+                                (static_cast<double>(elapsedMs) / 1000.0);
+        SaveStatus("[HOST] save transfer complete (%llu bytes in %llu ms, avg %.2f MB/s)",
+                   static_cast<unsigned long long>(totalSize), elapsedMs, avgMbSec);
     }
     if (!sendOk) {
         SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
@@ -1775,13 +1867,13 @@ static bool ClientReceiveAndUnpackWorld(SOCKET sock, const char* zipPath, const 
 {
     {
         SaveTransferGuard transferGuard;
+        AckPacedTransferGuard ackGuard;
         ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
-        ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
-        g_transferStartTime = GetTickCount64();
-        g_transferLastTick = g_transferStartTime;
-        g_transferLastDone = 0;
-        g_transferSpeedEma = 0.0f;
-        if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
+        // Do NOT send MSG_STEP control frames while the socket carries raw payload + uint64 ACKs.
+        ProgressCtx recvCtx = { INVALID_SOCKET, 4, Tr("приём мира", "receiving the world"), 0 };
+        g_transferTotalBytes = 0;
+        SaveSync_SpeedMeterReset(&g_transferMeter, GetTickCount64());
+        if (!NetworkReceiveFileAckPaced(sock, zipPath, NetworkProgressCb, &recvCtx, &g_disconnectRequested)) {
             SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
             return false;
         }
@@ -1984,18 +2076,29 @@ static void RunClientSession()
         SetState(SESSION_CLIENT_IN_GAME);
         SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", targetCopy);
         const char* why = MonitorLiveSession(true);
+        char hostLabel[128] = {};
+        ReadProtectedString(g_lastPartnerPeer, hostLabel, sizeof(hostLabel));
+        if (!hostLabel[0]) {
+            SaveSync_FormatDisplayTarget(targetCopy, EffectiveSaveSyncPort(), hostLabel, sizeof(hostLabel), nullptr);
+        }
         ResetChannels();
         if (why == kResyncReason) {
             rejoin = true;
             SaveStatus("[CLIENT] the host is re-syncing the world - reconnecting");
             continue;
         }
+        const bool unexpectedHostLoss = (why != nullptr && !g_disconnectRequested && SaveSync_IsWorldLoaded());
         TwoStates_OnSessionEnded();
         if (why) {
             SetSessionError(Tr("Отключено от хоста: %s", "disconnected from the host: %s"), why);
             SaveStatus("[CLIENT] disconnected from the host (%s)", why);
         } else {
             SaveStatus("[CLIENT] left the session");
+        }
+        if (unexpectedHostLoss) {
+            RecordClientHostLost(targetCopy, hostLabel, why);
+            SaveSync_EnforceWaitingLobbyHold();
+            SaveStatus("[CLIENT] connection lost - paused game & showing recovery prompt");
         }
         return;
     }
@@ -2111,6 +2214,7 @@ void SaveSync_StartHost()
     if (TwoStates_GetMode() == COOP_MODE_TWO_STATES) {
         g_lockstepChosen = true;
     }
+    ClearClientHostLost();
     g_disconnectRequested = false;
     g_isHost = true;
     g_hadPartnerInSession = false;
@@ -2143,6 +2247,7 @@ void SaveSync_StartHost()
 void SaveSync_StartClient(const char* hostIp)
 {
     if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return;
+    ClearClientHostLost();
     TwoStates_MountSaveBank(true);
     g_disconnectRequested = false;
     if (hostIp && hostIp[0]) {
@@ -2175,6 +2280,7 @@ void SaveSync_StartClient(const char* hostIp)
 
 void SaveSync_RequestDisconnect()
 {
+    ClearClientHostLost();
     if (g_state == SESSION_IDLE) {
         // Channels opened by hand from the Debug window.
         ResetChannels();
@@ -2193,6 +2299,7 @@ void SaveSync_RequestDisconnect()
 
 void SaveSync_Shutdown(DWORD waitMs)
 {
+    ClearClientHostLost();
     g_processShuttingDown.store(true);
     SaveSync_RequestDisconnect();
     JoinAndCloseSessionThread(waitMs);
@@ -2271,12 +2378,77 @@ static void CheckStillInWorld()
                          : Tr("Отключено: выход из мира", "disconnected: you left the world"));
 }
 
+bool SaveSync_IsClientHostLost()
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    const bool active = g_clientHostLost.active;
+    LeaveCriticalSection(&g_saveSyncStrLock);
+    return active;
+}
+
+bool SaveSync_GetClientHostLostInfo(ClientHostLostInfo* out)
+{
+    if (!out) return false;
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    *out = g_clientHostLost;
+    const bool active = g_clientHostLost.active;
+    LeaveCriticalSection(&g_saveSyncStrLock);
+    return active;
+}
+
+void SaveSync_DismissClientHostLost()
+{
+    ClearClientHostLost();
+}
+
+bool SaveSync_ShouldShowClientHostLostModal(int sessionState, bool worldLoaded, bool hostLostFlag)
+{
+    return sessionState == static_cast<int>(SESSION_IDLE) && worldLoaded && hostLostFlag;
+}
+
+bool SaveSync_ExitToMainMenu(unsigned char* exeBase)
+{
+    ClearClientHostLost();
+    if (g_state != SESSION_IDLE) {
+        SaveSync_RequestDisconnect();
+    }
+    BYTE* base = exeBase ? exeBase : reinterpret_cast<BYTE*>(g_exe);
+    if (!base) return false;
+    Determinism_ClearFillingWorkQueues(base);
+    const uint8_t zero = 0;
+    const uint8_t one = 1;
+    (void)SafeWritePod(base + WORLD_RVA + WORLD_EXIT_DESKTOP_FLAG_OFF, zero);
+    if (!SafeWritePod(base + EXIT_TO_MENU_FLAG_RVA, one)) {
+        return false;
+    }
+    SaveStatus("[CLIENT] returning to main menu");
+    return true;
+}
+
+void SaveSync_SetClientHostLostForTest(bool active, const char* hostAddr,
+                                       const char* hostLabel, const char* reason)
+{
+    if (!active) {
+        ClearClientHostLost();
+        return;
+    }
+    RecordClientHostLost(hostAddr, hostLabel, reason);
+}
+
 void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
     DiagLog_FrameTick();
     ModSync_TickMainThread();
-    if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
+    const bool worldLoaded = SaveSync_IsWorldLoaded();
+    if (!worldLoaded && SaveSync_IsClientHostLost()) {
+        ClearClientHostLost();
+    }
+    if (SaveSync_IsWaitingLobbyActive() ||
+        (NativeMenu_IsHostOnNextLoad() && worldLoaded) ||
+        SaveSync_ShouldShowClientHostLostModal(static_cast<int>(g_state), worldLoaded, SaveSync_IsClientHostLost())) {
         SaveSync_EnforceWaitingLobbyHold();
     }
     if (g_state == SESSION_IDLE && (NativeMenu_GetActiveScreenId() != 0 || SaveSync_IsWorldLoaded())) {

@@ -24,18 +24,22 @@ static bool Unfocused()
     }
 }
 
+static bool CanBypassInputBlock()
+{
+    return SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() &&
+           !IsDualTestbed() && !SaveSync_IsWorldLoadInProgress() && !SaveSync_IsClientHostLost();
+}
+
 static bool Blocked()
 {
-    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() &&
-        !IsDualTestbed() && !SaveSync_IsWorldLoadInProgress())
+    if (CanBypassInputBlock())
         return false;
     return SyncBlock_BlocksWorldInput() || Unfocused();
 }
 
 static bool WorldActionBlocked()
 {
-    if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning() &&
-        !IsDualTestbed() && !SaveSync_IsWorldLoadInProgress())
+    if (CanBypassInputBlock())
         return false;
     return Blocked() || SaveSync_IsWaitingLobbyActive();
 }

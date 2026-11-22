@@ -2063,6 +2063,88 @@ unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void*
     return HookedIsVehicleAtDepotOrStop(nullptr, (const BYTE*)bld, (const BYTE*)veh, a4);
 }
 
+// Crash A: guard 0x41E9F0 (UpdateSignalBlock) against corrupt segment->signalBlock pointers
+// such as 0x90 dereferenced at 0x41EA0C ([rdx+0x14]) or missing node ptr at 0x41EB5A ([rdx+0x08]).
+static const unsigned char kUpdateSignalBlockExpect[16] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18, 0x56, 0x48, 0x83,
+    0xEC, 0x30, 0x48, 0x8B, 0xF2, 0x48, 0x8B, 0xD9
+};
+typedef void (__fastcall* UpdateSignalBlockFn)(void* world, void* segPtr);
+static UpdateSignalBlockFn o_updateSignalBlock = nullptr;
+
+bool SimPatches_IsSignalSegmentSafe(const void* segPtr)
+{
+    if (!segPtr || !IsPointerLikeX64((uint64_t)(uintptr_t)segPtr)) {
+        return false;
+    }
+    const uint8_t* seg = (const uint8_t*)segPtr;
+    uint64_t sigBlockPtr = 0;
+    if (!SafeReadPod(seg + SEG_SIGNAL_BLOCK_PTR_OFFSET, &sigBlockPtr)) {
+        return false;
+    }
+    if (sigBlockPtr != 0) {
+        if (!IsPointerLikeX64(sigBlockPtr)) {
+            return false;
+        }
+        const uint8_t* sigBlock = (const uint8_t*)(uintptr_t)sigBlockPtr;
+        uint32_t kind = 0;
+        if (!SafeReadPod(sigBlock + SIGNAL_BLOCK_KIND_OFFSET, &kind)) {
+            return false;
+        }
+        if (kind != SIGNAL_BLOCK_KIND_SKIP) {
+            uint64_t nodePtr = 0;
+            if (!SafeReadPod(sigBlock + SIGNAL_BLOCK_NODE_PTR_OFFSET, &nodePtr)) {
+                return false;
+            }
+            return nodePtr != 0 && IsPointerLikeX64(nodePtr);
+        }
+    }
+    uint64_t nodeBounds[2] = { 0, 0 };
+    if (!SafeReadPod(seg + SEG_CONNECTED_NODES_BEGIN_OFF, &nodeBounds)) {
+        return false;
+    }
+    const uint64_t beginAddr = nodeBounds[0];
+    const uint64_t endAddr = nodeBounds[1];
+    if (endAddr < beginAddr || ((endAddr - beginAddr) % sizeof(void*)) != 0) {
+        return false;
+    }
+    const uint64_t count = (endAddr - beginAddr) / sizeof(void*);
+    if (count > 1024ULL) {
+        return false;
+    }
+    if (count > 0 && !IsPointerLikeX64(beginAddr)) {
+        return false;
+    }
+    return true;
+}
+
+static bool __fastcall HookedUpdateSignalBlockImpl(void* world, void* segPtr)
+{
+    if (!SimPatches_IsSignalSegmentSafe(segPtr)) {
+        static ULONGLONG s_lastWarnTick = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (s_lastWarnTick == 0 || (now - s_lastWarnTick) >= 2000ULL) {
+            s_lastWarnTick = now;
+            Logf("republicmp  CRASH_FIX_A: skipped invalid signal segment %p in 0x41E9F0", segPtr);
+        }
+        return false;
+    }
+    if (o_updateSignalBlock) {
+        o_updateSignalBlock(world, segPtr);
+    }
+    return true;
+}
+
+static void __fastcall HookedUpdateSignalBlock(void* world, void* segPtr)
+{
+    (void)HookedUpdateSignalBlockImpl(world, segPtr);
+}
+
+bool SimPatches_TestHookedUpdateSignalBlock(void* world, void* segPtr)
+{
+    return HookedUpdateSignalBlockImpl(world, segPtr);
+}
+
 void SimPatches_TestBuildVehicleWaypoints(void* vehicle, unsigned char a2)
 {
     // Native SOVIET64.exe 0x683240 early-exits at 0x6832EB when veh[0x67D] != 0 && veh[0xD39] != 0.
@@ -2084,6 +2166,9 @@ bool SimPatches_Install()
     InstallInlineHook(g_exeBase + RVA_IS_VEHICLE_AT_DEPOT_OR_STOP, (void*)&HookedIsVehicleAtDepotOrStop,
                       &o_isVehicleAtDepotOrStop, kIsVehicleAtDepotOrStopExpect,
                       sizeof(kIsVehicleAtDepotOrStopExpect), "republicmp is_vehicle_at_depot");
+    InstallInlineHook(g_exeBase + RVA_UPDATE_SIGNAL_BLOCK, (void*)&HookedUpdateSignalBlock,
+                      (void**)&o_updateSignalBlock, kUpdateSignalBlockExpect,
+                      sizeof(kUpdateSignalBlockExpect), "republicmp update_signal_block");
 
     bool sitesOk = memcmp(g_exeBase + GETNODE_SITE, kGetNodeOriginal, 6) == 0 &&
                    memcmp(g_exeBase + SAPLING_RENDER_CALL, kSaplingRenderOriginal, 5) == 0 &&

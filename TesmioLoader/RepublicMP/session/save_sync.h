@@ -60,6 +60,27 @@ bool SaveSync_IsWorldLoaded();
 // True while the engine is loading a world save (load trigger pending, HookedLoadWorld executing, or save transfer unpacking).
 bool SaveSync_IsWorldLoadInProgress();
 void SaveSync_SetTestWorldLoadInProgress(bool inProgress);
+// Sliding-window transfer speed calculator (monotonic byte clamp + 3s window + EMA).
+struct SaveTransferSpeedSample {
+    ULONGLONG tickMs;
+    uint64_t bytesDone;
+};
+
+struct SaveTransferSpeedMeter {
+    static constexpr int kCapacity = 16;
+    static constexpr ULONGLONG kWindowMs = 3000ULL;
+    static constexpr ULONGLONG kMinSampleIntervalMs = 150ULL;
+    SaveTransferSpeedSample samples[kCapacity];
+    int head;
+    int count;
+    uint64_t maxBytesSeen;
+    ULONGLONG lastUpdateTick;
+    float speedEmaMbSec;
+};
+
+void SaveSync_SpeedMeterReset(SaveTransferSpeedMeter* meter, ULONGLONG nowMs = 0);
+float SaveSync_SpeedMeterUpdate(SaveTransferSpeedMeter* meter, uint64_t doneBytes, ULONGLONG nowMs);
+
 void SaveSync_OnP2PFlushProgress(int queuedBytes, bool finished);
 
 // Refused (no-op) while a session is active. Hosting needs a loaded world;
@@ -184,6 +205,23 @@ bool SaveSync_ShouldBlockWorldEdits(int sessionState, bool inGameplay, bool sync
 
 // True while the Co-op Waiting Lobby / Synchronization lock is active in gameplay.
 bool SaveSync_IsWaitingLobbyActive();
+
+// Client unexpected Host disconnect state & modal (Pause + Guided Recovery UI).
+struct ClientHostLostInfo {
+    bool active;
+    char hostAddress[64];
+    char hostLabel[128];
+    char reason[256];
+    ULONGLONG lostTick;
+};
+
+bool SaveSync_IsClientHostLost();
+bool SaveSync_GetClientHostLostInfo(ClientHostLostInfo* out);
+void SaveSync_DismissClientHostLost();
+bool SaveSync_ShouldShowClientHostLostModal(int sessionState, bool worldLoaded, bool hostLostFlag);
+bool SaveSync_ExitToMainMenu(unsigned char* exeBase = nullptr);
+void SaveSync_SetClientHostLostForTest(bool active, const char* hostAddr = nullptr,
+                                       const char* hostLabel = nullptr, const char* reason = nullptr);
 
 // True when a partner had already joined this Host session earlier, dropped/disconnected,
 // and the Host is now paused in SESSION_HOST_LISTENING waiting for them to reconnect.

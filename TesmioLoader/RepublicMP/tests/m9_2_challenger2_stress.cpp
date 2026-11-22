@@ -4,7 +4,7 @@
 //
 // Focus Areas:
 //   1. GameCalls Call Site Dispatch & Unique Collision Oracle (Challenge 1):
-//      - Verify call sites 0x776557 (ReplaceMachines -> 0x1A8D90), 0x7D8738 (RepaintTemplate -> 0x664940),
+//      - Verify call sites 0x776557 (ReplaceMachines -> 0x1A8D90), removal of read-only 0x7D8738 -> 0x664940,
 //        and verified firestation_addfire / assign_co click mutators (while 9 broken sites are absent).
 //      - Exhaustive collision check: verify zero duplicate site RVAs across the entire table.
 //      - Verify relay buffer allocation and headroom (SITE_COUNT * 32 <= 16384 bytes).
@@ -49,15 +49,15 @@
 
 static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
 {
-    printf("    [Challenger2-1.1] GameCalls Sites 0x776557, 0x7D8738, Removed Broken Sites & Relay Headroom ...\n");
+    printf("    [Challenger2-1.1] GameCalls Sites 0x776557, Removed Read-Only 0x7D8738 & Broken Sites, Relay Headroom ...\n");
     fflush(stdout);
 
     // 1. Verify existence of valid call sites added in Milestone M9.2 + M1 click mutators
     // Site 0x776557 (factory window: replace machines) -> routine 0x1A8D90
     TEST_CHECK(GameCalls_HasCallSiteForTest(0x776557u, 0x1A8D90u));
 
-    // Site 0x7D8738 (vehicle window: repaint template) -> routine 0x664940
-    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+    // Read-only per-frame predicate 0x7D8738 -> 0x664940 was removed to stop Lockstep floods
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
 
     // Verify all 9 removed broken per-frame tool-loop / simulation sites are absent
     const unsigned kRemovedSites[][2] = {
@@ -94,7 +94,6 @@ static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
         { 0x770464u, 0x1A0510u }, // office window: toggle priority
         { 0x77DD57u, 0x1A0510u }, // building window: toggle priority
         { 0x776557u, 0x1A8D90u }, // M9.2: replace machines
-        { 0x7D8738u, 0x664940u }, // M9.2: repaint template
         { SITE_FIRESTATION_DISPATCH_ROAD_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_FIRESTATION_DISPATCH_HELI_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_ASSIGN_CO_SINGLE_START_RVA, RVA_START_PLANNED_CONSTRUCTION },

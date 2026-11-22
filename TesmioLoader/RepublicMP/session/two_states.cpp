@@ -2125,35 +2125,44 @@ static __int64 __fastcall H_BldStepUtility(BYTE* world, BYTE* building, uintptr_
     return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldStepUtility);
 }
 
+static void RegisterNewlySpawnedVehicles(BYTE* building, int vehBefore)
+{
+    int vehAfter = GetWorldVehicleCount();
+    if (vehAfter <= vehBefore || !building || !g_exeBase) return;
+    int owner = ResolveBuildingOwnerFast(building);
+    if (owner != 1 && owner != 2) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
+        for (int i = vehBefore; v && i < vehAfter; ++i) {
+            if (v[i]) {
+                int vehId = *(const int*)(v[i] + VEH_ID_OFFSET);
+                TwoStates_RegisterVehicleOwner(vehId, owner);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    DiagLog_EndSafeSeh();
+}
+
+static __int64 CallBuildingEconAndRegisterVehicles(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
+                                                   uintptr_t a5, uintptr_t a6, BldEconFn orig)
+{
+    int vehBefore = GetWorldVehicleCount();
+    __int64 r = CallBuildingEconHook(world, building, a3, a4, a5, a6, orig);
+    RegisterNewlySpawnedVehicles(building, vehBefore);
+    return r;
+}
+
 static __int64 __fastcall H_BldStepProduction(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                               uintptr_t a5, uintptr_t a6)
 {
-    int vehBefore = GetWorldVehicleCount();
-    __int64 r = CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldStepProduction);
-    int vehAfter = GetWorldVehicleCount();
-    if (vehAfter > vehBefore && building && g_exeBase) {
-        int owner = ResolveBuildingOwnerFast(building);
-        if (owner == 1 || owner == 2) {
-            DiagLog_BeginSafeSeh();
-            __try {
-                BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
-                for (int i = vehBefore; v && i < vehAfter; ++i) {
-                    if (v[i]) {
-                        int vehId = *(const int*)(v[i] + VEH_ID_OFFSET);
-                        TwoStates_RegisterVehicleOwner(vehId, owner);
-                    }
-                }
-            } __except (EXCEPTION_EXECUTE_HANDLER) {}
-            DiagLog_EndSafeSeh();
-        }
-    }
-    return r;
+    return CallBuildingEconAndRegisterVehicles(world, building, a3, a4, a5, a6, o_bldStepProduction);
 }
 
 static __int64 __fastcall H_BldConstructWorkers(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
                                                 uintptr_t a5, uintptr_t a6)
 {
-    return CallBuildingEconHook(world, building, a3, a4, a5, a6, o_bldConstructWorkers);
+    return CallBuildingEconAndRegisterVehicles(world, building, a3, a4, a5, a6, o_bldConstructWorkers);
 }
 
 static __int64 __fastcall H_BldWorkerStep(BYTE* world, BYTE* building, uintptr_t a3, uintptr_t a4,
@@ -3795,15 +3804,40 @@ bool TwoStates_SetVehicleLicenseOwnedForTest(BYTE* world, int stateOwner, int ty
     return true;
 }
 
+bool TwoStates_IsDemolitionOfficeOrSite(const BYTE* officeBld, const BYTE* targetBld)
+{
+    if (targetBld && IsPointerLikeX64((uintptr_t)targetBld)) {
+        BYTE isDemolSite = 0;
+        if (SafeReadPod(targetBld + BLD_IS_DEMOLITION_SITE_OFFSET, &isDemolSite) && isDemolSite != 0) {
+            return true;
+        }
+    }
+    if (officeBld && IsPointerLikeX64((uintptr_t)officeBld)) {
+        uintptr_t bldType = 0;
+        int cat = 0;
+        if (SafeReadPod(officeBld + BLD_TYPE_OFFSET, &bldType) &&
+            IsPointerLikeX64(bldType) &&
+            SafeReadPod((const BYTE*)bldType + BLD_TYPE_CAT_OFF, &cat) &&
+            cat == (int)BLD_CAT_DEMOLISH_CO) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool ShouldAllowConstructionOfficeAssignment(const BYTE* officeBld, const BYTE* targetBld,
-                                                    unsigned char checkFilters, unsigned char isDemolishOffice,
+                                                    unsigned char checkFilters, unsigned char triggerImmediateScan,
                                                     uintptr_t callerRva)
 {
+    (void)triggerImmediateScan; // 0x161CB0 6th param only schedules RCO reachability scan, never marks demolition.
     if (!TwoStates_IsActive() || !officeBld || !targetBld) return true;
     int officeOwner = ResolveBuildingOwnerFast(officeBld);
     int targetOwner = ResolveBuildingOwnerFast(targetBld);
-    bool isAutoSearch = (checkFilters != 0) || (callerRva == RVA_CALLER_OFFICE_ROAD_SCAN);
-    if (isAutoSearch || isDemolishOffice != 0) {
+    bool isAutoSearch = (checkFilters != 0) ||
+                        (callerRva == RVA_CALLER_OFFICE_ROAD_SCAN) ||
+                        (callerRva == RVA_CALLER_RAIL_CHAIN_ASSIGN);
+    bool isDemolition = TwoStates_IsDemolitionOfficeOrSite(officeBld, targetBld);
+    if (isAutoSearch || isDemolition) {
         return officeOwner == targetOwner;
     }
     if (g_inCommand && (g_cmdOwner == 1 || g_cmdOwner == 2)) {
@@ -3816,28 +3850,28 @@ static bool ShouldAllowConstructionOfficeAssignment(const BYTE* officeBld, const
 }
 
 static void __fastcall H_AssignConstructionOffice(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
-                                                  unsigned char checkFilters, unsigned char isDemolishOffice)
+                                                  unsigned char checkFilters, unsigned char triggerImmediateScan)
 {
     uintptr_t retAddr = (uintptr_t)_ReturnAddress();
     uintptr_t exeBase = (uintptr_t)g_exeBase;
     uintptr_t callerRva = (exeBase && retAddr >= exeBase) ? (retAddr - exeBase) : 0;
-    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, isDemolishOffice, callerRva)) {
+    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, triggerImmediateScan, callerRva)) {
         return;
     }
     if (o_assignConstructionOffice) {
-        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, isDemolishOffice);
+        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, triggerImmediateScan);
     }
 }
 
 bool TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
-                                               unsigned char checkFilters, unsigned char isDemolishOffice,
+                                               unsigned char checkFilters, unsigned char triggerImmediateScan,
                                                uintptr_t callerRvaOverride)
 {
-    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, isDemolishOffice, callerRvaOverride)) {
+    if (!ShouldAllowConstructionOfficeAssignment(officeBld, targetBld, checkFilters, triggerImmediateScan, callerRvaOverride)) {
         return false;
     }
     if (o_assignConstructionOffice) {
-        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, isDemolishOffice);
+        o_assignConstructionOffice(world, officeBld, targetBld, dist, checkFilters, triggerImmediateScan);
     }
     return true;
 }
@@ -4200,6 +4234,61 @@ private:
     StateTrackerSlice m_vehBeforeTrackerCur = {};
 };
 
+bool TwoStates_PtrInStdVector(const void* vecHeader, const void* targetPtr)
+{
+    if (!vecHeader || !targetPtr) return false;
+    uint64_t bounds[2] = { 0, 0 };
+    if (!SafeReadPod(vecHeader, &bounds)) return false;
+    const uint64_t beginAddr = bounds[0];
+    const uint64_t endAddr = bounds[1];
+    if (beginAddr == 0 || endAddr <= beginAddr) return false;
+    if ((beginAddr & 7u) != 0 || (endAddr & 7u) != 0) return false;
+    const uint64_t count = (endAddr - beginAddr) / sizeof(uint64_t);
+    if (count > 1000000ULL || !IsPointerLikeX64(beginAddr)) return false;
+    const uint64_t targetAddr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(targetPtr));
+    const BYTE* basePtr = reinterpret_cast<const BYTE*>(static_cast<uintptr_t>(beginAddr));
+    for (uint64_t i = 0; i < count; ++i) {
+        uint64_t elem = 0;
+        if (!SafeReadPod(basePtr + i * sizeof(uint64_t), &elem)) return false;
+        if (elem == targetAddr) return true;
+    }
+    return false;
+}
+
+size_t TwoStates_ErasePtrFromStdVector(void* vecHeader, const void* targetPtr)
+{
+    if (!vecHeader || !targetPtr) return 0;
+    uint64_t bounds[2] = { 0, 0 };
+    if (!SafeReadPod(vecHeader, &bounds)) return 0;
+    const uint64_t beginAddr = bounds[0];
+    const uint64_t endAddr = bounds[1];
+    if (beginAddr == 0 || endAddr <= beginAddr) return 0;
+    if ((beginAddr & 7u) != 0 || (endAddr & 7u) != 0) return 0;
+    const uint64_t count = (endAddr - beginAddr) / sizeof(uint64_t);
+    if (count > 1000000ULL || !IsPointerLikeX64(beginAddr)) return 0;
+    const uint64_t targetAddr = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(targetPtr));
+    BYTE* basePtr = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(beginAddr));
+    uint64_t writeIdx = 0;
+    size_t removed = 0;
+    for (uint64_t readIdx = 0; readIdx < count; ++readIdx) {
+        uint64_t elem = 0;
+        if (!SafeReadPod(basePtr + readIdx * sizeof(uint64_t), &elem)) return 0;
+        if (elem == targetAddr) {
+            ++removed;
+            continue;
+        }
+        if (writeIdx != readIdx) {
+            if (!SafeWritePod(basePtr + writeIdx * sizeof(uint64_t), elem)) return removed;
+        }
+        ++writeIdx;
+    }
+    if (removed > 0) {
+        const uint64_t newEnd = beginAddr + writeIdx * sizeof(uint64_t);
+        (void)SafeWritePod(static_cast<BYTE*>(vecHeader) + sizeof(uint64_t), newEnd);
+    }
+    return removed;
+}
+
 static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned char a3, unsigned char a4,
                                         uintptr_t a5, uintptr_t a6, float a7)
 {
@@ -4207,11 +4296,26 @@ static __int64 __fastcall H_VehicleSale(BYTE* world, BYTE* vehicle, unsigned cha
     int vehId = vehicle ? *(const int*)(vehicle + VEH_ID_OFFSET) : -1;
     VehicleEconOverrideScope econ(world, vehicle);
     __int64 r = o_vehicleSale ? o_vehicleSale(world, vehicle, a3, a4, a5, a6, a7) : 0;
-    if (r && vehId >= 0) {
-        EnsureOwnerLock();
-        EnterCriticalSection(&g_ownerLock);
-        g_vehicleOwners.erase(vehId);
-        LeaveCriticalSection(&g_ownerLock);
+    // Crash B: native 0x3E0670 can leave rax == 0 (it has no explicit `mov al, 1` in its epilogue)
+    // while removing `vehicle` from VEC_VEHICLES, or leave a dangling pointer in VEC_FILLING_VEHICLES.
+    const bool sold = (r != 0) ||
+                      (vehicle != nullptr && g_exeBase != nullptr &&
+                       !TwoStates_PtrInStdVector(g_exeBase + VEC_VEHICLES_BEGIN_RVA, vehicle));
+    if (sold) {
+        if (vehicle && g_exeBase) {
+            const size_t purged = TwoStates_ErasePtrFromStdVector(
+                g_exeBase + VEC_FILLING_VEHICLES_BEGIN_RVA, vehicle);
+            if (purged > 0) {
+                Logf("republicmp  CRASH_FIX_B: pruned sold vehicle %p (id=%d, count=%zu) from Filling vector",
+                     vehicle, vehId, purged);
+            }
+        }
+        if (vehId >= 0) {
+            EnsureOwnerLock();
+            EnterCriticalSection(&g_ownerLock);
+            g_vehicleOwners.erase(vehId);
+            LeaveCriticalSection(&g_ownerLock);
+        }
     }
     return r;
 }

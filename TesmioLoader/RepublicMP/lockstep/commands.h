@@ -59,6 +59,7 @@ enum LockstepCommandKind {
     LS_CMD_LOAN = 28,           // two_states.cpp: bank loan borrow / partial repay / full repay
     LS_CMD_CITY_DELETE = 29,    // rename.cpp: city deletion
     LS_CMD_RESEARCH = 30,       // two_states.cpp: independent state research program selection
+    LS_CMD_OFFICE_REORDER = 31, // game_calls.cpp: construction/rail office queue reorder popup (0x7707E0)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

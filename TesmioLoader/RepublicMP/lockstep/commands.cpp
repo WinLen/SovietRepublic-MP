@@ -137,6 +137,7 @@ static const char* const kCmdKindNames[] = {
     "bank loan",                      // LS_CMD_LOAN (28)
     "city deletion",                  // LS_CMD_CITY_DELETE (29)
     "research program",               // LS_CMD_RESEARCH (30)
+    "office queue reorder",           // LS_CMD_OFFICE_REORDER (31)
 };
 
 static const char* KindName(int kind)
@@ -244,6 +245,7 @@ static const RawCmdHandlerEntry kRawCmdHandlers[] = {
     { LS_CMD_VEHICLE_SOFT_SYNC, VehicleSoftSync_ApplyCommand },
     { LS_CMD_CITY_DELETE, Rename_ApplyDeleteCommand },
     { LS_CMD_RESEARCH, ApplyResearchCommand },
+    { LS_CMD_OFFICE_REORDER, GameCalls_ApplyOfficeReorderCommand },
 };
 
 static bool DispatchCommandPayload(int kind, const void* p, size_t n)

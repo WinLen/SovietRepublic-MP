@@ -1978,11 +1978,26 @@ static bool SubTest_ConstructionOfficeTwoStatesAutoAndManual()
     TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteWest.data(), 0));
     TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeEast.data(), siteEast.data(), 0));
 
-    // 4. Demolition office (isDemolish = 1) CANNOT demolish a foreign SSR's building even manually
-    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 0, 1));
-    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 1));
-    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteWest.data(), 1));
-    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 1));
+    // 4. Demolition office (cat == 0x6A) or demolition site (+0xEA8 != 0) CANNOT demolish a foreign SSR's building,
+    //    whereas regular CO / RCO passing arg6 = 1 (triggerImmediateScan) CAN manually assist neighbor construction
+    std::vector<BYTE> bldTypeCo(0x400, 0), bldTypeDemol(0x400, 0);
+    *(int*)(bldTypeCo.data() + BLD_TYPE_CAT_OFF) = (int)BLD_CAT_RAIL_CO;
+    *(int*)(bldTypeDemol.data() + BLD_TYPE_CAT_OFF) = (int)BLD_CAT_DEMOLISH_CO;
+    *(uintptr_t*)(officeWest.data() + BLD_TYPE_OFFSET) = (uintptr_t)bldTypeCo.data();
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 1));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 1));
+
+    *(uintptr_t*)(officeWest.data() + BLD_TYPE_OFFSET) = (uintptr_t)bldTypeDemol.data();
+    TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 3000.0f, 0, 0));
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 0));
+    TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteWest.data(), 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
+    *(uintptr_t*)(officeWest.data() + BLD_TYPE_OFFSET) = (uintptr_t)bldTypeCo.data();
+
+    siteEast[BLD_IS_DEMOLITION_SITE_OFFSET] = 1;
+    TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 3000.0f, 0, 0));
+    TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
+    siteEast[BLD_IS_DEMOLITION_SITE_OFFSET] = 0;
 
     // 5. Unassignment (0x162360): allowed if local player owns EITHER the office OR the target construction site
     TEST_CHECK(GameCalls_CheckOfficeCallAllowedForTest(RVA_UNASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
@@ -9263,6 +9278,8 @@ static bool Test_Stress_M4_Challenger_R3_R10_R11_R17()
 #include "lan_m3_tests.cpp"
 #define REPUBLICMP_E2E_EXTERNAL_INCLUDES 1
 #include "lan_e2e_tests.cpp"
+#include "hotfix_v171_tests.cpp"
+#include "rco_rail_construction_tests.cpp"
 
 static bool Test_LanDiscoveryDirectSmoke_M1()
 {
@@ -11535,11 +11552,10 @@ static bool SubTest_M9_2_LineWaypointsOnRoadAndAirNetworks()
 static bool SubTest_M9_2_FactoryQueueAndMachineReplacementSites()
 {
     // Feature 29: In game_calls.cpp:
-    // Verify sites 0x776557 (ReplaceMachines) & 0x7D8738 (Repaint template);
-    // broken simulation site 0x1A15A8 has been removed.
+    // Verify site 0x776557 (ReplaceMachines) & removal of broken 0x1A15A8 and read-only 0x7D8738.
     TEST_CHECK(GameCalls_HasCallSiteForTest(0x776557u, 0x1A8D90u));
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1A15A8u, 0x1BC010u));
-    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
 
     // Check non-existent site
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x654321u));
@@ -15962,6 +15978,8 @@ int main()
         { "SteamFreeSessionAndModSync_M2 (F6-F8)", &Test_SteamFreeSessionAndModSyncDirectSmoke_M2 },
         { "LanUiBrowserHostIpAndToasts_M3 (F9-F11)", &Test_LanUiBrowserHostIpAndToastsDirectSmoke_M3 },
         { "LanE2eSuite_M4 (145 Cases: F1-F11, Tiers 1-5)", &Test_LanE2eSuite_M4 },
+        { "HotfixV171_CrashesHostLostSteamFriendsAckSpeed (Issues #1-#4)", &Test_HotfixV171_All },
+        { "RcoRailConstructionFixes (Bugs #1-#6: SiteStopFilter, DemolArg6, RailChain, QueueReorder, 0x7D8738)", &Test_RcoRailConstructionFixes_All },
     };
 
     for (const auto& tc : kTests) {

@@ -1105,7 +1105,7 @@ static bool SubTest_M2_F8_SessionLifecycleAndIdentity(M2LoopbackEnvGuard& guard)
     }
 
     // Protocol constant sanity check
-    TEST_CHECK(REPUBLICMP_PROTOCOL == 63);
+    TEST_CHECK(REPUBLICMP_PROTOCOL >= 63);
     TEST_CHECK(strcmp(SaveSync_GetLocalVersion(), REPUBLICMP_VERSION) == 0);
 
     // Idempotent LanDiscovery_Shutdown

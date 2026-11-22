@@ -205,7 +205,7 @@ static const GameCallSite kSites[] = {
     { SITE_COPY_WASTE_SETTINGS_RVA, FN_COPY_WASTE_SETTINGS_RVA, "copy tool: copy technical services waste settings", "WBB", 0, 0, false },
     { SITE_COPY_TRANSFER_SETTINGS_RVA, FN_COPY_TRANSFER_SETTINGS_RVA, "copy tool: copy factory connection settings", "WBB", 0, 0, false },
     { SITE_FACTORY_REPLACE_MACHINES_2_RVA, RVA_START_PLANNED_CONSTRUCTION, "factory window: replace machines", "WObb", 0, 0, false },
-    { 0x7D8738, 0x664940, "vehicle window: repaint template", "V", 0, 0, false },
+    // 0x7D8738 -> 0x664940 omitted: pure read-only per-frame vehicle-window predicate (interception flooded Lockstep).
     { SITE_DENOMINATION_RVA, FN_CURRENCY_DENOMINATION_RVA, "denomination popup: redenominate currency", "W", 0, 0, false, CALL_DENOMINATION },
     { SITE_FACTORY_REPLACE_MACHINES_1_RVA, RVA_START_PLANNED_CONSTRUCTION, "factory window: replace machines (first currency)", "WObb", 0, 0, false },
     { SITE_AUTO_REPLACE_CLEAR_RVA, RVA_SET_AUTO_REPLACE, "purchase window: clear auto-replace rule", "Mxx", WORLD_AUTO_REPLACE_MGR_OFFSET, 0, false, CALL_AUTO_REPLACE_CLEAR },
@@ -867,17 +867,22 @@ static U64 FindWorldBuilding(Pred pred)
     return 0;
 }
 
-static bool ReadPtrVectorRange(U64 vecAddr, U64 outVec[2], U64& outCount)
+static bool ReadVectorByteRange(U64 vecAddr, size_t stride, U64 outVec[2], U64& outCount)
 {
     outVec[0] = 0;
     outVec[1] = 0;
     outCount = 0;
-    if (!SafeMemcpyPod(outVec, (const void*)vecAddr, 2u * sizeof(U64))) return false;
-    if (!IsPointerLikeX64(outVec[0]) || outVec[1] <= outVec[0] || ((outVec[1] - outVec[0]) & 7u) != 0) {
-        return false;
-    }
-    outCount = (outVec[1] - outVec[0]) / sizeof(U64);
+    if (!stride || !SafeMemcpyPod(outVec, (const void*)vecAddr, 2u * sizeof(U64))) return false;
+    if (!IsPointerLikeX64(outVec[0]) || outVec[1] <= outVec[0]) return false;
+    const U64 diff = outVec[1] - outVec[0];
+    if ((diff % stride) != 0) return false;
+    outCount = diff / stride;
     return true;
+}
+
+static bool ReadPtrVectorRange(U64 vecAddr, U64 outVec[2], U64& outCount)
+{
+    return ReadVectorByteRange(vecAddr, sizeof(U64), outVec, outCount);
 }
 
 static bool FindBuildingOwningSingleSlot(U64 slotPtr, U64& outBld, unsigned& outSlotIdx)
@@ -1391,15 +1396,16 @@ static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U
 }
 
 static bool CheckTwoStatesOfficeCallAllowed(unsigned targetRva, const BYTE* officeBld,
-                                            const BYTE* targetBld, unsigned char isDemolishOffice)
+                                            const BYTE* targetBld, unsigned char triggerImmediateScan)
 {
+    (void)triggerImmediateScan; // 0x161CB0 arg6 only triggers RCO reachability scan, never identifies demolition.
     if (!TwoStates_IsActive()) return true;
     if (targetRva == RVA_ASSIGN_CONSTRUCTION_OFFICE) {
         if (!officeBld || !TwoStates_CheckBuildingControlAllowed(officeBld,
                 Tr("назначение чужой стройконторы", "assigning a foreign construction office"))) {
             return false;
         }
-        if (isDemolishOffice != 0 && targetBld &&
+        if (TwoStates_IsDemolitionOfficeOrSite(officeBld, targetBld) && targetBld &&
             !TwoStates_CheckBuildingControlAllowed(targetBld,
                 Tr("снос чужого здания", "demolishing a foreign building"))) {
             return false;
@@ -1424,9 +1430,9 @@ static bool CheckTwoStatesOfficeCallAllowed(unsigned targetRva, const BYTE* offi
 }
 
 bool GameCalls_CheckOfficeCallAllowedForTest(unsigned targetRva, const BYTE* officeBld,
-                                             const BYTE* targetBld, unsigned char isDemolishOffice)
+                                             const BYTE* targetBld, unsigned char triggerImmediateScan)
 {
-    return CheckTwoStatesOfficeCallAllowed(targetRva, officeBld, targetBld, isDemolishOffice);
+    return CheckTwoStatesOfficeCallAllowed(targetRva, officeBld, targetBld, triggerImmediateScan);
 }
 
 static bool IsAssignCoStartPlanSite(unsigned siteRva)
@@ -1936,6 +1942,220 @@ bool GameCalls_ApplyCommand(const void* data, size_t size)
     return why == nullptr;
 }
 
+static const size_t kMaxOfficeReorderCount = 256;
+
+#pragma pack(push, 1)
+struct OfficeReorderHeader {
+    RouteRef office;
+    unsigned short count;
+};
+#pragma pack(pop)
+
+typedef void (__fastcall* OfficeReorderFn)(BYTE* itemsVec, BYTE* office);
+static OfficeReorderFn g_origOfficeQueueReorder = nullptr;
+
+static const unsigned char kOfficeReorderExpect[14] = {
+    0x4C, 0x8B, 0xDC, 0x49, 0x89, 0x4B, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55
+};
+
+bool GameCalls_ApplyOfficeQueuePermutation(unsigned long long* sites, float* dists, size_t count,
+                                           const unsigned short* newOrder, size_t orderCount)
+{
+    if (!sites || !dists || !newOrder || count == 0 || count != orderCount || count > kMaxOfficeReorderCount) {
+        return false;
+    }
+    unsigned long long tmpSites[kMaxOfficeReorderCount] = {};
+    float tmpDists[kMaxOfficeReorderCount] = {};
+    bool used[kMaxOfficeReorderCount] = {};
+    for (size_t i = 0; i < count; ++i) {
+        tmpSites[i] = sites[i];
+        tmpDists[i] = dists[i];
+    }
+
+    size_t out = 0;
+    for (size_t i = 0; i < count && out < count; ++i) {
+        const size_t idx = (size_t)newOrder[i];
+        if (idx < count && !used[idx]) {
+            sites[out] = tmpSites[idx];
+            dists[out] = tmpDists[idx];
+            used[idx] = true;
+            ++out;
+        }
+    }
+    for (size_t i = 0; i < count && out < count; ++i) {
+        if (!used[i]) {
+            sites[out] = tmpSites[i];
+            dists[out] = tmpDists[i];
+            ++out;
+        }
+    }
+    return out == count;
+}
+
+static bool ReadOfficeAssignedVectors(const BYTE* office, U64 outSiteVec[2], U64 outDistVec[2], U64& outCount)
+{
+    outCount = 0;
+    if (!office || !IsPointerLikeX64((uintptr_t)office)) return false;
+    U64 siteCount = 0;
+    U64 distCount = 0;
+    const U64 base = (U64)(uintptr_t)office;
+    if (!ReadVectorByteRange(base + BLD_ASSIGNED_SITES_BEGIN_OFF, sizeof(U64), outSiteVec, siteCount) ||
+        !ReadVectorByteRange(base + BLD_ASSIGNED_DISTS_BEGIN_OFF, sizeof(float), outDistVec, distCount)) {
+        return false;
+    }
+    if (siteCount == 0 || siteCount > kMaxOfficeReorderCount || siteCount != distCount) {
+        return false;
+    }
+    outCount = siteCount;
+    return true;
+}
+
+static bool ParseOfficeReorderItems(const BYTE* itemsVec, U64 expectedCount, unsigned short* outOrder, bool& outChanged)
+{
+    outChanged = false;
+    if (!itemsVec || !IsPointerLikeX64((uintptr_t)itemsVec) || !outOrder) return false;
+    U64 vec[2] = {};
+    U64 itemCount = 0;
+    if (!ReadVectorByteRange((U64)(uintptr_t)itemsVec, OFFICE_REORDER_ITEM_STRIDE, vec, itemCount) ||
+        itemCount != expectedCount) {
+        return false;
+    }
+    for (U64 i = 0; i < itemCount; ++i) {
+        float rawIdx = -1.0f;
+        if (!SafeReadPod((const void*)(vec[0] + i * OFFICE_REORDER_ITEM_STRIDE + OFFICE_REORDER_ITEM_IDX_OFF), &rawIdx) ||
+            !isfinite(rawIdx)) {
+            return false;
+        }
+        const int idx = (int)rawIdx;
+        if (idx < 0 || (U64)idx >= itemCount) return false;
+        outOrder[i] = (unsigned short)idx;
+        if ((U64)idx != i) outChanged = true;
+    }
+    return true;
+}
+
+static bool BuildOfficeReorderPayload(const BYTE* itemsVec, const BYTE* office,
+                                      BYTE* outBuf, size_t maxBytes, size_t* outBytes, bool* outChanged)
+{
+    if (outBytes) *outBytes = 0;
+    if (outChanged) *outChanged = false;
+    if (!outBuf || maxBytes < sizeof(OfficeReorderHeader)) return false;
+
+    U64 siteVec[2] = {};
+    U64 distVec[2] = {};
+    U64 count = 0;
+    if (!ReadOfficeAssignedVectors(office, siteVec, distVec, count)) return false;
+
+    const size_t needBytes = sizeof(OfficeReorderHeader) + (size_t)count * sizeof(unsigned short);
+    if (maxBytes < needBytes) return false;
+
+    unsigned short order[kMaxOfficeReorderCount] = {};
+    bool changed = false;
+    if (!ParseOfficeReorderItems(itemsVec, count, order, changed)) return false;
+
+    OfficeReorderHeader hdr = {};
+    hdr.count = (unsigned short)count;
+    if (!Ref_Building((U64)(uintptr_t)office, hdr.office)) return false;
+
+    memcpy(outBuf, &hdr, sizeof(hdr));
+    memcpy(outBuf + sizeof(hdr), order, (size_t)count * sizeof(unsigned short));
+    if (outBytes) *outBytes = needBytes;
+    if (outChanged) *outChanged = changed;
+    return true;
+}
+
+bool GameCalls_BuildOfficeReorderPayloadForTest(const BYTE* itemsVec, const BYTE* office,
+                                                void* outBuf, size_t maxBytes, size_t* outBytes)
+{
+    bool changed = false;
+    return BuildOfficeReorderPayload(itemsVec, office, (BYTE*)outBuf, maxBytes, outBytes, &changed) && changed;
+}
+
+static void FreeOfficeReorderList(BYTE* itemsVec)
+{
+    if (!g_exeBase || g_exeBase[RVA_OFFICE_REORDER_FREE_LIST] == 0 || !IsPointerLikeX64((uintptr_t)itemsVec)) {
+        return;
+    }
+    DiagLog_BeginSafeSeh();
+    __try {
+        ((void (__fastcall*)(BYTE*))(g_exeBase + RVA_OFFICE_REORDER_FREE_LIST))(itemsVec);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void __fastcall H_OfficeQueueReorder(BYTE* itemsVec, BYTE* office)
+{
+    if (!Commands_TakeUi()) {
+        if (g_origOfficeQueueReorder) {
+            g_origOfficeQueueReorder(itemsVec, office);
+        } else {
+            FreeOfficeReorderList(itemsVec);
+        }
+        return;
+    }
+    const bool allowed = IsPointerLikeX64((uintptr_t)office) &&
+        (!TwoStates_IsActive() || TwoStates_CheckBuildingControlAllowed(
+            office, Tr("изменение очереди чужой стройконторы", "reordering a foreign construction office queue")));
+    if (allowed) {
+        BYTE buf[sizeof(OfficeReorderHeader) + kMaxOfficeReorderCount * sizeof(unsigned short)] = {};
+        size_t payloadBytes = 0;
+        bool changed = false;
+        if (BuildOfficeReorderPayload(itemsVec, office, buf, sizeof(buf), &payloadBytes, &changed) && changed) {
+            Commands_Submit(LS_CMD_OFFICE_REORDER, buf, payloadBytes);
+        }
+    }
+    FreeOfficeReorderList(itemsVec);
+}
+
+bool GameCalls_ApplyOfficeReorderCommand(const void* data, size_t size)
+{
+    if (!data || size < sizeof(OfficeReorderHeader)) return false;
+    OfficeReorderHeader hdr = {};
+    memcpy(&hdr, data, sizeof(hdr));
+    if (hdr.count == 0 || hdr.count > kMaxOfficeReorderCount) return false;
+    if (size != sizeof(OfficeReorderHeader) + (size_t)hdr.count * sizeof(unsigned short)) return false;
+
+    const U64 officeAddr = Ref_BuildingAt(hdr.office);
+    if (!officeAddr) {
+        Logf("republicmp  GAME CALL: office queue reorder - office is gone");
+        return true;
+    }
+    if (TwoStates_IsActive()) {
+        const int cmdOwner = TwoStates_GetCommandOwner();
+        if ((cmdOwner == 1 || cmdOwner == 2) &&
+            TwoStates_GetBuildingOwnerSlot((const BYTE*)officeAddr) != cmdOwner) {
+            return true;
+        }
+    }
+
+    U64 siteVec[2] = {};
+    U64 distVec[2] = {};
+    U64 vecCount = 0;
+    if (!ReadOfficeAssignedVectors((const BYTE*)officeAddr, siteVec, distVec, vecCount) ||
+        vecCount != hdr.count) {
+        Logf("republicmp  GAME CALL: office queue reorder (%u sites) - queue size mismatch, skipped",
+             (unsigned)hdr.count);
+        return true;
+    }
+
+    U64 sites[kMaxOfficeReorderCount] = {};
+    float dists[kMaxOfficeReorderCount] = {};
+    unsigned short order[kMaxOfficeReorderCount] = {};
+    memcpy(order, (const BYTE*)data + sizeof(hdr), (size_t)hdr.count * sizeof(unsigned short));
+    if (!SafeMemcpyPod(sites, (const void*)siteVec[0], (size_t)hdr.count * sizeof(U64)) ||
+        !SafeMemcpyPod(dists, (const void*)distVec[0], (size_t)hdr.count * sizeof(float))) {
+        return true;
+    }
+    if (!GameCalls_ApplyOfficeQueuePermutation(sites, dists, hdr.count, order, hdr.count)) {
+        return true;
+    }
+    SafeMemcpyPod((void*)siteVec[0], sites, (size_t)hdr.count * sizeof(U64));
+    SafeMemcpyPod((void*)distVec[0], dists, (size_t)hdr.count * sizeof(float));
+    Logf("republicmp  GAME CALL: office queue reorder (%u sites): applied", (unsigned)hdr.count);
+    return true;
+}
+
 static void EmitRelay20(BYTE* r, const BYTE prefix[6], void* to)
 {
     memcpy(r, prefix, 6);
@@ -2009,6 +2229,11 @@ bool GameCalls_Install()
         VirtualProtect(at, 5, prot, &prot);
         FlushInstructionCache(GetCurrentProcess(), at, 5);
         on++;
+    }
+    if (g_exeBase && !InstallInlineHook(g_exeBase + RVA_OFFICE_QUEUE_REORDER, (void*)&H_OfficeQueueReorder,
+                                        (void**)&g_origOfficeQueueReorder, kOfficeReorderExpect,
+                                        sizeof(kOfficeReorderExpect), "republicmp office_queue_reorder")) {
+        Logf("republicmp  GAME CALL: office_queue_reorder hook left uninstalled");
     }
     Logf("republicmp  GAME CALL: %d of %d window call sites relayed", on, (int)SITE_COUNT);
     return on == (int)SITE_COUNT;

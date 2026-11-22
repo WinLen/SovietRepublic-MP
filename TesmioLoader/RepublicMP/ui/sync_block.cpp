@@ -129,6 +129,10 @@ bool SyncBlock_BlocksWorldInput()
     if (ModSync_IsDownloadActive()) return true;
     if (g_active.load(std::memory_order_acquire)) return true;
     if (SaveSync_IsWaitingLobbyActive() && !g_mapInspectMode.load(std::memory_order_acquire)) return true;
+    if (SaveSync_ShouldShowClientHostLostModal(
+            static_cast<int>(SaveSync_GetState()), SaveSync_IsWorldLoaded(), SaveSync_IsClientHostLost())) {
+        return true;
+    }
     return false;
 }
 
@@ -663,12 +667,8 @@ static void DrawLobbyActionButtons(SessionState st, bool syncActive, bool isReco
     }
 }
 
-static void DrawWorkshopDownloadModal(const ImGuiIO& io)
+static void DrawFullscreenDimmer(const ImGuiIO& io, const char* windowId)
 {
-    ModDownloadProgress prog = {};
-    if (!ModSync_GetDownloadProgress(&prog) || !prog.active) return;
-
-    // Dimmer background
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.04f, 0.03f, 0.74f));
@@ -679,13 +679,18 @@ static void DrawWorkshopDownloadModal(const ImGuiIO& io)
                                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
                                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs;
-    if (ImGui::Begin("##republicmp_workshop_dimmer", nullptr, dimFlags)) {
+    if (ImGui::Begin(windowId, nullptr, dimFlags)) {
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
+}
 
-    float cardW = 700.0f;
+static bool BeginGosplanModalCard(const ImGuiIO& io, const char* windowId, float baseWidth,
+                                  ImU32 headerColor, const char* headerTitle, const char* subTitle,
+                                  float* outWinW)
+{
+    float cardW = baseWidth;
     if (cardW > io.DisplaySize.x - 40.0f) cardW = io.DisplaySize.x - 40.0f;
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
@@ -703,33 +708,60 @@ static void DrawWorkshopDownloadModal(const ImGuiIO& io)
                                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
 
-    if (ImGui::Begin("##republicmp_workshop_download_card", nullptr, cardFlags)) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 winPos = ImGui::GetWindowPos();
-        float winW = ImGui::GetWindowWidth();
+    if (!ImGui::Begin(windowId, nullptr, cardFlags)) {
+        ImGui::End();
+        ImGui::PopStyleVar(4);
+        ImGui::PopStyleColor(2);
+        return false;
+    }
 
-        dl->AddRectFilled(winPos, ImVec2(winPos.x + winW, winPos.y + 58.0f),
-                          IM_COL32(112, 22, 20, 255), 8.0f, ImDrawFlags_RoundCornersTop);
-        dl->AddLine(ImVec2(winPos.x, winPos.y + 58.0f), ImVec2(winPos.x + winW, winPos.y + 58.0f),
-                    IM_COL32(214, 171, 61, 240), 2.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 winPos = ImGui::GetWindowPos();
+    float winW = ImGui::GetWindowWidth();
+    if (outWinW) *outWinW = winW;
 
-        const char* headerTitle = Tr("★ ГОСПЛАН СССР — ЗАГРУЗКА МОДИФИКАЦИЙ ★",
-                                     "★ GOSPLAN USSR — DOWNLOADING WORKSHOP MODS ★");
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
-        ImVec2 tSize = ImGui::CalcTextSize(headerTitle);
-        ImGui::SetCursorPosX((winW - tSize.x) * 0.5f);
-        ImGui::TextUnformatted(headerTitle);
-        ImGui::PopStyleColor();
+    dl->AddRectFilled(winPos, ImVec2(winPos.x + winW, winPos.y + 58.0f),
+                      headerColor, 8.0f, ImDrawFlags_RoundCornersTop);
+    dl->AddLine(ImVec2(winPos.x, winPos.y + 58.0f), ImVec2(winPos.x + winW, winPos.y + 58.0f),
+                IM_COL32(214, 171, 61, 240), 2.0f);
 
-        const char* subTitle = Tr("СИНХРОНИЗАЦИЯ МОДОВ STEAM WORKSHOP ДЛЯ КООП-СЕССИИ",
-                                  "STEAM WORKSHOP MOD SYNCHRONIZATION FOR CO-OP SESSION");
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.89f, 0.82f, 1.0f));
-        ImVec2 subSize = ImGui::CalcTextSize(subTitle);
-        ImGui::SetCursorPosX((winW - subSize.x) * 0.5f);
-        ImGui::TextUnformatted(subTitle);
-        ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
+    ImVec2 tSize = ImGui::CalcTextSize(headerTitle);
+    ImGui::SetCursorPosX((winW - tSize.x) * 0.5f);
+    ImGui::TextUnformatted(headerTitle);
+    ImGui::PopStyleColor();
 
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.89f, 0.82f, 1.0f));
+    ImVec2 subSize = ImGui::CalcTextSize(subTitle);
+    ImGui::SetCursorPosX((winW - subSize.x) * 0.5f);
+    ImGui::TextUnformatted(subTitle);
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy(ImVec2(0.0f, 8.0f));
+    return true;
+}
+
+static void EndGosplanModalCard()
+{
+    ImGui::End();
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(2);
+}
+
+static void DrawWorkshopDownloadModal(const ImGuiIO& io)
+{
+    ModDownloadProgress prog = {};
+    if (!ModSync_GetDownloadProgress(&prog) || !prog.active) return;
+
+    DrawFullscreenDimmer(io, "##republicmp_workshop_dimmer");
+
+    const char* headerTitle = Tr("★ ГОСПЛАН СССР — ЗАГРУЗКА МОДИФИКАЦИЙ ★",
+                                 "★ GOSPLAN USSR — DOWNLOADING WORKSHOP MODS ★");
+    const char* subTitle = Tr("СИНХРОНИЗАЦИЯ МОДОВ STEAM WORKSHOP ДЛЯ КООП-СЕССИИ",
+                              "STEAM WORKSHOP MOD SYNCHRONIZATION FOR CO-OP SESSION");
+    float winW = 700.0f;
+    if (BeginGosplanModalCard(io, "##republicmp_workshop_download_card", 700.0f,
+                              IM_COL32(112, 22, 20, 255), headerTitle, subTitle, &winW)) {
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.05f, 0.04f, 0.88f));
         if (ImGui::BeginChild("##ws_dl_inner", ImVec2(winW - 40.0f, 0.0f), true, ImGuiWindowFlags_AlwaysAutoResize)) {
@@ -820,11 +852,103 @@ static void DrawWorkshopDownloadModal(const ImGuiIO& io)
         }
         ImGui::EndChild();
         ImGui::PopStyleColor();
+        EndGosplanModalCard();
     }
-    ImGui::End();
+}
 
-    ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor(2);
+static void DrawClientHostLostModal(const ImGuiIO& io)
+{
+    ClientHostLostInfo info = {};
+    if (!SaveSync_GetClientHostLostInfo(&info) || !info.active) return;
+
+    DrawFullscreenDimmer(io, "##republicmp_host_lost_dimmer");
+
+    char headerTitle[160] = {};
+    _snprintf_s(headerTitle, sizeof(headerTitle), _TRUNCATE,
+                Tr("★ СВЯЗЬ С ХОСТОМ ПОТЕРЯНА (RepublicMP v%s) ★",
+                   "★ CONNECTION TO HOST LOST (RepublicMP v%s) ★"),
+                REPUBLICMP_VERSION);
+    const char* subTitle = Tr("СЕРВЕР ЗАКРЫЛСЯ ИЛИ ОТКЛЮЧИЛСЯ — СИМУЛЯЦИЯ ПРИОСТАНОВЛЕНА",
+                              "HOST DISCONNECTED OR CRASHED — SIMULATION HELD ON PAUSE");
+
+    float winW = 740.0f;
+    if (!BeginGosplanModalCard(io, "##republicmp_client_host_lost_card", 740.0f,
+                               IM_COL32(138, 22, 20, 255), headerTitle, subTitle, &winW)) {
+        return;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.05f, 0.04f, 0.90f));
+    if (ImGui::BeginChild("##host_lost_inner", ImVec2(winW - 40.0f, 0.0f), true, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* displayHost = info.hostLabel[0] ? info.hostLabel
+                                  : (info.hostAddress[0] ? info.hostAddress : Tr("неизвестно", "unknown"));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
+        ImGui::Text(Tr("Сервер (хост): %s", "Host server: %s"), displayHost);
+        ImGui::PopStyleColor();
+
+        if (info.reason[0]) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.56f, 0.48f, 1.0f));
+            ImGui::TextWrapped(Tr("Причина: %s", "Reason: %s"), info.reason);
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.94f, 0.91f, 0.86f, 1.0f));
+        ImGui::TextWrapped(Tr(
+            "Хост прекратил отвечать — возможно, сервер был закрыт, потерялся интернет или игра хоста вылетела.\n"
+            "Игра автоматически поставлена на паузу, чтобы ваша республика не разошлась с сохранением хоста.",
+            "The host stopped responding — their game may have exited, crashed, or lost network connectivity.\n"
+            "Your game was automatically paused so your world state does not diverge from the host."));
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.84f, 0.78f, 0.64f, 1.0f));
+        ImGui::TextWrapped(Tr(
+            "Что делать дальше:\n"
+            "  • Переподключиться: дождитесь перезапуска сервера у друга и нажмите кнопку ниже.\n"
+            "  • Выйти в главное меню: вернуться в меню, чтобы выбрать другой сервер или сохранение.\n"
+            "  • Продолжить локально: снять сетевой блок и играть в одиночку с текущего момента.",
+            "Recommended next steps:\n"
+            "  • Reconnect: wait for your friend to reopen the server, then click Reconnect.\n"
+            "  • Exit to Main Menu: return to the menu to join another server or load a save.\n"
+            "  • Continue Offline: stay in this map as local singleplayer."));
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const float innerW = winW - 60.0f;
+        const float btnGap = 10.0f;
+        const float btnW = (innerW - btnGap * 2.0f) / 3.0f;
+
+        PushSovietButtonStyle(true);
+        if (ImGui::Button(Tr("Переподключиться к хосту", "Reconnect to Host"), ImVec2(btnW, 38.0f))) {
+            char reconnectAddr[64] = {};
+            strncpy_s(reconnectAddr, sizeof(reconnectAddr), info.hostAddress, _TRUNCATE);
+            SaveSync_DismissClientHostLost();
+            SaveSync_StartClient(reconnectAddr[0] ? reconnectAddr : nullptr);
+        }
+        PopSovietButtonStyle();
+
+        ImGui::SameLine(0.0f, btnGap);
+        PushSovietButtonStyle(false);
+        if (ImGui::Button(Tr("Выйти в главное меню", "Exit to Main Menu"), ImVec2(btnW, 38.0f))) {
+            SaveSync_ExitToMainMenu();
+        }
+        PopSovietButtonStyle();
+
+        ImGui::SameLine(0.0f, btnGap);
+        PushSovietButtonStyle(false);
+        if (ImGui::Button(Tr("Продолжить без сети", "Continue Offline"), ImVec2(btnW, 38.0f))) {
+            SaveSync_DismissClientHostLost();
+            EnsureGameUnpaused();
+            TwoStates_AddToast(Tr("Вы продолжаете игру локально (оффлайн)", "Continuing offline in singleplayer"), 0);
+        }
+        PopSovietButtonStyle();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    EndGosplanModalCard();
 }
 
 void SyncBlock_Draw()
@@ -834,13 +958,16 @@ void SyncBlock_Draw()
     bool waitingLobby = SaveSync_IsWaitingLobbyActive();
     SyncBlock_UpdateMapInspectState((int)st, syncActive);
 
+    bool worldLoadedNow = SaveSync_IsWorldLoaded();
     bool inActiveGameplay = (st == SESSION_CLIENT_IN_GAME || st == SESSION_HOST_IN_GAME ||
-                             (!waitingLobby && !syncActive && SaveSync_IsWorldLoaded()));
+                             (!waitingLobby && !syncActive && worldLoadedNow));
     if (inActiveGameplay && ModSync_IsDownloadActive()) {
         ModSync_CancelDownloadModal();
     }
 
-    if (waitingLobby) {
+    bool clientHostLostModal = SaveSync_ShouldShowClientHostLostModal((int)st, worldLoadedNow, SaveSync_IsClientHostLost());
+
+    if (waitingLobby || clientHostLostModal) {
         SaveSync_EnforceWaitingLobbyHold();
     } else if (syncActive || ModSync_IsDownloadActive()) {
         EnsureGamePaused();
@@ -856,6 +983,12 @@ void SyncBlock_Draw()
         }
         ImGuiIO& io = ImGui::GetIO();
         DrawWorkshopDownloadModal(io);
+        return;
+    }
+
+    if (clientHostLostModal) {
+        ImGuiIO& io = ImGui::GetIO();
+        DrawClientHostLostModal(io);
         return;
     }
 
@@ -885,84 +1018,32 @@ void SyncBlock_Draw()
         speedMbSec = g_speedMbSec;
     }
 
-    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
-    ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.04f, 0.03f, 0.74f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    DrawFullscreenDimmer(io, "##republicmp_lobby_dimmer");
 
-    ImGuiWindowFlags dimFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                                ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                                ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
-                                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs;
-    if (ImGui::Begin("##republicmp_lobby_dimmer", nullptr, dimFlags)) {
+    char headerTitle[160];
+    _snprintf_s(headerTitle, sizeof(headerTitle), _TRUNCATE,
+                Tr("★ ГОСПЛАН СССР — КООПЕРАТИВНЫЙ ШТАБ (RepublicMP v%s) ★",
+                   "★ GOSPLAN USSR — CO-OP COMMAND LOBBY (RepublicMP v%s) ★"),
+                REPUBLICMP_VERSION);
+
+    const char* subTitle = "";
+    if (st == SESSION_HOST_LISTENING && isReconnect) {
+        subTitle = Tr("ПАРТНЁР ОТКЛЮЧИЛСЯ — ИГРА ПРИНУДИТЕЛЬНО НА ПАУЗЕ ДО ПЕРЕПОДКЛЮЧЕНИЯ",
+                      "PARTNER DISCONNECTED — GAME HELD ON PAUSE UNTIL RECONNECT");
+    } else if (st == SESSION_HOST_LISTENING) {
+        subTitle = Tr("СЕРВЕР ОТКРЫТ — ОЖИДАНИЕ ВТОРОГО ИГРОКА (ИГРА НА ПАУЗЕ)",
+                      "SERVER OPEN — WAITING FOR SECOND PLAYER (GAME PAUSED)");
+    } else if (st == SESSION_HOST_JOINING) {
+        subTitle = Tr("ВТОРОЙ ИГРОК ПОДКЛЮЧАЕТСЯ — ПЕРЕДАЧА И СИНХРОНИЗАЦИЯ МИРА",
+                      "SECOND PLAYER JOINING — TRANSFERRING & SYNCHRONIZING WORLD");
+    } else {
+        subTitle = Tr("ПОДКЛЮЧЕНИЕ К КОМАНДНОМУ СЕРВЕРУ — СИНХРОНИЗАЦИЯ МИРА",
+                      "CONNECTING TO HOST SERVER — SYNCHRONIZING WORLD");
     }
-    ImGui::End();
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
 
-    float cardW = 700.0f;
-    if (cardW > io.DisplaySize.x - 40.0f) cardW = io.DisplaySize.x - 40.0f;
-
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(cardW, 0.0f), ImGuiCond_Always);
-
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.11f, 0.08f, 0.07f, 0.97f));
-    ImGui::PushStyleColor(ImGuiCol_Border,   ImVec4(0.84f, 0.67f, 0.24f, 0.96f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 16.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 8.0f));
-
-    ImGuiWindowFlags cardFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
-
-    if (ImGui::Begin("##republicmp_coop_lobby_card", nullptr, cardFlags)) {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 winPos = ImGui::GetWindowPos();
-        float winW = ImGui::GetWindowWidth();
-
-        dl->AddRectFilled(winPos, ImVec2(winPos.x + winW, winPos.y + 58.0f),
-                          IM_COL32(112, 22, 20, 255), 8.0f, ImDrawFlags_RoundCornersTop);
-        dl->AddLine(ImVec2(winPos.x, winPos.y + 58.0f), ImVec2(winPos.x + winW, winPos.y + 58.0f),
-                    IM_COL32(214, 171, 61, 240), 2.0f);
-
-        char headerTitle[160];
-        _snprintf_s(headerTitle, sizeof(headerTitle), _TRUNCATE,
-                    Tr("★ ГОСПЛАН СССР — КООПЕРАТИВНЫЙ ШТАБ (RepublicMP v%s) ★",
-                       "★ GOSPLAN USSR — CO-OP COMMAND LOBBY (RepublicMP v%s) ★"),
-                    REPUBLICMP_VERSION);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
-        ImVec2 tSize = ImGui::CalcTextSize(headerTitle);
-        ImGui::SetCursorPosX((winW - tSize.x) * 0.5f);
-        ImGui::TextUnformatted(headerTitle);
-        ImGui::PopStyleColor();
-
-        const char* subTitle = "";
-        if (st == SESSION_HOST_LISTENING && isReconnect) {
-            subTitle = Tr("ПАРТНЁР ОТКЛЮЧИЛСЯ — ИГРА ПРИНУДИТЕЛЬНО НА ПАУЗЕ ДО ПЕРЕПОДКЛЮЧЕНИЯ",
-                          "PARTNER DISCONNECTED — GAME HELD ON PAUSE UNTIL RECONNECT");
-        } else if (st == SESSION_HOST_LISTENING) {
-            subTitle = Tr("СЕРВЕР ОТКРЫТ — ОЖИДАНИЕ ВТОРОГО ИГРОКА (ИГРА НА ПАУЗЕ)",
-                          "SERVER OPEN — WAITING FOR SECOND PLAYER (GAME PAUSED)");
-        } else if (st == SESSION_HOST_JOINING) {
-            subTitle = Tr("ВТОРОЙ ИГРОК ПОДКЛЮЧАЕТСЯ — ПЕРЕДАЧА И СИНХРОНИЗАЦИЯ МИРА",
-                          "SECOND PLAYER JOINING — TRANSFERRING & SYNCHRONIZING WORLD");
-        } else {
-            subTitle = Tr("ПОДКЛЮЧЕНИЕ К КОМАНДНОМУ СЕРВЕРУ — СИНХРОНИЗАЦИЯ МИРА",
-                          "CONNECTING TO HOST SERVER — SYNCHRONIZING WORLD");
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.89f, 0.82f, 1.0f));
-        ImVec2 subSize = ImGui::CalcTextSize(subTitle);
-        ImGui::SetCursorPosX((winW - subSize.x) * 0.5f);
-        ImGui::TextUnformatted(subTitle);
-        ImGui::PopStyleColor();
-
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
-
+    float winW = 700.0f;
+    if (BeginGosplanModalCard(io, "##republicmp_coop_lobby_card", 700.0f,
+                              IM_COL32(112, 22, 20, 255), headerTitle, subTitle, &winW)) {
         DrawLobbyPlayersBox(st, isReconnect, winW);
 
         if (syncActive || st == SESSION_HOST_JOINING || st == SESSION_CLIENT_JOINING) {
@@ -972,9 +1053,6 @@ void SyncBlock_Draw()
         }
 
         DrawLobbyActionButtons(st, syncActive, isReconnect, winW);
+        EndGosplanModalCard();
     }
-    ImGui::End();
-
-    ImGui::PopStyleVar(4);
-    ImGui::PopStyleColor(2);
 }

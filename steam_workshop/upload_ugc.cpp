@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Full LAN multiplayer & Steam-free mode: UDP LAN server auto-discovery (physical LAN + Radmin VPN/Hamachi/ZeroTier), host local IP list with Copy IP, Join menu LAN server browser, autonomous Steam-free / offline Workshop ModSync, firewall-free loopback test mode, and 145+ new LAN/E2E tests (59/59 suites)",
+                "v%s (Protocol %d) - Rail Construction Office (RCO) & rail construction fixes (H_SiteStop/H_SiteResume UI caller filter, 0x161CB0 triggerImmediateScan, rail auto-chain 0x159F4D, RCO/CO queue reorder 0x7707E0 Lockstep sync, track-builder/site ownership, removed 0x7D8738 flood), client Host-Lost recovery modal, Steam Friends discovery fix, ACK-paced save upload speed meter, Crash A (0x41E9F0) & Crash B (Filling UAF) guards (61/61 test suites)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

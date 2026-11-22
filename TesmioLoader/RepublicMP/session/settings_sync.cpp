@@ -13,6 +13,8 @@
 #include <vector>
 #include <math.h>
 #include <string.h>
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
 
 #define BLD_TYPE_OFFSET 0x318
 #define TYPE_CATEGORY_OFFSET 0x360
@@ -689,7 +691,6 @@ static void Scan(bool sendChanges)
 #define STOP_BODY_RVA 0x160579 // non-RIP-relative body after test rdx,rdx; je
 #define RESUME_RVA 0x161440  // FUN_140161440(world, building)
 #define BLD_PAY_OFFSET 0x608
-#define BLD_STOPPED_OFFSET 0x879
 
 typedef void (__fastcall* SiteStopFn)(__int64 world, BYTE* site, int stop);
 typedef void (__fastcall* SiteResumeFn)(__int64 world, BYTE* site);
@@ -704,12 +705,52 @@ static const unsigned char kSiteResumeExpect[14] = {
     0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56
 };
 
+bool SettingsSync_IsSiteStopUiCallerRva(unsigned callerRva)
+{
+    return callerRva == RVA_SITE_STOP_UI_RET;
+}
+
+bool SettingsSync_IsSiteResumeUiCallerRva(unsigned callerRva)
+{
+    return callerRva == RVA_SITE_RESUME_UI_RET_SUSPEND ||
+           callerRva == RVA_SITE_RESUME_UI_RET_PAY_RUB ||
+           callerRva == RVA_SITE_RESUME_UI_RET_PAY_USD ||
+           callerRva == RVA_SITE_RESUME_UI_RET_WIN2_RUB ||
+           callerRva == RVA_SITE_RESUME_UI_RET_WIN2_USD;
+}
+
+static unsigned ComputeCallerRva(const void* retAddr)
+{
+    const uintptr_t base = (uintptr_t)g_exeBase;
+    const uintptr_t addr = (uintptr_t)retAddr;
+    if (!base || addr < base) return 0u;
+    return (unsigned)(addr - base);
+}
+
+static bool TryInterceptSiteUiCall(BYTE* site, bool isStop, bool captureUi, unsigned callerRva)
+{
+    if (!captureUi || !IsPointerLikeX64((uintptr_t)site)) return false;
+    if (isStop) {
+        if (!SettingsSync_IsSiteStopUiCallerRva(callerRva)) return false;
+        // 0x160570 unconditionally sets site+0x879 = 1; its 3rd param (r8b) is autoAssignOffices, not the flag value.
+        unsigned char one = 1u;
+        SafeWritePod(site + BLD_STOPPED_OFFSET, one);
+        return true;
+    }
+    if (!SettingsSync_IsSiteResumeUiCallerRva(callerRva)) return false;
+    unsigned char cur = 0;
+    if (SafeReadPod(site + BLD_STOPPED_OFFSET, &cur) && cur != 0) {
+        unsigned char zero = 0u;
+        SafeWritePod(site + BLD_STOPPED_OFFSET, zero);
+    }
+    return true;
+}
+
 static void __fastcall H_SiteStop(__int64 world, BYTE* site, int stop)
 {
     if (!IsPointerLikeX64((uintptr_t)site)) return;
-    if (g_inApplyConstruction == 0 && Commands_TakeLocal()) {
-        unsigned char v = (stop != 0) ? 1u : 0u;
-        SafeWritePod(site + BLD_STOPPED_OFFSET, v);
+    const unsigned callerRva = ComputeCallerRva(_ReturnAddress());
+    if (g_inApplyConstruction == 0 && TryInterceptSiteUiCall(site, true, Commands_TakeUi(), callerRva)) {
         return;
     }
     if (g_origSiteStop) {
@@ -720,12 +761,8 @@ static void __fastcall H_SiteStop(__int64 world, BYTE* site, int stop)
 static void __fastcall H_SiteResume(__int64 world, BYTE* site)
 {
     if (!IsPointerLikeX64((uintptr_t)site)) return;
-    if (g_inApplyConstruction == 0 && Commands_TakeLocal()) {
-        unsigned char cur = 0;
-        if (SafeReadPod(site + BLD_STOPPED_OFFSET, &cur) && cur != 0) {
-            unsigned char zero = 0;
-            SafeWritePod(site + BLD_STOPPED_OFFSET, zero);
-        }
+    const unsigned callerRva = ComputeCallerRva(_ReturnAddress());
+    if (g_inApplyConstruction == 0 && TryInterceptSiteUiCall(site, false, Commands_TakeUi(), callerRva)) {
         return;
     }
     if (g_origSiteResume) {
@@ -743,21 +780,17 @@ bool SettingsSync_InstallHooks()
     return okStop && okResume;
 }
 
+bool SettingsSync_TestSiteCallFilter(BYTE* site, bool isStop, int stopVal, bool captureUi, unsigned callerRva)
+{
+    (void)stopVal;
+    return TryInterceptSiteUiCall(site, isStop, captureUi, callerRva);
+}
+
 void SettingsSync_TestSiteUiClick(BYTE* site, bool isStop, int stopVal, bool captureLocal)
 {
-    if (!IsPointerLikeX64((uintptr_t)site)) return;
-    if (captureLocal) {
-        if (isStop) {
-            unsigned char v = (stopVal != 0) ? 1u : 0u;
-            SafeWritePod(site + BLD_STOPPED_OFFSET, v);
-        } else {
-            unsigned char cur = 0;
-            if (SafeReadPod(site + BLD_STOPPED_OFFSET, &cur) && cur != 0) {
-                unsigned char zero = 0;
-                SafeWritePod(site + BLD_STOPPED_OFFSET, zero);
-            }
-        }
-    }
+    (void)stopVal;
+    TryInterceptSiteUiCall(site, isStop, captureLocal,
+                           isStop ? RVA_SITE_STOP_UI_RET : RVA_SITE_RESUME_UI_RET_SUSPEND);
 }
 
 struct LsBuilding {
@@ -1023,7 +1056,7 @@ bool SettingsSync_ApplyCommand(const SettingWire& w)
     if (w.field == SETTINGS_FIELD_PAY || w.field == SETTINGS_FIELD_STOP) {
         BYTE* b = FindBuilding(w.pos, w.category);
         bool ok = b && ApplyConstruction(b, w.field, w.value);
-        Logf("republicmp  SETTINGS: %s = %llu at (%.1f,%.1f) %s", w.field == SETTINGS_FIELD_PAY ? "pay rubles/dollars" : "stopped",
+        Logf("republicmp  SETTINGS: %s = %llu at (%.1f,%.1f) %s", w.field == SETTINGS_FIELD_PAY ? "pay rubles/dollars" : "co_enabled",
              w.value, w.pos[0], w.pos[2], ok ? "applied" : "NOT applied");
         return ok;
     }

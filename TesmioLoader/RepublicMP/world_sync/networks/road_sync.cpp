@@ -3366,6 +3366,33 @@ static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
     }
 }
 
+static size_t GetConstructionsVectorCount()
+{
+    if (!g_exeBase) return 0;
+    const long long n = SafeCountStdVector(g_exeBase + VEC_CONSTRUCTIONS_BEGIN_RVA, sizeof(void*));
+    return n > 0 ? (size_t)n : 0u;
+}
+
+static void RegisterNewConstructionsForOwner(size_t countBefore, int owner)
+{
+    if (!TwoStates_IsActive() || (owner != 1 && owner != 2) || !g_exeBase) return;
+    uintptr_t ptrs[2] = { 0, 0 };
+    if (!SafeMemcpyPod(ptrs, g_exeBase + VEC_CONSTRUCTIONS_BEGIN_RVA, sizeof(ptrs))) return;
+    if (!IsPointerLikeX64(ptrs[0]) || ptrs[1] <= ptrs[0] || ((ptrs[1] - ptrs[0]) & 7u) != 0) return;
+    const size_t countAfter = (size_t)((ptrs[1] - ptrs[0]) / sizeof(void*));
+    if (countAfter <= countBefore || countAfter > 2000000u) return;
+    const uintptr_t* arr = (const uintptr_t*)ptrs[0];
+    for (size_t i = countBefore; i < countAfter; ++i) {
+        uintptr_t bldPtr = 0;
+        if (!SafeReadPod(&arr[i], &bldPtr) || !IsPointerLikeX64(bldPtr)) continue;
+        float x = 0.0f, z = 0.0f;
+        if (SafeReadPod((const BYTE*)bldPtr + OBJ_POS_OFFSET, &x) &&
+            SafeReadPod((const BYTE*)bldPtr + OBJ_POS_OFFSET + 8, &z)) {
+            TwoStates_RegisterBuildingOwner(TwoStates_BuildingPosKey(x, z), owner);
+        }
+    }
+}
+
 static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 {
     const RoadSyncCategoryInfo* info = RoadSync_GetCategoryInfo(m.category);
@@ -3401,6 +3428,7 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
     }
     bool except = m.exceptGroup != 0;
     int before = CountStartablePlans(network, except, m.count, m.group);
+    const size_t conBefore = GetConstructionsVectorCount();
     // The new sites take the sender's build mode, not this PC's: with
     // "rubles" here a realistic plan from the other PC finished at once.
     BuildMode mine = BuildMode_Read();
@@ -3411,6 +3439,7 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
     TerrainSync_EndForeignReplay();
     InterlockedDecrement(&g_applyingSegment);
     BuildMode_Write(mine);
+    if (ok) RegisterNewConstructionsForOwner(conBefore, cmdOwner);
     int started = before - CountStartablePlans(network, except, m.count, m.group);
     char theirs[96];
     Logf("republicmp  ROAD_SYNC: plan start seq=%d %s dollars=%d rubles=%d pay=%s - %s: %d plan(s) started here, %d on the sender%s",
@@ -3795,6 +3824,7 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
     // All of it lives in the exe image (the world object is a global).
     GroupToolState own, replay;
     int before = CountPlannedPieces(world);
+    const size_t conBefore = (m.mode <= 3) ? GetConstructionsVectorCount() : 0u;
     BuildMode mine = BuildMode_Read();
     ReadGroupToolState(world, own);
     memcpy(replay.box, m.box, sizeof(replay.box));
@@ -3812,6 +3842,7 @@ static void ApplyGroupToolAndAck(const RoadSyncGroupToolMsg& m)
     InterlockedDecrement(&g_applyingSegment);
     WriteGroupToolState(world, own); // this PC's own drag, cursor, camera and input
     BuildMode_Write(mine);
+    if (ok && m.mode <= 3) RegisterNewConstructionsForOwner(conBefore, cmdOwner);
     int started = before - CountPlannedPieces(world);
     char theirs[96];
     Logf("republicmp  ROAD_SYNC: group tool seq=%d mode %d pay=%s - %s: %d planned piece(s) started here, %d on the sender%s",

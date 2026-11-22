@@ -250,8 +250,9 @@ void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
 void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
 void   TwoStates_RecomputeEngineResearchForTest(BYTE* world);
 bool   TwoStates_MatchesResearchRecomputePrologueForTest(const BYTE* bytes, size_t len);
+bool   TwoStates_IsDemolitionOfficeOrSite(const BYTE* officeBld, const BYTE* targetBld);
 bool   TwoStates_AssignConstructionOfficeForTest(BYTE* world, BYTE* officeBld, BYTE* targetBld, float dist,
-                                                 unsigned char checkFilters, unsigned char isDemolishOffice,
+                                                 unsigned char checkFilters, unsigned char triggerImmediateScan,
                                                  uintptr_t callerRvaOverride = 0);
 
 // Per-state vehicle production license isolation (world + 0x12840, stride 0x9F08, byte +0x9C88)
@@ -295,6 +296,10 @@ const BYTE* TwoStates_ResolveTooltipCountLimitForTest(const BYTE* world, const B
 void    TwoStates_PruneDeadEntities(bool checkWorldLoaded = true);
 bool    TwoStates_GetStateTrackerSliceForTest(int state, bool isOld, StateTrackerSlice* out);
 void    TwoStates_SetStateTrackerSliceForTest(int state, bool isOld, const StateTrackerSlice& in);
+
+// Crash B (Filling worker UAF on vehicle sale) helpers
+bool    TwoStates_PtrInStdVector(const void* vecHeader, const void* targetPtr);
+size_t  TwoStates_ErasePtrFromStdVector(void* vecHeader, const void* targetPtr);
 
 
 

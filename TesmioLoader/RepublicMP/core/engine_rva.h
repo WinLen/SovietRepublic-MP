@@ -2406,4 +2406,167 @@ static_assert(FN_DISCARD_VEH_CARGO_RVA == 0x6BF080u &&
               SITE_GAME_RULES_REBUILD_3_RVA == 0x7FEBBCu,
               "Audit-7 sync fix RVAs and offsets must match 1.1.1.13 layout");
 
+// ---------------------------------------------------------------------------
+// Hotfix v1.7.1: Crash B (Filling worker UAF), Client Exit-to-Menu, Crash A (Signal block)
+// ---------------------------------------------------------------------------
+
+// Filling worker & queues (0x2592C0 / 0x259350 / 0x294BA5)
+#ifndef WORLD_FILLING_VEHICLES_OFFSET
+#define WORLD_FILLING_VEHICLES_OFFSET       0x12828u  // 0x9E7738 - WORLD_RVA (0x9D4F10)
+#endif
+#ifndef VEC_FILLING_VEHICLES_BEGIN_RVA
+#define VEC_FILLING_VEHICLES_BEGIN_RVA      (WORLD_RVA + WORLD_FILLING_VEHICLES_OFFSET) // 0x9E7738
+#endif
+#ifndef VEC_FILLING_VEHICLES_END_RVA
+#define VEC_FILLING_VEHICLES_END_RVA        (VEC_FILLING_VEHICLES_BEGIN_RVA + 8u)        // 0x9E7740
+#endif
+#ifndef FILLING_OBJ_RVA
+#define FILLING_OBJ_RVA                     0x995290u // DAT_140995290: Filling worker object ptr
+#endif
+#ifndef FILLING_QUIT_OFFSET
+#define FILLING_QUIT_OFFSET                 0x28u     // byte: 1 when 0x2592C0 signals worker shutdown
+#endif
+#ifndef FILLING_DONE_OFFSET
+#define FILLING_DONE_OFFSET                 0x59u     // byte: 1 when current Filling step finishes
+#endif
+#ifndef FILLING_START_EVENT_OFFSET
+#define FILLING_START_EVENT_OFFSET          0x60u     // HANDLE: FillingrStart event
+#endif
+#ifndef FILLING_QUEUE_PTR_RVA
+#define FILLING_QUEUE_PTR_RVA               0x9E7710u // [exe+0x9E7710]+0x60 transient Filling queue
+#endif
+#ifndef FILLING_PATHS_PTR_RVA
+#define FILLING_PATHS_PTR_RVA               0x9E2350u // [exe+0x9E2350]+0x40 transient Filling paths
+#endif
+
+// Client Pause/Exit-to-Main-Menu trigger flags (0x10520B / 0x1059B0 / 0x3151A5)
+#ifndef EXIT_TO_MENU_FLAG_RVA
+#define EXIT_TO_MENU_FLAG_RVA               0x99208Du // byte: 1 triggers UnloadWorld + Main Menu
+#endif
+#ifndef WORLD_EXIT_DESKTOP_FLAG_OFF
+#define WORLD_EXIT_DESKTOP_FLAG_OFF         0x5034u   // byte on WORLD*: 1 = exit to desktop, 0 = Main Menu
+#endif
+
+// Rail signal block recalculation guard (Crash A: 0x41E9F0 / 0x41EB40 / 0x41EDF0)
+#ifndef RVA_UPDATE_SIGNAL_BLOCK
+#define RVA_UPDATE_SIGNAL_BLOCK             0x41E9F0u // void __fastcall(WORLD*, void* segPtr)
+#endif
+#ifndef SEG_CONNECTED_NODES_BEGIN_OFF
+#define SEG_CONNECTED_NODES_BEGIN_OFF       0x10u     // std::vector<RAIL_NODE*> begin on segment
+#endif
+#ifndef SEG_CONNECTED_NODES_END_OFF
+#define SEG_CONNECTED_NODES_END_OFF         0x18u     // std::vector<RAIL_NODE*> end on segment
+#endif
+#ifndef SEG_SIGNAL_BLOCK_PTR_OFFSET
+#define SEG_SIGNAL_BLOCK_PTR_OFFSET         0xB8u     // RAIL_SIGNAL_BLOCK* on segment (0x41EA00)
+#endif
+#ifndef SIGNAL_BLOCK_NODE_PTR_OFFSET
+#define SIGNAL_BLOCK_NODE_PTR_OFFSET        0x08u     // RAIL_NODE* read at 0x41EB5A in 0x41EB40
+#endif
+#ifndef SIGNAL_BLOCK_KIND_OFFSET
+#define SIGNAL_BLOCK_KIND_OFFSET            0x14u     // uint32_t kind read at 0x41EA0C
+#endif
+#ifndef SIGNAL_BLOCK_KIND_SKIP
+#define SIGNAL_BLOCK_KIND_SKIP              0x0Au     // kind == 0x0A takes direct-nodes path
+#endif
+
+static_assert(VEC_FILLING_VEHICLES_BEGIN_RVA == 0x9E7738u &&
+              VEC_FILLING_VEHICLES_END_RVA == 0x9E7740u &&
+              FILLING_OBJ_RVA == 0x995290u &&
+              FILLING_QUIT_OFFSET == 0x28u &&
+              FILLING_DONE_OFFSET == 0x59u &&
+              FILLING_START_EVENT_OFFSET == 0x60u &&
+              FILLING_QUEUE_PTR_RVA == 0x9E7710u &&
+              FILLING_PATHS_PTR_RVA == 0x9E2350u &&
+              EXIT_TO_MENU_FLAG_RVA == 0x99208Du &&
+              WORLD_EXIT_DESKTOP_FLAG_OFF == 0x5034u &&
+              RVA_UPDATE_SIGNAL_BLOCK == 0x41E9F0u &&
+              SEG_CONNECTED_NODES_BEGIN_OFF == 0x10u &&
+              SEG_CONNECTED_NODES_END_OFF == 0x18u &&
+              SEG_SIGNAL_BLOCK_PTR_OFFSET == 0xB8u &&
+              SIGNAL_BLOCK_NODE_PTR_OFFSET == 0x08u &&
+              SIGNAL_BLOCK_KIND_OFFSET == 0x14u &&
+              SIGNAL_BLOCK_KIND_SKIP == 0x0Au,
+              "Hotfix v1.7.1 RVAs and struct offsets must match SOVIET64.exe 1.1.1.13 disassembly");
+
+// Rail Construction Office (RCO) & Rail Construction Fixes (v1.1.1.13)
+// Site CO-enable (0x160570) & Site Suspend/Cancel (0x161440) UI caller return RVAs (call + 5)
+#ifndef RVA_SITE_STOP_UI_RET
+#define RVA_SITE_STOP_UI_RET                0x6FA0E7u // 0x6FA0E2 + 5 (UI toggle to enable CO construction)
+#endif
+#ifndef BLD_STOPPED_OFFSET
+#define BLD_STOPPED_OFFSET                  0x879u    // byte on BUILDING: 1 = CO construction enabled, 0 = suspended/stopped
+#endif
+#ifndef RVA_SITE_RESUME_UI_RET_SUSPEND
+#define RVA_SITE_RESUME_UI_RET_SUSPEND      0x6F9E72u // 0x6F9E6D + 5 (UI toggle to suspend CO construction)
+#endif
+#ifndef RVA_SITE_RESUME_UI_RET_PAY_RUB
+#define RVA_SITE_RESUME_UI_RET_PAY_RUB      0x6FAB0Eu // 0x6FAB09 + 5 (UI button: finish with rubles)
+#endif
+#ifndef RVA_SITE_RESUME_UI_RET_PAY_USD
+#define RVA_SITE_RESUME_UI_RET_PAY_USD      0x6FAF28u // 0x6FAF23 + 5 (UI button: finish with dollars)
+#endif
+#ifndef RVA_SITE_RESUME_UI_RET_WIN2_RUB
+#define RVA_SITE_RESUME_UI_RET_WIN2_RUB     0x775C32u // 0x775C2D + 5 (second window: finish with rubles)
+#endif
+#ifndef RVA_SITE_RESUME_UI_RET_WIN2_USD
+#define RVA_SITE_RESUME_UI_RET_WIN2_USD     0x775F06u // 0x775F01 + 5 (second window: finish with dollars)
+#endif
+
+// Rail CO, Demolition Office & Auto-Chain constants
+#ifndef RVA_CALLER_RAIL_CHAIN_ASSIGN
+#define RVA_CALLER_RAIL_CHAIN_ASSIGN        0x159F4Du // 0x159F48 + 5 (ConstructStep rail next-segment auto-chain -> 0x161CB0)
+#endif
+#ifndef BLD_CAT_RAIL_CO
+#define BLD_CAT_RAIL_CO                     0x1Cu     // 28: Rail Construction Office (BUILDING::TYPE+0x360)
+#endif
+#ifndef BLD_CAT_DEMOLISH_CO
+#define BLD_CAT_DEMOLISH_CO                 0x6Au     // 106: Demolition Office (BUILDING::TYPE+0x360)
+#endif
+#ifndef BLD_IS_DEMOLITION_SITE_OFFSET
+#define BLD_IS_DEMOLITION_SITE_OFFSET       0xEA8u    // non-zero byte on demolition site (planned construction)
+#endif
+#ifndef BLD_TYPE_CAT_OFF
+#define BLD_TYPE_CAT_OFF                    0x360u    // int32_t category on BUILDING::TYPE
+#endif
+
+// RCO/CO Queue Reorder Popup (0x7707E0) constants
+#ifndef RVA_OFFICE_QUEUE_REORDER
+#define RVA_OFFICE_QUEUE_REORDER            0x7707E0u // void __fastcall(std::vector<ListItem>* itemsVec, BYTE* office)
+#endif
+#ifndef RVA_OFFICE_REORDER_FREE_LIST
+#define RVA_OFFICE_REORDER_FREE_LIST        0x042BA0u // std::vector<ListItem>::~vector() tail-called by 0x7707E0
+#endif
+#ifndef BLD_ASSIGNED_SITES_BEGIN_OFF
+#define BLD_ASSIGNED_SITES_BEGIN_OFF        0xF90u    // std::vector<BUILDING*> begin on CO/RCO
+#endif
+#ifndef BLD_ASSIGNED_SITES_END_OFF
+#define BLD_ASSIGNED_SITES_END_OFF          0xF98u    // std::vector<BUILDING*> end on CO/RCO
+#endif
+#ifndef BLD_ASSIGNED_DISTS_BEGIN_OFF
+#define BLD_ASSIGNED_DISTS_BEGIN_OFF        0xFA8u    // std::vector<float> begin on CO/RCO
+#endif
+#ifndef BLD_ASSIGNED_DISTS_END_OFF
+#define BLD_ASSIGNED_DISTS_END_OFF          0xFB0u    // std::vector<float> end on CO/RCO
+#endif
+#ifndef OFFICE_REORDER_ITEM_STRIDE
+#define OFFICE_REORDER_ITEM_STRIDE          0x18u     // 24 bytes per popup list item
+#endif
+#ifndef OFFICE_REORDER_ITEM_IDX_OFF
+#define OFFICE_REORDER_ITEM_IDX_OFF         0x10u     // float(oldIdx) at +0x10 inside each 24-byte ListItem
+#endif
+
+static_assert(BLD_STOPPED_OFFSET == 0x879u &&
+              BLD_ASSIGNED_SITES_END_OFF == BLD_ASSIGNED_SITES_BEGIN_OFF + 8u &&
+              BLD_ASSIGNED_DISTS_BEGIN_OFF == BLD_ASSIGNED_SITES_BEGIN_OFF + 0x18u &&
+              BLD_ASSIGNED_DISTS_END_OFF == BLD_ASSIGNED_DISTS_BEGIN_OFF + 8u &&
+              OFFICE_REORDER_ITEM_IDX_OFF + 4u <= OFFICE_REORDER_ITEM_STRIDE &&
+              RVA_CALLER_RAIL_CHAIN_ASSIGN > RVA_CALLER_OFFICE_ROAD_SCAN &&
+              RVA_CALLER_RAIL_CHAIN_ASSIGN < RVA_ASSIGN_CONSTRUCTION_OFFICE &&
+              BLD_CAT_RAIL_CO == 28u && BLD_CAT_DEMOLISH_CO == 106u &&
+              BLD_IS_DEMOLITION_SITE_OFFSET == BLD_IS_PLANNED_OFF,
+              "RCO/Rail construction RVAs and offsets must match SOVIET64.exe 1.1.1.13 disassembly");
+
+
+
 

@@ -15,6 +15,7 @@
 #include "../ui/native_menu.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../core/safe_mem.h"
+#include "../core/engine_rva.h"
 #include "../core/diag_log.h"
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
@@ -290,9 +291,8 @@ static uintptr_t __cdecl H_beginThread(void (__cdecl* start)(void*), unsigned st
 // simulation step in FUN_14030c790 and both modify vehicles and citizens.
 // Under the layer the main thread waits for the worker right after starting
 // it, so the two never overlap and always run in the same order.
-#define FILLING_OBJ_RVA 0x995290       // DAT_140995290: the worker's object
-#define FILLING_DONE_OFFSET 0x59       // byte: 1 when the step's work is finished
-#define FILLING_START_EVENT_OFFSET 0x60
+// Threads: see engine_rva.h for FILLING_OBJ_RVA, FILLING_QUIT_OFFSET (+0x28),
+// FILLING_DONE_OFFSET (+0x59), FILLING_START_EVENT_OFFSET (+0x60), and queues.
 
 typedef BOOL (WINAPI* SetEventFn)(HANDLE);
 typedef HANDLE (WINAPI* CreateEventWFn)(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCWSTR);
@@ -300,6 +300,31 @@ typedef BOOL (WINAPI* ClipCursorFn)(const RECT*);
 static SetEventFn o_setEvent;
 static CreateEventWFn o_createEventW;
 static ClipCursorFn o_clipCursor;
+
+static void ClearStdVecEndSafe(BYTE* vecHdr)
+{
+    if (!vecHdr || !IsPointerLikeX64((uint64_t)(uintptr_t)vecHdr)) return;
+    uint64_t bounds[2] = { 0, 0 };
+    if (!SafeReadPod(vecHdr, &bounds)) return;
+    if (bounds[1] != bounds[0]) {
+        (void)SafeWritePod(vecHdr + sizeof(uint64_t), bounds[0]);
+    }
+}
+
+void Determinism_ClearFillingWorkQueues(unsigned char* exeBase)
+{
+    BYTE* base = exeBase ? exeBase : g_exeBase;
+    if (!base) return;
+    ClearStdVecEndSafe(base + VEC_FILLING_VEHICLES_BEGIN_RVA);
+    uint64_t queuePtr = 0;
+    if (SafeReadPod(base + FILLING_QUEUE_PTR_RVA, &queuePtr) && IsPointerLikeX64(queuePtr)) {
+        ClearStdVecEndSafe(reinterpret_cast<BYTE*>(static_cast<uintptr_t>(queuePtr)) + 0x60u);
+    }
+    uint64_t pathsPtr = 0;
+    if (SafeReadPod(base + FILLING_PATHS_PTR_RVA, &pathsPtr) && IsPointerLikeX64(pathsPtr)) {
+        ClearStdVecEndSafe(reinterpret_cast<BYTE*>(static_cast<uintptr_t>(pathsPtr)) + 0x40u);
+    }
+}
 
 static BOOL WINAPI H_clipCursor(const RECT* /*lpRect*/)
 {
@@ -324,17 +349,36 @@ static HANDLE WINAPI H_createEventW(LPSECURITY_ATTRIBUTES attr, BOOL manualReset
 
 static BOOL WINAPI H_setEvent(HANDLE h)
 {
-    BOOL r = o_setEvent(h);
-    if (g_active) {
-        BYTE* obj = *(BYTE**)(g_exeBase + FILLING_OBJ_RVA);
-        if (obj && h == *(HANDLE*)(obj + FILLING_START_EVENT_OFFSET)) {
-            volatile BYTE* done = obj + FILLING_DONE_OFFSET;
-            g_workerPhase = true;
-            while (!*done) YieldProcessor();
-            g_workerPhase = false;
+    if (g_exeBase != nullptr) {
+        uint64_t objAddr = 0;
+        if (SafeReadPod(g_exeBase + FILLING_OBJ_RVA, &objAddr) && IsPointerLikeX64(objAddr)) {
+            BYTE* obj = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(objAddr));
+            HANDLE startEvent = nullptr;
+            if (SafeReadPod(obj + FILLING_START_EVENT_OFFSET, &startEvent) &&
+                h != nullptr && h == startEvent) {
+                BYTE quitting = 0;
+                (void)SafeReadPod(obj + FILLING_QUIT_OFFSET, &quitting);
+                if (quitting != 0) {
+                    // Crash B: UnloadWorld (0x294B80 -> 0x2592C0) sets quit=1 and wakes Filling
+                    // after Determinism_SetActive(false) may already have run. Clear any stale/freed
+                    // vehicle pointers from Filling's queues BEFORE waking the worker thread.
+                    Determinism_ClearFillingWorkQueues(g_exeBase);
+                    Logf("republicmp  CRASH_FIX_B: cleared Filling queues before worker shutdown SetEvent");
+                    return o_setEvent ? o_setEvent(h) : TRUE;
+                }
+                BOOL r = o_setEvent ? o_setEvent(h) : TRUE;
+                if (g_active) {
+                    volatile BYTE* done = obj + FILLING_DONE_OFFSET;
+                    volatile BYTE* quitPtr = obj + FILLING_QUIT_OFFSET;
+                    g_workerPhase = true;
+                    while (!*done && !*quitPtr) YieldProcessor();
+                    g_workerPhase = false;
+                }
+                return r;
+            }
         }
     }
-    return r;
+    return o_setEvent ? o_setEvent(h) : TRUE;
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,8 +1228,9 @@ static void LogSessionProgress(const StateSummary& s)
             if (p < 1.0f) {
                 progress += p;
                 sites++;
-                if (*(bld + 0x608) || *(bld + 0x609)) paid++;
-                if (*(bld + 0x879)) stopped++;
+                bool isPaid = (*(bld + 0x608) != 0) || (*(bld + 0x609) != 0);
+                if (isPaid) paid++;
+                else if (*(bld + 0x879) == 0) stopped++;
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {

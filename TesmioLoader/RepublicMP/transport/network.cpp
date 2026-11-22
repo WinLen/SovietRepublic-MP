@@ -9,6 +9,7 @@
 #include <atomic>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -525,10 +526,12 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size)
     return true;
 }
 
-bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
+static bool OpenReadableFileAndSize(const char* filePath, FILE** outFile, unsigned long long* outSize)
 {
+    if (outFile) *outFile = nullptr;
+    if (outSize) *outSize = 0;
     if (!filePath || !filePath[0]) {
-        Logf("republicmp  NETWORK: NetworkSendFile() called with empty filePath");
+        Logf("republicmp  NETWORK: file transfer called with empty filePath");
         return false;
     }
     std::filesystem::path fp(filePath);
@@ -538,7 +541,6 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
         Logf("republicmp  NETWORK: couldn't open [%s] for reading", filePath);
         return false;
     }
-
     if (_fseeki64(f, 0, SEEK_END) != 0) {
         fclose(f);
         return false;
@@ -549,7 +551,51 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
         fclose(f);
         return false;
     }
-    unsigned long long fileSize = (unsigned long long)rawSz;
+    if (outFile) *outFile = f;
+    else fclose(f);
+    if (outSize) *outSize = static_cast<unsigned long long>(rawSz);
+    return true;
+}
+
+static bool RecvFileSizeHeaderAndOpenOut(SOCKET sock, const char* outFilePath,
+                                         unsigned long long* outSize, FILE** outFile)
+{
+    if (outSize) *outSize = 0;
+    if (outFile) *outFile = nullptr;
+    if (!outFilePath || !outFilePath[0]) {
+        Logf("republicmp  NETWORK: file receive called with empty outFilePath");
+        return false;
+    }
+    unsigned long long fileSize = 0;
+    if (!NetworkRecvExact(sock, &fileSize, sizeof(fileSize))) {
+        return false;
+    }
+    static constexpr unsigned long long kMaxReceiveFileBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+    if (fileSize > kMaxReceiveFileBytes) {
+        Logf("republicmp  NETWORK: rejected oversized file payload (%llu > %llu bytes)",
+             fileSize, kMaxReceiveFileBytes);
+        return false;
+    }
+    std::filesystem::path fp(outFilePath);
+    FILE* f = nullptr;
+    _wfopen_s(&f, fp.c_str(), L"wb");
+    if (!f) {
+        Logf("republicmp  NETWORK: couldn't open [%s] for writing", outFilePath);
+        return false;
+    }
+    if (outSize) *outSize = fileSize;
+    if (outFile) *outFile = f;
+    else fclose(f);
+    return true;
+}
+
+bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
+{
+    FILE* f = nullptr;
+    unsigned long long fileSize = 0;
+    if (!OpenReadableFileAndSize(filePath, &f, &fileSize)) {
+        return false;
+    }
 
     if (!NetworkSendExact(sock, (const char*)&fileSize, sizeof(fileSize))) {
         fclose(f);
@@ -589,31 +635,13 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
 
 bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn onProgress, void* userData)
 {
-    if (!outFilePath || !outFilePath[0]) {
-        Logf("republicmp  NETWORK: NetworkReceiveFile() called with empty outFilePath");
-        return false;
-    }
-
     unsigned long long fileSize = 0;
-    if (!NetworkRecvExact(sock, (char*)&fileSize, sizeof(fileSize))) {
-        return false;
-    }
-
-    static constexpr unsigned long long kMaxReceiveFileBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
-    if (fileSize > kMaxReceiveFileBytes) {
-        Logf("republicmp  NETWORK: NetworkReceiveFile rejected oversized payload (%llu > %llu bytes)",
-             fileSize, kMaxReceiveFileBytes);
+    FILE* f = nullptr;
+    if (!RecvFileSizeHeaderAndOpenOut(sock, outFilePath, &fileSize, &f)) {
         return false;
     }
 
     std::filesystem::path fp(outFilePath);
-    FILE* f = nullptr;
-    _wfopen_s(&f, fp.c_str(), L"wb");
-    if (!f) {
-        Logf("republicmp  NETWORK: couldn't open [%s] for writing", outFilePath);
-        return false;
-    }
-
     auto removePartialFile = [&fp]() {
         std::error_code ec;
         std::filesystem::remove(fp, ec);
@@ -656,6 +684,218 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
     return true;
 }
 
+static bool DrainSenderAcks(SOCKET sock, unsigned long long fileSize,
+                            unsigned long long* ackedTotal, bool* finalAckReceived,
+                            ULONGLONG* lastAckTick, DWORD initialWaitMs,
+                            NetworkProgressFn onProgress, void* userData)
+{
+    DWORD pollMs = initialWaitMs;
+    for (;;) {
+        const int pollRes = NetworkPollReadableBytes(sock, pollMs, sizeof(uint64_t));
+        pollMs = 0;
+        if (pollRes < 0) return false;
+        if (pollRes == 0) return true;
+        uint64_t ackBytes = 0;
+        if (!NetworkRecvExact(sock, &ackBytes, sizeof(ackBytes))) return false;
+        if (ackBytes > fileSize) {
+            Logf("republicmp  NETWORK: invalid ACK %llu > %llu bytes",
+                 static_cast<unsigned long long>(ackBytes), fileSize);
+            return false;
+        }
+        if (ackBytes >= *ackedTotal) {
+            if (ackBytes > *ackedTotal) {
+                *ackedTotal = ackBytes;
+                if (onProgress) onProgress(*ackedTotal, fileSize, userData);
+            }
+            if (ackBytes == fileSize) {
+                *finalAckReceived = true;
+                if (fileSize == 0 && onProgress) onProgress(0, 0, userData);
+            }
+            *lastAckTick = GetTickCount64();
+        }
+    }
+}
+
+bool NetworkSendFileAckPaced(SOCKET sock, const char* filePath,
+                             NetworkProgressFn onProgress, void* userData,
+                             volatile bool* cancelFlag, size_t maxWindowBytes,
+                             DWORD ackTimeoutMs)
+{
+    FILE* f = nullptr;
+    unsigned long long fileSize = 0;
+    if (!OpenReadableFileAndSize(filePath, &f, &fileSize)) {
+        return false;
+    }
+    if (!NetworkSendExact(sock, &fileSize, sizeof(fileSize))) {
+        fclose(f);
+        return false;
+    }
+
+    const size_t windowCap = (maxWindowBytes > 0) ? maxWindowBytes : (1024u * 1024u);
+    static constexpr size_t kChunkMax = 32768u;
+    std::vector<char> buffer(kChunkMax);
+    const DWORD stallLimitMs = (ackTimeoutMs > 0) ? ackTimeoutMs : 60000u;
+
+    Logf("republicmp  NETWORK: ACK-paced sending [%s], %llu bytes (window=%zu)...",
+         filePath, fileSize, windowCap);
+
+    unsigned long long sentTotal = 0;
+    unsigned long long ackedTotal = 0;
+    bool finalAckReceived = false;
+    ULONGLONG lastAckTick = GetTickCount64();
+
+    while (sentTotal < fileSize) {
+        if (cancelFlag && *cancelFlag) {
+            fclose(f);
+            return false;
+        }
+        while ((sentTotal - ackedTotal) >= windowCap) {
+            if (cancelFlag && *cancelFlag) {
+                fclose(f);
+                return false;
+            }
+            if (!DrainSenderAcks(sock, fileSize, &ackedTotal, &finalAckReceived, &lastAckTick, 50u, onProgress, userData)) {
+                fclose(f);
+                return false;
+            }
+            if ((sentTotal - ackedTotal) < windowCap) break;
+            if (NetworkPeerGone(sock)) {
+                fclose(f);
+                return false;
+            }
+            if ((GetTickCount64() - lastAckTick) >= stallLimitMs) {
+                Logf("republicmp  NETWORK: ACK-paced send stalled waiting for client ACK (%llu/%llu acked)",
+                     ackedTotal, fileSize);
+                fclose(f);
+                return false;
+            }
+        }
+        const unsigned long long winAvail = windowCap - (sentTotal - ackedTotal);
+        size_t toRead = static_cast<size_t>(std::min<unsigned long long>(kChunkMax, std::min(winAvail, fileSize - sentTotal)));
+        if (toRead == 0) toRead = 1u;
+        const size_t bytesRead = fread(buffer.data(), 1, toRead, f);
+        if (bytesRead == 0) {
+            Logf("republicmp  NETWORK: fread() returned 0 early (sent %llu of %llu bytes)", sentTotal, fileSize);
+            fclose(f);
+            return false;
+        }
+        if (!NetworkSendExact(sock, buffer.data(), bytesRead)) {
+            fclose(f);
+            return false;
+        }
+        sentTotal += bytesRead;
+        if (!DrainSenderAcks(sock, fileSize, &ackedTotal, &finalAckReceived, &lastAckTick, 0u, onProgress, userData)) {
+            fclose(f);
+            return false;
+        }
+    }
+    fclose(f);
+
+    while (!finalAckReceived) {
+        if (cancelFlag && *cancelFlag) return false;
+        if (!DrainSenderAcks(sock, fileSize, &ackedTotal, &finalAckReceived, &lastAckTick, 50u, onProgress, userData)) {
+            return false;
+        }
+        if (finalAckReceived) break;
+        if (NetworkPeerGone(sock)) return false;
+        if ((GetTickCount64() - lastAckTick) >= stallLimitMs) {
+            Logf("republicmp  NETWORK: ACK-paced final confirmation timeout (%llu/%llu acked)", ackedTotal, fileSize);
+            return false;
+        }
+    }
+
+    Logf("republicmp  NETWORK: finished ACK-paced send [%s], %llu bytes", filePath, ackedTotal);
+    return true;
+}
+
+bool NetworkReceiveFileAckPaced(SOCKET sock, const char* outFilePath,
+                                NetworkProgressFn onProgress, void* userData,
+                                volatile bool* cancelFlag)
+{
+    unsigned long long fileSize = 0;
+    FILE* f = nullptr;
+    if (!RecvFileSizeHeaderAndOpenOut(sock, outFilePath, &fileSize, &f)) {
+        return false;
+    }
+
+    std::filesystem::path fp(outFilePath);
+    auto removePartialFile = [&fp]() {
+        std::error_code ec;
+        std::filesystem::remove(fp, ec);
+    };
+
+    Logf("republicmp  NETWORK: ACK-paced receiving [%s], expecting %llu bytes...", outFilePath, fileSize);
+
+    char buffer[8192];
+    unsigned long long receivedTotal = 0;
+    unsigned long long lastAckSentBytes = 0;
+    ULONGLONG lastAckSentTick = GetTickCount64();
+    unsigned long long nextLogMark = 4ULL * 1024ULL * 1024ULL;
+    static constexpr unsigned long long kAckStepBytes = 65536ULL;
+    static constexpr ULONGLONG kAckStepMs = 200ULL;
+
+    while (receivedTotal < fileSize) {
+        if (cancelFlag && *cancelFlag) {
+            fclose(f);
+            removePartialFile();
+            return false;
+        }
+        size_t toRead = static_cast<size_t>(std::min<unsigned long long>(sizeof(buffer), fileSize - receivedTotal));
+        if (!NetworkRecvExact(sock, buffer, toRead)) {
+            Logf("republicmp  NETWORK: ACK-paced receive interrupted at %llu / %llu bytes", receivedTotal, fileSize);
+            fclose(f);
+            removePartialFile();
+            return false;
+        }
+        if (fwrite(buffer, 1, toRead, f) != toRead) {
+            Logf("republicmp  NETWORK: fwrite() failed during ACK-paced receive (disk full?)");
+            fclose(f);
+            removePartialFile();
+            return false;
+        }
+        receivedTotal += toRead;
+        if (receivedTotal >= nextLogMark || receivedTotal == fileSize) {
+            Logf("republicmp  NETWORK: received %llu / %llu bytes (%llu%%)",
+                 receivedTotal, fileSize, fileSize ? (receivedTotal * 100ULL) / fileSize : 100ULL);
+            nextLogMark = receivedTotal + (4ULL * 1024ULL * 1024ULL);
+        }
+        if (onProgress) onProgress(receivedTotal, fileSize, userData);
+
+        const ULONGLONG now = GetTickCount64();
+        const bool bufferDrained = (receivedTotal > lastAckSentBytes) &&
+                                   (NetworkPollReadableBytes(sock, 0u, 1u) == 0);
+        if (receivedTotal < fileSize &&
+            (bufferDrained ||
+             (receivedTotal - lastAckSentBytes) >= kAckStepBytes ||
+             (now - lastAckSentTick) >= kAckStepMs)) {
+            const uint64_t ackVal = static_cast<uint64_t>(receivedTotal);
+            if (!NetworkSendExact(sock, &ackVal, sizeof(ackVal))) {
+                fclose(f);
+                removePartialFile();
+                return false;
+            }
+            lastAckSentBytes = receivedTotal;
+            lastAckSentTick = now;
+        }
+    }
+
+    if (fclose(f) != 0) {
+        Logf("republicmp  NETWORK: fclose() failed flushing [%s] (disk full?)", outFilePath);
+        removePartialFile();
+        return false;
+    }
+
+    const uint64_t finalAck = static_cast<uint64_t>(fileSize);
+    if (!NetworkSendExact(sock, &finalAck, sizeof(finalAck))) {
+        return false;
+    }
+    if (fileSize == 0 && onProgress) {
+        onProgress(0, 0, userData);
+    }
+    Logf("republicmp  NETWORK: finished ACK-paced receive [%s], %llu bytes", outFilePath, receivedTotal);
+    return true;
+}
+
 bool NetworkPeerGone(SOCKET sock)
 {
     if (sock == INVALID_SOCKET) return true;
@@ -690,6 +930,42 @@ int NetworkPollReadable(SOCKET sock, DWORD timeoutMs)
     int r = select(0, &readSet, nullptr, nullptr, &tv);
     if (r == SOCKET_ERROR) return -1;
     return (r > 0 && FD_ISSET(sock, &readSet)) ? 1 : 0;
+}
+
+int NetworkPollReadableBytes(SOCKET sock, DWORD timeoutMs, size_t minBytes)
+{
+    if (sock == INVALID_SOCKET) return -1;
+    if (SteamP2P_IsSteamSocket(sock)) return SteamP2P_PollReadable(sock, timeoutMs, minBytes);
+
+    const size_t wantBytes = (minBytes > 0) ? minBytes : 1u;
+    const ULONGLONG start = GetTickCount64();
+    for (;;) {
+        const ULONGLONG elapsed = GetTickCount64() - start;
+        const DWORD remainingMs = (timeoutMs == 0 || elapsed >= timeoutMs)
+                                  ? 0u
+                                  : static_cast<DWORD>(timeoutMs - elapsed);
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(sock, &readSet);
+        timeval tv = {};
+        tv.tv_sec = static_cast<long>(remainingMs / 1000u);
+        tv.tv_usec = static_cast<long>((remainingMs % 1000u) * 1000u);
+        const int r = select(0, &readSet, nullptr, nullptr, &tv);
+        if (r == SOCKET_ERROR) return -1;
+        if (r > 0 && FD_ISSET(sock, &readSet)) {
+            u_long avail = 0;
+            if (ioctlsocket(sock, FIONREAD, &avail) != 0) return -1;
+            if (static_cast<size_t>(avail) >= wantBytes) return 1;
+            if (avail == 0) {
+                char peekByte = 0;
+                const int pk = recv(sock, &peekByte, 1, MSG_PEEK);
+                if (pk <= 0) return -1;
+                if (wantBytes <= 1u) return 1;
+            }
+        }
+        if (timeoutMs == 0 || (GetTickCount64() - start) >= timeoutMs) return 0;
+        Sleep(1);
+    }
 }
 
 void NetworkDrainReadable(SOCKET sock, size_t maxBytes)
