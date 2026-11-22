@@ -2,17 +2,28 @@
 // See network.h.
 #include "network.h"
 #include "steam_p2p.h"
+#include "lan_discovery.h"
 #include <cstdio>
 #include <mstcpip.h> // SIO_KEEPALIVE_VALS
 #include <algorithm> // std::min - NOMINMAX is defined project-wide, so windows.h's min/max macros are gone
+#include <atomic>
 #include <filesystem>
+#include <string>
 
 #pragma comment(lib, "ws2_32.lib")
+
+static std::atomic<bool> g_networkLoopbackOnlyForTest{false};
+
+void Network_SetLoopbackOnlyForTest(bool enabled)
+{
+    g_networkLoopbackOnlyForTest.store(enabled);
+}
 
 void Network_Bind(const TsmHost* host)
 {
     TsmBind(host);
     SteamP2P_Bind(host);
+    LanDiscovery_Bind(host);
 }
 
 bool NetworkInit()
@@ -75,7 +86,7 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
         sockaddr_in addr = {};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
-        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_addr.s_addr = htonl(g_networkLoopbackOnlyForTest.load() ? INADDR_LOOPBACK : INADDR_ANY);
         if (bind(listenSock, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR ||
             listen(listenSock, 1) == SOCKET_ERROR) {
             Logf("republicmp  NETWORK: TCP bind/listen(:%u) failed, WSAGetLastError=%d", port, WSAGetLastError());
@@ -123,10 +134,16 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
                 Logf("republicmp  NETWORK: select() failed, WSAGetLastError=%d", WSAGetLastError());
                 closesocket(listenSock);
                 listenSock = INVALID_SOCKET;
+                if (!SteamP2P_IsAvailable()) {
+                    return INVALID_SOCKET;
+                }
             } else if (selectResult > 0) {
                 break; // a TCP client is waiting - fall through to accept() below
             }
         } else {
+            if (!SteamP2P_IsAvailable()) {
+                return INVALID_SOCKET;
+            }
             Sleep(pollStepMs);
         }
 
@@ -160,17 +177,192 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
     return clientSock;
 }
 
+static bool IsAsciiWhitespace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static std::string TrimTargetAddress(const char* raw)
+{
+    if (!raw) return std::string();
+    const char* start = raw;
+    while (*start != '\0' && IsAsciiWhitespace(*start)) {
+        ++start;
+    }
+    const char* end = start + strlen(start);
+    while (end > start && IsAsciiWhitespace(end[-1])) {
+        --end;
+    }
+    return std::string(start, (size_t)(end - start));
+}
+
+static bool ParseStrictPort1To65535(const std::string& portStr, uint16_t* outPort)
+{
+    if (portStr.empty()) return false;
+    for (char c : portStr) {
+        if (c < '0' || c > '9') return false;
+    }
+    size_t firstNonZero = 0;
+    while (firstNonZero < portStr.size() && portStr[firstNonZero] == '0') {
+        ++firstNonZero;
+    }
+    if (firstNonZero == portStr.size()) return false;
+    if ((portStr.size() - firstNonZero) > 5u) return false;
+    unsigned long val = 0;
+    for (size_t i = firstNonZero; i < portStr.size(); ++i) {
+        val = val * 10ul + (unsigned long)(portStr[i] - '0');
+    }
+    if (val < 1ul || val > 65535ul) return false;
+    if (outPort) *outPort = (uint16_t)val;
+    return true;
+}
+
+static bool TryCopyCheckedHost(const char* src, char* outHost, size_t hostCap)
+{
+    if (!src || !outHost || hostCap == 0) return false;
+    size_t len = strlen(src);
+    if (len == 0 || len >= hostCap) return false;
+    memcpy(outHost, src, len + 1);
+    return true;
+}
+
+static bool TryParseStrictUint64Digits(const char* s, uint64_t* outVal)
+{
+    if (!s || s[0] < '0' || s[0] > '9') return false;
+    uint64_t val = 0;
+    size_t count = 0;
+    for (const char* p = s; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') return false;
+        ++count;
+        if (count > 20u) return false;
+        uint64_t d = (uint64_t)(*p - '0');
+        if (val > (UINT64_MAX - d) / 10ULL) {
+            return false;
+        }
+        val = val * 10ULL + d;
+    }
+    if (count < 15u) return false;
+    if (outVal) *outVal = val;
+    return true;
+}
+
+static bool TryNormalizeSteamTarget(const std::string& trimmed, char* outHost, size_t hostCap, bool* outHandled)
+{
+    *outHandled = false;
+    bool hasSteamPrefix = (_strnicmp(trimmed.c_str(), "steam:", 6) == 0);
+    bool allDigits = !trimmed.empty();
+    for (char c : trimmed) {
+        if (c < '0' || c > '9') {
+            allDigits = false;
+            break;
+        }
+    }
+
+    if (!hasSteamPrefix && !(allDigits && trimmed.size() >= 15u)) {
+        return true;
+    }
+
+    *outHandled = true;
+    const char* digitSeq = hasSteamPrefix ? (trimmed.c_str() + 6) : trimmed.c_str();
+    uint64_t parsedStrict = 0;
+    if (!TryParseStrictUint64Digits(digitSeq, &parsedStrict)) {
+        return false;
+    }
+    uint64_t sid = SteamP2P_ParseTargetSteamId(trimmed.c_str());
+    if (sid == 0 || sid != parsedStrict) return false;
+
+    if (hasSteamPrefix) {
+        char canon[64] = {};
+        _snprintf_s(canon, sizeof(canon), _TRUNCATE, "steam:%llu", (unsigned long long)sid);
+        return TryCopyCheckedHost(canon, outHost, hostCap);
+    }
+    return TryCopyCheckedHost(trimmed.c_str(), outHost, hostCap);
+}
+
+bool NetworkNormalizeTargetAddress(const char* rawInput, char* outHost, size_t hostCap, uint16_t* outPort)
+{
+    if (outHost && hostCap > 0) outHost[0] = '\0';
+    if (!rawInput || !outHost || hostCap == 0) return false;
+
+    std::string trimmed = TrimTargetAddress(rawInput);
+    if (trimmed.empty()) return false;
+
+    for (char c : trimmed) {
+        if (c == '[' || c == ']' || IsAsciiWhitespace(c)) {
+            return false;
+        }
+    }
+
+    bool handledSteam = false;
+    if (!TryNormalizeSteamTarget(trimmed, outHost, hostCap, &handledSteam)) {
+        return false;
+    }
+    if (handledSteam) {
+        return true;
+    }
+
+    size_t colonPos = std::string::npos;
+    int colonCount = 0;
+    for (size_t i = 0; i < trimmed.size(); ++i) {
+        if (trimmed[i] == ':') {
+            colonPos = i;
+            ++colonCount;
+        }
+    }
+    if (colonCount > 1) return false;
+
+    std::string hostPart = trimmed;
+    uint16_t parsedPort = 0;
+    if (colonCount == 1) {
+        hostPart = trimmed.substr(0, colonPos);
+        std::string portPart = trimmed.substr(colonPos + 1);
+        if (hostPart.empty() || !ParseStrictPort1To65535(portPart, &parsedPort)) {
+            return false;
+        }
+    }
+
+    in_addr ipv4 = {};
+    if (inet_pton(AF_INET, hostPart.c_str(), &ipv4) != 1) {
+        return false;
+    }
+    char canonIp[INET_ADDRSTRLEN] = {};
+    if (!inet_ntop(AF_INET, &ipv4, canonIp, sizeof(canonIp))) {
+        return false;
+    }
+    if (!TryCopyCheckedHost(canonIp, outHost, hostCap)) {
+        return false;
+    }
+    if (colonCount == 1 && outPort) {
+        *outPort = parsedPort;
+    }
+    return true;
+}
+
 SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
 {
-    uint64_t remoteSteamId = SteamP2P_ParseTargetSteamId(hostIp);
+    char normHost[128] = {};
+    uint16_t parsedPort = 0;
+    if (!NetworkNormalizeTargetAddress(hostIp, normHost, sizeof(normHost), &parsedPort)) {
+        Logf("republicmp  NETWORK: invalid target address [%s]", hostIp ? hostIp : "(null)");
+        return INVALID_SOCKET;
+    }
+
+    unsigned short effectivePort = (parsedPort != 0) ? parsedPort : port;
+    if (effectivePort == 0) {
+        Logf("republicmp  NETWORK: invalid port 0 for [%s]", normHost);
+        return INVALID_SOCKET;
+    }
+
+    const char* connectHost = normHost;
+    uint64_t remoteSteamId = SteamP2P_ParseTargetSteamId(normHost);
     if (remoteSteamId != 0) {
         uint64_t mySteamId = SteamP2P_GetLocalSteamId();
         if (mySteamId != 0 && remoteSteamId == mySteamId) {
             Logf("republicmp  NETWORK: target SteamID %llu is local Steam account -> routing via TCP 127.0.0.1:%u",
-                 (unsigned long long)remoteSteamId, port);
-            hostIp = "127.0.0.1";
+                 (unsigned long long)remoteSteamId, effectivePort);
+            connectHost = "127.0.0.1";
         } else {
-            return SteamP2P_Connect(remoteSteamId, port, connectTimeoutMs, ioTimeoutMs, cancelFlag);
+            return SteamP2P_Connect(remoteSteamId, effectivePort, connectTimeoutMs, ioTimeoutMs, cancelFlag);
         }
     }
 
@@ -182,14 +374,14 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
 
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, hostIp, &addr.sin_addr) != 1) {
-        Logf("republicmp  NETWORK: couldn't parse IP [%s]", hostIp);
+    addr.sin_port = htons(effectivePort);
+    if (inet_pton(AF_INET, connectHost, &addr.sin_addr) != 1) {
+        Logf("republicmp  NETWORK: couldn't parse IP [%s]", connectHost);
         closesocket(sock);
         return INVALID_SOCKET;
     }
 
-    Logf("republicmp  NETWORK: connecting to %s:%u (timeout %u ms)...", hostIp, port, connectTimeoutMs);
+    Logf("republicmp  NETWORK: connecting to %s:%u (timeout %u ms)...", connectHost, effectivePort, connectTimeoutMs);
 
     // Standard non-blocking connect-with-timeout pattern.
     u_long nonBlocking = 1;
@@ -212,7 +404,7 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
         fd_set exceptSet;
         for (;;) {
             if (cancelFlag && *cancelFlag) {
-                Logf("republicmp  NETWORK: connect to %s:%u cancelled", hostIp, port);
+                Logf("republicmp  NETWORK: connect to %s:%u cancelled", connectHost, effectivePort);
                 closesocket(sock);
                 return INVALID_SOCKET;
             }
@@ -222,7 +414,9 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
             FD_ZERO(&exceptSet);
             FD_SET(sock, &exceptSet);
 
-            DWORD stepMs = std::min(pollStepMs, connectTimeoutMs - waited);
+            DWORD stepMs = (connectTimeoutMs == 0)
+                ? pollStepMs
+                : std::min(pollStepMs, connectTimeoutMs - waited);
             timeval stepTimeout;
             stepTimeout.tv_sec = stepMs / 1000;
             stepTimeout.tv_usec = (stepMs % 1000) * 1000;
@@ -237,11 +431,13 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
                 break; // writeSet/exceptSet now hold this call's real result
             }
 
-            waited += stepMs;
-            if (waited >= connectTimeoutMs) {
-                Logf("republicmp  NETWORK: TIMEOUT - couldn't connect to %s:%u within %u ms", hostIp, port, connectTimeoutMs);
-                closesocket(sock);
-                return INVALID_SOCKET;
+            if (connectTimeoutMs != 0) {
+                waited += stepMs;
+                if (waited >= connectTimeoutMs) {
+                    Logf("republicmp  NETWORK: TIMEOUT - couldn't connect to %s:%u within %u ms", connectHost, effectivePort, connectTimeoutMs);
+                    closesocket(sock);
+                    return INVALID_SOCKET;
+                }
             }
         }
 
@@ -269,7 +465,7 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
     u_long blocking = 0;
     ioctlsocket(sock, FIONBIO, &blocking);
 
-    Logf("republicmp  NETWORK: connected to %s:%u", hostIp, port);
+    Logf("republicmp  NETWORK: connected to %s:%u", connectHost, effectivePort);
     NetworkSetSocketTimeouts(sock, ioTimeoutMs);
     NetworkEnableKeepalive(sock);
     return sock;
@@ -331,6 +527,10 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size)
 
 bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProgress, void* userData)
 {
+    if (!filePath || !filePath[0]) {
+        Logf("republicmp  NETWORK: NetworkSendFile() called with empty filePath");
+        return false;
+    }
     std::filesystem::path fp(filePath);
     FILE* f = nullptr;
     _wfopen_s(&f, fp.c_str(), L"rb");
@@ -339,9 +539,17 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
         return false;
     }
 
-    _fseeki64(f, 0, SEEK_END);
-    unsigned long long fileSize = (unsigned long long)_ftelli64(f);
-    _fseeki64(f, 0, SEEK_SET);
+    if (_fseeki64(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return false;
+    }
+    long long rawSz = _ftelli64(f);
+    if (rawSz < 0 || _fseeki64(f, 0, SEEK_SET) != 0) {
+        Logf("republicmp  NETWORK: _ftelli64/_fseeki64 failed for [%s]", filePath);
+        fclose(f);
+        return false;
+    }
+    unsigned long long fileSize = (unsigned long long)rawSz;
 
     if (!NetworkSendExact(sock, (const char*)&fileSize, sizeof(fileSize))) {
         fclose(f);
@@ -381,8 +589,20 @@ bool NetworkSendFile(SOCKET sock, const char* filePath, NetworkProgressFn onProg
 
 bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn onProgress, void* userData)
 {
+    if (!outFilePath || !outFilePath[0]) {
+        Logf("republicmp  NETWORK: NetworkReceiveFile() called with empty outFilePath");
+        return false;
+    }
+
     unsigned long long fileSize = 0;
     if (!NetworkRecvExact(sock, (char*)&fileSize, sizeof(fileSize))) {
+        return false;
+    }
+
+    static constexpr unsigned long long kMaxReceiveFileBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+    if (fileSize > kMaxReceiveFileBytes) {
+        Logf("republicmp  NETWORK: NetworkReceiveFile rejected oversized payload (%llu > %llu bytes)",
+             fileSize, kMaxReceiveFileBytes);
         return false;
     }
 
@@ -394,6 +614,11 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
         return false;
     }
 
+    auto removePartialFile = [&fp]() {
+        std::error_code ec;
+        std::filesystem::remove(fp, ec);
+    };
+
     Logf("republicmp  NETWORK: receiving [%s], expecting %llu bytes...", outFilePath, fileSize);
 
     char buffer[8192];
@@ -404,11 +629,13 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
         if (!NetworkRecvExact(sock, buffer, toRead)) {
             Logf("republicmp  NETWORK: NetworkReceiveFile interrupted at %llu / %llu bytes", receivedTotal, fileSize);
             fclose(f);
+            removePartialFile();
             return false;
         }
         if (fwrite(buffer, 1, toRead, f) != toRead) {
             Logf("republicmp  NETWORK: fwrite() didn't write everything (disk full?)");
             fclose(f);
+            removePartialFile();
             return false;
         }
         receivedTotal += toRead;
@@ -420,7 +647,11 @@ bool NetworkReceiveFile(SOCKET sock, const char* outFilePath, NetworkProgressFn 
         if (onProgress) onProgress(receivedTotal, fileSize, userData);
     }
 
-    fclose(f);
+    if (fclose(f) != 0) {
+        Logf("republicmp  NETWORK: fclose() failed flushing [%s] (disk full?)", outFilePath);
+        removePartialFile();
+        return false;
+    }
     Logf("republicmp  NETWORK: finished receiving [%s], %llu bytes", outFilePath, receivedTotal);
     return true;
 }
@@ -446,14 +677,47 @@ bool NetworkPeerGone(SOCKET sock)
     return true;
 }
 
-void NetworkShutdownSocket(SOCKET sock)
+int NetworkPollReadable(SOCKET sock, DWORD timeoutMs)
+{
+    if (sock == INVALID_SOCKET) return -1;
+    if (SteamP2P_IsSteamSocket(sock)) return 1;
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(sock, &readSet);
+    timeval tv = {};
+    tv.tv_sec = static_cast<long>(timeoutMs / 1000u);
+    tv.tv_usec = static_cast<long>((timeoutMs % 1000u) * 1000u);
+    int r = select(0, &readSet, nullptr, nullptr, &tv);
+    if (r == SOCKET_ERROR) return -1;
+    return (r > 0 && FD_ISSET(sock, &readSet)) ? 1 : 0;
+}
+
+void NetworkDrainReadable(SOCKET sock, size_t maxBytes)
+{
+    if (sock == INVALID_SOCKET || SteamP2P_IsSteamSocket(sock)) return;
+    char buf[1024];
+    size_t drained = 0;
+    while (drained < maxBytes) {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(sock, &readSet);
+        timeval zero = { 0, 0 };
+        int r = select(0, &readSet, nullptr, nullptr, &zero);
+        if (r <= 0 || !FD_ISSET(sock, &readSet)) break;
+        int n = recv(sock, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        drained += static_cast<size_t>(n);
+    }
+}
+
+void NetworkShutdownSocket(SOCKET sock, int how)
 {
     if (sock == INVALID_SOCKET) return;
     if (SteamP2P_IsSteamSocket(sock)) {
         SteamP2P_ShutdownSocket(sock);
         return;
     }
-    shutdown(sock, SD_BOTH);
+    shutdown(sock, how);
 }
 
 void NetworkCloseSocket(SOCKET sock)

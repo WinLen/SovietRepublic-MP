@@ -8,6 +8,8 @@
 #include "../session/save_sync.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
+#include "../transport/lan_discovery.h"
+#include "../transport/steam_p2p.h"
 #include "present_hook.h"
 
 #include "imgui.h"
@@ -308,6 +310,19 @@ static bool HandleTestbedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lP
 
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    if (msg == WM_DESTROY && hwnd == g_hwnd) {
+        LanDiscovery_BeginProcessShutdown();
+        SaveSync_Shutdown(2000);
+        LanDiscovery_Shutdown();
+        SteamP2P_UnregisterCallbacks();
+        if (g_initialized) {
+            ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
+        }
+        return g_originalWndProc
+            ? CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam)
+            : DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
     if (IsDualTestbedActive()) {
         LRESULT testbedRes = 0;
         if (HandleTestbedWndProc(hwnd, msg, wParam, lParam, &testbedRes)) {

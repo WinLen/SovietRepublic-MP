@@ -44,6 +44,8 @@
 #include "../game/input_block.h"
 #include "../game/imgui_hook.h"
 #include "../ui/native_menu.h"
+#include "../ui/ui_common.h"
+#include "../ui/lang.h"
 #include "imgui.h"
 #include "../lockstep/rename.h"
 #include "../world_sync/buildings/build_mode.h"
@@ -53,6 +55,7 @@
 #include "../lockstep/brush_tools.h"
 #include "../transport/steam_p2p.h"
 #include "../transport/network.h"
+#include "../transport/lan_discovery.h"
 #include "../session/settings_sync.h"
 #include "../lockstep/source_slots.h"
 #include "../lockstep/vehicle_switches.h"
@@ -207,6 +210,7 @@ static void InitMockHarness()
 static void ResetMockWorldMemory()
 {
     TwoStates_ResetEconStatsForTest(nullptr);
+    TwoStates_ClearToastsForTest();
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
     g_mockExeBuffer[0x542890] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
     g_mockExeBuffer[0x5429C0] = 0xC3; // ret for MANAGER_RESET_RVA
@@ -461,6 +465,34 @@ static bool Test_RvaAndSafeMem()
     TEST_CHECK(SafeIsToolGuardBusy((uintptr_t)worldPtr));
     worldPtr[TOOL_GUARD2_OFFSET] = 0;
     TEST_CHECK(!SafeIsToolGuardBusy((uintptr_t)worldPtr));
+
+    // Cold-start concurrent SaveSync_GetLocalDllCrc() race test (first call in process)
+    {
+        std::atomic<int> ready{ 0 };
+        std::atomic<bool> go{ false };
+        unsigned int crcs[8] = {};
+        std::vector<std::thread> crcThreads;
+        for (int t = 0; t < 8; ++t) {
+            crcThreads.emplace_back([&, t]() {
+                ready.fetch_add(1, std::memory_order_acq_rel);
+                while (!go.load(std::memory_order_acquire)) {
+                    YieldProcessor();
+                }
+                crcs[t] = SaveSync_GetLocalDllCrc();
+            });
+        }
+        while (ready.load(std::memory_order_acquire) < 8) {
+            Sleep(0);
+        }
+        go.store(true, std::memory_order_release);
+        for (auto& th : crcThreads) {
+            th.join();
+        }
+        TEST_CHECK(crcs[0] != 0u);
+        for (int t = 1; t < 8; ++t) {
+            TEST_CHECK(crcs[t] == crcs[0]);
+        }
+    }
 
     return true;
 }
@@ -9226,6 +9258,141 @@ static bool Test_Stress_M4_Challenger_R3_R10_R11_R17()
 #include "m9_3_challenger1_stress.cpp"
 #include "m9_3_challenger2_stress.cpp"
 #include "m9_4_challenger2_stress.cpp"
+#include "lan_m1_tests.cpp"
+#include "lan_m2_tests.cpp"
+#include "lan_m3_tests.cpp"
+#define REPUBLICMP_E2E_EXTERNAL_INCLUDES 1
+#include "lan_e2e_tests.cpp"
+
+static bool Test_LanDiscoveryDirectSmoke_M1()
+{
+    LanDiscovery_Bind(&g_mockHost);
+    LanDiscovery_Init();
+    (void)LanDiscovery_GetLocalAdapters(false);
+    (void)LanDiscovery_GetLocalDisplayName();
+    (void)LanDiscovery_ClassifyAdapter(6, "Ethernet", "Realtek", "192.168.1.10", nullptr);
+    char m[16] = {};
+    char b[16] = {};
+    TEST_CHECK(LanDiscovery_ComputeBroadcast("192.168.1.10", 24, m, sizeof(m), b, sizeof(b)));
+    LanProbePacket probe = {};
+    probe.protocol = REPUBLICMP_PROTOCOL;
+    uint8_t pbuf[32] = {};
+    size_t plen = LanDiscovery_SerializeProbe(probe, pbuf, sizeof(pbuf));
+    TEST_CHECK(plen == sizeof(LanProbePacket));
+    TEST_CHECK(LanDiscovery_ParseProbe(pbuf, plen, &probe));
+    LanAnnouncePacket ann = {};
+    ann.protocol = REPUBLICMP_PROTOCOL;
+    ann.tcpPort = 5556u;
+    ann.serverGuid = 1ULL;
+    ann.open = 1u;
+    uint8_t abuf[256] = {};
+    size_t alen = LanDiscovery_SerializeAnnounce(ann, abuf, sizeof(abuf));
+    TEST_CHECK(alen == sizeof(LanAnnouncePacket));
+    TEST_CHECK(LanDiscovery_ParseAnnounce(abuf, alen, &ann));
+    std::vector<LanHostEntry> hosts;
+    TEST_CHECK(LanDiscovery_UpsertHost(hosts, ann, "192.168.1.10", 1000ULL));
+    LanDiscovery_PruneExpired(hosts, 6000ULL, LAN_DISCOVERY_TTL_MS);
+    TEST_CHECK(hosts.empty());
+    LanDiscovery_SetPortForTest(0);
+    LanDiscovery_SetSelfPidOverrideForTest(0, false);
+    LanDiscovery_SetHosting(false, 0, 0, nullptr, nullptr);
+    LanDiscovery_UpdateHostingMode(0);
+    LanDiscovery_StartScan();
+    LanDiscovery_ProbeNow();
+    (void)LanDiscovery_GetHosts();
+    LanDiscovery_StopScan();
+    LanDiscovery_Shutdown();
+    char norm[64] = {};
+    uint16_t p = 0;
+    TEST_CHECK(NetworkNormalizeTargetAddress(" 127.0.0.1:5556 ", norm, sizeof(norm), &p));
+    return Test_LanDiscoveryAndAddressNormalization_M1();
+}
+
+static bool Test_SteamFreeSessionAndModSyncDirectSmoke_M2()
+{
+    TEST_CHECK(!SteamP2P_IsLoggedOn());
+    TEST_CHECK(!SteamP2P_IsAvailable());
+    TEST_CHECK(SteamP2P_GetLocalPersonaNameCopy().empty());
+    TEST_CHECK(SteamP2P_ParseTargetSteamId("steam:76561197960265728") == 76561197960265728ULL);
+    TEST_CHECK(SaveSync_DetectDualTestbedInputs("HOST", nullptr, nullptr));
+    char disp[64] = {};
+    bool isStm = false;
+    SaveSync_FormatDisplayTarget("127.0.0.1", 5556u, disp, sizeof(disp), &isStm);
+    TEST_CHECK(!isStm && strcmp(disp, "127.0.0.1:5556") == 0);
+    TEST_CHECK(DiagLog_IsSafeRemoteLogFileName("tesmioloader.log"));
+    TEST_CHECK(!ModSync_IsSteamUgcOnline());
+    ModSync_TickMainThread();
+    char modBuf[MAX_PATH] = {};
+    TEST_CHECK(!ModSync_FindLocalModFolder(0, modBuf, sizeof(modBuf)));
+    TEST_CHECK(!ModSync_FindLocalModFolderAtRoot(0, nullptr, false, modBuf, sizeof(modBuf)));
+    (void)ModSync_GetLastOfflineWarning();
+    SaveSync_SetTcpPortForTest(0);
+    LockstepNet_SetPortForTest(0);
+    return Test_SteamFreeSessionAndModSync_M2();
+}
+
+static bool Test_LanUiBrowserHostIpAndToastsDirectSmoke_M3()
+{
+    TEST_CHECK(!UiCommon_CopyTextToClipboard(""));
+    std::string clipTmp;
+    (void)clipTmp;
+    char normBuf[64] = {};
+    TEST_CHECK(UiCommon_NormalizeClipboardJoinAddress(" 127.0.0.1 ", normBuf, sizeof(normBuf)));
+    TEST_CHECK(UiCommon_NormalizeToastColorKind(99) == 5);
+    std::vector<LanAdapterInfo> ads;
+    TEST_CHECK(UiCommon_SelectPrimaryAdapter(ads) == nullptr);
+    UiCommon_RefreshLocalAdaptersCache();
+    (void)UiCommon_GetCachedLocalAdapters(false);
+    (void)UiCommon_AdapterKindTag(LanAdapterKind::Ethernet, "Ethernet", "192.168.1.10", false);
+    (void)UiCommon_FormatHostEndpoint("127.0.0.1", 5556);
+    (void)UiCommon_FormatCopyableHostIp("127.0.0.1", 5556);
+    LanAdapterInfo dummyAd = {};
+    strncpy_s(dummyAd.ip, "192.168.1.10", _TRUNCATE);
+    dummyAd.kind = LanAdapterKind::Ethernet;
+    (void)UiCommon_FormatAdapterLine(dummyAd, 5556);
+    const UiHostAddressView hv = UiCommon_BuildHostAddressView(ads, 5556);
+    (void)UiCommon_FormatHostTransportSummary(hv.primaryEndpoint.c_str(), false, 0, false);
+    TwoStates_AddToastAtTickForTest("smoke", 0, GetTickCount64());
+    TwoStates_ClearToastsForTest();
+    TEST_CHECK(TwoStates_GetToastCountForTest() == 0);
+    (void)Lang_CopyIpLabel();
+    (void)Lang_CopyIpLabelW();
+    (void)Lang_CopiedLabel();
+    (void)Lang_CopiedLabelW();
+    (void)Lang_RefreshIpLabel();
+    (void)Lang_SteamOfflineLabel();
+    (void)Lang_SteamOfflineLabelW();
+    (void)Lang_CopySteamCodeLabel();
+    (void)Lang_CopySteamCodeLabelW();
+    (void)NativeMenu_Utf8ToWideSafe("Host");
+    (void)NativeMenu_TruncateLabel(L"Host", NATIVE_JOIN_MAX_LABEL_CHARS);
+    LanHostEntry dummyHost = {};
+    strncpy_s(dummyHost.connectIp, "127.0.0.1", _TRUNCATE);
+    dummyHost.protocolMatch = true;
+    (void)NativeMenu_FormatLanHostLabel(dummyHost);
+    TEST_CHECK(NativeMenu_FormatConnectTarget(dummyHost, normBuf, sizeof(normBuf)));
+    TEST_CHECK(NativeMenu_IsLanHostVersionCompatible(dummyHost, REPUBLICMP_VERSION, 0u));
+    (void)NativeMenu_SelectSidebarExtraAdapters(ads, 2);
+    std::vector<LanHostEntry> lh;
+    std::vector<NativeMenuFriendInfo> sf;
+    const auto planned = NativeMenu_PlanJoinEntries(false, lh, false, sf, "127.0.0.1", true);
+    JoinPlanEntry sel = {};
+    TEST_CHECK(NativeMenu_ResolveJoinClick(planned, 0, &sel));
+    return Test_LanUiBrowserHostIpAndToasts_M3();
+}
+
+static bool Test_LanE2eSuite_M4()
+{
+    char why[128] = {};
+    (void)SaveSync_ExchangeCustomHelloOverSocketForTest(
+        static_cast<uintptr_t>(INVALID_SOCKET), false, "RPMPSES", REPUBLICMP_PROTOCOL,
+        REPUBLICMP_VERSION, 0u, why, sizeof(why));
+    (void)SaveSync_ExchangeHandshakeOverSocketForTest(
+        static_cast<uintptr_t>(INVALID_SOCKET), false, "", true, "", why, sizeof(why));
+    SaveSync_SetTcpPortForTest(0);
+    LockstepNet_SetPortForTest(0);
+    return RunLanE2eTestSuite() == 0;
+}
 
 // ---------------------------------------------------------------------------
 // Test 36: SettingsSync for TV/Radio Broadcast, Prison/Orphanage Upbringing, and Building Alerts
@@ -15732,6 +15899,8 @@ int main()
     printf("================================================================\n");
 
     InitMockHarness();
+    LanDiscovery_SetLoopbackOnlyForTest(true);
+    Network_SetLoopbackOnlyForTest(true);
 
     const TestCase kTests[] = {
         { "RvaAndSafeMem (Invariants #1, #12, #16, InitOnce)",   &Test_RvaAndSafeMem },
@@ -15789,6 +15958,10 @@ int main()
         { "R1SecondPass_WasteSetForBioCrossroadEditor (M3 R1-1A..2B)", &Test_R1SecondPass_WasteSetForBioCrossroadEditor },
         { "HookFixesAndRunAudit_M1 (Removed9, FireDispatch, AssignCo, RunAudit)", &Test_HookFixesAndRunAudit_M1 },
         { "Audit7Fixes_M1 (Bugs #1-#7 Sync, Skip, CopyWeights, Pre-GameRules)", &Test_Audit7Fixes_M1 },
+        { "LanDiscoveryAndAddressNormalization_M1 (F1-F5)", &Test_LanDiscoveryDirectSmoke_M1 },
+        { "SteamFreeSessionAndModSync_M2 (F6-F8)", &Test_SteamFreeSessionAndModSyncDirectSmoke_M2 },
+        { "LanUiBrowserHostIpAndToasts_M3 (F9-F11)", &Test_LanUiBrowserHostIpAndToastsDirectSmoke_M3 },
+        { "LanE2eSuite_M4 (145 Cases: F1-F11, Tiers 1-5)", &Test_LanE2eSuite_M4 },
     };
 
     for (const auto& tc : kTests) {

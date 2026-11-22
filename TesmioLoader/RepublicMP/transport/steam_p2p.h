@@ -8,6 +8,7 @@
 #include <winsock2.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <string>
 #include <vector>
 
 struct SteamFriendEntry {
@@ -24,12 +25,16 @@ void SteamP2P_Bind(const TsmHost* host);
 // Initializes dynamic bindings to steam_api64.dll and registers P2P / Join callbacks.
 bool SteamP2P_Init();
 
-// True if steam_api64.dll is loaded and the user is logged into Steam.
+// True if steam_api64.dll is loaded, running, and the user is logged into Steam.
+bool SteamP2P_IsLoggedOn();
+
+// True if steam_api64.dll is loaded, P2P bindings are initialized, and the user is logged into Steam.
 bool SteamP2P_IsAvailable();
 
 // Local player's 64-bit SteamID (e.g. 76561198000000000) and persona name.
 uint64_t SteamP2P_GetLocalSteamId();
 const char* SteamP2P_GetLocalPersonaName();
+std::string SteamP2P_GetLocalPersonaNameCopy();
 
 // Refreshes and returns the list of Steam friends currently playing W&R (AppID 784150)
 // and actively hosting an open Co-op server.
@@ -47,6 +52,7 @@ void SteamP2P_SetHostingPresence(bool hosting);
 // Checks if the user clicked "Join Game" in Steam Friends / accepted an invite.
 // If true, writes "steam:<SteamID64>" into outTarget and clears the pending flag.
 bool SteamP2P_ConsumePendingJoin(char* outTarget, size_t outSize);
+void SteamP2P_SetPendingJoinForTest(const char* target);
 
 // Parses a target string ("steam:7656119...", or raw 17-digit SteamID64 "7656119...")
 // and returns the 64-bit SteamID, or 0 if the string is a regular IPv4 address.

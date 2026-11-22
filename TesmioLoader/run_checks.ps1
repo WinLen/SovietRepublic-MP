@@ -56,7 +56,7 @@ cl /nologo /O2 /MT /W3 /EHsc /std:c++20 /utf-8 ^
    /I"..\src" /I"third_party\imgui" /I"third_party\imgui\backends" ^
    /Fo"$buildDir\test_main.obj" /Fe"$buildDir\republicmp_tests.exe" ^
    tests\test_main.cpp obj\Release\x64\*.obj ^
-   /link /LTCG /SUBSYSTEM:CONSOLE kernel32.lib user32.lib gdi32.lib ws2_32.lib winhttp.lib d3d11.lib dxgi.lib imm32.lib advapi32.lib shell32.lib
+   /link /LTCG /SUBSYSTEM:CONSOLE kernel32.lib user32.lib gdi32.lib ws2_32.lib iphlpapi.lib winhttp.lib d3d11.lib dxgi.lib imm32.lib advapi32.lib shell32.lib
 "@
 
 $tempBat = Join-Path $buildDir "compile_tests.bat"
@@ -134,11 +134,13 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    world_sync\networks\road_sync.cpp ^
    save\save_zip.cpp ^
    transport\network.cpp ^
+   transport\lan_discovery.cpp ^
    transport\steam_p2p.cpp ^
    ui\native_menu.cpp ^
    ui\ui_log.cpp ^
    ui\debug_log.cpp ^
    ui\sync_block.cpp ^
+   ui\ui_common.cpp ^
    tests\test_main.cpp
 "@
 
@@ -153,7 +155,7 @@ if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
     Write-Error "MSVC /analyze failed with exit code $analyzeExit and $($warns.Count) warning(s)"
     exit 1
 }
-Write-Host "[PASS] MSVC /analyze completed cleanly across all 55 compilation units (0 warnings)." -ForegroundColor Green
+Write-Host "[PASS] MSVC /analyze completed cleanly across all 57 compilation units (0 warnings)." -ForegroundColor Green
 
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " [4/5] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
@@ -181,17 +183,26 @@ call "$tidyVcvars" >nul
 if errorlevel 1 exit /b 1
 cd /d "$repDir"
 "$clangTidy" --quiet ^
+   core\main.cpp ^
    core\diag_log.cpp ^
    determinism\state_hash.cpp ^
    determinism\determinism.cpp ^
+   game\imgui_hook.cpp ^
    lockstep\world_refs.cpp ^
    lockstep\building_switches.cpp ^
    lockstep\commands.cpp ^
    lockstep\rename.cpp ^
+   lockstep\lockstep_net.cpp ^
    session\two_states.cpp ^
    session\mod_sync.cpp ^
+   session\save_sync.cpp ^
    save\save_zip.cpp ^
+   transport\network.cpp ^
+   transport\lan_discovery.cpp ^
+   transport\steam_p2p.cpp ^
    ui\native_menu.cpp ^
+   ui\sync_block.cpp ^
+   ui\ui_common.cpp ^
    world_sync\networks\road_sync.cpp ^
    tests\test_main.cpp ^
    -- $tidyStd -fms-extensions -fms-compatibility -D_MT -DNDEBUG -D_WINDOWS -D_USRDLL -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -Wno-microsoft-include -Wno-pragma-pack -I..\src -Ithird_party\imgui -Ithird_party\imgui\backends

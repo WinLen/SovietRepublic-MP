@@ -1,6 +1,6 @@
-[h1]☭ RepublicMP v1.6.6 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
+[h1]☭ RepublicMP v1.7.0 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
 
-Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P connection[/b] (no VPN/Hamachi or port forwarding required), seamless integration into the [b]native game UI[/b] (with game [b]v1.1.1.13[/b] support), the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
+Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P and Steam-free LAN auto-discovery[/b] (physical LAN, Radmin VPN, Hamachi, ZeroTier — works even without Steam running), seamless integration into the [b]native game UI[/b] (with game [b]v1.1.1.13[/b] support), the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
 
 [h2]🔥 Key Features:[/h2]
 [list]
@@ -23,7 +23,7 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 [/list]
 
 [h2]🚀 Installation & Launch Rules:[/h2]
-[b]Important:[/b] Both players must run the same game version ([b]v1.1.1.13[/b]) and [b]RepublicMP v1.6.6[/b].
+[b]Important:[/b] Both players must run the same game version ([b]v1.1.1.13[/b]) and [b]RepublicMP v1.7.0[/b].
 
 [b]Method 1 — Via Steam Workshop (Recommended):[/b]
 1. Subscribe to this mod on Steam Workshop (both players).
@@ -35,8 +35,8 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 2. Launch the game via Steam or [i]SOVIET64.exe[/i].
 
 [b]How to Start a Co-op Session:[/b]
-• [b]HOST:[/b] In the main menu, click [b]"CO-OP" -> "Host Server"[/b]. Optionally adjust [b]"Co-op Settings"[/b] ([i]1 or 2 States[/i], [i]Treasury 100% / 50-50[/i], [i]Border Zone[/i], [i]Map Borders[/i], [i]Mod Sync Mode[/i]), then select [b]"Continue Co-op"[/b], [b]"Co-op Saves"[/b], [b]"Import Singleplayer"[/b], or [b]"New Custom Game"[/b].
-• [b]CLIENT (Player 2):[/b] Wait until the Host loads the map (and enters the Co-op Waiting Lobby), open [b]"CO-OP" -> "Join Server"[/b], and click [b]"Host: <Friend's Name>"[/b] in the online Steam friends list (or paste their IP / [i]steam:<SteamID64>[/i]).
+• [b]HOST:[/b] In the main menu, click [b]"CO-OP" -> "Host Server"[/b]. Optionally adjust [b]"Co-op Settings"[/b] ([i]1 or 2 States[/i], [i]Treasury 100% / 50-50[/i], [i]Border Zone[/i], [i]Map Borders[/i], [i]Mod Sync Mode[/i]), then select [b]"Continue Co-op"[/b], [b]"Co-op Saves"[/b], [b]"Import Singleplayer"[/b], or [b]"New Custom Game"[/b]. Your local/VPN IP addresses and a [b]Copy IP[/b] button appear in the lobby & sidebar.
+• [b]CLIENT (Player 2):[/b] Wait until the Host loads the map (and enters the Co-op Waiting Lobby), open [b]"CO-OP" -> "Join Server"[/b], and click the auto-discovered [b]LAN / Radmin VPN / Hamachi / ZeroTier[/b] server or [b]"Host: <Friend's Name>"[/b] in the Steam friends list (works even offline without Steam running; pasting IP / [i]steam:<SteamID64>[/i] also works).
 
 [h2]📜 License & Open Source Code (GNU GPL v3.0):[/h2]
 • [b]License:[/b] GNU General Public License v3.0 ([b]GPL-3.0-only[/b], included in [i]LICENSE[/i]).

@@ -2,21 +2,24 @@
 // See sync_block.h.
 #include "sync_block.h"
 #include "lang.h"
+#include "ui_common.h"
 #include "../core/version.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../session/mod_sync.h"
+#include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
 #include "imgui.h"
 #include <windows.h>
+#include <atomic>
 #include <mutex>
 #include <cstdio>
 #include <cmath>
 
 static std::mutex g_mutex;
-static volatile bool g_active = false;
-static volatile bool g_mapInspectMode = false;
+static std::atomic<bool> g_active{false};
+static std::atomic<bool> g_mapInspectMode{false};
 static char g_text[160] = "Syncing...";
 static int g_step = 0;
 static int g_totalSteps = 0;
@@ -28,9 +31,9 @@ static float g_speedMbSec = 0.0f;
 void SyncBlock_SetActive(bool active, const char* reason)
 {
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_active = active;
+    g_active.store(active, std::memory_order_release);
     if (active) {
-        g_mapInspectMode = false;
+        g_mapInspectMode.store(false, std::memory_order_release);
         if (reason && reason[0]) {
             _snprintf_s(g_text, sizeof(g_text), _TRUNCATE, "%s", reason);
         }
@@ -96,57 +99,37 @@ void SyncBlock_GetTransferStats(int* outPercent, int* outQueuedBytes, int* outTo
 
 bool SyncBlock_IsActive()
 {
-    return g_active;
+    return g_active.load(std::memory_order_acquire);
 }
 
 bool SyncBlock_IsMapInspectMode()
 {
-    return g_mapInspectMode;
+    return g_mapInspectMode.load(std::memory_order_acquire);
 }
 
 void SyncBlock_SetMapInspectMode(bool inspect)
 {
-    if (g_active || SaveSync_GetState() != SESSION_HOST_LISTENING) {
-        g_mapInspectMode = false;
+    if (g_active.load(std::memory_order_acquire) || SaveSync_GetState() != SESSION_HOST_LISTENING) {
+        g_mapInspectMode.store(false, std::memory_order_release);
         return;
     }
-    g_mapInspectMode = inspect;
+    g_mapInspectMode.store(inspect, std::memory_order_release);
 }
 
 bool SyncBlock_UpdateMapInspectState(int sessionState, bool syncActive)
 {
     if (syncActive || sessionState != (int)SESSION_HOST_LISTENING) {
-        g_mapInspectMode = false;
+        g_mapInspectMode.store(false, std::memory_order_release);
     }
-    return g_mapInspectMode;
+    return g_mapInspectMode.load(std::memory_order_acquire);
 }
 
 bool SyncBlock_BlocksWorldInput()
 {
     if (ModSync_IsDownloadActive()) return true;
-    if (g_active) return true;
-    if (SaveSync_IsWaitingLobbyActive() && !g_mapInspectMode) return true;
+    if (g_active.load(std::memory_order_acquire)) return true;
+    if (SaveSync_IsWaitingLobbyActive() && !g_mapInspectMode.load(std::memory_order_acquire)) return true;
     return false;
-}
-
-static void CopyTextToClipboard(const char* text)
-{
-    if (!text || !text[0]) return;
-    if (!OpenClipboard(nullptr)) return;
-    EmptyClipboard();
-    size_t len = strlen(text) + 1;
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len);
-    if (hMem) {
-        void* p = GlobalLock(hMem);
-        if (p) {
-            memcpy(p, text, len);
-            GlobalUnlock(hMem);
-            SetClipboardData(CF_TEXT, hMem);
-        } else {
-            GlobalFree(hMem);
-        }
-    }
-    CloseClipboard();
 }
 
 static void PushSovietButtonStyle(bool primaryRed = false)
@@ -165,6 +148,32 @@ static void PushSovietButtonStyle(bool primaryRed = false)
 static void PopSovietButtonStyle()
 {
     ImGui::PopStyleColor(3);
+}
+
+static void DrawCopyIpButtonWithFeedback(const char* idSuffix, const char* copyText, const char* baseLabel)
+{
+    static ULONGLONG s_copiedUntilMs = 0;
+    static char s_copiedId[32] = {};
+    const ULONGLONG now = GetTickCount64();
+    const bool showingCopied = (now < s_copiedUntilMs) && (strcmp(s_copiedId, idSuffix) == 0);
+    char btnText[96] = {};
+    _snprintf_s(btnText, sizeof(btnText), _TRUNCATE, "%s###copy_ip_%s",
+                showingCopied ? Lang_CopiedLabel() : baseLabel, idSuffix);
+    PushSovietButtonStyle(false);
+    if (ImGui::SmallButton(btnText)) {
+        if (UiCommon_CopyTextToClipboard(copyText)) {
+            s_copiedUntilMs = now + 2000ULL;
+            strncpy_s(s_copiedId, idSuffix, _TRUNCATE);
+            char toastBuf[160] = {};
+            _snprintf_s(toastBuf, sizeof(toastBuf), _TRUNCATE,
+                        Tr("LAN IP скопирован: %s", "LAN IP copied: %s"), copyText);
+            TwoStates_AddToast(toastBuf, 1);
+        } else {
+            TwoStates_AddToast(Tr("Не удалось открыть буфер обмена",
+                                  "Clipboard is busy, copy manually"), 2);
+        }
+    }
+    PopSovietButtonStyle();
 }
 
 static void DrawMapInspectBanner(const ImGuiIO& io, bool isReconnect)
@@ -193,16 +202,28 @@ static void DrawMapInspectBanner(const ImGuiIO& io, bool isReconnect)
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.86f, 0.84f, 0.78f, 1.0f));
+        const bool russian = (Lang_Get() == MP_LANG_RU);
+        const UiHostAddressView view = UiCommon_BuildHostAddressView(
+            UiCommon_GetCachedLocalAdapters(false), SAVE_SYNC_PORT, SAVE_SYNC_PORT, russian);
         if (isReconnect) {
             const char* lastPeer = SaveSync_GetLastPartnerPeer();
-            ImGui::Text(Tr("Партнёр отключился (%s). Ожидание переподключения... Камера: WASD / СКМ, Метка: Alt+ЛКМ.",
-                           "Partner disconnected (%s). Waiting for reconnect... Camera: WASD / MMB, Ping: Alt+LMB."),
-                        (lastPeer && lastPeer[0]) ? lastPeer : "peer");
+            ImGui::TextWrapped(Tr("Партнёр отключился (%s). Ожидание переподключения...",
+                                  "Partner disconnected (%s). Waiting for reconnect..."),
+                               (lastPeer && lastPeer[0]) ? lastPeer : "peer");
         } else {
-            ImGui::Text(Tr("Ожидание подключения второго игрока (Steam P2P / TCP :%d)... Камера: WASD / СКМ, Метка: Alt+ЛКМ.",
-                           "Waiting for second player to connect (Steam P2P / TCP :%d)... Camera: WASD / MMB, Ping: Alt+LMB."),
-                        SAVE_SYNC_PORT);
+            const bool steamOnline = SteamP2P_IsAvailable() && SteamP2P_GetLocalSteamId() != 0;
+            ImGui::TextWrapped(Tr("Ожидание второго игрока — %s",
+                                  "Waiting for second player — %s"),
+                               steamOnline ? "Steam P2P" : Lang_SteamOfflineLabel());
         }
+        ImGui::Text("LAN IP: %s [%s]", view.primaryEndpoint.c_str(), view.primaryTag.c_str());
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        DrawCopyIpButtonWithFeedback("inspect", view.primaryCopyText.c_str(), Lang_CopyIpLabel());
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.73f, 0.67f, 1.0f));
+        ImGui::TextUnformatted(Tr("Камера: WASD / СКМ, Метка: Alt+ЛКМ.",
+                                  "Camera: WASD / MMB, Ping: Alt+LMB."));
         ImGui::PopStyleColor();
 
         ImGui::Spacing();
@@ -243,13 +264,83 @@ static void DrawMapInspectBanner(const ImGuiIO& io, bool isReconnect)
     ImGui::PopStyleColor(2);
 }
 
+static void DrawHostAdaptersSection(const UiHostAddressView& view, float winW, bool russian)
+{
+    if (view.displayAdapters.empty()) return;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.84f, 0.78f, 0.58f, 1.0f));
+    ImGui::TextUnformatted(Tr("Доступные локальные адреса:", "Available local addresses:"));
+    ImGui::PopStyleColor();
+
+    const bool useScroll = view.displayAdapters.size() > 4;
+    if (useScroll) {
+        ImGui::BeginChild("##lobby_adapters_scroll", ImVec2(winW - 60.0f, 92.0f), ImGuiChildFlags_Borders);
+    }
+    for (size_t i = 0; i < view.displayAdapters.size(); ++i) {
+        const LanAdapterInfo& ad = view.displayAdapters[i];
+        const std::string line = UiCommon_FormatAdapterLine(ad, SAVE_SYNC_PORT, true, russian);
+        const std::string copyTxt = UiCommon_FormatCopyableHostIp(ad.ip, SAVE_SYNC_PORT, SAVE_SYNC_PORT);
+        if (line.empty() || copyTxt.empty()) continue;
+
+        ImGui::TextUnformatted(line.c_str());
+        ImGui::SameLine();
+        char idBuf[16] = {};
+        _snprintf_s(idBuf, sizeof(idBuf), _TRUNCATE, "ad_%zu", i);
+        DrawCopyIpButtonWithFeedback(idBuf, copyTxt.c_str(), Tr("Копировать", "Copy"));
+    }
+    if (useScroll) {
+        ImGui::EndChild();
+    }
+}
+
+static void DrawHostSteamLine(bool russian)
+{
+    const unsigned long long localSid = static_cast<unsigned long long>(SteamP2P_GetLocalSteamId());
+    if (SteamP2P_IsAvailable() && localSid != 0) {
+        char sidStr[32] = {};
+        _snprintf_s(sidStr, sizeof(sidStr), _TRUNCATE, "%llu", localSid);
+        ImGui::Text("SteamID: %s | TCP :%d", sidStr, SAVE_SYNC_PORT);
+        ImGui::SameLine();
+        PushSovietButtonStyle(false);
+        if (ImGui::SmallButton(Tr("Копировать ID###copy_sid", "Copy ID###copy_sid"))) {
+            if (UiCommon_CopyTextToClipboard(sidStr)) {
+                TwoStates_AddToast(Tr("SteamID скопирован в буфер обмена", "SteamID copied to clipboard"), 1);
+            } else {
+                TwoStates_AddToast(Tr("Не удалось открыть буфер обмена", "Clipboard is busy, copy manually"), 2);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(Tr("Код Steam###copy_scode", "Steam Code###copy_scode"))) {
+            char code[64] = {};
+            _snprintf_s(code, sizeof(code), _TRUNCATE, "steam:%s", sidStr);
+            if (UiCommon_CopyTextToClipboard(code)) {
+                TwoStates_AddToast(Tr("Ваш код steam:<ID> скопирован в буфер обмена!",
+                                      "Your steam:<ID> code copied to clipboard!"), 1);
+            } else {
+                TwoStates_AddToast(Tr("Не удалось открыть буфер обмена", "Clipboard is busy, copy manually"), 2);
+            }
+        }
+        PopSovietButtonStyle();
+    } else {
+        (void)russian;
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.84f, 0.78f, 0.58f, 1.0f));
+        ImGui::Text("%s | TCP :%d", Lang_SteamOfflineLabel(), SAVE_SYNC_PORT);
+        ImGui::PopStyleColor();
+    }
+}
+
 static void DrawLobbyPlayersBox(SessionState st, bool isReconnect, float winW)
 {
+    static SessionState s_prevLobbyState = SESSION_IDLE;
+    const bool enteredListening = (st == SESSION_HOST_LISTENING && s_prevLobbyState != SESSION_HOST_LISTENING);
+    s_prevLobbyState = st;
+
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.11f, 0.09f, 0.95f));
-    ImGui::BeginChild("##lobby_players_box", ImVec2(winW - 40.0f, 88.0f), true);
+    ImGui::BeginChild("##lobby_players_box", ImVec2(winW - 40.0f, 0.0f),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
     {
-        bool twoStates = (TwoStates_GetMode() == COOP_MODE_TWO_STATES);
-        bool localIsHost = SaveSync_IsHostRole() || st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING;
+        const bool twoStates = (TwoStates_GetMode() == COOP_MODE_TWO_STATES);
+        const bool localIsHost = SaveSync_IsHostRole() || st == SESSION_HOST_LISTENING || st == SESSION_HOST_JOINING;
+        const bool russian = (Lang_Get() == MP_LANG_RU);
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.92f, 0.48f, 1.0f));
         ImGui::TextUnformatted(twoStates
@@ -258,24 +349,40 @@ static void DrawLobbyPlayersBox(SessionState st, bool isReconnect, float winW)
         ImGui::PopStyleColor();
         ImGui::SameLine(275.0f);
 
-        unsigned long long localSid = (unsigned long long)SteamP2P_GetLocalSteamId();
-        if (localIsHost && localSid != 0) {
-            char sidStr[32];
-            _snprintf_s(sidStr, sizeof(sidStr), _TRUNCATE, "%llu", localSid);
-            ImGui::Text(Tr("В игре (Пауза) | SteamID: %s | TCP :%d",
-                           "In game (Paused) | SteamID: %s | TCP :%d"),
-                        sidStr, SAVE_SYNC_PORT);
+        if (localIsHost) {
+            std::vector<LanAdapterInfo> adapters = UiCommon_GetCachedLocalAdapters(enteredListening);
+            const UiHostAddressView view = UiCommon_BuildHostAddressView(
+                adapters, SAVE_SYNC_PORT, SAVE_SYNC_PORT, russian);
+
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextWrapped(Tr("В игре (Пауза) | LAN: %s [%s]", "In game (Paused) | LAN: %s [%s]"),
+                               view.primaryEndpoint.c_str(), view.primaryTag.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::SetCursorPosX(275.0f);
+            DrawCopyIpButtonWithFeedback("primary", view.primaryCopyText.c_str(), Lang_CopyIpLabel());
             ImGui::SameLine();
             PushSovietButtonStyle(false);
-            if (ImGui::SmallButton(Tr("Копировать ID", "Copy ID"))) {
-                CopyTextToClipboard(sidStr);
-                TwoStates_AddToast(Tr("SteamID скопирован в буфер обмена", "SteamID copied to clipboard"), 1);
+            char refreshBtn[64] = {};
+            _snprintf_s(refreshBtn, sizeof(refreshBtn), _TRUNCATE, "%s###refresh_ips", Lang_RefreshIpLabel());
+            if (ImGui::SmallButton(refreshBtn)) {
+                adapters = UiCommon_GetCachedLocalAdapters(true);
             }
             PopSovietButtonStyle();
+
+            DrawHostSteamLine(russian);
+
+            if (st == SESSION_HOST_LISTENING) {
+                const UiHostAddressView latestView = UiCommon_BuildHostAddressView(
+                    adapters, SAVE_SYNC_PORT, SAVE_SYNC_PORT, russian);
+                DrawHostAdaptersSection(latestView, winW, russian);
+            }
         } else {
-            ImGui::Text(Tr("Готов (Синхронизация по порту :%d / Steam P2P)",
-                           "Ready (Synchronizing on port :%d / Steam P2P)"),
-                        SAVE_SYNC_PORT);
+            const char* targetIp = SaveSync_GetTargetIp();
+            const char* peer = SaveSync_GetPeerIp();
+            const char* hostAddr = (peer && peer[0]) ? peer : ((targetIp && targetIp[0]) ? targetIp : "Host");
+            ImGui::Text(Tr("Подключение к Хосту (%s | TCP :%d)",
+                           "Connecting to Host (%s | TCP :%d)"),
+                        hostAddr, SAVE_SYNC_PORT);
         }
 
         ImGui::Separator();
@@ -442,9 +549,13 @@ static void DrawLobbyHostSettingsBox(bool isReconnect, float winW)
                         twoStates ? Tr("Два государства (Запад и Восток)", "Two States (West & East)")
                                   : Tr("Одно государство (Общая ССР)", "One State (Shared SSR)"));
             if (ImGui::Button(modeBtn, ImVec2(315.0f, 26.0f))) {
-                TwoStates_SetMode(twoStates ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES);
+                const int nextMode = twoStates ? COOP_MODE_ONE_STATE : COOP_MODE_TWO_STATES;
+                TwoStates_SetMode(nextMode);
                 TwoStates_ReapplyWaitingLobbySettings();
                 TwoStates_SaveSettings();
+                if (SaveSync_GetState() == SESSION_HOST_LISTENING && !SaveSync_IsWaitingForReconnect()) {
+                    LanDiscovery_UpdateHostingMode(static_cast<uint8_t>(nextMode));
+                }
             }
 
             if (twoStates) {
@@ -754,7 +865,7 @@ void SyncBlock_Draw()
     ImGuiIO& io = ImGui::GetIO();
     bool isReconnect = SaveSync_IsWaitingForReconnect();
 
-    if (waitingLobby && !syncActive && g_mapInspectMode) {
+    if (waitingLobby && !syncActive && SyncBlock_IsMapInspectMode()) {
         DrawMapInspectBanner(io, isReconnect);
         return;
     }

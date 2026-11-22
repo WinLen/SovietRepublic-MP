@@ -17,6 +17,7 @@
 #include "../ui/lang.h"
 #include "../ui/native_menu.h"
 #include "../ui/sync_block.h"
+#include "../ui/ui_common.h"
 #include "imgui.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,7 +149,7 @@ static std::unordered_map<int, int> g_vehicleOwners;  // vehicleId  -> 1 (West) 
 
 struct ToastMessage {
     char text[256];
-    int colorKind; // 0=info(blue), 1=success(green), 2=warning(yellow), 3=error(red)
+    int colorKind; // 0=info(blue), 1=success(green), 2=warning(yellow), 3=error(red), 4=gold, 5=workshop(cyan)
     ULONGLONG createdMs;
     ULONGLONG durationMs;
 };
@@ -159,19 +160,59 @@ static void EnsureOwnerLock()
     TsmEnsureCriticalSection(&g_ownerLockOnce, &g_ownerLock);
 }
 
-void TwoStates_AddToast(const char* text, int colorKind)
+void TwoStates_AddToastAtTickForTest(const char* text, int colorKind, unsigned long long createdMs)
 {
     if (!text || !text[0]) return;
+    const int kind = UiCommon_NormalizeToastColorKind(colorKind);
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
     ToastMessage tm = {};
     strncpy_s(tm.text, sizeof(tm.text), text, _TRUNCATE);
-    tm.colorKind = colorKind;
-    tm.createdMs = GetTickCount64();
-    tm.durationMs = (colorKind >= 2) ? 5500 : 4500;
+    tm.colorKind = kind;
+    tm.createdMs = createdMs;
+    tm.durationMs = (kind >= 2) ? 5500 : 4500;
     g_toasts.push_back(tm);
     while (g_toasts.size() > 5) g_toasts.pop_front();
     LeaveCriticalSection(&g_ownerLock);
+}
+
+void TwoStates_AddToast(const char* text, int colorKind)
+{
+    TwoStates_AddToastAtTickForTest(text, colorKind, GetTickCount64());
+}
+
+void TwoStates_ClearToastsForTest()
+{
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    g_toasts.clear();
+    LeaveCriticalSection(&g_ownerLock);
+}
+
+int TwoStates_GetToastCountForTest()
+{
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    int count = static_cast<int>(g_toasts.size());
+    LeaveCriticalSection(&g_ownerLock);
+    return count;
+}
+
+bool TwoStates_GetToastForTest(int index, char* outText, size_t outCap,
+                               int* outColorKind, unsigned long long* outDurationMs)
+{
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    if (index < 0 || static_cast<size_t>(index) >= g_toasts.size()) {
+        LeaveCriticalSection(&g_ownerLock);
+        return false;
+    }
+    const ToastMessage& tm = g_toasts[static_cast<size_t>(index)];
+    if (outText && outCap > 0) strncpy_s(outText, outCap, tm.text, _TRUNCATE);
+    if (outColorKind) *outColorKind = tm.colorKind;
+    if (outDurationMs) *outDurationMs = tm.durationMs;
+    LeaveCriticalSection(&g_ownerLock);
+    return true;
 }
 
 static double* WorldRubles()  { return (double*)(g_exeBase + WORLD_RVA + WORLD_RUB_OFFSET); }
@@ -179,11 +220,15 @@ static double* WorldDollars() { return (double*)(g_exeBase + WORLD_RVA + WORLD_U
 static bool IsUnlimitedMoney()
 {
     if (!g_exeBase) return false;
+    bool result = false;
+    DiagLog_BeginSafeSeh();
     __try {
-        return *(const int*)(g_exeBase + WORLD_RVA + WORLD_UNLIMITED_MONEY_OFFSET) != 0;
+        result = *(const int*)(g_exeBase + WORLD_RVA + WORLD_UNLIMITED_MONEY_OFFSET) != 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        result = false;
     }
+    DiagLog_EndSafeSeh();
+    return result;
 }
 
 static INIT_ONCE g_moneySwapLockOnce = INIT_ONCE_STATIC_INIT;
@@ -1167,6 +1212,7 @@ static CollisionTerrainHeightFn g_collisionTerrainHeight = nullptr;
 static void ApplyRuntimeTerrainBounds(BYTE* terrain)
 {
     if (!terrain) return;
+    DiagLog_BeginSafeSeh();
     __try {
         if (g_expandBorders) {
             if (*(float*)(terrain + 0x8DC) > EXPANDED_BOUNDARY_MARGIN)
@@ -1180,6 +1226,7 @@ static void ApplyRuntimeTerrainBounds(BYTE* terrain)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static float __fastcall H_GetTerrainBoundaryXMin(BYTE* terrain)
@@ -1686,6 +1733,8 @@ static bool BeginEconAttribution(BYTE* world, int owner)
 
     bool unlim = IsUnlimitedMoney();
     EnsureStateEconInitialized(world);
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         if (!unlim) {
             double curRub = *WorldRubles();
@@ -1709,11 +1758,13 @@ static bool BeginEconAttribution(BYTE* world, int owner)
 
         t_econOwner  = owner;
         t_inEconHook = true;
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         t_inEconHook = false;
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static double SanitizeMoneyStep(double oldBal, double newBal)
@@ -1727,6 +1778,7 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
     if (!t_inEconHook) return;
     t_inEconHook = false;
     bool unlim = IsUnlimitedMoney();
+    DiagLog_BeginSafeSeh();
     __try {
         int idx = owner - 1;
         if (!unlim) {
@@ -1759,6 +1811,7 @@ static void EndEconAttribution(int owner, bool countInNetTrade = true)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static bool IsTwoStatesResearchOrLicenseActive();
@@ -2081,6 +2134,7 @@ static __int64 __fastcall H_BldStepProduction(BYTE* world, BYTE* building, uintp
     if (vehAfter > vehBefore && building && g_exeBase) {
         int owner = ResolveBuildingOwnerFast(building);
         if (owner == 1 || owner == 2) {
+            DiagLog_BeginSafeSeh();
             __try {
                 BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
                 for (int i = vehBefore; v && i < vehAfter; ++i) {
@@ -2090,6 +2144,7 @@ static __int64 __fastcall H_BldStepProduction(BYTE* world, BYTE* building, uintp
                     }
                 }
             } __except (EXCEPTION_EXECUTE_HANDLER) {}
+            DiagLog_EndSafeSeh();
         }
     }
     return r;
@@ -2193,6 +2248,7 @@ static void AttributePendingTouristHotelStay(BYTE* world, const BYTE* citizen)
     int owner = ResolveCitizenOwnerFast(citizen);
     if (owner != 1 && owner != 2) return;
     int idx = owner - 1;
+    DiagLog_BeginSafeSeh();
     __try {
         if (!IsUnlimitedMoney()) {
             double curRub = *WorldRubles();
@@ -2216,6 +2272,7 @@ static void AttributePendingTouristHotelStay(BYTE* world, const BYTE* citizen)
         g_lastWorldScalars = curScalars;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static void __fastcall H_CitizenBirth(BYTE* world, BYTE* citizen, uintptr_t a3, uintptr_t a4,
@@ -6297,10 +6354,8 @@ void TwoStates_OnSessionEnded()
     g_localPingActive = false;
     g_hasResyncCam = false;
 
-    EnsureOwnerLock();
-    EnterCriticalSection(&g_ownerLock);
-    g_toasts.clear();
-    LeaveCriticalSection(&g_ownerLock);
+    // Preserve g_toasts across session teardown so join-failure, disconnect, and
+    // copy notifications remain visible after returning to SESSION_IDLE.
 
     g_netTradeRub[0] = g_netTradeRub[1] = 0.0;
     g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
@@ -6355,11 +6410,13 @@ void TwoStates_SyncBalancesFromHost(double r1, double r2, double u1, double u2)
     g_stateRub[1] = r2;
     g_stateUsd[0] = u1;
     g_stateUsd[1] = u2;
+    DiagLog_BeginSafeSeh();
     __try {
         *WorldRubles()  = g_stateRub[0] + g_stateRub[1];
         *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static int g_cmdBuildingsBefore = 0;
@@ -6402,6 +6459,7 @@ void TwoStates_BeginCommand(int ownerState)
         return;
     }
     bool unlim = IsUnlimitedMoney();
+    DiagLog_BeginSafeSeh();
     __try {
         if (g_exeBase) {
             BYTE* world = g_exeBase + WORLD_RVA;
@@ -6416,6 +6474,7 @@ void TwoStates_BeginCommand(int ownerState)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 int TwoStates_GetCommandOwner()
@@ -6426,6 +6485,7 @@ int TwoStates_GetCommandOwner()
 static void RegisterNewStructuresInVec(size_t beginRva, int countBefore, int countAfter, int owner)
 {
     if (!g_exeBase || countAfter <= countBefore) return;
+    DiagLog_BeginSafeSeh();
     __try {
         BYTE** arr = *(BYTE***)(g_exeBase + beginRva);
         for (int i = countBefore; arr && i < countAfter; i++) {
@@ -6437,6 +6497,7 @@ static void RegisterNewStructuresInVec(size_t beginRva, int countBefore, int cou
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 void TwoStates_EndCommand(int ownerState)
@@ -6450,6 +6511,7 @@ void TwoStates_EndCommand(int ownerState)
     // Register any new vehicles bought/spawned during this command to `owner`.
     int vehAfter = GetWorldVehicleCount();
     if (vehAfter > g_cmdVehiclesBefore) {
+        DiagLog_BeginSafeSeh();
         __try {
             BYTE** v = *(BYTE***)(g_exeBase + VEC_VEHICLES_BEGIN_RVA);
             for (int i = g_cmdVehiclesBefore; v && i < vehAfter; i++) {
@@ -6457,6 +6519,7 @@ void TwoStates_EndCommand(int ownerState)
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+        DiagLog_EndSafeSeh();
     }
     if (g_inCommand && TwoStates_IsActive() && g_exeBase) {
         BYTE* world = g_exeBase + WORLD_RVA;
@@ -6479,6 +6542,7 @@ void TwoStates_EndCommand(int ownerState)
     g_inCommand = false;
     g_cmdThread = 0;
     bool unlim = IsUnlimitedMoney();
+    DiagLog_BeginSafeSeh();
     __try {
         if (g_exeBase) {
             BYTE* world = g_exeBase + WORLD_RVA;
@@ -6507,6 +6571,7 @@ void TwoStates_EndCommand(int ownerState)
         t_suppressCurStatLedgerHook = false;
         g_cmdResSnapshot.active = false;
     }
+    DiagLog_EndSafeSeh();
 }
 
 void TwoStates_CloseDenominationPopups(BYTE* world)
@@ -6632,11 +6697,13 @@ bool TwoStates_ApplyTransferCommand(const LsStateTransfer& t)
     g_stateUsd[dst] += sendUsd;
 
     if (g_inCommand) {
+        DiagLog_BeginSafeSeh();
         __try {
             *WorldRubles()  = g_stateRub[g_cmdOwner - 1];
             *WorldDollars() = g_stateUsd[g_cmdOwner - 1];
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+        DiagLog_EndSafeSeh();
     }
     SaveStatus(Tr("[ДВА ГОСУДАРСТВА] Перевод из %s в %s: %.0f ₽, %.0f $",
                   "[TWO STATES] Transfer from %s to %s: %.0f RUB, %.0f USD"),
@@ -7227,6 +7294,7 @@ void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd)
 {
     TwoStates_RestoreUiMoneySwap();
     if (!TwoStates_IsActive() || IsUnlimitedMoney()) return;
+    DiagLog_BeginSafeSeh();
     __try {
         *outSavedSimRub = *WorldRubles();
         *outSavedSimUsd = *WorldDollars();
@@ -7234,16 +7302,19 @@ void TwoStates_ToolMoneyBegin(double* outSavedSimRub, double* outSavedSimUsd)
         *WorldDollars() = TwoStates_LocalDollars();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 void TwoStates_ToolMoneyEnd(double savedSimRub, double savedSimUsd)
 {
     if (!TwoStates_IsActive() || IsUnlimitedMoney()) return;
+    DiagLog_BeginSafeSeh();
     __try {
         *WorldRubles()  = savedSimRub;
         *WorldDollars() = savedSimUsd;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 // ---------------------------------------------------------------------------
@@ -7313,18 +7384,24 @@ int TwoStates_GetVehicleOwner(int vehicleId, const BYTE* vehiclePtr)
         if (found == 1 || found == 2) return found;
     }
     if (vehiclePtr) {
+        int resolvedOwner = 0;
+        DiagLog_BeginSafeSeh();
         __try {
             const BYTE* home = *(const BYTE* const*)(vehiclePtr + VEH_HOME_OFFSET);
             if (!home) home = *(const BYTE* const*)(vehiclePtr + VEH_DEPOT_OFFSET);
             if (home) {
                 float bx = *(const float*)(home + OBJ_POS_OFFSET);
                 float bz = *(const float*)(home + OBJ_POS_OFFSET + 8);
-                return TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
+                resolvedOwner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(bx, bz), bx, bz);
+            } else {
+                float vx = *(const float*)(vehiclePtr + VEH_POS_OFFSET);
+                resolvedOwner = (vx < 0.0f) ? 1 : 2;
             }
-            float vx = *(const float*)(vehiclePtr + VEH_POS_OFFSET);
-            return (vx < 0.0f) ? 1 : 2;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+            resolvedOwner = 0;
         }
+        DiagLog_EndSafeSeh();
+        if (resolvedOwner != 0) return resolvedOwner;
     }
     return 0;
 }
@@ -7376,7 +7453,16 @@ bool TwoStates_CanControlVehicle(const BYTE* vehiclePtr, int state)
     if (!TwoStates_IsActive() || !vehiclePtr) return true;
     int s = (state == 1 || state == 2) ? state : TwoStates_LocalState();
     int id = -1;
-    __try { id = *(const int*)(vehiclePtr + VEH_ID_OFFSET); } __except (EXCEPTION_EXECUTE_HANDLER) { return true; }
+    bool readOk = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        id = *(const int*)(vehiclePtr + VEH_ID_OFFSET);
+        readOk = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        readOk = false;
+    }
+    DiagLog_EndSafeSeh();
+    if (!readOk) return true;
     int owner = TwoStates_GetVehicleOwner(id, vehiclePtr);
     return owner == s;
 }
@@ -7426,12 +7512,17 @@ bool TwoStates_CheckBuildingControlAllowed(const BYTE* buildingPtr, const char* 
 {
     if (!TwoStates_IsActive() || !buildingPtr) return true;
     float x = 0.0f, z = 0.0f;
+    bool readOk = false;
+    DiagLog_BeginSafeSeh();
     __try {
         x = *(const float*)(buildingPtr + OBJ_POS_OFFSET);
         z = *(const float*)(buildingPtr + OBJ_POS_OFFSET + 8);
+        readOk = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return true;
+        readOk = false;
     }
+    DiagLog_EndSafeSeh();
+    if (!readOk) return true;
     return TwoStates_CheckBuildingControlAllowed(TwoStates_BuildingPosKey(x, z), x, z,
                                                  actionDesc ? actionDesc : Tr("настройка чужого здания", "configuring foreign building"));
 }
@@ -7440,7 +7531,9 @@ bool TwoStates_CheckVehicleControlAllowed(const BYTE* vehiclePtr, const char* ac
 {
     if (TwoStates_CanControlVehicle(vehiclePtr)) return true;
     float vx = 0.0f;
+    DiagLog_BeginSafeSeh();
     __try { if (vehiclePtr) vx = *(const float*)(vehiclePtr + VEH_POS_OFFSET); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    DiagLog_EndSafeSeh();
     NotifyTerritoryRefused(actionDesc, vx);
     return false;
 }
@@ -7826,22 +7919,28 @@ void TwoStates_PingAtCursor()
 
 static bool WorldToScreen(float wx, float wy, float wz, const ImVec2& displaySize, ImVec2* outScreen)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         const float* m = (const float*)(g_exeBase + CAMERA_RVA + CAMERA_VIEWPROJ_OFFSET);
         float clipX = wx * m[0] + wy * m[4] + wz * m[8]  + m[12];
         float clipY = wx * m[1] + wy * m[5] + wz * m[9]  + m[13];
         float clipW = wx * m[3] + wy * m[7] + wz * m[11] + m[15];
-        if (clipW <= 0.5f || !isfinite(clipW)) return false;
-        float invW = 1.0f / clipW;
-        float ndcX = clipX * invW;
-        float ndcY = clipY * invW;
-        if (ndcX < -1.6f || ndcX > 1.6f || ndcY < -1.6f || ndcY > 1.6f) return false;
-        outScreen->x = (ndcX * 0.5f + 0.5f) * displaySize.x;
-        outScreen->y = (0.5f - ndcY * 0.5f) * displaySize.y;
-        return true;
+        if (clipW > 0.5f && isfinite(clipW)) {
+            float invW = 1.0f / clipW;
+            float ndcX = clipX * invW;
+            float ndcY = clipY * invW;
+            if (ndcX >= -1.6f && ndcX <= 1.6f && ndcY >= -1.6f && ndcY <= 1.6f) {
+                outScreen->x = (ndcX * 0.5f + 0.5f) * displaySize.x;
+                outScreen->y = (0.5f - ndcY * 0.5f) * displaySize.y;
+                ok = true;
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static void Draw3DTextBadge(ImDrawList* dl, const ImVec2& pos, const char* text, ImU32 bgCol, ImU32 borderCol, ImU32 textCol)
@@ -7887,12 +7986,16 @@ static bool BindHudTexturePtr(void* tex)
     FnTexBind bindFn = nullptr;
     if (!SafeReadPod<FnTexBind>((const void*)(vtbl + HUD_TEX_BIND_VTABLE_OFF), &bindFn) ||
         !IsPointerLikeX64((uintptr_t)bindFn)) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         bindFn(tex, 0, renderer);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool BindHudTexture(uintptr_t texPtrRva)
@@ -8561,100 +8664,148 @@ static void DrawPartnerCursorAndPing(ImDrawList* dl, const ImVec2& displaySize)
     }
 }
 
-void TwoStates_DrawOverlay()
+static void GetToastColorsForKind(int colorKind, ImU32* outBorderCol, ImU32* outTextCol)
 {
-    TwoStates_TickPendingCameraRestore();
-
-    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
-    if (!inCoop) return;
-
-    bool worldLoaded = SaveSync_IsWorldLoaded();
-    bool focused = IsGameWindowFocused();
-
-    // Hotkeys when game window is focused:
-    //   F7: toggle 3D state border lines (Two States mode only)
-    //   F6: jump camera to partner / active ping
-    //   Alt + LMB: send map ping at cursor
-    static bool s_f7WasDown = false;
-    static bool s_f6WasDown = false;
-    static bool s_altClickWasDown = false;
-
-    bool allowWorldHotkeys = focused && !SyncBlock_BlocksWorldInput();
-
-    bool f7Down = allowWorldHotkeys && TwoStates_IsActive() && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
-    if (f7Down && !s_f7WasDown) {
-        g_show3DBorder = !g_show3DBorder;
-        TwoStates_SaveSettings();
-        TwoStates_AddToast(g_show3DBorder
-            ? Tr("3D-граница государств: ВКЛЮЧЕНА [F7]", "3D State Border: ON [F7]")
-            : Tr("3D-граница государств: СКРЫТА [F7]", "3D State Border: OFF [F7]"), 0);
+    switch (UiCommon_NormalizeToastColorKind(colorKind)) {
+    case 1:
+        *outBorderCol = IM_COL32(80, 220, 100, 235);
+        *outTextCol   = IM_COL32(210, 255, 215, 255);
+        break;
+    case 2:
+        *outBorderCol = IM_COL32(255, 205, 60, 240);
+        *outTextCol   = IM_COL32(255, 240, 180, 255);
+        break;
+    case 3:
+        *outBorderCol = IM_COL32(255, 80, 70, 245);
+        *outTextCol   = IM_COL32(255, 205, 200, 255);
+        break;
+    case 4:
+        *outBorderCol = IM_COL32(235, 190, 70, 240);
+        *outTextCol   = IM_COL32(255, 242, 185, 255);
+        break;
+    case 5:
+        *outBorderCol = IM_COL32(70, 215, 225, 240);
+        *outTextCol   = IM_COL32(215, 250, 255, 255);
+        break;
+    default:
+        *outBorderCol = IM_COL32(90, 180, 255, 230);
+        *outTextCol   = IM_COL32(230, 245, 255, 255);
+        break;
     }
-    s_f7WasDown = f7Down;
+}
 
-    bool f6Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
-    if (f6Down && !s_f6WasDown && worldLoaded) {
-        TwoStates_JumpCameraToPartner();
-    }
-    s_f6WasDown = f6Down;
+static void DrawToastsOverlay(ImDrawList* dl, const ImVec2& displaySize)
+{
+    if (!dl) return;
+    ToastMessage active[5] = {};
+    int activeCount = 0;
 
-    bool altClickDown = allowWorldHotkeys && !ImGui::GetIO().WantCaptureMouse &&
-                        (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
-                        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    if (altClickDown && !s_altClickWasDown && worldLoaded) {
-        TwoStates_PingAtCursor();
-    }
-    s_altClickWasDown = altClickDown;
-
-    // Periodically send local 3D cursor & camera lookAt to partner (~10 Hz)
-    static ULONGLONG s_lastCursorSendMs = 0;
-    ULONGLONG now = GetTickCount64();
-    if (worldLoaded && LockstepNet_IsConnected() && now - s_lastCursorSendMs >= 100) {
-        s_lastCursorSendMs = now;
-        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-        float lx = 0.0f, ly = 0.0f, lz = 0.0f;
-        TwoStates_GetCursorWorldPos(&cx, &cy, &cz);
-        TwoStates_GetCameraLookAt(&lx, &ly, &lz);
-        float cpos[3] = { 0.0f, 0.0f, 0.0f };
-        float clook[3] = { lx, ly, lz };
-        TwoStates_GetCameraPos(&cpos[0], &cpos[1], &cpos[2]);
-        LockstepNet_SendCursor(cx, cy, cz, cpos, clook, false);
-    }
-
-    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
-    ImDrawList* bg = ImGui::GetBackgroundDrawList();
-
-    // Draw 3D border lines whenever world is loaded & Two States mode is active & g_show3DBorder is true
-    if (worldLoaded && g_show3DBorder && TwoStates_IsActive()) {
-        Draw3DBorderLines(bg, displaySize);
-    }
-
-    // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime).
-    // Minimap territory/border/ping overlay is rendered natively inside H_MinimapDrawContent (0x4BDE80)
-    // and its toggle button inside H_MinimapDrawButtons (0x4BFF40), respecting HUD hide (G) and window Z-order.
-    if (worldLoaded) {
-        DrawPartnerCursorAndPing(bg, displaySize);
-    }
-
-    // Draw Toast notifications (top-center below the game's resource bar)
     EnsureOwnerLock();
     EnterCriticalSection(&g_ownerLock);
-    while (!g_toasts.empty() && now - g_toasts.front().createdMs > g_toasts.front().durationMs) {
-        g_toasts.pop_front();
+    const ULONGLONG now = GetTickCount64();
+    while (!g_toasts.empty()) {
+        const ToastMessage& front = g_toasts.front();
+        if (now >= front.createdMs && (now - front.createdMs) > front.durationMs) {
+            g_toasts.pop_front();
+        } else {
+            break;
+        }
     }
-    float toastY = 58.0f;
-    for (size_t i = 0; i < g_toasts.size(); ++i) {
-        const ToastMessage& tm = g_toasts[i];
-        ImU32 borderCol = IM_COL32(90, 180, 255, 230);
-        ImU32 textCol   = IM_COL32(230, 245, 255, 255);
-        if (tm.colorKind == 1) { borderCol = IM_COL32(80, 220, 100, 235); textCol = IM_COL32(210, 255, 215, 255); }
-        else if (tm.colorKind == 2) { borderCol = IM_COL32(255, 205, 60, 240); textCol = IM_COL32(255, 240, 180, 255); }
-        else if (tm.colorKind == 3) { borderCol = IM_COL32(255, 80, 70, 245); textCol = IM_COL32(255, 205, 200, 255); }
+    for (size_t i = 0; i < g_toasts.size() && activeCount < 5; ++i) {
+        active[activeCount++] = g_toasts[i];
+    }
+    LeaveCriticalSection(&g_ownerLock);
 
-        Draw3DTextBadge(bg, ImVec2(displaySize.x * 0.5f, toastY), tm.text,
+    float toastY = 58.0f;
+    for (int i = 0; i < activeCount; ++i) {
+        ImU32 borderCol = 0;
+        ImU32 textCol = 0;
+        GetToastColorsForKind(active[i].colorKind, &borderCol, &textCol);
+        Draw3DTextBadge(dl, ImVec2(displaySize.x * 0.5f, toastY), active[i].text,
                         IM_COL32(18, 22, 28, 235), borderCol, textCol);
         toastY += 28.0f;
     }
-    LeaveCriticalSection(&g_ownerLock);
+}
+
+void TwoStates_DrawOverlay()
+{
+    TwoStates_TickPendingCameraRestore();
+    if (!ImGui::GetCurrentContext()) return;
+
+    const bool inCoop = g_inSession || SaveSync_IsBusy() || SaveSync_IsWaitingLobbyActive();
+    const ULONGLONG now = GetTickCount64();
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+
+    if (inCoop) {
+        bool worldLoaded = SaveSync_IsWorldLoaded();
+        bool focused = IsGameWindowFocused();
+
+        // Hotkeys when game window is focused:
+        //   F7: toggle 3D state border lines (Two States mode only)
+        //   F6: jump camera to partner / active ping
+        //   Alt + LMB: send map ping at cursor
+        static bool s_f7WasDown = false;
+        static bool s_f6WasDown = false;
+        static bool s_altClickWasDown = false;
+
+        bool allowWorldHotkeys = focused && !SyncBlock_BlocksWorldInput();
+
+        bool f7Down = allowWorldHotkeys && TwoStates_IsActive() && (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
+        if (f7Down && !s_f7WasDown) {
+            g_show3DBorder = !g_show3DBorder;
+            TwoStates_SaveSettings();
+            TwoStates_AddToast(g_show3DBorder
+                ? Tr("3D-граница государств: ВКЛЮЧЕНА [F7]", "3D State Border: ON [F7]")
+                : Tr("3D-граница государств: СКРЫТА [F7]", "3D State Border: OFF [F7]"), 0);
+        }
+        s_f7WasDown = f7Down;
+
+        bool f6Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+        if (f6Down && !s_f6WasDown && worldLoaded) {
+            TwoStates_JumpCameraToPartner();
+        }
+        s_f6WasDown = f6Down;
+
+        bool altClickDown = allowWorldHotkeys && !ImGui::GetIO().WantCaptureMouse &&
+                            (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
+                            (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        if (altClickDown && !s_altClickWasDown && worldLoaded) {
+            TwoStates_PingAtCursor();
+        }
+        s_altClickWasDown = altClickDown;
+
+        // Periodically send local 3D cursor & camera lookAt to partner (~10 Hz)
+        static ULONGLONG s_lastCursorSendMs = 0;
+        if (worldLoaded && LockstepNet_IsConnected() && now - s_lastCursorSendMs >= 100) {
+            s_lastCursorSendMs = now;
+            float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+            float lx = 0.0f, ly = 0.0f, lz = 0.0f;
+            TwoStates_GetCursorWorldPos(&cx, &cy, &cz);
+            TwoStates_GetCameraLookAt(&lx, &ly, &lz);
+            float cpos[3] = { 0.0f, 0.0f, 0.0f };
+            float clook[3] = { lx, ly, lz };
+            TwoStates_GetCameraPos(&cpos[0], &cpos[1], &cpos[2]);
+            LockstepNet_SendCursor(cx, cy, cz, cpos, clook, false);
+        }
+
+        ImDrawList* bg = ImGui::GetBackgroundDrawList();
+
+        // Draw 3D border lines whenever world is loaded & Two States mode is active & g_show3DBorder is true
+        if (worldLoaded && g_show3DBorder && TwoStates_IsActive()) {
+            Draw3DBorderLines(bg, displaySize);
+        }
+
+        // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime).
+        // Minimap territory/border/ping overlay is rendered natively inside H_MinimapDrawContent (0x4BDE80)
+        // and its toggle button inside H_MinimapDrawButtons (0x4BFF40), respecting HUD hide (G) and window Z-order.
+        if (worldLoaded) {
+            DrawPartnerCursorAndPing(bg, displaySize);
+        }
+    }
+
+    // Draw Toast notifications even in SESSION_IDLE (Main Menu / Join Menu / post-disconnect).
+    // Render to ForegroundDrawList so toasts remain visible above Lobby/Modal dimmers.
+    DrawToastsOverlay(ImGui::GetForegroundDrawList(), displaySize);
 }
 
 // ---------------------------------------------------------------------------
@@ -9200,34 +9351,44 @@ bool TwoStates_IsImportingSpSave()
 
 static bool SafeReadWorldMoney(double* outRub, double* outUsd)
 {
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         *outRub = *WorldRubles();
         *outUsd = *WorldDollars();
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static void SafeWriteWorldMoney(double rub, double usd)
 {
+    DiagLog_BeginSafeSeh();
     __try {
         *WorldRubles()  = rub;
         *WorldDollars() = usd;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static bool SafeReadPendingLoadInfo(BYTE* outTerrainFlag, char* outSaveRel, size_t outSaveRelSize)
 {
     if (!g_exeBase) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
     __try {
         *outTerrainFlag = *(BYTE*)(g_exeBase + TERRAIN_FLAG_DAT_RVA);
         strncpy_s(outSaveRel, outSaveRelSize, (const char*)(g_exeBase + SAVE_NAME_DAT_RVA), _TRUNCATE);
-        return true;
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+        ok = false;
     }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static std::string ResourcePtrToToken(const BYTE* world, uintptr_t resPtr)

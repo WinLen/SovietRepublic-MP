@@ -11,6 +11,7 @@
 #include "../determinism/held_frame.h"
 #include "../determinism/state_hash.h"
 #include "../lockstep/lockstep_net.h"
+#include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/networks/road_sync.h"
@@ -148,6 +149,10 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
     if (!ep || !ep->ExceptionRecord || !ep->ContextRecord || t_safeSehDepth > 0)
         return EXCEPTION_CONTINUE_SEARCH;
 
+    static thread_local bool t_inVeh = false;
+    if (t_inVeh)
+        return EXCEPTION_CONTINUE_SEARCH;
+
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     // Ignore benign / C++ / debugger / thread-naming exceptions unless fatal
     if (code != EXCEPTION_ACCESS_VIOLATION &&
@@ -161,6 +166,13 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         code != 0xC0000409UL /* STATUS_STACK_BUFFER_OVERRUN */) {
         return EXCEPTION_CONTINUE_SEARCH;
     }
+
+    struct VehGuard {
+        bool& flag;
+        ~VehGuard() { flag = false; }
+    };
+    t_inVeh = true;
+    VehGuard vehGuard{ t_inVeh };
 
     static DWORD s_vehLogCount = 0;
     if (InterlockedIncrement(&s_vehLogCount) > 20) {
@@ -204,12 +216,24 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
                    c->R12, c->R13, c->R14, c->R15);
 
     // Walk stack pointers cleanly to find code return addresses
+    static constexpr DWORD kReadableProtMask =
+        PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
     uintptr_t* sp = (uintptr_t*)c->Rsp;
     int printed = 0;
     for (int i = 0; i < 64 && printed < 16; ++i) {
+        const uintptr_t addr = (uintptr_t)(sp + i);
         MEMORY_BASIC_INFORMATION mbi = {};
-        if (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) break;
-        uintptr_t val = sp[i];
+        if (!VirtualQuery((LPCVOID)addr, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) break;
+        if ((mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0 ||
+            (mbi.Protect & kReadableProtMask) == 0) {
+            break;
+        }
+        const uintptr_t regionStart = (uintptr_t)mbi.BaseAddress;
+        const uintptr_t regionEnd = regionStart + mbi.RegionSize;
+        if (addr < regionStart || addr + sizeof(uintptr_t) > regionEnd) break;
+        uintptr_t val = 0;
+        if (!SafeMemcpyPod(&val, (const void*)addr, sizeof(val))) break;
         HMODULE hMod = nullptr;
         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                (LPCSTR)val, &hMod) && hMod) {
@@ -228,7 +252,10 @@ static LONG WINAPI DiagVectoredExceptionHandler(PEXCEPTION_POINTERS ep)
         _snprintf_s(crashLogPath, sizeof(crashLogPath), _TRUNCATE, "%s\\RepublicMP_LastCrash.log", g_gameDir);
         CopyFileA(g_diagFilePath, crashLogPath, FALSE);
     }
-    if (!SaveSync_IsHostRole() && LockstepNet_IsConnected() && TwoStates_GetSendClientLogs()) {
+    const bool unsafeForHeapOrNet = (code == 0xC0000374UL ||
+                                     code == EXCEPTION_STACK_OVERFLOW ||
+                                     code == 0xC0000409UL);
+    if (!unsafeForHeapOrNet && !SaveSync_IsHostRole() && LockstepNet_IsConnected() && TwoStates_GetSendClientLogs()) {
         LockstepNet_SendClientLogs("CRASH");
         for (int i = 0; i < 16; ++i) {
             SteamP2P_FrameTick();
@@ -242,7 +269,10 @@ const TsmHost* DiagLog_InitAndWrapHost(const TsmHost* origHost)
 {
     EnsureDiagLock();
     g_origHost = origHost;
-    g_wrappedHost = *origHost;
+    memset(&g_wrappedHost, 0, sizeof(g_wrappedHost));
+    if (origHost) {
+        g_wrappedHost = *origHost;
+    }
     g_wrappedHost.log = &HookedHostLogf;
 
     char exePath[MAX_PATH] = {};
@@ -351,12 +381,14 @@ static void DumpLiveSnapshot(const char* tag)
                    SessionStateName(st), host ? "HOST" : "CLIENT", (int)world, (int)lockstep,
                    peer ? peer : "", lastErr ? lastErr : "");
 
-    // Steam P2P status
+    // Steam P2P & local LAN display identity
     bool stmAvail = SteamP2P_IsAvailable();
     uint64_t mySteamId = SteamP2P_GetLocalSteamId();
-    const char* myName = SteamP2P_GetLocalPersonaName();
-    DiagLog_Printf(tag, "SteamP2P: Available=%d | LocalSteamID=%llu ('%s')",
-                   (int)stmAvail, (unsigned long long)mySteamId, myName ? myName : "");
+    std::string myName = SteamP2P_GetLocalPersonaNameCopy();
+    std::string localDisplay = LanDiscovery_GetLocalDisplayName();
+    DiagLog_Printf(tag, "SteamP2P: Available=%d | LocalSteamID=%llu ('%s') | DisplayName='%s'",
+                   (int)stmAvail, (unsigned long long)mySteamId, myName.c_str(),
+                   localDisplay.c_str());
 
     // Two States & Map Expansion status
     double westDebtRub = 0.0, westDebtUsd = 0.0, eastDebtRub = 0.0, eastDebtUsd = 0.0;
@@ -591,12 +623,17 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
     RemoteLogBundleHeader hdr = {};
     memcpy(hdr.magic, "RPMPLOG1", 8);
     strncpy_s(hdr.reason, reason && reason[0] ? reason : "SESSION", _TRUNCATE);
-    const char* stmName = SteamP2P_GetLocalPersonaName();
+    std::string stmName = SteamP2P_GetLocalPersonaNameCopy();
     uint64_t stmId = SteamP2P_GetLocalSteamId();
-    if (stmName && stmName[0]) {
-        _snprintf_s(hdr.peerName, sizeof(hdr.peerName), _TRUNCATE, "%s (%llu)", stmName, (unsigned long long)stmId);
+    if (!stmName.empty() && stmId != 0) {
+        _snprintf_s(hdr.peerName, sizeof(hdr.peerName), _TRUNCATE, "%s (%llu)", stmName.c_str(), (unsigned long long)stmId);
     } else {
-        strncpy_s(hdr.peerName, "Client", _TRUNCATE);
+        std::string localName = LanDiscovery_GetLocalDisplayName();
+        if (!localName.empty() && localName != "Host") {
+            _snprintf_s(hdr.peerName, sizeof(hdr.peerName), _TRUNCATE, "%s (LAN)", localName.c_str());
+        } else {
+            strncpy_s(hdr.peerName, "Client", _TRUNCATE);
+        }
     }
     hdr.rawSize = (unsigned int)rawEntries.size();
 
@@ -620,6 +657,44 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
 
     DiagLog_Printf("REMLOG", "Packaged client log bundle (reason='%s', raw=%u B, wire=%u B)",
                    hdr.reason, hdr.rawSize, (unsigned int)outPayload.size());
+    return true;
+}
+
+bool DiagLog_IsSafeRemoteLogFileName(const char* name)
+{
+    if (!name || !name[0]) return false;
+    const size_t len = strnlen(name, 48);
+    if (len == 0 || len >= 48) return false;
+    if (name[0] == '.' || name[0] == ' ' || name[len - 1] == '.' || name[len - 1] == ' ') {
+        return false;
+    }
+    if (strstr(name, "..") != nullptr) return false;
+    for (size_t i = 0; i < len; ++i) {
+        const unsigned char c = (unsigned char)name[i];
+        if (c < 0x20u || c == 0x7Fu) return false;
+        switch (c) {
+            case '<': case '>': case ':': case '"':
+            case '/': case '\\': case '|': case '?': case '*':
+                return false;
+            default:
+                break;
+        }
+    }
+    char stem[48] = {};
+    size_t stemLen = 0;
+    while (stemLen < len && name[stemLen] != '.') {
+        stem[stemLen] = name[stemLen];
+        ++stemLen;
+    }
+    stem[stemLen] = '\0';
+    static const char* const kReservedNames[] = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+    for (const char* reserved : kReservedNames) {
+        if (_stricmp(stem, reserved) == 0) return false;
+    }
     return true;
 }
 
@@ -692,14 +767,9 @@ bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size)
         pos += sizeof(RemoteLogFileEntry);
         if (pos + entry.size > rawBuf.size()) break;
 
-        // Sanitize filename (strip any path separators)
-        const char* s1 = strrchr(entry.fileName, '\\');
-        const char* s2 = strrchr(entry.fileName, '/');
-        const char* lastSep = (!s1) ? s2 : (!s2 ? s1 : (s1 > s2 ? s1 : s2));
-        const char* baseName = lastSep ? (lastSep + 1) : entry.fileName;
-        if (baseName[0] && strstr(baseName, "..") == nullptr) {
+        if (DiagLog_IsSafeRemoteLogFileName(entry.fileName)) {
             char outPath[MAX_PATH] = {};
-            _snprintf_s(outPath, sizeof(outPath), _TRUNCATE, "%s\\%s", sessionDir, baseName);
+            _snprintf_s(outPath, sizeof(outPath), _TRUNCATE, "%s\\%s", sessionDir, entry.fileName);
             FILE* fOut = nullptr;
             if (fopen_s(&fOut, outPath, "wb") == 0 && fOut) {
                 fwrite(rawBuf.data() + pos, 1, entry.size, fOut);
@@ -708,6 +778,12 @@ bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size)
             }
         }
         pos += entry.size;
+    }
+
+    if (filesSaved == 0) {
+        DeleteFileA(infoPath);
+        RemoveDirectoryA(sessionDir);
+        return false;
     }
 
     DiagLog_Printf("REMLOG", "Saved %d remote client log file(s) from '%s' (reason=%s) to %s",

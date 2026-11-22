@@ -1,13 +1,13 @@
 <div align="center">
 
-# ☭ RepublicMP v1.6.6 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
+# ☭ RepublicMP v1.7.0 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
 ### Co-op Multiplayer Mod for Workers & Resources: Soviet Republic (RU / EN)
 
 ![RepublicMP Cover](steam_workshop/preview.png)
 
-**Полноценный кооперативный мод с детерминированной синхронизацией Lockstep, подключением через Steam P2P в 1 клик, нативным внутриигровым меню, режимом «Два государства на одной карте», автоматической синхронизацией модов Мастерской Steam и плавной 60–144+ FPS интерполяцией транспорта и камер.**
+**Полноценный кооперативный мод с детерминированной синхронизацией Lockstep, подключением через Steam P2P и автообнаружением по локальной сети (LAN / Radmin VPN / Hamachi / ZeroTier, в том числе без Steam), нативным внутриигровым меню, режимом «Два государства на одной карте», автоматической синхронизацией модов Мастерской Steam и плавной 60–144+ FPS интерполяцией транспорта и камер.**
 
-**Full-featured deterministic Lockstep co-op multiplayer mod with 1-click Steam P2P networking, native in-game menus, "Two States on One Map" mode, automatic Steam Workshop mod synchronization, and smooth 60–144+ FPS vehicle & camera interpolation.**
+**Full-featured deterministic Lockstep co-op multiplayer mod with 1-click Steam P2P and automatic LAN discovery (LAN / Radmin VPN / Hamachi / ZeroTier, including Steam-free offline play), native in-game menus, "Two States on One Map" mode, automatic Steam Workshop mod synchronization, and smooth 60–144+ FPS vehicle & camera interpolation.**
 
 </div>
 
@@ -42,15 +42,15 @@
   - **«Моды: Из сейва»** — синхронизируются только моды, реально задействованные в загружаемом сохранении.
 - **Проверка ДО создания сейва:** если у Клиента не хватает модов из Мастерской Steam, открывается окно загрузки «ГОСПЛАН СССР — ЗАГРУЗКА МОДИФИКАЦИЙ» с автоматической подпиской/скачиванием и кнопкой перезапуска игры в 1 клик. Лишние моды Клиента временно скрываются на время сессии, а здания и техника из неустановленных у партнёра DLC безопасно блокируются.
 
-#### 5. Отдельный банк кооп-сохранений (`save_coop`), автосейвы и подключение через Steam P2P
+#### 5. Отдельный банк кооп-сохранений (`save_coop`), автосейвы, Steam P2P и локальная сеть (LAN без Steam)
 - **Изолированный банк сохранений и 10-минутные автосейвы:** кооперативные сохранения (`save_coop`) полностью отделены от одиночных (`save_sp`), поддерживают UTF-8 и ZIP64-архивы с полным переносом подпапок (`script/`, `mod_config/` и др.) и детерминированные автосейвы каждые 10 минут (`coop_autosave` у Хоста и `coop_client_backup` у Клиента). Доступны **«Продолжить кооп»**, быстрое сохранение из панели `☭ -> Кооператив` и безопасный **«Импорт одиночного»**.
-- **Подключение в 1 клик через Steam P2P:** в меню **«КООПЕРАТИВ -> Подключиться»** отображаются друзья Steam, у которых прямо сейчас открыт кооп-сервер (`Хост: <Имя>`), без VPN и проброса портов.
+- **Подключение через Steam P2P и автообнаружение LAN (включая работу без Steam):** в меню **«КООПЕРАТИВ -> Подключиться»** автоматически отображаются как друзья Steam (`Хост: <Имя>`), так и серверы в локальной и виртуальных сетях (**LAN / Radmin VPN / Hamachi / ZeroTier**) без ручного ввода IP и без обязательного запущенного клиента Steam. В интерфейсе Хоста отображается локальный/VPN-адрес с кнопкой копирования в буфер обмена (`Copy IP`).
 
 ---
 
 ### 🚀 Правила установки и запуска (RU)
 
-> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.6.6**.
+> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.7.0**.
 
 #### Способ 1 — Через Steam Workshop (Рекомендуется)
 1. Подпишитесь на мод в **Steam Workshop** (оба игрока).
@@ -62,8 +62,8 @@
 2. Распакуйте содержимое архива в корневую папку игры `SovietRepublic\` (рядом с `SOVIET64.exe`) или запустите **`START-COOP.bat`** из распакованной папки.
 
 #### Как начать совместную игру
-- **Хост:** Главное меню -> **`КООПЕРАТИВ`** -> **`Создать сервер`** -> при необходимости настройте параметры в **`Настройки`** -> выберите **`Продолжить кооп`**, **`Кооп-сохранения`**, **`Импорт одиночного`** или **`Новая своя игра`**.
-- **Клиент (Игрок 2):** Дождитесь, пока Хост загрузит карту (и окажется в окне кооп-штаба ожидания) -> Главное меню -> **`КООПЕРАТИВ`** -> **`Подключиться`** -> нажмите на **`Хост: <Имя друга>`** в списке Steam (или вставьте его IP / `steam:<SteamID64>`).
+- **Хост:** Главное меню -> **`КООПЕРАТИВ`** -> **`Создать сервер`** -> при необходимости настройте параметры в **`Настройки`** -> выберите **`Продолжить кооп`**, **`Кооп-сохранения`**, **`Импорт одиночного`** или **`Новая своя игра`** (в лобби и боковой панели отображается ваш локальный/VPN IP с кнопкой копирования).
+- **Клиент (Игрок 2):** Дождитесь, пока Хост загрузит карту (и окажется в окне кооп-штаба ожидания) -> Главное меню -> **`КООПЕРАТИВ`** -> **`Подключиться`** -> нажмите на найденный сервер **`[LAN] <Имя>`** / **`Хост: <Имя друга>`** в списке (или вставьте скопированный IP / `steam:<SteamID64>`).
 
 ### ⌨️ Горячие клавиши в игре (RU)
 
@@ -106,15 +106,15 @@
   - **"Mods: From Save Only"** — syncs only the Workshop mods actively used in the loaded save.
 - **Pre-Save Handshake & Auto-Downloader:** Workshop mods are verified **before** packing the save. If the Client is missing mods, the in-game Gosplan modal automatically subscribes and downloads them from Steam Workshop and provides a 1-click game restart button. Extra Client-only mods are temporarily hidden for the session, and buildings/vehicles from unowned DLCs are safely guarded.
 
-#### 5. Isolated Co-op Save Bank (`save_coop`), Autosaves & 1-Click Steam P2P Join
+#### 5. Isolated Co-op Save Bank (`save_coop`), Autosaves, Steam P2P & Steam-Free LAN Auto-Discovery
 - **Dedicated Save Bank & 10-Min Autosaves:** co-op saves (`save_coop`) are completely separated from singleplayer saves (`save_sp`), support UTF-8 / ZIP64 save archives with full subfolder transfer, and create deterministic 10-minute co-op autosaves (`coop_autosave` on Host, `coop_client_backup` on Client). Supports **"Continue Co-op"**, quick in-game saving from the `☭ -> Co-op` sidebar, and non-destructive **"Import Singleplayer Save"**.
-- **1-Click Steam P2P Networking:** the **"CO-OP -> Join Server"** menu automatically lists online Steam friends who have an open co-op server waiting (`Host: <Friend's Name>`) — no VPN, Hamachi, or port forwarding needed.
+- **1-Click Steam P2P & Steam-Free LAN Browser:** the **"CO-OP -> Join Server"** menu automatically lists both online Steam friends (`Host: <Friend's Name>`) and servers across physical LAN and virtual LAN adapters (**Radmin VPN / Hamachi / ZeroTier**) with no manual IP entry and full offline support without Steam running (local mod resolution via disk folders). Hosts see their local/VPN IP addresses with a 1-click **Copy IP** button.
 
 ---
 
 ### 🚀 Installation & Launch Rules (EN)
 
-> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.6.6**.
+> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.7.0**.
 
 #### Method 1 — Via Steam Workshop (Recommended)
 1. Subscribe to the mod on **Steam Workshop** (both players).
@@ -126,8 +126,8 @@
 2. Extract the archive into your `SovietRepublic\` game folder (next to `SOVIET64.exe`) or run **`START-COOP.bat`** from the extracted folder.
 
 #### How to Start a Co-op Session
-- **Host:** Main Menu -> **`CO-OP`** -> **`Host Server`** -> optionally configure **`Settings`** -> choose **`Continue Co-op`**, **`Co-op Saves`**, **`Import Singleplayer`**, or **`New Custom Game`**.
-- **Client (Player 2):** Wait until the Host has loaded the map (and is in the Co-op Waiting Lobby) -> Main Menu -> **`CO-OP`** -> **`Join Server`** -> click **`Host: <Friend's Name>`** in the Steam list (or paste their IP / `steam:<SteamID64>`).
+- **Host:** Main Menu -> **`CO-OP`** -> **`Host Server`** -> optionally configure **`Settings`** -> choose **`Continue Co-op`**, **`Co-op Saves`**, **`Import Singleplayer`**, or **`New Custom Game`** (your local/VPN IP address and **Copy IP** button are shown in the lobby and sidebar).
+- **Client (Player 2):** Wait until the Host has loaded the map (and is in the Co-op Waiting Lobby) -> Main Menu -> **`CO-OP`** -> **`Join Server`** -> click the auto-discovered **`[LAN] <Host>`** or **`Host: <Friend's Name>`** entry (or paste their IP / `steam:<SteamID64>`).
 
 ### ⌨️ In-Game Hotkeys (EN)
 
@@ -149,7 +149,7 @@
 TesmioLoader\build.bat
 ```
 
-Полный прогон сборки, 50 автотестов, статического анализа (`MSVC /analyze` + `LLVM clang-tidy`) и проверки чистоты кода `ub-mode`:
+Полный прогон сборки, 59 автотестов, статического анализа (`MSVC /analyze` + `LLVM clang-tidy`) и проверки чистоты кода `ub-mode`:
 
 ```bat
 TesmioLoader\run_checks.bat

@@ -83,6 +83,13 @@ void ModSync_RestartGameNow();
 void ModSync_CancelDownloadModal();
 bool ModSync_IsDownloadActive();
 
+// SteamUGC availability & Steam-free disk fallback helpers
+bool ModSync_IsSteamUgcOnline();
+bool ModSync_FindLocalModFolder(uint64_t workshopId, char* outPath, size_t outPathCap);
+bool ModSync_FindLocalModFolderAtRoot(uint64_t workshopId, const char* exeDir, bool ugcOnline,
+                                      char* outPath, size_t outPathCap);
+const char* ModSync_GetLastOfflineWarning();
+
 // Layer 2 action hook query predicates
 bool ModSync_IsModIdAllowedInSession(uint64_t modId);
 bool ModSync_CheckBuildingTypeAllowed(const char* typeName);
@@ -92,6 +99,10 @@ uint64_t ModSync_ParseWorkshopIdFromTypeName(const char* typeName);
 // Called when a Co-op session ends or returns to the main menu:
 // clears the session mod filter and restores singleplayer mods & plugins.
 void ModSync_EndSession();
+
+// Executes any pending SOVIET_WORKSHOP_MANAGER filter/restore scheduled by background threads.
+// Must only be called on the main game thread.
+void ModSync_TickMainThread();
 
 // Testable domain helpers (used by runtime and unit test suite)
 void ModSync_ExtractHeaderBinModIdsFromBuffer(const void* data, size_t size, uint64_t* outIds, int maxOut, int* ioCount);

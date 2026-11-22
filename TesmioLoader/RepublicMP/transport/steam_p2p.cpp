@@ -87,6 +87,8 @@ typedef bool (*Fn_ISteamNetworking_AllowP2PPacketRelay)(void* self, bool bAllow)
 static HMODULE s_hSteamDll = nullptr;
 static bool s_initAttempted = false;
 static bool s_available = false;
+static bool s_loggedNotLoggedOn = false;
+static bool s_loggedWaitingForSteam = false;
 static volatile bool s_shuttingDown = false;
 
 void SteamP2P_UnregisterCallbacks();
@@ -101,12 +103,7 @@ static SteamExitGuard s_steamExitGuard;
 
 static bool IsDualTestbedEnvActive()
 {
-    static int s_cached = -1;
-    if (s_cached < 0) {
-        const char* envRole = getenv("REPUBLICMP_ROLE");
-        s_cached = (envRole && envRole[0] != 0) ? 1 : 0;
-    }
-    return s_cached == 1;
+    return SaveSync_IsDualTestbed();
 }
 
 static Fn_SteamAPI_IsSteamRunning pSteamAPI_IsSteamRunning = nullptr;
@@ -143,6 +140,7 @@ static Fn_ISteamNetworking_AllowP2PPacketRelay pISteamNetworking_AllowP2PPacketR
 static void* s_pSteamUser = nullptr;
 static void* s_pSteamFriends = nullptr;
 static void* s_pSteamNetworking = nullptr;
+static bool s_callbacksRegistered = false;
 
 // ---------------------------------------------------------------------------
 // Steam Callbacks (P2PSessionRequest_t = 1202, P2PSessionConnectFail_t = 1203,
@@ -191,11 +189,64 @@ static void* s_callbackVtable[3] = {
 static RawSteamCallback s_cbP2PRequest = {};
 static RawSteamCallback s_cbP2PFail = {};
 static RawSteamCallback s_cbRichPresenceJoin = {};
-static bool s_callbacksRegistered = false;
+
+static void ResetSteamBindingsLocked()
+{
+    if (!s_shuttingDown && s_callbacksRegistered && s_hSteamDll != nullptr &&
+        GetModuleHandleA("steam_api64.dll") == s_hSteamDll &&
+        pSteamAPI_UnregisterCallback != nullptr) {
+        pSteamAPI_UnregisterCallback(&s_cbP2PRequest);
+        pSteamAPI_UnregisterCallback(&s_cbP2PFail);
+        pSteamAPI_UnregisterCallback(&s_cbRichPresenceJoin);
+    }
+
+    s_hSteamDll = nullptr;
+    s_available = false;
+    s_callbacksRegistered = false;
+    s_loggedNotLoggedOn = false;
+    s_loggedWaitingForSteam = false;
+    s_pSteamUser = nullptr;
+    s_pSteamFriends = nullptr;
+    s_pSteamNetworking = nullptr;
+
+    pSteamAPI_IsSteamRunning = nullptr;
+    pSteamAPI_RunCallbacks = nullptr;
+    pSteamAPI_GetHSteamUser = nullptr;
+    pSteamInternal_FindOrCreateUserInterface = nullptr;
+    pSteamAPI_RegisterCallback = nullptr;
+    pSteamAPI_UnregisterCallback = nullptr;
+
+    pISteamUser_GetSteamID = nullptr;
+    pISteamUser_BLoggedOn = nullptr;
+
+    pISteamFriends_GetPersonaName = nullptr;
+    pISteamFriends_GetFriendCount = nullptr;
+    pISteamFriends_GetFriendByIndex = nullptr;
+    pISteamFriends_GetFriendPersonaName = nullptr;
+    pISteamFriends_GetFriendPersonaState = nullptr;
+    pISteamFriends_GetFriendGamePlayed = nullptr;
+    pISteamFriends_SetRichPresence = nullptr;
+    pISteamFriends_ClearRichPresence = nullptr;
+    pISteamFriends_GetFriendRichPresence = nullptr;
+    pISteamFriends_RequestFriendRichPresence = nullptr;
+    pISteamFriends_InviteUserToGame = nullptr;
+
+    pISteamNetworking_SendP2PPacket = nullptr;
+    pISteamNetworking_IsP2PPacketAvailable = nullptr;
+    pISteamNetworking_ReadP2PPacket = nullptr;
+    pISteamNetworking_AcceptP2PSessionWithUser = nullptr;
+    pISteamNetworking_CloseP2PSessionWithUser = nullptr;
+    pISteamNetworking_CloseP2PChannelWithUser = nullptr;
+    pISteamNetworking_GetP2PSessionState = nullptr;
+    pISteamNetworking_AllowP2PPacketRelay = nullptr;
+}
 
 static INIT_ONCE s_lockOnce = INIT_ONCE_STATIC_INIT;
 static CRITICAL_SECTION s_lock;
 static char s_pendingJoinTarget[64] = "";
+
+static bool VerifyActiveSteamModuleLocked();
+static bool IsSteamP2PReadyLocked();
 
 static void EnsureLock()
 {
@@ -208,10 +259,20 @@ static void EnsureLock()
 static void OnP2PSessionRequest(void* pvParam)
 {
     P2PSessionRequest_t* req = (P2PSessionRequest_t*)pvParam;
-    if (!req || !s_pSteamNetworking || !pISteamNetworking_AcceptP2PSessionWithUser) return;
-    pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, req->m_steamIDRemote);
-    Logf("republicmp  STEAM_P2P: accepted incoming P2P session request from SteamID %llu",
-         (unsigned long long)req->m_steamIDRemote);
+    if (!req) return;
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    bool accepted = false;
+    uint64_t remoteId = req->m_steamIDRemote;
+    if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
+        pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, remoteId);
+        accepted = true;
+    }
+    LeaveCriticalSection(&s_lock);
+    if (accepted) {
+        Logf("republicmp  STEAM_P2P: accepted incoming P2P session request from SteamID %llu",
+             (unsigned long long)remoteId);
+    }
 }
 
 static void OnP2PSessionConnectFail(void* pvParam)
@@ -233,12 +294,14 @@ static void OnRichPresenceJoinRequested(void* pvParam)
         if (parsed >= 76561197960265728ULL) targetId = parsed;
     }
     if (targetId >= 76561197960265728ULL) {
+        char logTarget[64] = {};
         EnsureLock();
         EnterCriticalSection(&s_lock);
         _snprintf_s(s_pendingJoinTarget, sizeof(s_pendingJoinTarget), _TRUNCATE,
                     "steam:%llu", (unsigned long long)targetId);
+        strncpy_s(logTarget, sizeof(logTarget), s_pendingJoinTarget, _TRUNCATE);
         LeaveCriticalSection(&s_lock);
-        Logf("republicmp  STEAM_P2P: Join Game requested via Steam Friends -> %s", s_pendingJoinTarget);
+        Logf("republicmp  STEAM_P2P: Join Game requested via Steam Friends -> %s", logTarget);
     }
 }
 
@@ -246,14 +309,23 @@ void SteamP2P_UnregisterCallbacks()
 {
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    if (s_callbacksRegistered && pSteamAPI_UnregisterCallback) {
-        pSteamAPI_UnregisterCallback(&s_cbP2PRequest);
-        pSteamAPI_UnregisterCallback(&s_cbP2PFail);
-        pSteamAPI_UnregisterCallback(&s_cbRichPresenceJoin);
-        s_callbacksRegistered = false;
-        Logf("republicmp  STEAM_P2P: unmounted callbacks 1202, 1203, 337");
+    bool unregistered = false;
+    if (s_callbacksRegistered) {
+        HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
+        if (s_hSteamDll != nullptr && hSteam == s_hSteamDll && pSteamAPI_UnregisterCallback != nullptr) {
+            pSteamAPI_UnregisterCallback(&s_cbP2PRequest);
+            pSteamAPI_UnregisterCallback(&s_cbP2PFail);
+            pSteamAPI_UnregisterCallback(&s_cbRichPresenceJoin);
+            s_callbacksRegistered = false;
+            unregistered = true;
+        } else {
+            ResetSteamBindingsLocked();
+        }
     }
     LeaveCriticalSection(&s_lock);
+    if (unregistered) {
+        Logf("republicmp  STEAM_P2P: unmounted callbacks 1202, 1203, 337");
+    }
 }
 
 static void EnsureCallbacksRegistered()
@@ -292,16 +364,27 @@ bool SteamP2P_Init()
         return false;
     }
     EnsureLock();
-    if (s_available) return true;
-
     EnterCriticalSection(&s_lock);
-    if (s_available) {
+    HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
+    if (!hSteam) {
+        ResetSteamBindingsLocked();
         LeaveCriticalSection(&s_lock);
-        return true;
+        return false;
+    }
+    if (s_hSteamDll && s_hSteamDll != hSteam) {
+        ResetSteamBindingsLocked();
+    }
+    if (s_available) {
+        if (pSteamAPI_GetHSteamUser && pSteamAPI_GetHSteamUser() &&
+            pSteamAPI_IsSteamRunning && pSteamAPI_IsSteamRunning() &&
+            s_pSteamUser && pISteamUser_BLoggedOn && pISteamUser_BLoggedOn(s_pSteamUser)) {
+            LeaveCriticalSection(&s_lock);
+            return true;
+        }
+        ResetSteamBindingsLocked();
     }
 
     static ULONGLONG s_lastAttemptTick = 0;
-    static bool s_loggedWaitingForSteam = false;
     ULONGLONG now = GetTickCount64();
     if (s_initAttempted && (now - s_lastAttemptTick < 3000)) {
         LeaveCriticalSection(&s_lock);
@@ -310,17 +393,11 @@ bool SteamP2P_Init()
     s_initAttempted = true;
     s_lastAttemptTick = now;
 
-    if (!s_hSteamDll) {
-        s_hSteamDll = GetModuleHandleA("steam_api64.dll");
-        if (!s_hSteamDll) {
-            LeaveCriticalSection(&s_lock);
-            return false;
-        }
-    }
+    s_hSteamDll = hSteam;
 
 #define RESOLVE_FN(var, type, name) \
     var = (type)GetProcAddress(s_hSteamDll, name); \
-    if (!var) { LeaveCriticalSection(&s_lock); Logf("republicmp  STEAM_P2P: missing export %s", name); return false; }
+    if (!var) { ResetSteamBindingsLocked(); LeaveCriticalSection(&s_lock); Logf("republicmp  STEAM_P2P: missing export %s", name); return false; }
 
     RESOLVE_FN(pSteamAPI_IsSteamRunning, Fn_SteamAPI_IsSteamRunning, "SteamAPI_IsSteamRunning");
     RESOLVE_FN(pSteamAPI_RunCallbacks, Fn_SteamAPI_RunCallbacks, "SteamAPI_RunCallbacks");
@@ -387,6 +464,15 @@ bool SteamP2P_Init()
         return false;
     }
 
+    if (!pISteamUser_BLoggedOn(s_pSteamUser)) {
+        if (!s_loggedNotLoggedOn) {
+            Logf("republicmp  STEAM_P2P: Steam user is not logged on (offline mode) - Steam P2P disabled");
+            s_loggedNotLoggedOn = true;
+        }
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+
     pISteamNetworking_AllowP2PPacketRelay(s_pSteamNetworking, true);
 
     EnsureCallbacksRegistered();
@@ -419,19 +505,115 @@ bool SteamP2P_Init()
     return true;
 }
 
+static bool VerifyActiveSteamModuleLocked()
+{
+    HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
+    if (!hSteam || hSteam != s_hSteamDll || !pSteamAPI_GetHSteamUser || !pSteamAPI_GetHSteamUser()) {
+        ResetSteamBindingsLocked();
+        return false;
+    }
+    return true;
+}
+
+static bool IsSteamP2PReadyLocked()
+{
+    if (s_shuttingDown || !s_available || !s_hSteamDll) return false;
+    if (!s_pSteamUser || !s_pSteamFriends || !s_pSteamNetworking) return false;
+    if (!pSteamAPI_IsSteamRunning || !pSteamAPI_RunCallbacks || !pSteamAPI_GetHSteamUser) return false;
+    if (!pISteamUser_GetSteamID || !pISteamUser_BLoggedOn) return false;
+    if (!pISteamFriends_GetPersonaName || !pISteamFriends_GetFriendCount ||
+        !pISteamFriends_GetFriendByIndex || !pISteamFriends_GetFriendPersonaName ||
+        !pISteamFriends_GetFriendPersonaState || !pISteamFriends_GetFriendGamePlayed ||
+        !pISteamFriends_SetRichPresence || !pISteamFriends_ClearRichPresence ||
+        !pISteamFriends_GetFriendRichPresence || !pISteamFriends_RequestFriendRichPresence ||
+        !pISteamFriends_InviteUserToGame) {
+        return false;
+    }
+    if (!pISteamNetworking_SendP2PPacket || !pISteamNetworking_IsP2PPacketAvailable ||
+        !pISteamNetworking_ReadP2PPacket || !pISteamNetworking_AcceptP2PSessionWithUser ||
+        !pISteamNetworking_GetP2PSessionState) {
+        return false;
+    }
+    return true;
+}
+
+static bool IsSteamUserLoggedOnLocked(HMODULE hSteam)
+{
+    if (!hSteam) {
+        ResetSteamBindingsLocked();
+        return false;
+    }
+    if (s_hSteamDll != hSteam) {
+        ResetSteamBindingsLocked();
+    }
+
+    Fn_SteamAPI_IsSteamRunning fnIsRunning = pSteamAPI_IsSteamRunning
+        ? pSteamAPI_IsSteamRunning
+        : (Fn_SteamAPI_IsSteamRunning)GetProcAddress(hSteam, "SteamAPI_IsSteamRunning");
+    Fn_SteamAPI_GetHSteamUser fnGetUser = pSteamAPI_GetHSteamUser
+        ? pSteamAPI_GetHSteamUser
+        : (Fn_SteamAPI_GetHSteamUser)GetProcAddress(hSteam, "SteamAPI_GetHSteamUser");
+    Fn_SteamInternal_FindOrCreateUserInterface fnFindIface = pSteamInternal_FindOrCreateUserInterface
+        ? pSteamInternal_FindOrCreateUserInterface
+        : (Fn_SteamInternal_FindOrCreateUserInterface)GetProcAddress(hSteam, "SteamInternal_FindOrCreateUserInterface");
+    Fn_ISteamUser_BLoggedOn fnLoggedOn = pISteamUser_BLoggedOn
+        ? pISteamUser_BLoggedOn
+        : (Fn_ISteamUser_BLoggedOn)GetProcAddress(hSteam, "SteamAPI_ISteamUser_BLoggedOn");
+
+    if (!fnIsRunning || !fnGetUser || !fnFindIface || !fnLoggedOn) return false;
+    if (!fnIsRunning()) {
+        ResetSteamBindingsLocked();
+        return false;
+    }
+
+    HSteamUser hUser = fnGetUser();
+    if (!hUser) {
+        ResetSteamBindingsLocked();
+        return false;
+    }
+
+    void* userIface = (s_available && s_hSteamDll == hSteam) ? s_pSteamUser : nullptr;
+    if (!userIface) {
+        static const char* const kUserVersions[] = { "SteamUser020", "SteamUser021", "SteamUser019" };
+        for (int i = 0; i < 3 && !userIface; ++i) {
+            userIface = fnFindIface(hUser, kUserVersions[i]);
+        }
+    }
+    return (userIface != nullptr) && fnLoggedOn(userIface);
+}
+
+bool SteamP2P_IsLoggedOn()
+{
+    if (s_shuttingDown || IsDualTestbedEnvActive()) return false;
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    HMODULE hSteam = GetModuleHandleA("steam_api64.dll");
+    bool loggedOn = IsSteamUserLoggedOnLocked(hSteam);
+    LeaveCriticalSection(&s_lock);
+    return loggedOn;
+}
+
 bool SteamP2P_IsAvailable()
 {
     if (s_shuttingDown || IsDualTestbedEnvActive()) return false;
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
     if (s_available) {
-        if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
-            s_shuttingDown = true;
-            s_available = false;
+        if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+            ResetSteamBindingsLocked();
+            LeaveCriticalSection(&s_lock);
             return false;
         }
+        if (!pSteamAPI_IsSteamRunning() || !pISteamUser_BLoggedOn(s_pSteamUser)) {
+            ResetSteamBindingsLocked();
+            LeaveCriticalSection(&s_lock);
+            return false;
+        }
+        LeaveCriticalSection(&s_lock);
         return true;
     }
-    SteamP2P_Init();
-    return s_available;
+    LeaveCriticalSection(&s_lock);
+    return SteamP2P_Init();
 }
 
 uint64_t SteamP2P_GetLocalSteamId()
@@ -439,19 +621,32 @@ uint64_t SteamP2P_GetLocalSteamId()
     if (!SteamP2P_IsAvailable()) return 0;
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    uint64_t id = s_pSteamUser ? pISteamUser_GetSteamID(s_pSteamUser) : 0;
+    uint64_t id = (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked())
+        ? pISteamUser_GetSteamID(s_pSteamUser)
+        : 0;
     LeaveCriticalSection(&s_lock);
     return id;
 }
 
-const char* SteamP2P_GetLocalPersonaName()
+std::string SteamP2P_GetLocalPersonaNameCopy()
 {
-    if (!SteamP2P_IsAvailable()) return "";
+    if (!SteamP2P_IsAvailable()) return std::string();
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    const char* name = s_pSteamFriends ? pISteamFriends_GetPersonaName(s_pSteamFriends) : nullptr;
+    const char* name = (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked())
+        ? pISteamFriends_GetPersonaName(s_pSteamFriends)
+        : nullptr;
+    std::string copy = (name != nullptr) ? std::string(name) : std::string();
     LeaveCriticalSection(&s_lock);
-    return name ? name : "";
+    return copy;
+}
+
+const char* SteamP2P_GetLocalPersonaName()
+{
+    static thread_local char tlsPersona[256] = {};
+    const std::string copy = SteamP2P_GetLocalPersonaNameCopy();
+    strncpy_s(tlsPersona, sizeof(tlsPersona), copy.c_str(), _TRUNCATE);
+    return tlsPersona;
 }
 
 static volatile bool s_isHostingOpen = false;
@@ -504,7 +699,15 @@ void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends)
     ULONGLONG now = GetTickCount64();
     EnsureLock();
     EnterCriticalSection(&s_lock);
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return;
+    }
     PumpChannelLocked(5555);
+    if (!IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return;
+    }
 
     const int k_EFriendFlagImmediate = 0x04;
     int count = pISteamFriends_GetFriendCount(s_pSteamFriends, k_EFriendFlagImmediate);
@@ -520,9 +723,7 @@ void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends)
         // Only consider friends who are currently playing Workers & Resources: Soviet Republic (AppID 784150)
         if (!inSoviet) continue;
 
-        if (pISteamFriends_RequestFriendRichPresence) {
-            pISteamFriends_RequestFriendRichPresence(s_pSteamFriends, fid);
-        }
+        pISteamFriends_RequestFriendRichPresence(s_pSteamFriends, fid);
 
         const char* conn = pISteamFriends_GetFriendRichPresence(s_pSteamFriends, fid, "connect");
         const char* hostFlag = pISteamFriends_GetFriendRichPresence(s_pSteamFriends, fid, "republicmp_hosting");
@@ -536,6 +737,7 @@ void SteamP2P_GetOnlineFriends(std::vector<SteamFriendEntry>& outFriends)
                 fp->lastPingSentTick = now;
                 pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, fid);
                 SendUnreliableFrameLocked(fid, 5555, 5 /* P2P_FRAME_HOST_PING */, 0, nullptr, 0);
+                if (!IsSteamP2PReadyLocked()) break;
             }
             if (fp->hasPong && (now - fp->lastPongRecvTick) <= 6000) {
                 isHosting = fp->isOpen;
@@ -572,7 +774,11 @@ bool SteamP2P_InviteFriend(uint64_t friendSteamId)
     if (!SteamP2P_IsAvailable() || !friendSteamId) return false;
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    uint64_t myId = s_pSteamUser ? pISteamUser_GetSteamID(s_pSteamUser) : 0;
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+    uint64_t myId = pISteamUser_GetSteamID(s_pSteamUser);
     char connectCmd[64] = {};
     _snprintf_s(connectCmd, sizeof(connectCmd), _TRUNCATE, "+connect_steam %llu", (unsigned long long)myId);
     pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, friendSteamId);
@@ -589,8 +795,12 @@ void SteamP2P_SetHostingPresence(bool hosting)
     if (!SteamP2P_IsAvailable()) return;
     EnsureLock();
     EnterCriticalSection(&s_lock);
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return;
+    }
     if (hosting) {
-        uint64_t myId = s_pSteamUser ? pISteamUser_GetSteamID(s_pSteamUser) : 0;
+        uint64_t myId = pISteamUser_GetSteamID(s_pSteamUser);
         char connectCmd[64] = {};
         _snprintf_s(connectCmd, sizeof(connectCmd), _TRUNCATE, "+connect_steam %llu", (unsigned long long)myId);
         pISteamFriends_SetRichPresence(s_pSteamFriends, "connect", connectCmd);
@@ -616,11 +826,14 @@ void SteamP2P_SetHostingPresence(bool hosting)
 
 bool SteamP2P_ConsumePendingJoin(char* outTarget, size_t outSize)
 {
+    if (!outTarget || outSize == 0) return false;
+    outTarget[0] = '\0';
     EnsureLock();
     bool found = false;
     EnterCriticalSection(&s_lock);
-    if (s_pendingJoinTarget[0] != 0) {
-        strncpy_s(outTarget, outSize, s_pendingJoinTarget, _TRUNCATE);
+    size_t len = strlen(s_pendingJoinTarget);
+    if (len > 0 && len < outSize) {
+        memcpy(outTarget, s_pendingJoinTarget, len + 1);
         s_pendingJoinTarget[0] = 0;
         found = true;
     }
@@ -628,24 +841,43 @@ bool SteamP2P_ConsumePendingJoin(char* outTarget, size_t outSize)
     return found;
 }
 
+void SteamP2P_SetPendingJoinForTest(const char* target)
+{
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    if (target && target[0]) {
+        strncpy_s(s_pendingJoinTarget, sizeof(s_pendingJoinTarget), target, _TRUNCATE);
+    } else {
+        s_pendingJoinTarget[0] = '\0';
+    }
+    LeaveCriticalSection(&s_lock);
+}
+
 uint64_t SteamP2P_ParseTargetSteamId(const char* target)
 {
     if (!target) return 0;
-    while (*target == ' ' || *target == '\t') ++target;
+    auto isWs = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (isWs(*target)) ++target;
     if (_strnicmp(target, "steam:", 6) == 0) {
         target += 6;
-        while (*target == ' ' || *target == '\t') ++target;
+        while (isWs(*target)) ++target;
     }
-    // Check if the remaining string is a 64-bit integer >= minimum individual SteamID64
-    const char* p = target;
+    // Reject empty, sign prefixes, non-digits, and leading zeros.
+    if (*target < '1' || *target > '9') return 0;
+
+    uint64_t val = 0;
     int digits = 0;
-    while (*p >= '0' && *p <= '9') {
+    while (*target >= '0' && *target <= '9') {
+        uint64_t d = (uint64_t)(*target - '0');
+        if (val > (UINT64_MAX - d) / 10ULL) return 0;
+        val = val * 10ULL + d;
         ++digits;
-        ++p;
+        ++target;
     }
-    while (*p == ' ' || *p == '\t') ++p;
-    if (*p != 0 || digits < 15) return 0;
-    uint64_t val = _strtoui64(target, nullptr, 10);
+    while (isWs(*target)) ++target;
+    if (*target != '\0' || digits < 15 || digits > 20) return 0;
     return (val >= 76561197960265728ULL) ? val : 0;
 }
 
@@ -726,9 +958,7 @@ static bool SendFrameWithKindLocked(uint64_t remoteSteamId, unsigned short port,
                                     uint32_t connId, const void* payload, uint32_t payloadLen, int sendType)
 {
     if (s_shuttingDown || !s_available || !s_pSteamNetworking) return false;
-    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
-        s_shuttingDown = true;
-        s_available = false;
+    if (!VerifyActiveSteamModuleLocked() || !pISteamNetworking_SendP2PPacket) {
         return false;
     }
     std::vector<uint8_t> packet(sizeof(P2PFrameHeader) + payloadLen);
@@ -762,18 +992,97 @@ static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short por
     return SendFrameWithKindLocked(remoteSteamId, port, type, connId, payload, payloadLen, k_EP2PSendUnreliableNoDelay);
 }
 
+static constexpr size_t kMaxPendingSyns = 32;
+static constexpr size_t kMaxSlotRecvBufBytes = 16u * 1024u * 1024u;
+static constexpr int kMaxPumpFramesPerCall = 64;
+static constexpr uint32_t kMaxDiscardScratchBytes = 65536u;
+
+static void PruneStalePendingSynsLocked(ULONGLONG now, unsigned short portFilter)
+{
+    for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
+        if ((portFilter == 0 || it->port == portFilter) && (now - it->receivedTick) > 2000ULL) {
+            it = s_pendingSyns.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static void HandleSynFrameLocked(uint64_t sender, const P2PFrameHeader* hdr, ULONGLONG now)
+{
+    for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
+        if (s_slots[i].inUse && !s_slots[i].localClosed &&
+            s_slots[i].remoteSteamId == sender &&
+            s_slots[i].port == hdr->port &&
+            s_slots[i].connId == hdr->connId) {
+            SendFrameLocked(sender, hdr->port, P2P_FRAME_SYN_ACK, hdr->connId, nullptr, 0);
+            return;
+        }
+    }
+    for (auto& syn : s_pendingSyns) {
+        if (syn.remoteSteamId == sender && syn.port == hdr->port && syn.connId == hdr->connId) {
+            syn.receivedTick = now;
+            return;
+        }
+    }
+    if (s_pendingSyns.size() >= kMaxPendingSyns) {
+        s_pendingSyns.pop_front();
+    }
+    PendingSyn syn = { sender, hdr->port, hdr->connId, now };
+    s_pendingSyns.push_back(syn);
+}
+
+static void HandleSlotFrameLocked(uint64_t sender, const P2PFrameHeader* hdr,
+                                  const uint8_t* payload, ULONGLONG now)
+{
+    if (hdr->type == P2P_FRAME_FIN) {
+        for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
+            if (it->remoteSteamId == sender && it->port == hdr->port && it->connId == hdr->connId) {
+                it = s_pendingSyns.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
+        SteamSocketSlot& slot = s_slots[i];
+        if (!slot.inUse || slot.localClosed) continue;
+        if (slot.remoteSteamId != sender || slot.port != hdr->port || slot.connId != hdr->connId) continue;
+
+        slot.lastActivityTick = now;
+        if (hdr->type == P2P_FRAME_SYN_ACK) {
+            slot.connected = true;
+        } else if (hdr->type == P2P_FRAME_DATA) {
+            if (hdr->payloadLen > 0) {
+                if (slot.recvBuf.size() + hdr->payloadLen > kMaxSlotRecvBufBytes) {
+                    Logf("republicmp  STEAM_P2P: recvBuf overflow (>%zu bytes) on channel %u, closing slot",
+                         kMaxSlotRecvBufBytes, (unsigned)slot.port);
+                    slot.remoteFin = true;
+                } else {
+                    slot.recvBuf.insert(slot.recvBuf.end(), payload, payload + hdr->payloadLen);
+                }
+            }
+        } else if (hdr->type == P2P_FRAME_FIN) {
+            slot.remoteFin = true;
+        }
+        break;
+    }
+}
+
 static void PumpChannelLocked(int channel)
 {
     if (s_shuttingDown || !s_available || !s_pSteamNetworking) return;
-    if (!GetModuleHandleA("steam_api64.dll") || (pSteamAPI_GetHSteamUser && !pSteamAPI_GetHSteamUser())) {
-        s_shuttingDown = true;
-        s_available = false;
+    if (!VerifyActiveSteamModuleLocked() || !pISteamNetworking_IsP2PPacketAvailable || !pISteamNetworking_ReadP2PPacket) {
         return;
     }
     uint32_t msgSize = 0;
-    while (pISteamNetworking_IsP2PPacketAvailable(s_pSteamNetworking, &msgSize, channel)) {
-        if (msgSize == 0 || msgSize > (1024 * 1024)) {
-            std::vector<uint8_t> discard(msgSize ? msgSize : 1);
+    for (int pumped = 0;
+         pumped < kMaxPumpFramesPerCall && pISteamNetworking_IsP2PPacketAvailable(s_pSteamNetworking, &msgSize, channel);
+         ++pumped) {
+        if (msgSize == 0 || msgSize > (1024u * 1024u)) {
+            uint32_t discardCap = (msgSize == 0) ? 1u : std::min<uint32_t>(msgSize, kMaxDiscardScratchBytes);
+            std::vector<uint8_t> discard(discardCap);
             uint32_t readBytes = 0;
             uint64_t sender = 0;
             pISteamNetworking_ReadP2PPacket(s_pSteamNetworking, discard.data(), (uint32_t)discard.size(), &readBytes, &sender, channel);
@@ -796,6 +1105,7 @@ static void PumpChannelLocked(int channel)
         if (hdr->type == P2P_FRAME_HOST_PING) {
             uint8_t openByte = s_isHostingOpen ? 1 : 0;
             SendUnreliableFrameLocked(sender, hdr->port, P2P_FRAME_HOST_PONG, 0, &openByte, 1);
+            if (!s_available) break;
             continue;
         }
 
@@ -814,64 +1124,14 @@ static void PumpChannelLocked(int channel)
         }
 
         if (hdr->type == P2P_FRAME_SYN) {
-            // If already accepted in an active slot, re-send SYN_ACK
-            bool alreadyAccepted = false;
-            for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
-                if (s_slots[i].inUse && !s_slots[i].localClosed &&
-                    s_slots[i].remoteSteamId == sender &&
-                    s_slots[i].port == hdr->port &&
-                    s_slots[i].connId == hdr->connId) {
-                    SendFrameLocked(sender, hdr->port, P2P_FRAME_SYN_ACK, hdr->connId, nullptr, 0);
-                    alreadyAccepted = true;
-                    break;
-                }
-            }
-            if (!alreadyAccepted) {
-                bool queued = false;
-                for (auto& syn : s_pendingSyns) {
-                    if (syn.remoteSteamId == sender && syn.port == hdr->port && syn.connId == hdr->connId) {
-                        syn.receivedTick = now;
-                        queued = true;
-                        break;
-                    }
-                }
-                if (!queued) {
-                    PendingSyn syn = { sender, hdr->port, hdr->connId, now };
-                    s_pendingSyns.push_back(syn);
-                }
-            }
+            HandleSynFrameLocked(sender, hdr, now);
+            if (!s_available) break;
             continue;
         }
 
-        if (hdr->type == P2P_FRAME_FIN) {
-            for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
-                if (it->remoteSteamId == sender && it->port == hdr->port && it->connId == hdr->connId) {
-                    it = s_pendingSyns.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-
-        // Match active slot
-        for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
-            SteamSocketSlot& slot = s_slots[i];
-            if (!slot.inUse || slot.localClosed) continue;
-            if (slot.remoteSteamId != sender || slot.port != hdr->port || slot.connId != hdr->connId) continue;
-
-            slot.lastActivityTick = now;
-            if (hdr->type == P2P_FRAME_SYN_ACK) {
-                slot.connected = true;
-            } else if (hdr->type == P2P_FRAME_DATA) {
-                if (hdr->payloadLen > 0) {
-                    slot.recvBuf.insert(slot.recvBuf.end(), payload, payload + hdr->payloadLen);
-                }
-            } else if (hdr->type == P2P_FRAME_FIN) {
-                slot.remoteFin = true;
-            }
-            break;
-        }
+        HandleSlotFrameLocked(sender, hdr, payload, now);
     }
+    PruneStalePendingSynsLocked(GetTickCount64(), 0);
 }
 
 static bool HasActiveSteamSocketLocked()
@@ -897,24 +1157,30 @@ void SteamP2P_FrameTick()
     if (!SteamP2P_IsAvailable()) return;
     EnsureLock();
     EnterCriticalSection(&s_lock);
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return;
+    }
     bool activeSocket = HasActiveSteamSocketLocked();
     if (!activeSocket) {
         static ULONGLONG s_lastIdlePumpTick = 0;
         ULONGLONG now = GetTickCount64();
         if (s_lastIdlePumpTick != 0 && (now - s_lastIdlePumpTick) < 50) {
+            PruneStalePendingSynsLocked(now, 0);
             LeaveCriticalSection(&s_lock);
             return;
         }
         s_lastIdlePumpTick = now;
-        if (pSteamAPI_RunCallbacks) pSteamAPI_RunCallbacks();
+        pSteamAPI_RunCallbacks();
         PumpChannelLocked(5555);
         if (s_isHostingOpen) {
             PumpChannelLocked(5556);
         }
+        PruneStalePendingSynsLocked(now, 0);
         LeaveCriticalSection(&s_lock);
         return;
     }
-    if (pSteamAPI_RunCallbacks) pSteamAPI_RunCallbacks();
+    pSteamAPI_RunCallbacks();
     PumpAllLocked();
     LeaveCriticalSection(&s_lock);
 }
@@ -924,17 +1190,14 @@ void SteamP2P_PrepareAccept(unsigned short port)
     if (!SteamP2P_IsAvailable()) return;
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    if (pSteamAPI_RunCallbacks) pSteamAPI_RunCallbacks();
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return;
+    }
+    pSteamAPI_RunCallbacks();
     PumpChannelLocked((int)port);
     // Prune stale SYNs older than 2s on this port (active clients re-send SYN every 400ms)
-    ULONGLONG now = GetTickCount64();
-    for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
-        if (it->port == port && now - it->receivedTick > 2000) {
-            it = s_pendingSyns.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    PruneStalePendingSynsLocked(GetTickCount64(), port);
     LeaveCriticalSection(&s_lock);
 }
 
@@ -943,17 +1206,19 @@ SOCKET SteamP2P_TryAcceptOne(unsigned short port, DWORD ioTimeoutMs)
     if (!SteamP2P_IsAvailable()) return INVALID_SOCKET;
     SOCKET result = INVALID_SOCKET;
 
+    EnsureLock();
     EnterCriticalSection(&s_lock);
-    PumpChannelLocked((int)port);
-
-    ULONGLONG now = GetTickCount64();
-    for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ) {
-        if (it->port == port && now - it->receivedTick > 2000) {
-            it = s_pendingSyns.erase(it);
-        } else {
-            ++it;
-        }
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return INVALID_SOCKET;
     }
+    PumpChannelLocked((int)port);
+    if (!IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return INVALID_SOCKET;
+    }
+
+    PruneStalePendingSynsLocked(GetTickCount64(), port);
 
     for (auto it = s_pendingSyns.begin(); it != s_pendingSyns.end(); ++it) {
         if (it->port != port) continue;
@@ -1000,7 +1265,12 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
 {
     if (!SteamP2P_IsAvailable() || !remoteSteamId) return INVALID_SOCKET;
 
+    EnsureLock();
     EnterCriticalSection(&s_lock);
+    if (!VerifyActiveSteamModuleLocked() || !IsSteamP2PReadyLocked()) {
+        LeaveCriticalSection(&s_lock);
+        return INVALID_SOCKET;
+    }
     int slotIdx = -1;
     for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
         if (!s_slots[i].inUse) {
@@ -1082,6 +1352,7 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
 
     const uint8_t* bytes = (const uint8_t*)data;
     size_t sent = 0;
+    EnsureLock();
     while (sent < size) {
         uint32_t chunk = (uint32_t)std::min(size - sent, (size_t)P2P_MAX_CHUNK);
         ULONGLONG stallStart = GetTickCount64();
@@ -1098,7 +1369,7 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
 
             int32_t queuedBytes = 0;
             uint8_t sessionErr = 0;
-            if (s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+            if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
                 P2PSessionState_t state = {};
                 if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
                     queuedBytes = state.m_nBytesQueuedForSend;
@@ -1148,6 +1419,7 @@ bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
 
     ULONGLONG stallStart = GetTickCount64();
     int32_t minQueuedSeen = INT32_MAX;
+    EnsureLock();
 
     for (;;) {
         EnterCriticalSection(&s_lock);
@@ -1160,7 +1432,7 @@ bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
 
         int32_t queuedBytes = 0;
         uint8_t sessionErr = 0;
-        if (s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+        if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
             P2PSessionState_t state = {};
             if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
                 queuedBytes = state.m_nBytesQueuedForSend;
@@ -1199,6 +1471,7 @@ bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
     uint8_t* out = (uint8_t*)data;
     size_t received = 0;
     ULONGLONG waitStart = GetTickCount64();
+    EnsureLock();
 
     while (received < size) {
         EnterCriticalSection(&s_lock);
@@ -1224,7 +1497,7 @@ bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
 
         bool eof = slot.remoteFin;
         if (!eof && (GetTickCount64() - waitStart) > 2500 &&
-            s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+            VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
             P2PSessionState_t state = {};
             if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
                 if (state.m_eP2PSessionError != 0) {
@@ -1252,6 +1525,7 @@ bool SteamP2P_PeerGone(SOCKET s)
     int idx = SlotIndexFromSocket(s);
     if (idx < 0) return true;
 
+    EnsureLock();
     EnterCriticalSection(&s_lock);
     SteamSocketSlot& slot = s_slots[idx];
     if (!slot.inUse || slot.localClosed) {
@@ -1264,7 +1538,7 @@ bool SteamP2P_PeerGone(SOCKET s)
         return false;
     }
     bool gone = slot.remoteFin;
-    if (!gone && s_pSteamNetworking && pISteamNetworking_GetP2PSessionState) {
+    if (!gone && VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
         P2PSessionState_t state = {};
         if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
             if (state.m_eP2PSessionError != 0) gone = true;
@@ -1279,6 +1553,7 @@ void SteamP2P_ShutdownSocket(SOCKET s)
     int idx = SlotIndexFromSocket(s);
     if (idx < 0) return;
 
+    EnsureLock();
     EnterCriticalSection(&s_lock);
     SteamSocketSlot& slot = s_slots[idx];
     if (slot.inUse && !slot.localClosed) {
@@ -1293,6 +1568,7 @@ void SteamP2P_CloseSocket(SOCKET s)
     int idx = SlotIndexFromSocket(s);
     if (idx < 0) return;
 
+    EnsureLock();
     EnterCriticalSection(&s_lock);
     SteamSocketSlot& slot = s_slots[idx];
     if (slot.inUse) {
@@ -1323,7 +1599,7 @@ void SteamP2P_GetPeerName(SOCKET s, char* out, size_t outSize)
         return;
     }
     const char* persona = nullptr;
-    if (s_available && s_pSteamFriends && pISteamFriends_GetFriendPersonaName) {
+    if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
         persona = pISteamFriends_GetFriendPersonaName(s_pSteamFriends, remoteId);
     }
     if (persona && persona[0]) {

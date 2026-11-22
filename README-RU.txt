@@ -1,5 +1,5 @@
 ============================================================================
-  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.6.6)
+  Workers & Resources: Soviet Republic — Кооператив (RepublicMP v1.7.0)
   Правила установки и совместной игры (RU) / Installation & Co-op Guide (EN)
 ============================================================================
 
@@ -14,15 +14,17 @@
    - Способ Б (Архив RepublicMP_Friend_Pack.zip): Распакуйте архив в папку игры
      SovietRepublic\ (рядом с SOVIET64.exe) или запустите START-COOP.bat.
 
-2. КАК СОЗДАТЬ СЕРВЕР ИЛИ ПОДКЛЮЧИТЬСЯ К ДРУГУ (STEAM P2P — БЕЗ VPN И ПОРТОВ):
+2. КАК СОЗДАТЬ СЕРВЕР ИЛИ ПОДКЛЮЧИТЬСЯ К ДРУГУ (STEAM P2P И ЛОКАЛЬНАЯ СЕТЬ / LAN БЕЗ STEAM):
    - В главном меню игры нажмите кнопку «КООПЕРАТИВ».
    - ХОСТ: нажимает «Создать сервер» -> при необходимости заходит в «Настройки»
      (выбирает «1 государство» или «2 государства», стартовую казну 100% / 50-50,
      ширину погранзоны, границы карты и режим модов) -> запускает «Продолжить кооп»,
      «Кооп-сохранения», «Импорт одиночного» или «Новая своя игра».
+     В лобби и боковой панели отображается локальный/VPN-адрес с кнопкой копирования.
    - КЛИЕНТ (ИГРОК 2): когда Хост загрузил карту и ждёт в кооп-штабе, нажимает
-     «КООПЕРАТИВ» -> «Подключиться» -> кликает по кнопке «Хост: <Имя друга>»
-     в списке друзей Steam (или вставляет его SteamID / IP-адрес).
+     «КООПЕРАТИВ» -> «Подключиться» -> кликает по найденному серверу в локальной/виртуальной
+     сети (LAN / Radmin VPN / Hamachi / ZeroTier) или по «Хост: <Имя друга>» в Steam
+     (работает и без запущенного Steam; при необходимости можно вставить IP / steam:<ID>).
 
 3. АВТОМАТИЧЕСКАЯ СИНХРОНИЗАЦИЯ МОДОВ STEAM WORKSHOP И DLC:
    - Включать моды вручную не нужно! Хост выбирает режим «Моды: Только Хоста (Авто)»
@@ -53,15 +55,16 @@
    - Method B (RepublicMP_Friend_Pack.zip): Extract the archive into your SovietRepublic\
      game folder (next to SOVIET64.exe) or run START-COOP.bat.
 
-2. HOW TO HOST OR JOIN A FRIEND (STEAM P2P — NO VPN OR PORT FORWARDING):
+2. HOW TO HOST OR JOIN A FRIEND (STEAM P2P & STEAM-FREE LAN AUTO-DISCOVERY):
    - In the main menu, click "CO-OP".
    - HOST: click "Host Server" -> optionally open "Settings" (choose "1 State" or
      "2 States", 100% / 50-50 starting capital, border zone width, map borders, and
      mod sync mode) -> start via "Continue Co-op", "Co-op Saves", "Import Singleplayer",
-     or "New Custom Game".
+     or "New Custom Game" (local/VPN IP and Copy IP button are shown in lobby & sidebar).
    - CLIENT (PLAYER 2): once the Host has loaded the map and is waiting in the lobby,
-     click "CO-OP" -> "Join Server" -> click "Host: <Friend's Name>" in the Steam
-     friends list (or paste their SteamID / IP address).
+     click "CO-OP" -> "Join Server" -> click the auto-discovered LAN/VPN server
+     (LAN / Radmin VPN / Hamachi / ZeroTier) or "Host: <Friend's Name>" in Steam
+     (works even offline without Steam running; manual IP / steam:<ID> also supported).
 
 3. AUTOMATIC STEAM WORKSHOP MOD SYNC & DLC CHECK:
    - No manual mod checklists! The Host selects "Mods: Host Only (Auto)" or "Mods: From Save".
@@ -78,7 +81,7 @@
    - Alt + LMB : Place a 3D map ping (20 sec beacon) for your partner
    - Tab       : Collapse / expand the waiting lobby window to inspect the map
 
-5. ОСОБЕННОСТИ СИНХРОНИЗАЦИИ И АВТОСОХРАНЕНИЯ (v1.6.6):
+5. ОСОБЕННОСТИ СИНХРОНИЗАЦИИ И АВТОСОХРАНЕНИЯ (v1.7.0):
    - Совместимость с актуальной версией игры v1.1.1.13 (0x6A8D4087).
    - Детерминированные автосохранения каждые 10 минут: save/coop_autosave (Хост)
      и save/coop_client_backup (Клиент), поддержка ZIP64 и UTF-8 путей.

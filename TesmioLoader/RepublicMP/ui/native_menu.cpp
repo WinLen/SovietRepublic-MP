@@ -3,6 +3,7 @@
 #include "native_menu.h"
 #include "sync_block.h"
 #include "lang.h"
+#include "ui_common.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
 #include "../session/save_sync.h"
@@ -10,7 +11,9 @@
 #include "../session/mod_sync.h"
 #include "../determinism/determinism.h"
 #include "../lockstep/lockstep_net.h"
+#include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
+#include "../transport/network.h"
 #include "../game/save_load.h"
 #include "../game/window_focus.h"
 #include "imgui.h"
@@ -126,6 +129,10 @@ static bool g_escWasDown = false;
 
 static std::vector<SteamFriendEntry> g_cachedFriends;
 static ULONGLONG g_lastFriendsRefreshMs = 0;
+static bool g_lanScanRunningForJoin = false;
+static bool g_joinWasBusyLastFrame = false;
+static ULONGLONG g_sidebarIpCopiedUntilMs = 0;
+static int g_sidebarCopiedBtnIdx = -1;
 
 void NativeMenu_Bind(const TsmHost* host)
 {
@@ -153,11 +160,15 @@ void NativeMenu_SetHostOnNextLoadForTest(bool host)
 int NativeMenu_GetActiveScreenId(void)
 {
     if (!g_exeBase) return 0;
+    int screenId = 0;
+    DiagLog_BeginSafeSeh();
     __try {
-        return *(int*)(g_exeBase + MENU_OBJ_RVA + MENU_SCREEN_ID_OFF);
+        screenId = *(int*)(g_exeBase + MENU_OBJ_RVA + MENU_SCREEN_ID_OFF);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return 0;
+        screenId = 0;
     }
+    DiagLog_EndSafeSeh();
+    return screenId;
 }
 
 bool NativeMenu_WantsInput(void)
@@ -184,12 +195,34 @@ static void SetMenuTitleText(BYTE* menuObj, const wchar_t* title)
     wcsncpy_s(dst, 256, title ? title : L"", _TRUNCATE);
 }
 
-static void Utf8ToWide(const char* utf8, wchar_t* outWide, size_t maxChars)
+std::wstring NativeMenu_Utf8ToWideSafe(const char* utf8)
 {
-    if (!outWide || maxChars == 0) return;
-    outWide[0] = L'\0';
-    if (!utf8 || !utf8[0]) return;
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, outWide, (int)maxChars);
+    if (!utf8 || !utf8[0]) return std::wstring();
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+    if (needed <= 1) return std::wstring();
+    std::wstring out(static_cast<size_t>(needed - 1), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &out[0], needed) <= 0) {
+        return std::wstring();
+    }
+    return out;
+}
+
+std::wstring NativeMenu_TruncateLabel(const std::wstring& text, size_t maxChars)
+{
+    if (maxChars == 0 || text.empty()) return std::wstring();
+    if (text.size() <= maxChars) return text;
+    if (maxChars <= 2) {
+        size_t cut = maxChars;
+        if (cut > 0 && text[cut - 1] >= 0xD800 && text[cut - 1] <= 0xDBFF) {
+            --cut;
+        }
+        return text.substr(0, cut);
+    }
+    size_t cut = maxChars - 2;
+    if (cut > 0 && text[cut - 1] >= 0xD800 && text[cut - 1] <= 0xDBFF) {
+        --cut;
+    }
+    return text.substr(0, cut) + L"..";
 }
 
 static void RefreshFriendsIfNeeded(bool force)
@@ -205,61 +238,95 @@ static void RefreshFriendsIfNeeded(bool force)
     }
 }
 
+static std::vector<JoinPlanEntry> s_lastJoinEntries;
+
+static void SetNativeMenuPage(NativeMenuPage nextPage)
+{
+    const NativeMenuPage prevPage = g_nativePage;
+    if (prevPage == NATIVE_PAGE_JOIN && nextPage != NATIVE_PAGE_JOIN) {
+        if (g_lanScanRunningForJoin) {
+            LanDiscovery_StopScan();
+            g_lanScanRunningForJoin = false;
+        }
+        s_lastJoinEntries.clear();
+        g_showManualJoinModal = false;
+        g_joinWasBusyLastFrame = false;
+    }
+    g_nativePage = nextPage;
+    if (nextPage == NATIVE_PAGE_JOIN && prevPage != NATIVE_PAGE_JOIN) {
+        s_lastJoinEntries.clear();
+        LanDiscovery_StartScan();
+        LanDiscovery_ProbeNow();
+        g_lanScanRunningForJoin = true;
+        g_joinWasBusyLastFrame = SaveSync_IsBusy();
+        RefreshFriendsIfNeeded(true);
+    }
+}
+
 static void CopyMySteamCodeToClipboard(void)
 {
     if (!SteamP2P_IsAvailable()) return;
-    char code[64];
-    _snprintf_s(code, sizeof(code), _TRUNCATE, "steam:%llu", (unsigned long long)SteamP2P_GetLocalSteamId());
-    if (OpenClipboard(nullptr)) {
-        EmptyClipboard();
-        size_t len = strlen(code) + 1;
-        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len);
-        if (hMem) {
-            void* p = GlobalLock(hMem);
-            if (p) {
-                memcpy(p, code, len);
-                GlobalUnlock(hMem);
-                SetClipboardData(CF_TEXT, hMem);
-            } else {
-                GlobalFree(hMem);
-            }
-        }
-        CloseClipboard();
+    const uint64_t sid = SteamP2P_GetLocalSteamId();
+    if (sid == 0) return;
+    char code[64] = {};
+    _snprintf_s(code, sizeof(code), _TRUNCATE, "steam:%llu", static_cast<unsigned long long>(sid));
+    if (UiCommon_CopyTextToClipboard(code)) {
+        TwoStates_AddToast(Tr("Ваш код steam:<ID> скопирован в буфер обмена!",
+                              "Your steam:<ID> code copied to clipboard!"), 1);
+    } else {
+        TwoStates_AddToast(Tr("Не удалось открыть буфер обмена",
+                              "Clipboard is busy, copy manually"), 2);
     }
-    TwoStates_AddToast(Tr("Ваш код steam:<ID> скопирован в буфер обмена!", "Your steam:<ID> code copied to clipboard!"), 1);
 }
 
 static void PasteAddressFromClipboard(void)
 {
-    if (!OpenClipboard(nullptr)) return;
-    HANDLE hData = GetClipboardData(CF_TEXT);
-    if (hData) {
-        const char* txt = (const char*)GlobalLock(hData);
-        if (txt) {
-            char buf[128] = {};
-            strncpy_s(buf, txt, _TRUNCATE);
-            GlobalUnlock(hData);
-            char* start = buf;
-            while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') ++start;
-            char* end = start + strlen(start);
-            while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) *--end = '\0';
-
-            if (*start) {
-                bool allDigits = true;
-                size_t len = strlen(start);
-                for (size_t i = 0; i < len; ++i) {
-                    if (start[i] < '0' || start[i] > '9') { allDigits = false; break; }
-                }
-                if (allDigits && len >= 16 && strncmp(start, "7656", 4) == 0) {
-                    _snprintf_s(g_joinAddress, sizeof(g_joinAddress), _TRUNCATE, "steam:%s", start);
-                } else {
-                    strncpy_s(g_joinAddress, start, _TRUNCATE);
-                }
-                TwoStates_AddToast(Tr("Адрес вставлен из буфера обмена", "Address pasted from clipboard"), 1);
-            }
-        }
+    std::string raw;
+    if (!UiCommon_ReadTextFromClipboard(raw)) {
+        TwoStates_AddToast(Tr("Буфер обмена пуст или недоступен", "Clipboard is empty or unavailable"), 2);
+        return;
     }
-    CloseClipboard();
+    char normalized[64] = {};
+    if (UiCommon_NormalizeClipboardJoinAddress(raw.c_str(), normalized, sizeof(normalized))) {
+        strncpy_s(g_joinAddress, normalized, _TRUNCATE);
+        TwoStates_AddToast(Tr("Адрес вставлен из буфера обмена", "Address pasted from clipboard"), 1);
+    } else {
+        TwoStates_AddToast(Tr("В буфере обмена нет корректного адреса", "Clipboard has no valid address"), 2);
+    }
+}
+
+static bool StartJoinTargetFromMenu(const char* rawTarget)
+{
+    if (SaveSync_IsBusy()) return false;
+
+    char normHost[64] = {};
+    uint16_t parsedPort = 0;
+    if (!NetworkNormalizeTargetAddress(rawTarget, normHost, sizeof(normHost), &parsedPort)) {
+        TwoStates_AddToast(Tr("Некорректный адрес. Введите IP, IP:порт или steam:<ID>",
+                              "Invalid address. Enter IP, IP:port or steam:<ID>"), 3);
+        return false;
+    }
+
+    if (parsedPort != 0 && parsedPort != SAVE_SYNC_PORT && _strnicmp(normHost, "steam:", 6) != 0) {
+        _snprintf_s(g_joinAddress, sizeof(g_joinAddress), _TRUNCATE, "%s:%u",
+                    normHost, static_cast<unsigned int>(parsedPort));
+    } else {
+        strncpy_s(g_joinAddress, normHost, _TRUNCATE);
+    }
+    TwoStates_SetSavedJoinAddress(g_joinAddress);
+    TwoStates_SaveSettings();
+
+    g_showManualJoinModal = false;
+    if (g_lanScanRunningForJoin) {
+        LanDiscovery_StopScan();
+        g_lanScanRunningForJoin = false;
+    }
+    DiagLog_Printf("UI", "Native Co-op Join menu: connecting to [%s]", g_joinAddress);
+    SaveSync_StartClient(g_joinAddress);
+    if (g_nativePage == NATIVE_PAGE_JOIN) {
+        g_joinWasBusyLastFrame = true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,21 +341,20 @@ static void BuildCoopHubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
 {
     if (clicked == 1) {
         if (clickedIdx == 0) {
-            g_nativePage = NATIVE_PAGE_HOST;
+            SetNativeMenuPage(NATIVE_PAGE_HOST);
             BuildHostSubMenu(menuObj, hasContinue, 0, 0);
             return;
         } else if (clickedIdx == 1) {
-            g_nativePage = NATIVE_PAGE_JOIN;
-            RefreshFriendsIfNeeded(true);
+            SetNativeMenuPage(NATIVE_PAGE_JOIN);
             BuildJoinSubMenu(menuObj, hasContinue, 0, 0);
             return;
         } else if (clickedIdx == 2) {
             g_settingsReturnPage = NATIVE_PAGE_COOP_HUB;
-            g_nativePage = NATIVE_PAGE_SETTINGS;
+            SetNativeMenuPage(NATIVE_PAGE_SETTINGS);
             BuildSettingsSubMenu(menuObj, hasContinue, 0, 0);
             return;
         } else if (clickedIdx == 3) {
-            g_nativePage = NATIVE_PAGE_ROOT;
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
             NativeMenu_ClearHostOnNextLoad();
             *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
             g_origMainMenuBuild(menuObj);
@@ -363,7 +429,7 @@ static void BuildHostSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
             TwoStates_SetImportingSpSave(false);
             g_hostOnNextLoad = true;
             g_delegatedToLaunchScreen = false;
-            g_nativePage = NATIVE_PAGE_ROOT;
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
             *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
             DiagLog_Printf("UI", "Native Co-op Host menu: continuing latest Co-op save [%s]", latestCoopSave);
             TriggerLoadSave(latestCoopSave);
@@ -392,7 +458,7 @@ static void BuildHostSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
         if (delegateIdx >= 0) {
             g_hostOnNextLoad = true;
             g_delegatedToLaunchScreen = true;
-            g_nativePage = NATIVE_PAGE_ROOT;
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
             *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 1;
             *(int*)(menuObj + MENU_CLICKED_IDX_OFF)  = delegateIdx;
             DiagLog_Printf("UI", "Native Co-op Host menu: starting action %d (nativeIdx=%d) with HostOnNextLoad=1, importSp=%d",
@@ -403,11 +469,11 @@ static void BuildHostSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
 
         if (act == HACT_OPEN_SETTINGS) {
             g_settingsReturnPage = NATIVE_PAGE_HOST;
-            g_nativePage = NATIVE_PAGE_SETTINGS;
+            SetNativeMenuPage(NATIVE_PAGE_SETTINGS);
             BuildSettingsSubMenu(menuObj, hasContinue, 0, 0);
             return;
         } else if (act == HACT_BACK) {
-            g_nativePage = NATIVE_PAGE_COOP_HUB;
+            SetNativeMenuPage(NATIVE_PAGE_COOP_HUB);
             BuildCoopHubMenu(menuObj, hasContinue, 0, 0);
             return;
         }
@@ -479,7 +545,7 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
         bool expandBorders = TwoStates_GetExpandBorders();
         addEntry(SACT_MAP_BORDERS, expandBorders
             ? TrW(L"Карта: Вся без границ", L"Map: Full Borderless")
-            : TrW(L"Карта: 20x20 с границей", L"Map: 20x20 w/ Borders"));
+            : TrW(L"Карта: 20x20 граница", L"Map: 20x20 w/ Borders"));
 
         ModPackMode pm = ModSync_GetPackMode();
         if (pm == MOD_PACK_HOST_ONLY) {
@@ -554,7 +620,7 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
             Lang_Toggle();
             TwoStates_SaveSettings();
         } else if (act == SACT_BACK) {
-            g_nativePage = g_settingsReturnPage;
+            SetNativeMenuPage(g_settingsReturnPage);
             if (g_nativePage == NATIVE_PAGE_HOST) {
                 BuildHostSubMenu(menuObj, hasContinue, 0, 0);
             } else {
@@ -579,21 +645,343 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
 // ---------------------------------------------------------------------------
 // Page 4: JOIN SERVER ("ПОДКЛЮЧЕНИЕ") — short labels <= 21 chars
 // ---------------------------------------------------------------------------
-enum JoinMenuAction {
-    JACT_FRIEND_BASE = 100,
-    JACT_CONNECT_ADDR = 1,
-    JACT_TYPE_MANUAL = 2,
-    JACT_PASTE_CLIPBOARD = 3,
-    JACT_REFRESH_FRIENDS = 4,
-    JACT_BACK = 5,
-    JACT_LOCAL_PC_HOST = 6,
-};
+static std::string SanitizeMenuLabelText(const char* raw)
+{
+    if (!raw || !raw[0]) return std::string();
+    std::string out;
+    out.reserve(strlen(raw));
+    bool prevSpace = true;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(raw); *p != '\0'; ++p) {
+        if (*p < 0x20u || *p == 0x7Fu || *p == ' ') {
+            if (!prevSpace) {
+                out.push_back(' ');
+                prevSpace = true;
+            }
+        } else {
+            out.push_back(static_cast<char>(*p));
+            prevSpace = false;
+        }
+    }
+    while (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    return out;
+}
 
-struct JoinMenuEntry {
-    int action;
-    uint64_t steamId;
-    wchar_t label[256];
-};
+std::wstring NativeMenu_FormatLanHostLabel(const LanHostEntry& host)
+{
+    const wchar_t* prefix = L"[LAN] ";
+    if (!host.protocolMatch) {
+        prefix = L"[!ver] ";
+    } else if (host.sameMachine || strcmp(host.connectIp, "127.0.0.1") == 0) {
+        prefix = L"[PC] ";
+    } else if (host.pathKind == LanAdapterKind::VirtualVpn) {
+        prefix = L"[VPN] ";
+    }
+
+    std::string body = SanitizeMenuLabelText(host.hostName);
+    if (body.empty()) body = SanitizeMenuLabelText(host.connectIp);
+
+    const std::wstring full = std::wstring(prefix) + NativeMenu_Utf8ToWideSafe(body.c_str());
+    return NativeMenu_TruncateLabel(full, NATIVE_JOIN_MAX_LABEL_CHARS);
+}
+
+bool NativeMenu_FormatConnectTarget(const LanHostEntry& host, char* outTarget, size_t outCap)
+{
+    if (!outTarget || outCap == 0) return false;
+    outTarget[0] = '\0';
+    const char* ip = (host.sameMachine || strcmp(host.connectIp, "127.0.0.1") == 0)
+        ? "127.0.0.1"
+        : host.connectIp;
+    if (!ip || !ip[0]) return false;
+    if (host.tcpPort != 0 && host.tcpPort != SAVE_SYNC_PORT) {
+        _snprintf_s(outTarget, outCap, _TRUNCATE, "%s:%u", ip, static_cast<unsigned int>(host.tcpPort));
+    } else {
+        _snprintf_s(outTarget, outCap, _TRUNCATE, "%s", ip);
+    }
+    return outTarget[0] != '\0';
+}
+
+static JoinPlanEntry MakePlanEntry(JoinMenuActionKind kind, uint64_t steamId,
+                                   const char* connectTarget, const std::wstring& label)
+{
+    JoinPlanEntry e = {};
+    e.kind = kind;
+    e.steamId = steamId;
+    if (connectTarget && connectTarget[0]) {
+        strncpy_s(e.connectTarget, connectTarget, _TRUNCATE);
+    }
+    e.label = NativeMenu_TruncateLabel(label, NATIVE_JOIN_MAX_LABEL_CHARS);
+    return e;
+}
+
+static std::vector<JoinPlanEntry> BuildFixedJoinTail(const char* currentJoinAddress, bool isEnglish)
+{
+    const char* addr = (currentJoinAddress && currentJoinAddress[0]) ? currentJoinAddress : "127.0.0.1";
+    std::wstring connectLabel;
+    if (_strnicmp(addr, "steam:", 6) == 0) {
+        connectLabel = isEnglish ? L"Join via SteamID" : L"Войти по SteamID";
+    } else {
+        connectLabel = (isEnglish ? L"Join: " : L"Войти: ") + NativeMenu_Utf8ToWideSafe(addr);
+    }
+
+    std::vector<JoinPlanEntry> tail;
+    tail.reserve(5);
+    tail.push_back(MakePlanEntry(JOIN_ACT_CONNECT_ADDR, 0, addr, connectLabel));
+    tail.push_back(MakePlanEntry(JOIN_ACT_TYPE_MANUAL, 0, nullptr,
+                                 isEnglish ? L"Enter IP / SteamID" : L"Ввести IP / SteamID"));
+    tail.push_back(MakePlanEntry(JOIN_ACT_PASTE_CLIPBOARD, 0, nullptr,
+                                 isEnglish ? L"Paste Clipboard" : L"Вставить из буфера"));
+    tail.push_back(MakePlanEntry(JOIN_ACT_REFRESH_HOSTS, 0, nullptr,
+                                 isEnglish ? L"Refresh Hosts" : L"Обновить хостов"));
+    tail.push_back(MakePlanEntry(JOIN_ACT_BACK, 0, nullptr,
+                                 isEnglish ? L"<< Back" : L"<< Назад"));
+    return tail;
+}
+
+static int SelectSamePcHostIndex(const std::vector<LanHostEntry>& lanHosts)
+{
+    int bestIdx = -1;
+    for (size_t i = 0; i < lanHosts.size(); ++i) {
+        const LanHostEntry& h = lanHosts[i];
+        const bool isSamePc = h.sameMachine || strcmp(h.connectIp, "127.0.0.1") == 0;
+        if (!isSamePc) continue;
+        if (bestIdx < 0) {
+            bestIdx = static_cast<int>(i);
+            continue;
+        }
+        const LanHostEntry& cur = lanHosts[static_cast<size_t>(bestIdx)];
+        if (h.protocolMatch != cur.protocolMatch) {
+            if (h.protocolMatch) bestIdx = static_cast<int>(i);
+            continue;
+        }
+        const bool hLoop = (strcmp(h.connectIp, "127.0.0.1") == 0);
+        const bool curLoop = (strcmp(cur.connectIp, "127.0.0.1") == 0);
+        if (hLoop != curLoop) {
+            if (hLoop) bestIdx = static_cast<int>(i);
+            continue;
+        }
+        if (h.lastSeenMs > cur.lastSeenMs) {
+            bestIdx = static_cast<int>(i);
+        }
+    }
+    return bestIdx;
+}
+
+static bool IsDuplicateRemoteHost(const std::vector<JoinPlanEntry>& head, const LanHostEntry& candidate)
+{
+    for (const auto& ex : head) {
+        if (ex.kind != JOIN_ACT_LAN_HOST) continue;
+        if (candidate.serverGuid != 0 && ex.lanHost.serverGuid == candidate.serverGuid) return true;
+        if (strcmp(ex.lanHost.connectIp, candidate.connectIp) == 0 &&
+            ex.lanHost.tcpPort == candidate.tcpPort) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<JoinPlanEntry> NativeMenu_PlanJoinEntries(
+    bool localPcHostWaiting,
+    const std::vector<LanHostEntry>& lanHosts,
+    bool steamAvailable,
+    const std::vector<NativeMenuFriendInfo>& steamFriends,
+    const char* currentJoinAddress,
+    bool isEnglish,
+    int maxSlots)
+{
+    if (maxSlots <= 0) return {};
+
+    std::vector<JoinPlanEntry> fixedTail = BuildFixedJoinTail(currentJoinAddress, isEnglish);
+    if (maxSlots <= static_cast<int>(fixedTail.size())) {
+        const size_t start = fixedTail.size() - static_cast<size_t>(maxSlots);
+        return std::vector<JoinPlanEntry>(fixedTail.begin() + static_cast<ptrdiff_t>(start), fixedTail.end());
+    }
+
+    const size_t hostBudget = static_cast<size_t>(maxSlots) - fixedTail.size();
+    std::vector<JoinPlanEntry> head;
+    size_t actualHostCount = 0;
+
+    const int samePcIdx = SelectSamePcHostIndex(lanHosts);
+    if (samePcIdx >= 0) {
+        JoinPlanEntry e = MakePlanEntry(JOIN_ACT_LAN_HOST, 0, nullptr,
+                                        NativeMenu_FormatLanHostLabel(lanHosts[static_cast<size_t>(samePcIdx)]));
+        e.lanHost = lanHosts[static_cast<size_t>(samePcIdx)];
+        e.lanHost.sameMachine = true;
+        if (NativeMenu_FormatConnectTarget(e.lanHost, e.connectTarget, sizeof(e.connectTarget))) {
+            head.push_back(e);
+            ++actualHostCount;
+        }
+    } else if (localPcHostWaiting && head.size() < hostBudget) {
+        head.push_back(MakePlanEntry(JOIN_ACT_LOCAL_PC_HOST, 0, "127.0.0.1",
+                                     isEnglish ? L"Local PC (127.0.0.1)" : L"Этот ПК (127.0.0.1)"));
+        ++actualHostCount;
+    }
+
+    for (const auto& h : lanHosts) {
+        if (head.size() >= hostBudget) break;
+        if (h.sameMachine || strcmp(h.connectIp, "127.0.0.1") == 0) continue;
+        if (IsDuplicateRemoteHost(head, h)) continue;
+        JoinPlanEntry e = MakePlanEntry(JOIN_ACT_LAN_HOST, 0, nullptr, NativeMenu_FormatLanHostLabel(h));
+        e.lanHost = h;
+        if (NativeMenu_FormatConnectTarget(h, e.connectTarget, sizeof(e.connectTarget))) {
+            head.push_back(e);
+            ++actualHostCount;
+        }
+    }
+
+    if (steamAvailable) {
+        for (const auto& f : steamFriends) {
+            if (head.size() >= hostBudget) break;
+            if (!f.inThisGame || !f.isHosting || f.steamId == 0) continue;
+            char target[64] = {};
+            _snprintf_s(target, sizeof(target), _TRUNCATE, "steam:%llu", static_cast<unsigned long long>(f.steamId));
+            const std::string cleanFriend = SanitizeMenuLabelText(f.name);
+            const std::wstring lbl = (isEnglish ? L"Host: " : L"Хост: ") + NativeMenu_Utf8ToWideSafe(cleanFriend.c_str());
+            head.push_back(MakePlanEntry(JOIN_ACT_STEAM_FRIEND, f.steamId, target, lbl));
+            ++actualHostCount;
+        }
+    }
+
+    if (!steamAvailable && head.size() < hostBudget) {
+        head.push_back(MakePlanEntry(JOIN_ACT_INFO_STEAM_OFFLINE, 0, nullptr,
+                                     isEnglish ? L"Steam Offline (LAN)" : L"Steam офлайн (LAN)"));
+    }
+    if (actualHostCount == 0 && head.size() < hostBudget) {
+        head.push_back(MakePlanEntry(JOIN_ACT_INFO_NO_HOSTS, 0, nullptr,
+                                     isEnglish ? L"Scanning LAN hosts..." : L"Поиск серверов LAN..."));
+    }
+
+    head.insert(head.end(), fixedTail.begin(), fixedTail.end());
+    return head;
+}
+
+static std::vector<NativeMenuFriendInfo> SnapshotCachedFriends()
+{
+    std::vector<NativeMenuFriendInfo> out;
+    out.reserve(g_cachedFriends.size());
+    for (const auto& f : g_cachedFriends) {
+        NativeMenuFriendInfo nf = {};
+        nf.steamId = f.steamId;
+        strncpy_s(nf.name, f.name, _TRUNCATE);
+        nf.inThisGame = f.inThisGame;
+        nf.isHosting = f.isHosting;
+        out.push_back(nf);
+    }
+    return out;
+}
+
+bool NativeMenu_ResolveJoinClick(const std::vector<JoinPlanEntry>& renderedSnapshot,
+                                 int clickedIdx, JoinPlanEntry* outSelected)
+{
+    if (!outSelected || clickedIdx < 0 ||
+        static_cast<size_t>(clickedIdx) >= renderedSnapshot.size()) {
+        return false;
+    }
+    *outSelected = renderedSnapshot[static_cast<size_t>(clickedIdx)];
+    return true;
+}
+
+bool NativeMenu_IsLanHostVersionCompatible(const LanHostEntry& host,
+                                           const char* localVersion,
+                                           uint32_t localDllCrc)
+{
+    if (!host.protocolMatch) return false;
+    if (host.version[0] != '\0' && localVersion && localVersion[0] != '\0' &&
+        strcmp(host.version, localVersion) != 0) {
+        return false;
+    }
+    if (host.dllCrc != 0u && localDllCrc != 0u && host.dllCrc != localDllCrc) {
+        return false;
+    }
+    return true;
+}
+
+std::vector<LanAdapterInfo> NativeMenu_SelectSidebarExtraAdapters(
+    const std::vector<LanAdapterInfo>& displayAdapters, size_t maxExtra)
+{
+    std::vector<LanAdapterInfo> extras;
+    if (maxExtra == 0 || displayAdapters.size() <= 1) return extras;
+
+    extras.push_back(displayAdapters[1]);
+    if (maxExtra >= 2 && displayAdapters.size() > 2) {
+        size_t vpnIdx = 2;
+        bool foundVpn = false;
+        for (size_t i = 2; i < displayAdapters.size(); ++i) {
+            if (displayAdapters[i].kind == LanAdapterKind::VirtualVpn) {
+                vpnIdx = i;
+                foundVpn = true;
+                break;
+            }
+        }
+        extras.push_back(displayAdapters[foundVpn ? vpnIdx : 2]);
+    }
+    return extras;
+}
+
+static void HandleJoinMenuClick(BYTE* menuObj, bool hasContinue, const JoinPlanEntry& sel)
+{
+    if (sel.kind == JOIN_ACT_BACK) {
+        SetNativeMenuPage(NATIVE_PAGE_COOP_HUB);
+        BuildCoopHubMenu(menuObj, hasContinue, 0, 0);
+        return;
+    }
+    if (SaveSync_IsBusy()) return;
+
+    if (sel.kind == JOIN_ACT_LAN_HOST) {
+        const uint32_t localCrc = static_cast<uint32_t>(SaveSync_GetLocalDllCrc());
+        if (!NativeMenu_IsLanHostVersionCompatible(sel.lanHost, REPUBLICMP_VERSION, localCrc)) {
+            char err[224] = {};
+            _snprintf_s(err, sizeof(err), _TRUNCATE,
+                        Tr("Версия сервера не совпадает (сервер v%s/прот.%u/%08X, у вас v%s/прот.%d/%08X)",
+                           "Host version mismatch (host v%s/proto %u/%08X, yours v%s/proto %d/%08X)"),
+                        sel.lanHost.version[0] ? sel.lanHost.version : "?",
+                        static_cast<unsigned int>(sel.lanHost.protocol),
+                        static_cast<unsigned int>(sel.lanHost.dllCrc),
+                        REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL,
+                        static_cast<unsigned int>(localCrc));
+            TwoStates_AddToast(err, 3);
+            return;
+        }
+        StartJoinTargetFromMenu(sel.connectTarget);
+    } else if (sel.kind == JOIN_ACT_LOCAL_PC_HOST || sel.kind == JOIN_ACT_STEAM_FRIEND) {
+        StartJoinTargetFromMenu(sel.connectTarget);
+    } else if (sel.kind == JOIN_ACT_CONNECT_ADDR) {
+        StartJoinTargetFromMenu(g_joinAddress);
+    } else if (sel.kind == JOIN_ACT_TYPE_MANUAL) {
+        g_showManualJoinModal = true;
+    } else if (sel.kind == JOIN_ACT_PASTE_CLIPBOARD) {
+        PasteAddressFromClipboard();
+        TwoStates_SetSavedJoinAddress(g_joinAddress);
+        TwoStates_SaveSettings();
+    } else if (sel.kind == JOIN_ACT_REFRESH_HOSTS) {
+        LanDiscovery_StartScan();
+        LanDiscovery_ProbeNow();
+        g_lanScanRunningForJoin = true;
+        RefreshFriendsIfNeeded(true);
+        char msg[192] = {};
+        if (!SteamP2P_IsAvailable()) {
+            strncpy_s(msg, sizeof(msg),
+                      Tr("Поиск хостов в ЛВС... (Steam офлайн)",
+                         "Refreshing LAN hosts... (Steam offline)"),
+                      _TRUNCATE);
+        } else {
+            _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                        Tr("Поиск хостов в ЛВС и друзей (%zu)...",
+                           "Refreshing LAN hosts and friends (%zu)..."),
+                        g_cachedFriends.size());
+        }
+        TwoStates_AddToast(msg, 0);
+    } else if (sel.kind == JOIN_ACT_INFO_STEAM_OFFLINE) {
+        LanDiscovery_ProbeNow();
+        TwoStates_AddToast(Tr("Steam не в сети — доступно подключение по LAN и вручную по IP",
+                              "Steam offline — LAN discovery and manual IP join active"), 0);
+    } else if (sel.kind == JOIN_ACT_INFO_NO_HOSTS) {
+        LanDiscovery_ProbeNow();
+        TwoStates_AddToast(Tr("Идёт поиск серверов в локальной сети...",
+                              "Scanning local network for Co-op hosts..."), 0);
+    }
+}
 
 static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int clickedIdx)
 {
@@ -608,113 +996,44 @@ static void BuildJoinSubMenu(BYTE* menuObj, bool hasContinue, int clicked, int c
         g_joinAddressInit = true;
     }
 
+    const bool busy = SaveSync_IsBusy();
+    if (g_joinWasBusyLastFrame && !busy && !g_lanScanRunningForJoin) {
+        LanDiscovery_StartScan();
+        LanDiscovery_ProbeNow();
+        g_lanScanRunningForJoin = true;
+    }
+    g_joinWasBusyLastFrame = busy;
+
     RefreshFriendsIfNeeded(false);
 
-    std::vector<JoinMenuEntry> entries;
-    auto addEntry = [&](int act, uint64_t sid, const wchar_t* text) {
-        JoinMenuEntry e = {};
-        e.action = act;
-        e.steamId = sid;
-        wcsncpy_s(e.label, text, _TRUNCATE);
-        entries.push_back(e);
-    };
-
-    auto populateEntries = [&]() {
-        entries.clear();
-        if (SaveSync_IsLocalPcHostWaiting()) {
-            addEntry(JACT_LOCAL_PC_HOST, 0,
-                     TrW(L"Сервер на ПК (127.0.0.1)", L"Local PC Host (127.0.0.1)"));
-        }
-
-        size_t maxFriends = g_cachedFriends.size() < 6 ? g_cachedFriends.size() : 6;
-        for (size_t i = 0; i < maxFriends; ++i) {
-            const auto& f = g_cachedFriends[i];
-            if (!f.inThisGame || !f.isHosting) continue;
-            wchar_t wName[20] = {};
-            Utf8ToWide(f.name, wName, 14);
-            wchar_t line[64] = {};
-            _snwprintf_s(line, _TRUNCATE, TrW(L"Хост: %s", L"Host: %s"), wName);
-            addEntry(JACT_FRIEND_BASE + (int)i, f.steamId, line);
-        }
-
-        if (entries.empty() && SteamP2P_IsAvailable()) {
-            addEntry(JACT_REFRESH_FRIENDS, 0,
-                     TrW(L"Нет хостов в друзьях", L"No Friends Hosting"));
-        }
-
-        wchar_t connectLine[64] = {};
-        if (_strnicmp(g_joinAddress, "steam:", 6) == 0) {
-            wcsncpy_s(connectLine, TrW(L"Войти по SteamID", L"Join via SteamID"), _TRUNCATE);
-        } else {
-            wchar_t wAddr[24] = {};
-            Utf8ToWide(g_joinAddress, wAddr, 16);
-            _snwprintf_s(connectLine, _TRUNCATE, TrW(L"Войти: %s", L"Join: %s"), wAddr);
-        }
-        addEntry(JACT_CONNECT_ADDR, 0, connectLine);
-
-        addEntry(JACT_TYPE_MANUAL, 0,
-                 TrW(L"Ввести IP / SteamID", L"Enter IP / SteamID"));
-
-        addEntry(JACT_PASTE_CLIPBOARD, 0,
-                 TrW(L"Вставить из буфера", L"Paste Clipboard"));
-
-        if (SteamP2P_IsAvailable() && !g_cachedFriends.empty()) {
-            addEntry(JACT_REFRESH_FRIENDS, 0,
-                     TrW(L"Обновить хостов", L"Refresh Hosts"));
-        }
-
-        addEntry(JACT_BACK, 0,
-                 TrW(L"<< Назад", L"<< Back"));
-    };
-
-    populateEntries();
-
-    if (clicked == 1 && clickedIdx >= 0 && clickedIdx < (int)entries.size()) {
-        const JoinMenuEntry& sel = entries[clickedIdx];
-        if (sel.action >= JACT_FRIEND_BASE) {
-            _snprintf_s(g_joinAddress, sizeof(g_joinAddress), _TRUNCATE, "steam:%llu",
-                        (unsigned long long)sel.steamId);
-            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to hosting Steam friend %s", g_joinAddress);
-            SaveSync_StartClient(g_joinAddress);
-        } else if (sel.action == JACT_LOCAL_PC_HOST) {
-            strncpy_s(g_joinAddress, "127.0.0.1", _TRUNCATE);
-            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to Local PC Host (127.0.0.1)");
-            SaveSync_StartClient("127.0.0.1");
-        } else if (sel.action == JACT_CONNECT_ADDR) {
-            DiagLog_Printf("UI", "Native Co-op Join menu: connecting to address %s", g_joinAddress);
-            SaveSync_StartClient(g_joinAddress);
-        } else if (sel.action == JACT_PASTE_CLIPBOARD) {
-            PasteAddressFromClipboard();
-            TwoStates_SetSavedJoinAddress(g_joinAddress);
-            TwoStates_SaveSettings();
-        } else if (sel.action == JACT_TYPE_MANUAL) {
-            g_showManualJoinModal = true;
-        } else if (sel.action == JACT_REFRESH_FRIENDS) {
-            RefreshFriendsIfNeeded(true);
-            if (g_cachedFriends.empty()) {
-                TwoStates_AddToast(Tr("В списке друзей Steam сейчас нет открытых серверов Workers & Resources",
-                                      "No open Workers & Resources Co-op servers found among your Steam friends"), 0);
-            } else {
-                TwoStates_AddToast(Tr("Список открытых серверов друзей обновлён!",
-                                      "Open friends' servers list updated!"), 1);
-            }
-        } else if (sel.action == JACT_BACK) {
-            g_nativePage = NATIVE_PAGE_COOP_HUB;
-            BuildCoopHubMenu(menuObj, hasContinue, 0, 0);
-            return;
+    if (clicked == 1) {
+        JoinPlanEntry sel = {};
+        if (NativeMenu_ResolveJoinClick(s_lastJoinEntries, clickedIdx, &sel)) {
+            HandleJoinMenuClick(menuObj, hasContinue, sel);
+            if (g_nativePage != NATIVE_PAGE_JOIN) return;
         }
     }
+
+    const bool isEn = (Lang_Get() == MP_LANG_EN);
+    std::vector<JoinPlanEntry> entries = NativeMenu_PlanJoinEntries(
+        SaveSync_IsLocalPcHostWaiting(),
+        LanDiscovery_GetHosts(),
+        SteamP2P_IsAvailable(),
+        SnapshotCachedFriends(),
+        g_joinAddress,
+        isEn,
+        MENU_ITEM_MAX_SLOTS);
 
     *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
     g_origMainMenuBuild(menuObj);
-    populateEntries();
 
     SetMenuTitleText(menuObj, TrW(L"ПОДКЛЮЧЕНИЕ", L"JOIN SERVER"));
-    int count = (int)entries.size();
+    int count = static_cast<int>(entries.size());
     if (count > MENU_ITEM_MAX_SLOTS) count = MENU_ITEM_MAX_SLOTS;
     for (int i = 0; i < count; ++i) {
-        SetMenuItemText(menuObj, i, entries[i].label);
+        SetMenuItemText(menuObj, i, entries[static_cast<size_t>(i)].label.c_str());
     }
+    s_lastJoinEntries.assign(entries.begin(), entries.begin() + count);
     *(int*)(menuObj + MENU_ITEM_COUNT_OFFSET) = count;
 }
 
@@ -738,7 +1057,7 @@ static void Hook_MainMenuBuildInner(BYTE* menuObj)
                 g_hostOnNextLoad = false;
                 TwoStates_SetImportingSpSave(false);
                 TwoStates_MountSaveBank(false);
-                g_nativePage = NATIVE_PAGE_HOST;
+                SetNativeMenuPage(NATIVE_PAGE_HOST);
                 clicked = 0;
                 *(int*)(menuObj + MENU_CLICKED_FLAG_OFF) = 0;
             }
@@ -748,11 +1067,11 @@ static void Hook_MainMenuBuildInner(BYTE* menuObj)
         bool escDown = IsGameWindowFocused() && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
         if (escDown && !g_escWasDown && g_nativePage != NATIVE_PAGE_ROOT && !g_showManualJoinModal) {
             if (g_nativePage == NATIVE_PAGE_SETTINGS) {
-                g_nativePage = g_settingsReturnPage;
+                SetNativeMenuPage(g_settingsReturnPage);
             } else if (g_nativePage == NATIVE_PAGE_HOST || g_nativePage == NATIVE_PAGE_JOIN) {
-                g_nativePage = NATIVE_PAGE_COOP_HUB;
+                SetNativeMenuPage(NATIVE_PAGE_COOP_HUB);
             } else {
-                g_nativePage = NATIVE_PAGE_ROOT;
+                SetNativeMenuPage(NATIVE_PAGE_ROOT);
                 NativeMenu_ClearHostOnNextLoad();
             }
             clicked = 0;
@@ -805,7 +1124,7 @@ static void Hook_MainMenuBuildInner(BYTE* menuObj)
         }
 
         if (openCoopHub) {
-            g_nativePage = NATIVE_PAGE_COOP_HUB;
+            SetNativeMenuPage(NATIVE_PAGE_COOP_HUB);
             DiagLog_Printf("UI", "Native Main Menu: opened Co-op Hub");
             BuildCoopHubMenu(menuObj, hasContinue, 0, 0);
             return;
@@ -935,6 +1254,7 @@ static ULONGLONG g_sidebarSubTabSwitchTick = 0;
 static void PlayMenuClickSoundSafe()
 {
     if (!g_exeBase) return;
+    DiagLog_BeginSafeSeh();
     __try {
         if (*(BYTE*)(g_exeBase + SOUND_MUTE_BYTE_RVA) == 0 && *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA) != nullptr) {
             uintptr_t hasSndAddr  = *(uintptr_t*)(g_exeBase + IMPORT_HAS_SOUND_RVA);
@@ -952,6 +1272,7 @@ static void PlayMenuClickSoundSafe()
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static bool DrawSidebarButton(BYTE* menuObj, float x, float y, unsigned int colorARGB,
@@ -1161,6 +1482,35 @@ static void DrawSidebarActiveCoopStatus(SessionState st, float leftX, float& cur
         currentY += textStep;
     }
 
+    if (st == SESSION_HOST_LISTENING || SaveSync_IsHostRole()) {
+        const bool russian = (Lang_Get() == MP_LANG_RU);
+        const UiHostAddressView view = UiCommon_BuildHostAddressView(
+            UiCommon_GetCachedLocalAdapters(false), SAVE_SYNC_PORT, SAVE_SYNC_PORT, russian);
+
+        const std::wstring wEp = NativeMenu_Utf8ToWideSafe(view.primaryEndpoint.c_str());
+        const std::wstring wTag = NativeMenu_Utf8ToWideSafe(view.primaryTag.c_str());
+        wchar_t ipLine[112] = {};
+        _snwprintf_s(ipLine, _TRUNCATE, L"LAN IP: %s [%s]", wEp.c_str(), wTag.c_str());
+        DrawSidebarText(leftX, currentY, 0xFF183D5D, false, ipLine);
+        currentY += textStep;
+
+        const std::vector<LanAdapterInfo> extras = NativeMenu_SelectSidebarExtraAdapters(view.displayAdapters, 2);
+        for (const auto& sec : extras) {
+            const char* secTag = UiCommon_AdapterKindTag(sec.kind, sec.name, sec.ip, russian);
+            const std::wstring wSecTag = NativeMenu_Utf8ToWideSafe(secTag);
+            const std::wstring wSecIp = NativeMenu_Utf8ToWideSafe(sec.ip);
+            wchar_t secLine[112] = {};
+            _snwprintf_s(secLine, _TRUNCATE, L"+ [%s] %s", wSecTag.c_str(), wSecIp.c_str());
+            DrawSidebarText(leftX, currentY, 0xFF444444, false, secLine);
+            currentY += textStep;
+        }
+
+        if (!SteamP2P_IsAvailable() || SteamP2P_GetLocalSteamId() == 0) {
+            DrawSidebarText(leftX, currentY, 0xFF666666, false, Lang_SteamOfflineLabelW());
+            currentY += textStep;
+        }
+    }
+
     if (TwoStates_IsActive()) {
         int me = TwoStates_LocalState();
         int other = (me == 1) ? 2 : 1;
@@ -1208,14 +1558,79 @@ static void DrawSidebarActiveCoopStatus(SessionState st, float leftX, float& cur
     }
 }
 
+static void DrawSidebarCopyAdapterButton(BYTE* menuObj, const wchar_t* label, const char* copyText,
+                                         int btnIdx, ULONGLONG now, float leftX, float& currentY, float btnStep)
+{
+    if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF183D5D, label, "editor/mp_icon_coop.png")) {
+        if (UiCommon_CopyTextToClipboard(copyText)) {
+            g_sidebarIpCopiedUntilMs = now + 2000ULL;
+            g_sidebarCopiedBtnIdx = btnIdx;
+            char toastBuf[160] = {};
+            _snprintf_s(toastBuf, sizeof(toastBuf), _TRUNCATE,
+                        Tr("LAN IP скопирован: %s", "LAN IP copied: %s"),
+                        copyText);
+            TwoStates_AddToast(toastBuf, 1);
+        } else {
+            TwoStates_AddToast(Tr("Не удалось открыть буфер обмена",
+                                  "Clipboard is busy, copy manually"), 2);
+        }
+    }
+    currentY += btnStep;
+}
+
+static void DrawSidebarCopyIpButtons(BYTE* menuObj, SessionState st, float leftX, float& currentY, float btnStep)
+{
+    if (st != SESSION_HOST_LISTENING && st != SESSION_HOST_IN_GAME) return;
+    const bool russian = (Lang_Get() == MP_LANG_RU);
+    const UiHostAddressView view = UiCommon_BuildHostAddressView(
+        UiCommon_GetCachedLocalAdapters(false), SAVE_SYNC_PORT, SAVE_SYNC_PORT, russian);
+    const ULONGLONG now = GetTickCount64();
+
+    const bool primaryCopied = (now < g_sidebarIpCopiedUntilMs) && (g_sidebarCopiedBtnIdx == 0);
+    wchar_t primaryLbl[96] = {};
+    if (primaryCopied) {
+        wcsncpy_s(primaryLbl, Lang_CopiedLabelW(), _TRUNCATE);
+    } else {
+        const std::wstring wCopy = NativeMenu_Utf8ToWideSafe(view.primaryCopyText.c_str());
+        _snwprintf_s(primaryLbl, _TRUNCATE,
+                     TrW(L"Копировать IP (%s)", L"Copy IP (%s)"), wCopy.c_str());
+    }
+    DrawSidebarCopyAdapterButton(menuObj, primaryLbl, view.primaryCopyText.c_str(), 0, now, leftX, currentY, btnStep);
+
+    if (st == SESSION_HOST_LISTENING) {
+        const std::vector<LanAdapterInfo> extras = NativeMenu_SelectSidebarExtraAdapters(view.displayAdapters, 2);
+        for (size_t i = 0; i < extras.size(); ++i) {
+            const LanAdapterInfo& sec = extras[i];
+            const std::string secCopy = UiCommon_FormatCopyableHostIp(sec.ip, SAVE_SYNC_PORT, SAVE_SYNC_PORT);
+            if (secCopy.empty()) continue;
+
+            const int btnIdx = static_cast<int>(i) + 1;
+            const bool secCopied = (now < g_sidebarIpCopiedUntilMs) && (g_sidebarCopiedBtnIdx == btnIdx);
+            wchar_t secLbl[96] = {};
+            if (secCopied) {
+                wcsncpy_s(secLbl, Lang_CopiedLabelW(), _TRUNCATE);
+            } else {
+                const char* secTag = UiCommon_AdapterKindTag(sec.kind, sec.name, sec.ip, russian);
+                const std::wstring wTag = NativeMenu_Utf8ToWideSafe(secTag);
+                const std::wstring wIp = NativeMenu_Utf8ToWideSafe(secCopy.c_str());
+                _snwprintf_s(secLbl, _TRUNCATE,
+                             TrW(L"Копир. %s (%s)", L"Copy %s (%s)"), wTag.c_str(), wIp.c_str());
+            }
+            DrawSidebarCopyAdapterButton(menuObj, secLbl, secCopy.c_str(), btnIdx, now, leftX, currentY, btnStep);
+        }
+    }
+}
+
 static void DrawSidebarActiveCoopSection(BYTE* menuObj, SessionState st, float leftX, float& currentY, float textStep, float btnStep, float guiScale)
 {
     DrawSidebarActiveCoopStatus(st, leftX, currentY, textStep);
     currentY += guiScale * 8.0f;
 
-    if (st == SESSION_HOST_LISTENING && SteamP2P_IsAvailable()) {
+    DrawSidebarCopyIpButtons(menuObj, st, leftX, currentY, btnStep);
+
+    if (st == SESSION_HOST_LISTENING && SteamP2P_IsAvailable() && SteamP2P_GetLocalSteamId() != 0) {
         if (DrawSidebarButton(menuObj, leftX, currentY, 0xFF183D5D,
-                              TrW(L"Скопировать код Steam", L"Copy Steam Code"),
+                              Lang_CopySteamCodeLabelW(),
                               "editor/mp_icon_steam.png")) {
             CopyMySteamCodeToClipboard();
         }
@@ -1311,23 +1726,36 @@ static void DrawSidebarActiveCoopSection(BYTE* menuObj, SessionState st, float l
     currentY += btnStep;
 }
 
-static void DrawSidebarCoopSubTab(BYTE* menuObj)
+static void CallSystemTabBuildWithHiddenTitle(BYTE* menuObj)
 {
     BYTE* titleCallSite = g_exeBase + SYSTAB_ROOT_TITLE_RVA;
-    BYTE savedCallBytes[6];
+    BYTE savedCallBytes[6] = {};
     DWORD oldProt = 0;
-    VirtualProtect(titleCallSite, 6, PAGE_EXECUTE_READWRITE, &oldProt);
-    memcpy(savedCallBytes, titleCallSite, 6);
-    memset(titleCallSite, 0x90, 6);
+    const BOOL patched = VirtualProtect(titleCallSite, 6, PAGE_EXECUTE_READWRITE, &oldProt);
+    if (patched) {
+        memcpy(savedCallBytes, titleCallSite, 6);
+        memset(titleCallSite, 0x90, 6);
+        FlushInstructionCache(GetCurrentProcess(), titleCallSite, 6);
+    }
+    __try {
+        g_origSystemTabBuild(menuObj);
+    } __finally {
+        if (patched) {
+            memcpy(titleCallSite, savedCallBytes, 6);
+            FlushInstructionCache(GetCurrentProcess(), titleCallSite, 6);
+            DWORD dummyProt = 0;
+            VirtualProtect(titleCallSite, 6, oldProt, &dummyProt);
+        }
+    }
+}
 
+static void DrawSidebarCoopSubTab(BYTE* menuObj)
+{
     BYTE savedCheat = *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF);
     *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = 0;
     *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF) = -2;
 
-    g_origSystemTabBuild(menuObj);
-
-    memcpy(titleCallSite, savedCallBytes, 6);
-    VirtualProtect(titleCallSite, 6, oldProt, &oldProt);
+    CallSystemTabBuildWithHiddenTitle(menuObj);
 
     *(BYTE*)(menuObj + SYSTAB_CHEAT_BYTE_OFF) = savedCheat;
     int afterSubTab = *(int*)(menuObj + SYSTAB_SUBTAB_IDX_OFF);
@@ -1434,6 +1862,7 @@ static void Hook_SystemTabBuildInner(BYTE* menuObj)
             g_inGameCoopSubTab = true;
             g_sidebarSubTabSwitchTick = GetTickCount64();
             g_sidebarWaitRelease = true;
+            UiCommon_RefreshLocalAdaptersCache();
             DiagLog_Printf("UI", "In-game Left Sidebar ('system' tab): opened native Co-op sub-tab");
         }
         currentY += guiScale * 38.0f;
@@ -1579,12 +2008,12 @@ static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 display
         if (TwoStates_GetLatestCoopSaveName(autoSaveName, sizeof(autoSaveName)) && autoSaveName[0]) {
             g_hostOnNextLoad = true;
             g_delegatedToLaunchScreen = false;
-            g_nativePage = NATIVE_PAGE_ROOT;
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
             DiagLog_Printf("UI", "Dual-Window Testbed: auto-starting Host with latest Co-op save [%s]", autoSaveName);
             TriggerLoadSave(autoSaveName);
         } else {
             DiagLog_Printf("UI", "Dual-Window Testbed: no Co-op save found for auto-host; opening Host menu");
-            g_nativePage = NATIVE_PAGE_HOST;
+            SetNativeMenuPage(NATIVE_PAGE_HOST);
         }
     } else if (s_autoJoinPending && s_menuReadyFrames >= 45) {
         if (SaveSync_IsLocalPcHostWaiting()) {
@@ -1608,6 +2037,10 @@ static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 display
                 ImGui::SameLine();
                 if (ImGui::SmallButton(Tr("Отмена", "Cancel"))) {
                     s_autoJoinPending = false;
+                }
+                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+                    ImGui::IsItemHovered()) {
+                    g_overlayHovered = true;
                 }
             }
             ImGui::End();
@@ -1689,7 +2122,7 @@ static void DrawLaunchScreenCoopBadge(int screenId, ImVec2 displaySize)
 static void DrawManualJoinModal(ImVec2 displaySize)
 {
     ImGui::SetNextWindowPos(ImVec2(displaySize.x * 0.5f, displaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(460.0f, 195.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(490.0f, 225.0f), ImGuiCond_Always);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.16f, 0.11f, 0.08f, 0.98f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.90f, 0.70f, 0.25f, 0.95f));
     ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.45f, 0.14f, 0.10f, 1.0f));
@@ -1702,10 +2135,21 @@ static void DrawManualJoinModal(ImVec2 displaySize)
     ImGuiWindowFlags mflags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin(Tr("Подключение к серверу — Адрес###ManualJoinModal",
                         "Join Server — Address###ManualJoinModal"), &g_showManualJoinModal, mflags)) {
+        const bool steamOnline = SteamP2P_IsAvailable() && SteamP2P_GetLocalSteamId() != 0;
         ImGui::TextColored(ImVec4(0.95f, 0.85f, 0.60f, 1.0f), "%s",
-                           Tr("IP-адрес хоста (например 127.0.0.1) или steam:<SteamID>:",
-                              "Host IP address (e.g. 127.0.0.1) or steam:<SteamID>:"));
-        ImGui::SetNextItemWidth(320.0f);
+                           steamOnline
+                               ? Tr("Введите IPv4, IP:порт или steam:<SteamID>:",
+                                    "Enter IPv4, IP:port or steam:<SteamID>:")
+                               : Tr("Введите IPv4 или IP:порт хоста:",
+                                    "Enter host IPv4 or IP:port:"));
+        ImGui::TextColored(ImVec4(0.76f, 0.72f, 0.62f, 1.0f), "%s",
+                           Tr("Примеры: 192.168.1.50 | 26.x.x.x (Radmin) | 127.0.0.1 | 192.168.1.50:5556",
+                              "Examples: 192.168.1.50 | 26.x.x.x (Radmin) | 127.0.0.1 | 192.168.1.50:5556"));
+
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::SetNextItemWidth(350.0f);
         bool enterPressed = ImGui::InputText("##manual_join_ip", g_joinAddress, sizeof(g_joinAddress),
                                              ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
@@ -1713,20 +2157,22 @@ static void DrawManualJoinModal(ImVec2 displaySize)
             PasteAddressFromClipboard();
         }
 
-        if (SteamP2P_IsAvailable()) {
+        if (steamOnline) {
             ImGui::Spacing();
             if (ImGui::SmallButton(Tr("Скопировать мой код Steam для друга", "Copy My Steam Code for Friend"))) {
                 CopyMySteamCodeToClipboard();
             }
+        } else {
+            ImGui::TextColored(ImVec4(0.72f, 0.68f, 0.56f, 1.0f), "%s", Lang_SteamOfflineLabel());
         }
 
         ImGui::Spacing();
-        if (ImGui::Button(Tr("Подключиться", "Connect"), ImVec2(200.0f, 34.0f)) || enterPressed) {
-            g_showManualJoinModal = false;
-            SaveSync_StartClient(g_joinAddress);
+        if (ImGui::Button(Tr("Подключиться", "Connect"), ImVec2(210.0f, 34.0f)) || enterPressed) {
+            StartJoinTargetFromMenu(g_joinAddress);
         }
         ImGui::SameLine();
-        if (ImGui::Button(Tr("Отмена", "Cancel"), ImVec2(120.0f, 34.0f))) {
+        if (ImGui::Button(Tr("Отмена", "Cancel"), ImVec2(120.0f, 34.0f)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             g_showManualJoinModal = false;
         }
         g_overlayHovered = true;
@@ -1743,11 +2189,13 @@ void NativeMenu_DrawOverlay(void)
     int screenId = NativeMenu_GetActiveScreenId();
 
     if (g_exeBase && g_inGameCoopSubTab) {
+        DiagLog_BeginSafeSeh();
         __try {
             if (!*(void**)(g_exeBase + MENU_OBJ_RVA + SYSTAB_TAB_PTR_OFF)) {
                 g_inGameCoopSubTab = false;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        DiagLog_EndSafeSeh();
     }
 
     if (worldLoaded != g_wasWorldLoaded) {
@@ -1755,9 +2203,12 @@ void NativeMenu_DrawOverlay(void)
     }
     if (worldLoaded && !g_wasWorldLoaded) {
         g_delegatedToLaunchScreen = false;
+        if (g_nativePage == NATIVE_PAGE_JOIN) {
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
+        }
         if (g_hostOnNextLoad) {
             g_hostOnNextLoad = false;
-            g_nativePage = NATIVE_PAGE_ROOT;
+            SetNativeMenuPage(NATIVE_PAGE_ROOT);
             if (SaveSync_GetState() == SESSION_IDLE) {
                 DiagLog_Printf("SESSION", "World finished loading with HostOnNextLoad=1 -> auto-starting Co-op Host server");
                 SaveSync_StartHost();
@@ -1768,7 +2219,9 @@ void NativeMenu_DrawOverlay(void)
 
     if (!worldLoaded && screenId == 1 && g_lastScreenId != 1) {
         BYTE loadTrig = 0;
+        DiagLog_BeginSafeSeh();
         __try { loadTrig = *(volatile BYTE*)(g_exeBase + LOAD_TRIGGER_DAT_RVA); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        DiagLog_EndSafeSeh();
         if (loadTrig == 0 && !g_delegatedToLaunchScreen) {
             g_hostOnNextLoad = false;
             TwoStates_SetImportingSpSave(false);

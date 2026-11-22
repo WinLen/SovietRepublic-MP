@@ -17,6 +17,7 @@
 #include "../ui/lang.h"
 #include "../third_party/miniz/miniz.h" // mz_crc32 for the build check
 #include "../transport/network.h"
+#include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
 #include "../world_sync/buildings/build_sync.h"
 #include "../world_sync/buildings/build_mode.h"
@@ -72,6 +73,8 @@ void SaveSync_Bind(const TsmHost* host)
 static volatile SessionState g_state = SESSION_IDLE;
 static volatile bool g_isHost = false;
 static volatile bool g_hadPartnerInSession = false;
+static INIT_ONCE g_saveSyncStrLockOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_saveSyncStrLock;
 static char g_targetIp[64] = SAVE_SYNC_TEST_HOST_IP; // client target - overridable from the UI
 static char g_peerIp[64] = "";
 static char g_lastPartnerPeer[64] = "";
@@ -79,9 +82,16 @@ static char g_lastError[256] = "";
 
 // Set by SaveSync_RequestDisconnect; reset at the start of every session.
 static volatile bool g_disconnectRequested = false;
+static std::atomic<bool> g_processShuttingDown{false};
 
 // The join connection in use, so Disconnect can break a blocking recv.
-static volatile SOCKET g_activeSock = INVALID_SOCKET;
+static INIT_ONCE g_activeSockLockOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_activeSockLock;
+static SOCKET g_activeSock = INVALID_SOCKET;
+
+static INIT_ONCE g_sessionThreadLockOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_sessionThreadLock;
+static HANDLE g_sessionThread = nullptr;
 
 // GetTickCount64 when the current session was started (Host / Connect).
 static volatile ULONGLONG g_sessionStartTick = 0;
@@ -109,47 +119,122 @@ static volatile bool g_lockstep = true; // the current session's mode (lockstep 
 #define LOCKSTEP_CONNECT_TIMEOUT_MS 180000 // the host loads the world again before it listens
 #define LOCKSTEP_SILENCE_MS 20000          // a game that sent nothing (not even a keepalive) is gone
 static const char* const kResyncReason = "re-sync";
-static const char* const kLocalHostOpenEventName = "Local\\RepublicMP_LocalHostOpen_5556";
+static std::atomic<uint16_t> g_testTcpPortOverride{0};
 static HANDLE g_localHostOpenEvent = nullptr;
+
+static uint16_t EffectiveSaveSyncPort()
+{
+    const uint16_t p = g_testTcpPortOverride.load(std::memory_order_acquire);
+    return (p != 0) ? p : static_cast<uint16_t>(SAVE_SYNC_PORT);
+}
+
+static void FormatLocalHostOpenEventName(uint16_t port, char* outBuf, size_t outCap)
+{
+    _snprintf_s(outBuf, outCap, _TRUNCATE, "Local\\RepublicMP_LocalHostOpen_%u", static_cast<unsigned>(port));
+}
+
+void SaveSync_SetTcpPortForTest(uint16_t port)
+{
+    g_testTcpPortOverride.store(port, std::memory_order_release);
+}
 
 static void SetState(SessionState s)
 {
-    g_state = s;
     if (s == SESSION_HOST_LISTENING) {
+        g_state = s;
         if (!g_localHostOpenEvent) {
-            g_localHostOpenEvent = CreateEventA(nullptr, TRUE, TRUE, kLocalHostOpenEventName);
+            char evName[64] = {};
+            FormatLocalHostOpenEventName(EffectiveSaveSyncPort(), evName, sizeof(evName));
+            g_localHostOpenEvent = CreateEventA(nullptr, TRUE, TRUE, evName);
         } else {
             SetEvent(g_localHostOpenEvent);
         }
-    } else if (g_localHostOpenEvent) {
-        ResetEvent(g_localHostOpenEvent);
-        CloseHandle(g_localHostOpenEvent);
-        g_localHostOpenEvent = nullptr;
+    } else {
+        if (g_localHostOpenEvent) {
+            ResetEvent(g_localHostOpenEvent);
+            CloseHandle(g_localHostOpenEvent);
+            g_localHostOpenEvent = nullptr;
+        }
+        g_state = s;
     }
 }
 
 bool SaveSync_IsLocalPcHostWaiting()
 {
     if (g_state != SESSION_IDLE) return false;
-    HANDLE h = OpenEventA(SYNCHRONIZE, FALSE, kLocalHostOpenEventName);
+    char evName[64] = {};
+    FormatLocalHostOpenEventName(EffectiveSaveSyncPort(), evName, sizeof(evName));
+    HANDLE h = OpenEventA(SYNCHRONIZE, FALSE, evName);
     if (!h) return false;
     bool open = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
     CloseHandle(h);
     return open;
 }
 
+static void WriteProtectedString(char* dst, size_t dstCap, const char* src)
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    strncpy_s(dst, dstCap, src ? src : "", _TRUNCATE);
+    LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static void ReadProtectedString(const char* src, char* outBuf, size_t outCap)
+{
+    if (!outBuf || outCap == 0) return;
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    strncpy_s(outBuf, outCap, src ? src : "", _TRUNCATE);
+    LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static void SetActiveSock(SOCKET s)
+{
+    TsmEnsureCriticalSection(&g_activeSockLockOnce, &g_activeSockLock);
+    EnterCriticalSection(&g_activeSockLock);
+    g_activeSock = s;
+    if (g_disconnectRequested && s != INVALID_SOCKET) {
+        NetworkShutdownSocket(s);
+    }
+    LeaveCriticalSection(&g_activeSockLock);
+}
+
+static void ClearAndCloseActiveSock(SOCKET s)
+{
+    TsmEnsureCriticalSection(&g_activeSockLockOnce, &g_activeSockLock);
+    EnterCriticalSection(&g_activeSockLock);
+    if (g_activeSock == s) {
+        g_activeSock = INVALID_SOCKET;
+    }
+    LeaveCriticalSection(&g_activeSockLock);
+    if (s != INVALID_SOCKET) {
+        NetworkCloseSocket(s);
+    }
+}
+
+static void JoinAndCloseSessionThread(DWORD waitMs)
+{
+    TsmEnsureCriticalSection(&g_sessionThreadLockOnce, &g_sessionThreadLock);
+    EnterCriticalSection(&g_sessionThreadLock);
+    HANDLE h = g_sessionThread;
+    g_sessionThread = nullptr;
+    LeaveCriticalSection(&g_sessionThreadLock);
+    if (h) {
+        if (GetThreadId(h) != GetCurrentThreadId()) {
+            WaitForSingleObject(h, waitMs);
+        }
+        CloseHandle(h);
+    }
+}
+
 static void SetPeerIp(const char* ip)
 {
-    EnterCriticalSection(&g_lock);
-    strncpy_s(g_peerIp, ip ? ip : "", _TRUNCATE);
-    LeaveCriticalSection(&g_lock);
+    WriteProtectedString(g_peerIp, sizeof(g_peerIp), ip);
 }
 
 static void SetLastPartnerPeer(const char* peer)
 {
-    EnterCriticalSection(&g_lock);
-    strncpy_s(g_lastPartnerPeer, peer ? peer : "", _TRUNCATE);
-    LeaveCriticalSection(&g_lock);
+    WriteProtectedString(g_lastPartnerPeer, sizeof(g_lastPartnerPeer), peer);
 }
 
 static void SetSessionError(const char* fmt, ...)
@@ -159,9 +244,7 @@ static void SetSessionError(const char* fmt, ...)
     va_start(ap, fmt);
     _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt, ap);
     va_end(ap);
-    EnterCriticalSection(&g_lock);
-    strncpy_s(g_lastError, body, _TRUNCATE);
-    LeaveCriticalSection(&g_lock);
+    WriteProtectedString(g_lastError, sizeof(g_lastError), body);
     if (body[0]) {
         TwoStates_AddToast(body, 3);
     }
@@ -184,28 +267,25 @@ void SaveStatus(const char* fmt, ...)
 // Build identity
 // ---------------------------------------------------------------------------
 
+static INIT_ONCE g_dllCrcOnce = INIT_ONCE_STATIC_INIT;
 static unsigned int g_dllCrc = 0;
-static bool g_dllCrcDone = false;
 
-// CRC32 of this RepublicMP.dll file on disk: two players with the same file
-// have the same build, whatever its version string says.
-unsigned int SaveSync_GetLocalDllCrc()
+static BOOL CALLBACK ComputeLocalDllCrcOnce(PINIT_ONCE, PVOID, PVOID*)
 {
-    if (g_dllCrcDone) return g_dllCrc;
-    g_dllCrcDone = true;
-
     HMODULE self = nullptr;
     char path[MAX_PATH] = {};
     if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             (LPCSTR)&SaveSync_GetLocalDllCrc, &self) ||
         !GetModuleFileNameA(self, path, MAX_PATH)) {
         Logf("republicmp  SESSION: couldn't locate RepublicMP.dll for the build check");
-        return 0;
+        g_dllCrc = 0;
+        return TRUE;
     }
     FILE* f = nullptr;
     if (fopen_s(&f, path, "rb") != 0 || !f) {
         Logf("republicmp  SESSION: couldn't read [%s] for the build check", path);
-        return 0;
+        g_dllCrc = 0;
+        return TRUE;
     }
     std::vector<unsigned char> buf(64 * 1024);
     mz_ulong crc = MZ_CRC32_INIT;
@@ -216,6 +296,14 @@ unsigned int SaveSync_GetLocalDllCrc()
     g_dllCrc = (unsigned int)crc;
     Logf("republicmp  SESSION: this build: version %s, protocol %d, dll crc %08X",
          REPUBLICMP_VERSION, REPUBLICMP_PROTOCOL, g_dllCrc);
+    return TRUE;
+}
+
+// CRC32 of this RepublicMP.dll file on disk: two players with the same file
+// have the same build, whatever its version string says.
+unsigned int SaveSync_GetLocalDllCrc()
+{
+    InitOnceExecuteOnce(&g_dllCrcOnce, &ComputeLocalDllCrcOnce, nullptr, nullptr);
     return g_dllCrc;
 }
 
@@ -971,10 +1059,50 @@ static void HostStep(SOCKET sock, int step, const char* text, int percent = -1)
     (void)sock;
 }
 
+static void ExtractMapBasename(const char* raw, char* outMap, size_t outSize)
+{
+    if (!raw || !raw[0] || strstr(raw, "mp_syncsave_") != nullptr) return;
+    const char* p = raw;
+    if (_strnicmp(p, "save_coop/", 10) == 0 || _strnicmp(p, "save_coop\\", 10) == 0) {
+        p += 10;
+    } else if (_strnicmp(p, "save/", 5) == 0 || _strnicmp(p, "save\\", 5) == 0) {
+        p += 5;
+    }
+    const char* s1 = strrchr(p, '/');
+    const char* s2 = strrchr(p, '\\');
+    const char* sep = (!s1) ? s2 : (!s2 ? s1 : (s1 > s2 ? s1 : s2));
+    const char* base = sep ? (sep + 1) : p;
+    if (base[0] && strstr(base, "mp_syncsave_") == nullptr) {
+        strncpy_s(outMap, outSize, base, _TRUNCATE);
+    }
+}
+
+static void GetHostDisplayMapName(char* outMap, size_t outSize)
+{
+    if (!outMap || outSize == 0) return;
+    outMap[0] = '\0';
+    char raw[128] = {};
+    if (g_exe) {
+        if (SaveSync_SafeReadAscii((const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET),
+                                   raw, sizeof(raw))) {
+            ExtractMapBasename(raw, outMap, outSize);
+        }
+        if (!outMap[0] &&
+            SaveSync_SafeReadAscii((const char*)((uintptr_t)g_exe + SAVE_NAME_DAT_RVA), raw, sizeof(raw))) {
+            ExtractMapBasename(raw, outMap, outSize);
+        }
+    }
+    if (!outMap[0]) {
+        strncpy_s(outMap, outSize, "Co-op World", _TRUNCATE);
+    }
+}
+
 static void SafeSaveHostWorldSaveNames(char* outField, size_t fieldSize, char* outDat, size_t datSize)
 {
     outField[0] = '\0';
     outDat[0] = '\0';
+    if (!g_exe) return;
+    DiagLog_BeginSafeSeh();
     __try {
         const char* curField = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
         if (curField && curField[0] && strstr(curField, "mp_syncsave_") == nullptr) {
@@ -990,10 +1118,13 @@ static void SafeSaveHostWorldSaveNames(char* outField, size_t fieldSize, char* o
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
 }
 
 static void SafeRestoreHostWorldSaveNames(const char* origField, const char* origDat)
 {
+    if (!g_exe) return;
+    DiagLog_BeginSafeSeh();
     __try {
         if (origField && origField[0]) {
             char* dstField = (char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
@@ -1005,215 +1136,268 @@ static void SafeRestoreHostWorldSaveNames(const char* origField, const char* ori
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    DiagLog_EndSafeSeh();
+}
+
+static bool TryRecvJoinLogBundle(SOCKET sock, int byteSize)
+{
+    if (byteSize <= 0 || byteSize > (2 << 20)) return true;
+    std::vector<unsigned char> logBuf((size_t)byteSize);
+    if (!NetworkRecvExact(sock, logBuf.data(), logBuf.size())) return false;
+    DiagLog_SaveRemoteClientLogBundle(logBuf.data(), logBuf.size());
+    return true;
+}
+
+static void SendJoinDiagLogBundleIfEnabled(SOCKET sock, const char* reason)
+{
+    if (!TwoStates_GetSendClientLogs()) return;
+    std::vector<unsigned char> logBundle;
+    if (DiagLog_BuildClientLogBundle(logBundle, reason)) {
+        if (SendMsg(sock, MSG_CLIENT_LOGS, (int)logBundle.size(), -1, "")) {
+            NetworkSendExact(sock, logBundle.data(), logBundle.size());
+        }
+    }
+}
+
+static bool WaitForJoinControlMsg(SOCKET sock, int targetCode, bool isHost,
+                                  const char* disconnectErr, const char* abortFmt, const char* stepFmt)
+{
+    for (;;) {
+        SessionMsg m;
+        if (!RecvMsg(sock, &m)) {
+            SetSessionError("%s", disconnectErr);
+            return false;
+        }
+        if (m.code == targetCode) return true;
+        if (m.code == MSG_ABORT) {
+            SetSessionError(abortFmt, m.text);
+            if (isHost) SaveStatus("[HOST] the player gave up: %s", m.text);
+            return false;
+        }
+        if (m.code == MSG_CLIENT_LOGS) {
+            if (!TryRecvJoinLogBundle(sock, m.step)) return false;
+            continue;
+        }
+        if (m.code == MSG_STEP) {
+            char text[96];
+            _snprintf_s(text, sizeof(text), _TRUNCATE, stepFmt, m.text);
+            if (isHost && m.step != 5) HostStep(sock, m.step, text, m.percent);
+            else SyncBlock_SetStep(isHost ? 5 : m.step, JOIN_STEPS, text, m.percent);
+        }
+    }
+}
+
+static bool HostPerformHandshake(SOCKET sock, const char* activeName, SessionHello* outMine)
+{
+    HostStep(sock, 1, Tr("Подключение игрока — проверка версий", "A player is connecting - checking versions"));
+    SessionHello mine = {}, theirs = {};
+    MakeHello(&mine);
+    TwoStates_PrepareHostSave(g_resyncing, mine.stateRub, mine.stateUsd);
+    if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
+        SetSessionError(Tr("Игрок отключился во время проверки версий", "the player dropped during the version check"));
+        return false;
+    }
+    NetworkSendExact(sock, &mine, sizeof(mine)); // always, so the client can show what differs
+    char why[256];
+    if (!HelloMatches(theirs, why, sizeof(why))) {
+        SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
+        SaveStatus("[HOST] join refused: %s", why);
+        return false;
+    }
+    SessionDlcs myDlcs, theirDlcs;
+    MakeDlcs(&myDlcs);
+    if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
+        memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+        SetSessionError(Tr("Игрок отключился во время проверки DLC", "the player dropped during the DLC check"));
+        return false;
+    }
+    char dlcWhy[512];
+    if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
+        SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
+        SaveStatus("[HOST] join refused: %s", dlcWhy);
+        return false;
+    }
+
+    HostStep(sock, 1, Tr("Синхронизация модов Мастерской Steam", "Synchronizing Steam Workshop mods"), 0);
+    SendMsg(sock, MSG_MOD_SYNC, 1, 0, Tr("проверка модов", "checking mods"));
+    char activeSaveDir[MAX_PATH] = {};
+    if (activeName && activeName[0]) {
+        GetGameSaveDir(activeSaveDir, sizeof(activeSaveDir), activeName);
+    }
+    char modWhy[256] = {};
+    ModSyncHostResult modRes = ModSync_HostHandshake(sock, activeSaveDir, modWhy, sizeof(modWhy));
+    if (modRes == MOD_SYNC_HOST_CLIENT_MISSING) {
+        char missingToast[256] = {};
+        _snprintf_s(missingToast, sizeof(missingToast), _TRUNCATE,
+                    Tr("Клиент скачивает %s недостающих модов из Steam Workshop...",
+                       "Client is downloading %s missing mods from Steam Workshop..."),
+                    modWhy[0] ? modWhy : "N");
+        SaveStatus("[HOST] %s", missingToast);
+        TwoStates_AddToast(missingToast, 5);
+        return false;
+    }
+    if (modRes != MOD_SYNC_HOST_OK) {
+        SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
+        SaveStatus("[HOST] mod sync failed: %s", modWhy);
+        return false;
+    }
+    *outMine = mine;
+    return true;
+}
+
+static bool HostSaveAndPackWorld(SOCKET sock, const char* liveSaveName,
+                                 char* outSaveDir, size_t saveDirCap,
+                                 char* outZipPath, size_t zipPathCap)
+{
+    char saveDir[MAX_PATH] = {};
+    if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
+        SetSessionError(Tr("Не удалось сформировать путь сохранения", "couldn't build the save path"));
+        SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+        return false;
+    }
+    HostStep(sock, 2, Tr("Сохранение мира для передачи", "Saving the world"));
+    SendMsg(sock, MSG_STEP, 2, -1, Tr("сохранение мира", "saving the world"));
+    std::error_code parentEc;
+    std::filesystem::create_directories(std::filesystem::path(saveDir).parent_path(), parentEc);
+    if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        DWORD err = GetLastError();
+        Logf("republicmp  SESSION: CreateDirectoryA failed for [%s] (err=%lu)", saveDir, (unsigned long)err);
+        SetSessionError(Tr("Не удалось создать папку сохранения (код %lu)", "couldn't create the save folder (error %lu)"), err);
+        SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
+        return false;
+    }
+    strncpy_s(outSaveDir, saveDirCap, saveDir, _TRUNCATE);
+    TriggerSaveGame(liveSaveName);
+    if (!WaitForSaveToFinish(0, &g_disconnectRequested)) {
+        SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+        return false;
+    }
+    if (TwoStates_GetExpandBorders()) {
+        TwoStates_PatchSaveScriptIni(saveDir, 0.0f);
+    }
+
+    const char* hostLogReason = DiagLog_HasPrevCrashOrDesyncLog() ? "HOST_PREV_CRASH" : "HOST_JOIN";
+    SendJoinDiagLogBundleIfEnabled(sock, hostLogReason);
+
+    char zipPath[MAX_PATH] = {};
+    _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
+    HostStep(sock, 3, Tr("Упаковка сохранения", "Packing the save"), 0);
+    SendMsg(sock, MSG_STEP, 3, 0, Tr("упаковка сохранения", "packing the save"));
+    ProgressCtx packCtx = { sock, 3, Tr("упаковка сохранения", "packing the save"), -100 };
+    strncpy_s(outZipPath, zipPathCap, zipPath, _TRUNCATE);
+    if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
+        SetSessionError(Tr("Ошибка упаковки сохранения", "packing the save failed"));
+        SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
+        return false;
+    }
+    if (g_disconnectRequested) {
+        SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+        return false;
+    }
+    return true;
+}
+
+static bool HostSendWorldZip(SOCKET sock, const char* zipPath)
+{
+    HostStep(sock, 4, Tr("Передача мира второму игроку", "Sending the world to the player"), 0);
+    SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
+    ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
+    g_transferTotalBytes = GetFileSize64(zipPath);
+    g_transferStartTime = GetTickCount64();
+    g_transferLastTick = g_transferStartTime;
+    g_transferLastDone = 0;
+    g_transferSpeedEma = 0.0f;
+    bool sendOk = false;
+    {
+        SaveTransferGuard transferGuard;
+        sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
+    }
+    if (!sendOk) {
+        SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
+    }
+    return sendOk;
+}
+
+static bool HostLoadSharedWorld(const SessionHello& mine, const char* liveSaveName, bool rejoin)
+{
+    if (!g_lockstep) return true;
+    HostStep(INVALID_SOCKET, 5, Tr("Загрузка общего мира...", "Loading the shared world while the player loads it"));
+    if (!Determinism_BeginSession(true)) {
+        SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
+        TwoStates_OnSessionEnded();
+        ResetChannels();
+        return false;
+    }
+    TwoStates_OnSessionJoined(true, mine.twoStatesMode, mine.borderHalfWidth, mine.expandBorders != 0,
+                              mine.stateRub, mine.stateUsd);
+    if (rejoin) {
+        TwoStates_CapturePreResyncCamera();
+    }
+    TriggerLoadSave(liveSaveName);
+    if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
+        if (!g_disconnectRequested) {
+            SetSessionError(Tr("Не удалось загрузить общий мир", "loading the shared world failed"));
+        }
+        TwoStates_OnSessionEnded();
+        ResetChannels();
+        return false;
+    }
+    return true;
+}
+
+static void CleanupHostStaging(const char* madeZip, const char* madeSaveDir,
+                               const char* origSaveField, const char* origSaveDat)
+{
+    if (madeZip[0]) DeleteFileA(madeZip);
+    if (madeSaveDir[0]) {
+        KeepOnlyNewestHostSave(madeSaveDir);
+        std::error_code rmEc;
+        std::filesystem::remove_all(madeSaveDir, rmEc);
+    }
+    SafeRestoreHostWorldSaveNames(origSaveField, origSaveDat);
 }
 
 // One join, from the accepted connection to the lifted sync screen. The
 // caller's session loop decides what happens next. Returns true when the
 // player is in the game with all channels up.
-static bool RunHostJoin(SOCKET sock, bool rejoin = false)
+static bool RunHostJoin(SOCKET sock, bool rejoin = false, bool* outFatalHostError = nullptr)
 {
-    g_activeSock = sock;
+    if (outFatalHostError) *outFatalHostError = false;
+    SetActiveSock(sock);
     SyncBlock_SetActive(true, g_resyncing
         ? Tr("Повторная синхронизация мира...", "Re-syncing the world")
         : Tr("Подключается второй игрок...", "A player is connecting"));
     EnsureGamePaused();
     bool joined = false;
-    char madeSaveDir[MAX_PATH] = {}; // cleaned up below
+    bool modHandshakeOk = false;
+    bool fatalHostError = false;
+    char madeSaveDir[MAX_PATH] = {};
     char madeZip[MAX_PATH] = {};
     char origSaveField[128] = {};
     char origSaveDat[128] = {};
     SafeSaveHostWorldSaveNames(origSaveField, sizeof(origSaveField), origSaveDat, sizeof(origSaveDat));
 
     do {
-        // 1. Versions.
-        HostStep(sock, 1, Tr("Подключение игрока — проверка версий", "A player is connecting - checking versions"));
-        SessionHello mine, theirs;
-        MakeHello(&mine);
-        TwoStates_PrepareHostSave(g_resyncing, mine.stateRub, mine.stateUsd);
-        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) {
-            SetSessionError(Tr("Игрок отключился во время проверки версий", "the player dropped during the version check"));
-            break;
-        }
-        NetworkSendExact(sock, &mine, sizeof(mine)); // always, so the client can show what differs
-        char why[256];
-        if (!HelloMatches(theirs, why, sizeof(why))) {
-            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), why);
-            SaveStatus("[HOST] join refused: %s", why);
-            break;
-        }
-        SessionDlcs myDlcs, theirDlcs;
-        MakeDlcs(&myDlcs);
-        if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) || !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
-            memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
-            SetSessionError(Tr("Игрок отключился во время проверки DLC", "the player dropped during the DLC check"));
-            break;
-        }
-        char dlcWhy[512];
-        if (!DlcsMatch(myDlcs, theirDlcs, true, dlcWhy, sizeof(dlcWhy))) {
-            SetSessionError(Tr("Вход отклонён: %s", "join refused: %s"), dlcWhy);
-            SaveStatus("[HOST] join refused: %s", dlcWhy);
-            break;
-        }
-
-        // 1b. Mod sync handshake (pre-save, host-authoritative)
-        HostStep(sock, 1, Tr("Синхронизация модов Мастерской Steam", "Synchronizing Steam Workshop mods"), 0);
-        SendMsg(sock, MSG_MOD_SYNC, 1, 0, Tr("проверка модов", "checking mods"));
-        char activeSaveDir[MAX_PATH] = {};
+        SessionHello mine = {};
         const char* activeName = origSaveField[0] ? origSaveField : (origSaveDat[0] ? origSaveDat : nullptr);
-        if (activeName) {
-            GetGameSaveDir(activeSaveDir, sizeof(activeSaveDir), activeName);
-        }
-        char modWhy[256] = {};
-        ModSyncHostResult modRes = ModSync_HostHandshake(sock, activeSaveDir, modWhy, sizeof(modWhy));
-        if (modRes == MOD_SYNC_HOST_CLIENT_MISSING) {
-            char missingToast[256] = {};
-            _snprintf_s(missingToast, sizeof(missingToast), _TRUNCATE,
-                        Tr("Клиент скачивает %s недостающих модов из Steam Workshop...",
-                           "Client is downloading %s missing mods from Steam Workshop..."),
-                        modWhy[0] ? modWhy : "N");
-            SaveStatus("[HOST] %s", missingToast);
-            TwoStates_AddToast(missingToast, 5);
-            break;
-        } else if (modRes != MOD_SYNC_HOST_OK) {
-            SetSessionError(Tr("Ошибка синхронизации модов: %s", "mod sync failed: %s"), modWhy);
-            SaveStatus("[HOST] mod sync failed: %s", modWhy);
-            break;
-        }
+        if (!HostPerformHandshake(sock, activeName, &mine)) break;
+        modHandshakeOk = true;
 
-        // 2. Save.
         char liveSaveName[64];
         GenerateRandomSaveName(liveSaveName, sizeof(liveSaveName));
-        char saveDir[MAX_PATH] = {};
-        if (!GetGameSaveDir(saveDir, sizeof(saveDir), liveSaveName)) {
-            SetSessionError(Tr("Не удалось сформировать путь сохранения", "couldn't build the save path"));
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
-            break;
-        }
-        HostStep(sock, 2, Tr("Сохранение мира для передачи", "Saving the world"));
-        SendMsg(sock, MSG_STEP, 2, -1, Tr("сохранение мира", "saving the world"));
-        std::error_code parentEc;
-        std::filesystem::create_directories(std::filesystem::path(saveDir).parent_path(), parentEc);
-        // The engine's save writer does not create the destination folder.
-        if (!CreateDirectoryA(saveDir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            DWORD err = GetLastError();
-            Logf("republicmp  SESSION: CreateDirectoryA failed for [%s] (err=%lu)", saveDir, (unsigned long)err);
-            SetSessionError(Tr("Не удалось создать папку сохранения (код %lu)", "couldn't create the save folder (error %lu)"), err);
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't save the world");
-            break;
-        }
-        strncpy_s(madeSaveDir, saveDir, _TRUNCATE);
-        TriggerSaveGame(liveSaveName);
-        if (!WaitForSaveToFinish(0, &g_disconnectRequested)) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
-            break;
-        }
-        if (TwoStates_GetExpandBorders()) {
-            TwoStates_PatchSaveScriptIni(saveDir, 0.0f);
-        }
-
-        // 2b. If diagnostic log sharing is enabled, also exchange diagnostic logs before packing/sending the world.
-        if (TwoStates_GetSendClientLogs()) {
-            const char* hostLogReason = DiagLog_HasPrevCrashOrDesyncLog() ? "HOST_PREV_CRASH" : "HOST_JOIN";
-            std::vector<unsigned char> hostLogBundle;
-            if (DiagLog_BuildClientLogBundle(hostLogBundle, hostLogReason)) {
-                if (SendMsg(sock, MSG_CLIENT_LOGS, (int)hostLogBundle.size(), -1, "")) {
-                    NetworkSendExact(sock, hostLogBundle.data(), hostLogBundle.size());
-                }
-            }
-        }
-
-        // 3. Pack.
-        char zipPath[MAX_PATH] = {};
-        _snprintf_s(zipPath, sizeof(zipPath), _TRUNCATE, "%s.republicmp.zip", saveDir);
-        HostStep(sock, 3, Tr("Упаковка сохранения", "Packing the save"), 0);
-        SendMsg(sock, MSG_STEP, 3, 0, Tr("упаковка сохранения", "packing the save"));
-        ProgressCtx packCtx = { sock, 3, Tr("упаковка сохранения", "packing the save"), -100 };
-        strncpy_s(madeZip, zipPath, _TRUNCATE);
-        if (!ZipSaveDirectory(saveDir, zipPath, ZipProgressCb, &packCtx)) {
-            SetSessionError(Tr("Ошибка упаковки сохранения", "packing the save failed"));
-            SendMsg(sock, MSG_ABORT, 0, -1, "host couldn't pack the save");
-            break;
-        }
-        if (g_disconnectRequested) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "host stopped hosting");
+        if (!HostSaveAndPackWorld(sock, liveSaveName, madeSaveDir, sizeof(madeSaveDir), madeZip, sizeof(madeZip))) break;
+        if (!HostSendWorldZip(sock, madeZip)) break;
+        if (!HostLoadSharedWorld(mine, liveSaveName, rejoin)) {
+            fatalHostError = true;
             break;
         }
 
-        // 4. Send.
-        HostStep(sock, 4, Tr("Передача мира второму игроку", "Sending the world to the player"), 0);
-        SendMsg(sock, MSG_FILE_FOLLOWS, 4, -1, "");
-        ProgressCtx sendCtx = { INVALID_SOCKET, 4, nullptr, 0 };
-        g_transferTotalBytes = GetFileSize64(zipPath);
-        g_transferStartTime = GetTickCount64();
-        g_transferLastTick = g_transferStartTime;
-        g_transferLastDone = 0;
-        g_transferSpeedEma = 0.0f;
-        bool sendOk = false;
-        {
-            SaveTransferGuard transferGuard;
-            sendOk = NetworkSendFile(sock, zipPath, NetworkProgressCb, &sendCtx);
-        }
-        if (!sendOk) {
-            SetSessionError(Tr("Ошибка передачи сохранения — соединение потеряно", "sending the save failed - connection lost"));
-            break;
-        }
-
-        // Lockstep: this PC loads the same save while the player unpacks and
-        // loads its copy; the player's step messages wait in the socket.
-        if (g_lockstep) {
-            HostStep(sock, 5, Tr("Загрузка общего мира...", "Loading the shared world while the player loads it"));
-            if (!Determinism_BeginSession(true)) {
-                SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
-                break;
-            }
-            TwoStates_OnSessionJoined(true, mine.twoStatesMode, mine.borderHalfWidth, mine.expandBorders != 0,
-                                      mine.stateRub, mine.stateUsd);
-            if (rejoin) {
-                TwoStates_CapturePreResyncCamera();
-            }
-            TriggerLoadSave(liveSaveName);
-            if (!WaitForLoadToFinish(0, &g_disconnectRequested) || !Determinism_SessionRunning()) {
-                if (!g_disconnectRequested) {
-                    SetSessionError(Tr("Не удалось загрузить общий мир", "loading the shared world failed"));
-                    SetState(SESSION_HOST_LISTENING);
-                    EnsureGamePaused();
-                }
-                TwoStates_OnSessionEnded();
-                ResetChannels();
-                break;
-            }
-        }
-
-        // 5-6. The player unpacks and loads; its steps arrive as messages.
         HostStep(sock, 5, Tr("Ожидание второго игрока — распаковка", "Waiting for the player - unpacking"), 0);
-        bool ready = false;
-        for (;;) {
-            SessionMsg m;
-            if (!RecvMsg(sock, &m)) {
-                SetSessionError(Tr("Второй игрок отключился во время загрузки мира", "the player dropped while loading"));
-                break;
-            }
-            if (m.code == MSG_READY) { ready = true; break; }
-            if (m.code == MSG_ABORT) {
-                SetSessionError(Tr("Второй игрок отменил подключение: %s", "the player gave up: %s"), m.text);
-                SaveStatus("[HOST] the player gave up: %s", m.text);
-                break;
-            }
-            if (m.code == MSG_CLIENT_LOGS) {
-                if (m.step > 0 && m.step <= (2 << 20)) {
-                    std::vector<unsigned char> logBuf((size_t)m.step);
-                    if (!NetworkRecvExact(sock, logBuf.data(), logBuf.size())) break;
-                    DiagLog_SaveRemoteClientLogBundle(logBuf.data(), logBuf.size());
-                }
-                continue;
-            }
-            if (m.code == MSG_STEP) {
-                char text[96];
-                _snprintf_s(text, sizeof(text), _TRUNCATE, Tr("Ожидание игрока — %s", "Waiting for the player - %s"), m.text);
-                if (m.step == 5) SyncBlock_SetStep(5, JOIN_STEPS, text, m.percent);
-                else HostStep(sock, m.step, text, m.percent);
-            }
-        }
+        bool ready = WaitForJoinControlMsg(
+            sock, MSG_READY, true,
+            Tr("Второй игрок отключился во время загрузки мира", "the player dropped while loading"),
+            Tr("Второй игрок отменил подключение: %s", "the player gave up: %s"),
+            Tr("Ожидание игрока — %s", "Waiting for the player - %s"));
         if (!ready) {
             if (!g_disconnectRequested) {
                 SetState(SESSION_HOST_LISTENING);
@@ -1221,12 +1405,10 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
             }
             if (g_lockstep) {
                 ResetChannels();
-                ModSync_EndSession();
             }
             break;
         }
 
-        // 7. Lockstep: both loaded the same save; the channel connects.
         HostStep(sock, 7, Tr("Запуск синхронной симуляции Lockstep...", "Waiting for the player's lockstep connection"));
         if (!LockstepNet_Host(LOCKSTEP_CONNECT_TIMEOUT_MS, &g_disconnectRequested)) {
             if (!g_disconnectRequested) {
@@ -1237,30 +1419,23 @@ static bool RunHostJoin(SOCKET sock, bool rejoin = false)
                 EnsureGamePaused();
             }
             ResetChannels();
-            ModSync_EndSession();
             break;
         }
         joined = true;
-        break;
     } while (false);
 
-    // The zip and temporary staging folder only existed to transfer and load the shared world.
-    if (madeZip[0]) DeleteFileA(madeZip);
-    if (madeSaveDir[0]) {
-        KeepOnlyNewestHostSave(madeSaveDir);
-        std::error_code rmEc;
-        std::filesystem::remove_all(madeSaveDir, rmEc);
+    if (!joined && modHandshakeOk) {
+        ModSync_EndSession();
     }
-    SafeRestoreHostWorldSaveNames(origSaveField, origSaveDat);
 
-    g_activeSock = INVALID_SOCKET;
-    NetworkCloseSocket(sock);
-    if (!joined && !g_disconnectRequested) {
+    CleanupHostStaging(madeZip, madeSaveDir, origSaveField, origSaveDat);
+    ClearAndCloseActiveSock(sock);
+    if (!joined && !g_disconnectRequested && !fatalHostError) {
         SetState(SESSION_HOST_LISTENING);
         EnsureGamePaused();
     }
+    if (outFatalHostError) *outFatalHostError = fatalHostError;
     SyncBlock_SetActive(false, nullptr);
-    // Keep Host paused while waiting in the Co-op Lobby; only unpause if hosting was stopped.
     if (!joined && g_disconnectRequested) EnsureGameUnpaused();
     return joined;
 }
@@ -1273,22 +1448,33 @@ static void RunHostSession()
     }
 
     bool rejoin = false; // a re-sync: the player is expected back right away
-    while (!g_disconnectRequested) {
+    while (!g_disconnectRequested && !g_processShuttingDown.load()) {
+        const uint16_t listenPort = EffectiveSaveSyncPort();
         SetState(SESSION_HOST_LISTENING);
         EnsureGamePaused();
+        if (g_disconnectRequested || g_processShuttingDown.load()) break;
         SteamP2P_SetHostingPresence(!rejoin);
         if (!rejoin) {
+            char mapName[48] = {};
+            GetHostDisplayMapName(mapName, sizeof(mapName));
+            std::string hostName = LanDiscovery_GetLocalDisplayName();
+            if (g_disconnectRequested || g_processShuttingDown.load()) break;
+            LanDiscovery_SetHosting(true, listenPort, (uint8_t)TwoStates_GetMode(),
+                                    hostName.c_str(), mapName);
             SetPeerIp("");
-            SaveStatus("[HOST] hosting on port %d (TCP + Steam P2P) - waiting for a player", SAVE_SYNC_PORT);
+            SaveStatus("[HOST] hosting on port %u (%s) - waiting for a player",
+                       static_cast<unsigned>(listenPort), SteamP2P_IsAvailable() ? "TCP + LAN + Steam P2P" : "TCP + LAN");
+        } else {
+            LanDiscovery_SetHosting(false, listenPort, 0, nullptr, nullptr);
         }
 
         // No accept timeout (cancellable) unless the player is coming back
         // from a re-sync; no I/O timeout - the player may take a while to
         // unpack and load.
-        SOCKET sock = NetworkHostAcceptOne(SAVE_SYNC_PORT, rejoin ? RESYNC_REJOIN_TIMEOUT_MS : 0, 0,
+        SOCKET sock = NetworkHostAcceptOne(listenPort, rejoin ? RESYNC_REJOIN_TIMEOUT_MS : 0, 0,
                                            &g_disconnectRequested);
         if (sock == INVALID_SOCKET) {
-            if (g_disconnectRequested) break;
+            if (g_disconnectRequested || g_processShuttingDown.load()) break;
             if (rejoin) {
                 rejoin = false;
                 g_resyncing = false;
@@ -1296,11 +1482,13 @@ static void RunHostSession()
                 SaveStatus("[HOST] the player didn't come back for the re-sync - waiting for a player again");
                 continue;
             }
-            SetSessionError(Tr("Не удалось открыть порт %d (возможно, уже занят)", "couldn't listen on port %d (already in use?)"), SAVE_SYNC_PORT);
+            SetSessionError(Tr("Не удалось открыть порт %u (возможно, уже занят)", "couldn't listen on port %u (already in use?)"),
+                            static_cast<unsigned>(listenPort));
             break;
         }
 
         SteamP2P_SetHostingPresence(false);
+        LanDiscovery_SetHosting(false, listenPort, 0, nullptr, nullptr);
         char peer[64];
         PeerIpOf(sock, peer, sizeof(peer));
         SetPeerIp(peer);
@@ -1310,11 +1498,12 @@ static void RunHostSession()
                           : "[HOST] %s is joining - both games are paused until it is loaded", peer);
 
         g_lockstep = g_lockstepChosen;
-        bool joined = RunHostJoin(sock, rejoin);
+        bool fatalHostError = false;
+        bool joined = RunHostJoin(sock, rejoin, &fatalHostError);
         rejoin = false;
         g_resyncing = false;
         if (!joined) {
-            if (g_disconnectRequested) break;
+            if (g_disconnectRequested || g_processShuttingDown.load() || fatalHostError) break;
             SaveStatus("[HOST] the join failed (%s) - waiting for a player again", SaveSync_GetLastError());
             continue;
         }
@@ -1350,6 +1539,7 @@ static void RunHostSession()
     }
 
     SteamP2P_SetHostingPresence(false);
+    LanDiscovery_SetHosting(false, EffectiveSaveSyncPort(), 0, nullptr, nullptr);
     TwoStates_OnSessionEnded();
     g_hadPartnerInSession = false;
     SetLastPartnerPeer("");
@@ -1435,7 +1625,9 @@ static bool ClientPerformHandshake(SOCKET sock, SessionHello* outHostHello)
 static void WaitForWorldLoadToClear(DWORD timeoutMs = 30000)
 {
     ULONGLONG start = GetTickCount64();
-    while (SaveSync_IsWorldLoadInProgress() && (GetTickCount64() - start) < timeoutMs) {
+    while (SaveSync_IsWorldLoadInProgress() &&
+           !g_processShuttingDown.load() &&
+           (GetTickCount64() - start) < timeoutMs) {
         Sleep(50);
     }
 }
@@ -1519,6 +1711,202 @@ bool SaveSync_PreserveClientBackupForTest(const char* destDir)
     return SaveSync_PreserveClientBackup(destDir);
 }
 
+void SaveSync_FormatDisplayTarget(const char* rawTarget, unsigned short defaultPort,
+                                  char* outDisplay, size_t outCap, bool* outIsSteam)
+{
+    if (outIsSteam) *outIsSteam = false;
+    if (!outDisplay || outCap == 0) return;
+    outDisplay[0] = '\0';
+
+    char normHost[128] = {};
+    uint16_t parsedPort = 0;
+    if (NetworkNormalizeTargetAddress(rawTarget, normHost, sizeof(normHost), &parsedPort) && normHost[0]) {
+        const uint64_t sid = SteamP2P_ParseTargetSteamId(normHost);
+        if (sid != 0) {
+            if (outIsSteam) *outIsSteam = true;
+            _snprintf_s(outDisplay, outCap, _TRUNCATE, "steam:%llu", (unsigned long long)sid);
+            return;
+        }
+        const unsigned short effPort = (parsedPort != 0) ? parsedPort : defaultPort;
+        _snprintf_s(outDisplay, outCap, _TRUNCATE, "%s:%u", normHost, (unsigned)effPort);
+        return;
+    }
+
+    strncpy_s(outDisplay, outCap, rawTarget ? rawTarget : "", _TRUNCATE);
+}
+
+static SOCKET ClientConnectJoinSocket(bool rejoin)
+{
+    ClientStep(1, Tr("Подключение к серверу — проверка версий", "Connecting to the host - checking versions"));
+    if (!NetworkInit()) {
+        SetSessionError(Tr("Ошибка инициализации сети", "network init failed"));
+        return INVALID_SOCKET;
+    }
+    char targetCopy[64] = {};
+    ReadProtectedString(g_targetIp, targetCopy, sizeof(targetCopy));
+
+    const uint16_t defaultPort = EffectiveSaveSyncPort();
+    ULONGLONG connectStart = GetTickCount64();
+    SOCKET sock = INVALID_SOCKET;
+    for (;;) {
+        sock = NetworkConnect(targetCopy, defaultPort, 30000, 0, &g_disconnectRequested);
+        if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
+        if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
+        Sleep(RESYNC_RETRY_MS);
+    }
+    if (sock == INVALID_SOCKET && !g_disconnectRequested) {
+        char dispTarget[96] = {};
+        bool isSteamTarget = false;
+        SaveSync_FormatDisplayTarget(targetCopy, defaultPort, dispTarget, sizeof(dispTarget), &isSteamTarget);
+        if (isSteamTarget && !SteamP2P_IsAvailable()) {
+            SetSessionError(Tr("Steam не в сети — не удалось подключиться к %s. Используйте LAN IP хоста",
+                               "Steam is offline — couldn't reach %s. Use the host's LAN IP instead"),
+                            dispTarget);
+        } else {
+            SetSessionError(Tr("Не удалось подключиться к %s — проверьте, что хост уже открыл сервер",
+                               "couldn't reach %s - is the host hosting (and not already playing with someone)?"),
+                            dispTarget);
+        }
+    }
+    return sock;
+}
+
+static bool ClientReceiveAndUnpackWorld(SOCKET sock, const char* zipPath, const char* destDir)
+{
+    {
+        SaveTransferGuard transferGuard;
+        ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
+        ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
+        g_transferStartTime = GetTickCount64();
+        g_transferLastTick = g_transferStartTime;
+        g_transferLastDone = 0;
+        g_transferSpeedEma = 0.0f;
+        if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
+            SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
+            return false;
+        }
+    }
+
+    ClientStep(5, Tr("Распаковка мира", "Unpacking"), 0);
+    SendMsg(sock, MSG_STEP, 5, 0, Tr("распаковка мира", "unpacking"));
+    {
+        std::error_code rmEc;
+        std::filesystem::remove_all(destDir, rmEc);
+    }
+    ProgressCtx unpackCtx = { sock, 5, Tr("распаковка мира", "unpacking"), -100 };
+    bool unzippedOk = UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx);
+    DeleteFileA(zipPath);
+    if (!unzippedOk) {
+        SetSessionError(Tr("Ошибка распаковки мира", "unpacking the world failed"));
+        SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
+        return false;
+    }
+    if (g_disconnectRequested) {
+        SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled");
+        return false;
+    }
+    return true;
+}
+
+static bool ClientPrepareAndLoadWorld(SOCKET sock, const SessionHello& theirs, const char* destDir, bool rejoin)
+{
+    SaveSync_IsolateClientSettings(destDir, rejoin);
+    RoadSync_ClearPlannedSegments();
+
+    BuildMode preResyncBuildMode = {};
+    BYTE preResyncAutoPopulate = 0;
+    if (rejoin) {
+        TwoStates_CapturePreResyncCamera();
+        preResyncBuildMode = BuildMode_Read();
+        BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+        if (w) preResyncAutoPopulate = *(w + 0xB08);
+    }
+
+    const char* logReason = rejoin ? "RESYNC" : (DiagLog_HasPrevCrashOrDesyncLog() ? "PREV_CRASH" : "CLIENT_JOIN");
+    SendJoinDiagLogBundleIfEnabled(sock, logReason);
+
+    ClientStep(6, Tr("Загрузка мира...", "Loading the world"));
+    SendMsg(sock, MSG_STEP, 6, -1, Tr("загрузка мира", "loading the world"));
+    char receivedSaveName[MAX_PATH] = {};
+    _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
+                SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
+    if (g_lockstep) {
+        if (!Determinism_BeginSession(false)) {
+            SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
+            SendMsg(sock, MSG_ABORT, 0, -1, "lockstep is not available on the player");
+            return false;
+        }
+        TwoStates_OnSessionJoined(false, theirs.twoStatesMode, theirs.borderHalfWidth, theirs.expandBorders != 0,
+                                  theirs.stateRub, theirs.stateUsd);
+    }
+    TriggerLoadSave(receivedSaveName);
+    bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
+    WaitForWorldLoadToClear();
+
+    if (loadFinished) {
+        BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
+        if (rejoin) {
+            BuildMode_Write(preResyncBuildMode);
+            if (w) *(w + 0xB08) = preResyncAutoPopulate;
+            Logf("republicmp  CLIENT_SETTINGS: restored client BuildMode & autoPopulate after resync");
+        } else {
+            BuildMode defMode = { 0, 0, 0, 0 };
+            BuildMode_Write(defMode);
+        }
+    }
+
+    SaveSync_PreserveClientBackup(destDir);
+    {
+        std::error_code rmEc;
+        std::filesystem::remove_all(destDir, rmEc);
+    }
+    if (!loadFinished) {
+        if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
+        else SetSessionError(Tr("Хост отключился во время загрузки мира", "the host dropped while the world was loading"));
+        if (g_lockstep) TwoStates_OnSessionEnded();
+        return false;
+    }
+    return true;
+}
+
+static bool ClientConnectLockstep(SOCKET sock)
+{
+    ClientStep(7, Tr("Ожидание загрузки мира у хоста...", "Waiting for the host to load the shared world"));
+    SendMsg(sock, MSG_READY, 7, -1, "");
+    if (!Determinism_SessionRunning()) {
+        SetSessionError(Tr("Ошибка загрузки общего мира", "loading the shared world failed"));
+        TwoStates_OnSessionEnded();
+        return false;
+    }
+
+    char targetCopy[64] = {};
+    ReadProtectedString(g_targetIp, targetCopy, sizeof(targetCopy));
+    char lockstepHost[64] = {};
+    if (!NetworkNormalizeTargetAddress(targetCopy, lockstepHost, sizeof(lockstepHost), nullptr) || !lockstepHost[0]) {
+        strncpy_s(lockstepHost, sizeof(lockstepHost), targetCopy, _TRUNCATE);
+    }
+
+    ULONGLONG joinStart = GetTickCount64();
+    bool lockstepUp = false, hostGone = false;
+    while (!g_disconnectRequested && GetTickCount64() - joinStart < LOCKSTEP_CONNECT_TIMEOUT_MS) {
+        if (LockstepNet_Join(lockstepHost, 6000, &g_disconnectRequested)) {
+            lockstepUp = true;
+            break;
+        }
+        if (JoinHostGone(&sock)) {
+            hostGone = true;
+            break;
+        }
+    }
+    if (!lockstepUp) {
+        if (hostGone) SetSessionError(Tr("Хост отключился во время загрузки общего мира", "the host dropped while loading the shared world"));
+        else if (!g_disconnectRequested) SetSessionError(Tr("Не удалось открыть Lockstep-канал к %s:%d", "couldn't open the lockstep connection to %s:%d"), lockstepHost, LOCKSTEP_PORT);
+        TwoStates_OnSessionEnded();
+        return false;
+    }
+    return true;
+}
+
 // Returns true when the player is in the host's game with all channels up.
 // rejoin: coming back for a re-sync - the host may need a moment to listen
 // again, so refused connects are retried.
@@ -1546,212 +1934,40 @@ static bool RunClientJoin(bool rejoin)
         std::error_code parentEc;
         std::filesystem::create_directories(std::filesystem::path(zipPath).parent_path(), parentEc);
 
-        // 1. Connect + versions.
-        ClientStep(1, Tr("Подключение к серверу — проверка версий", "Connecting to the host - checking versions"));
-        if (!NetworkInit()) {
-            SetSessionError(Tr("Ошибка инициализации сети", "network init failed"));
-            break;
-        }
-        ULONGLONG connectStart = GetTickCount64();
-        for (;;) {
-            sock = NetworkConnect(g_targetIp, SAVE_SYNC_PORT, 30000, 0, &g_disconnectRequested);
-            if (sock != INVALID_SOCKET || !rejoin || g_disconnectRequested) break;
-            if (GetTickCount64() - connectStart > RESYNC_REJOIN_TIMEOUT_MS) break;
-            Sleep(RESYNC_RETRY_MS);
-        }
-        if (sock == INVALID_SOCKET) {
-            if (!g_disconnectRequested)
-                SetSessionError(Tr("Не удалось подключиться к %s — проверьте, что хост уже открыл сервер",
-                                   "couldn't reach %s:%d - is the host hosting (and not already playing with someone)?"),
-                                g_targetIp, SAVE_SYNC_PORT);
-            break;
-        }
-        g_activeSock = sock;
-        // A Disconnect that came while connecting found no socket to shut
-        // down; without this the whole world would still be downloaded.
+        sock = ClientConnectJoinSocket(rejoin);
+        if (sock == INVALID_SOCKET) break;
+        SetActiveSock(sock);
         if (g_disconnectRequested) break;
+
         SessionHello theirs = {};
-        if (!ClientPerformHandshake(sock, &theirs)) {
-            break;
-        }
+        if (!ClientPerformHandshake(sock, &theirs)) break;
 
-        // 2-3. The host saves and packs; its steps arrive as messages.
         ClientStep(2, Tr("Ожидание хоста — сохранение мира", "Waiting for the host - saving the world"));
-        bool fileFollows = false;
-        for (;;) {
-            SessionMsg m;
-            if (!RecvMsg(sock, &m)) {
-                SetSessionError(Tr("Хост отключился во время подготовки мира", "the host dropped while preparing the world"));
-                break;
-            }
-            if (m.code == MSG_FILE_FOLLOWS) { fileFollows = true; break; }
-            if (m.code == MSG_ABORT) {
-                SetSessionError(Tr("Хост прервал подключение: %s", "the host gave up: %s"), m.text);
-                break;
-            }
-            if (m.code == MSG_CLIENT_LOGS) {
-                if (m.step > 0 && m.step <= (2 << 20)) {
-                    std::vector<unsigned char> logBuf((size_t)m.step);
-                    if (!NetworkRecvExact(sock, logBuf.data(), logBuf.size())) break;
-                    DiagLog_SaveRemoteClientLogBundle(logBuf.data(), logBuf.size());
-                }
-                continue;
-            }
-            if (m.code == MSG_STEP) {
-                char text[96];
-                _snprintf_s(text, sizeof(text), _TRUNCATE, Tr("Ожидание хоста — %s", "Waiting for the host - %s"), m.text);
-                SyncBlock_SetStep(m.step, JOIN_STEPS, text, m.percent);
-            }
-        }
-        if (!fileFollows) break;
-
-        // 4. Receive.
-        {
-            SaveTransferGuard transferGuard;
-            ClientStep(4, Tr("Приём мира от хоста", "Receiving the world"), 0);
-            ProgressCtx recvCtx = { sock, 4, Tr("приём мира", "receiving the world"), 0 };
-            g_transferStartTime = GetTickCount64();
-            g_transferLastTick = g_transferStartTime;
-            g_transferLastDone = 0;
-            g_transferSpeedEma = 0.0f;
-            if (!NetworkReceiveFile(sock, zipPath, NetworkProgressCb, &recvCtx)) {
-                SetSessionError(Tr("Ошибка приёма мира — соединение потеряно", "receiving the world failed - connection lost"));
-                break;
-            }
-        }
-
-        // 5. Unpack (relayed to the host).
-        ClientStep(5, Tr("Распаковка мира", "Unpacking"), 0);
-        SendMsg(sock, MSG_STEP, 5, 0, Tr("распаковка мира", "unpacking"));
-        {
-            std::error_code rmEc;
-            std::filesystem::remove_all(destDir, rmEc);
-        }
-        ProgressCtx unpackCtx = { sock, 5, Tr("распаковка мира", "unpacking"), -100 };
-        bool unzippedOk = UnzipToDirectory(zipPath, destDir, ZipProgressCb, &unpackCtx);
-        DeleteFileA(zipPath);
-        if (!unzippedOk) {
-            SetSessionError(Tr("Ошибка распаковки мира", "unpacking the world failed"));
-            SendMsg(sock, MSG_ABORT, 0, -1, "unpacking failed");
-            break;
-        }
-        if (g_disconnectRequested) {
-            SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled");
+        if (!WaitForJoinControlMsg(
+                sock, MSG_FILE_FOLLOWS, false,
+                Tr("Хост отключился во время подготовки мира", "the host dropped while preparing the world"),
+                Tr("Хост прервал подключение: %s", "the host gave up: %s"),
+                Tr("Ожидание хоста — %s", "Waiting for the host - %s"))) {
             break;
         }
 
-        // Feature 34 & 36: Isolate settings & clear road segment preview
-        SaveSync_IsolateClientSettings(destDir, rejoin);
-        RoadSync_ClearPlannedSegments();
-
-        BuildMode preResyncBuildMode = {};
-        BYTE preResyncAutoPopulate = 0;
-        if (rejoin) {
-            TwoStates_CapturePreResyncCamera();
-            preResyncBuildMode = BuildMode_Read();
-            BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
-            if (w) preResyncAutoPopulate = *(w + 0xB08);
-        }
-
-        // 5b. Upload client diagnostic logs (including any previous session crash/desync logs) to Host.
-        if (TwoStates_GetSendClientLogs()) {
-            const char* logReason = rejoin ? "RESYNC" : (DiagLog_HasPrevCrashOrDesyncLog() ? "PREV_CRASH" : "CLIENT_JOIN");
-            std::vector<unsigned char> logBundle;
-            if (DiagLog_BuildClientLogBundle(logBundle, logReason)) {
-                if (SendMsg(sock, MSG_CLIENT_LOGS, (int)logBundle.size(), -1, "")) {
-                    NetworkSendExact(sock, logBundle.data(), logBundle.size());
-                }
-            }
-        }
-
-        // 6. Load.
-        ClientStep(6, Tr("Загрузка мира...", "Loading the world"));
-        SendMsg(sock, MSG_STEP, 6, -1, Tr("загрузка мира", "loading the world"));
-        char receivedSaveName[MAX_PATH] = {};
-        _snprintf_s(receivedSaveName, sizeof(receivedSaveName), _TRUNCATE, "%s%s",
-                    SAVE_SYNC_CLIENT_STAGING_NAME, SAVE_SYNC_RECEIVED_SUFFIX);
-        if (g_lockstep) {
-            if (!Determinism_BeginSession(false)) {
-                SetSessionError(Tr("Слой детерминизма недоступен (см. лог)", "lockstep is not available - see the log (determinism layer)"));
-                SendMsg(sock, MSG_ABORT, 0, -1, "lockstep is not available on the player");
-                break;
-            }
-            TwoStates_OnSessionJoined(false, theirs.twoStatesMode, theirs.borderHalfWidth, theirs.expandBorders != 0,
-                                      theirs.stateRub, theirs.stateUsd);
-        }
-        TriggerLoadSave(receivedSaveName);
-        bool loadFinished = WaitForLoadToFinish(0, &g_disconnectRequested, JoinHostGone, &sock);
-        WaitForWorldLoadToClear();
-
-        // Feature 34: Restore client BuildMode and autoPopulate
-        if (loadFinished) {
-            BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
-            if (rejoin) {
-                BuildMode_Write(preResyncBuildMode);
-                if (w) *(w + 0xB08) = preResyncAutoPopulate;
-                Logf("republicmp  CLIENT_SETTINGS: restored client BuildMode & autoPopulate after resync");
-            } else {
-                BuildMode defMode = { 0, 0, 0, 0 };
-                BuildMode_Write(defMode);
-            }
-        }
-
-        // Feature 32: Retain client-side backup copy in save/coop_client_backup before removing staging folder
-        SaveSync_PreserveClientBackup(destDir);
-        {
-            std::error_code rmEc;
-            std::filesystem::remove_all(destDir, rmEc);
-        }
-        if (!loadFinished) {
-            if (g_disconnectRequested) SendMsg(sock, MSG_ABORT, 0, -1, "the player cancelled while loading");
-            else SetSessionError(Tr("Хост отключился во время загрузки мира", "the host dropped while the world was loading"));
-            if (g_lockstep) TwoStates_OnSessionEnded();
-            break;
-        }
-
-        // 7. Ready -> the host starts listening on the channels; connect them.
-        ClientStep(7, Tr("Ожидание загрузки мира у хоста...", "Waiting for the host to load the shared world"));
-        SendMsg(sock, MSG_READY, 7, -1, "");
-        if (!Determinism_SessionRunning()) {
-            SetSessionError(Tr("Ошибка загрузки общего мира", "loading the shared world failed"));
-            TwoStates_OnSessionEnded();
-            break;
-        }
-        // In short tries, watching the join connection: a host that
-        // crashed while loading closes it.
-        ULONGLONG joinStart = GetTickCount64();
-        bool lockstepUp = false, hostGone = false;
-        while (!g_disconnectRequested && GetTickCount64() - joinStart < LOCKSTEP_CONNECT_TIMEOUT_MS) {
-            if (LockstepNet_Join(g_targetIp, 6000, &g_disconnectRequested)) {
-                lockstepUp = true;
-                break;
-            }
-            if (JoinHostGone(&sock)) {
-                hostGone = true;
-                break;
-            }
-        }
-        if (!lockstepUp) {
-            if (hostGone) SetSessionError(Tr("Хост отключился во время загрузки общего мира", "the host dropped while loading the shared world"));
-            else if (!g_disconnectRequested) SetSessionError(Tr("Не удалось открыть Lockstep-канал к %s:%d", "couldn't open the lockstep connection to %s:%d"), g_targetIp, LOCKSTEP_PORT);
-            TwoStates_OnSessionEnded();
-            break;
-        }
+        if (!ClientReceiveAndUnpackWorld(sock, zipPath, destDir)) break;
+        if (!ClientPrepareAndLoadWorld(sock, theirs, destDir, rejoin)) break;
+        if (!ClientConnectLockstep(sock)) break;
         joined = true;
-        break;
     } while (false);
 
-    g_activeSock = INVALID_SOCKET;
-    if (sock != INVALID_SOCKET) NetworkCloseSocket(sock);
+    ClearAndCloseActiveSock(sock);
     SyncBlock_SetActive(false, nullptr);
-    // Joined: stays paused until either player resumes (see RunHostJoin).
     if (!joined) EnsureGameUnpaused();
     return joined;
 }
 
 static void RunClientSession()
 {
-    SetPeerIp(g_targetIp);
+    char targetCopy[64] = {};
+    ReadProtectedString(g_targetIp, targetCopy, sizeof(targetCopy));
+    SetPeerIp(targetCopy);
     bool rejoin = false;
     for (;;) {
         SetState(SESSION_CLIENT_JOINING);
@@ -1766,7 +1982,7 @@ static void RunClientSession()
         }
 
         SetState(SESSION_CLIENT_IN_GAME);
-        SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", g_targetIp);
+        SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", targetCopy);
         const char* why = MonitorLiveSession(true);
         ResetChannels();
         if (why == kResyncReason) {
@@ -1847,11 +2063,13 @@ void SaveSync_SetTestWorldLoadInProgress(bool inProgress)
 
 static bool SafeGetCurrentWorldSaveRel(char* outRel, size_t outSize)
 {
+    if (!g_exe || !outRel || outSize == 0) return false;
+    outRel[0] = '\0';
     bool ok = false;
     DiagLog_BeginSafeSeh();
     __try {
         const char* curRel = (const char*)((uintptr_t)g_exe + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET);
-        if (curRel && _strnicmp(curRel, "save/", 5) == 0 && curRel[5]) {
+        if (curRel && (_strnicmp(curRel, "save/", 5) == 0 || _strnicmp(curRel, "save\\", 5) == 0) && curRel[5]) {
             strncpy_s(outRel, outSize, curRel, _TRUNCATE);
             ok = true;
         }
@@ -1864,7 +2082,7 @@ static bool SafeGetCurrentWorldSaveRel(char* outRel, size_t outSize)
 
 void SaveSync_StartHost()
 {
-    if (g_state != SESSION_IDLE) return;
+    if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return;
     if (!SaveSync_IsWorldLoaded()) {
         // A joining player gets the host's world: there has to be one.
         SaveStatus("[HOST] no world loaded - load a city first, then host");
@@ -1908,17 +2126,30 @@ void SaveSync_StartHost()
     TwoStates_PrepareHostSave(false, initRub, initUsd);
     TwoStates_OnSessionJoined(true, TwoStates_GetMode(), TwoStates_GetBorderHalfWidth(), TwoStates_GetExpandBorders(),
                               initRub, initUsd);
-    CreateThread(nullptr, 0, HostSessionThread, nullptr, 0, nullptr);
+    JoinAndCloseSessionThread(0);
+    HANDLE hThread = CreateThread(nullptr, 0, HostSessionThread, nullptr, 0, nullptr);
+    if (hThread) {
+        TsmEnsureCriticalSection(&g_sessionThreadLockOnce, &g_sessionThreadLock);
+        EnterCriticalSection(&g_sessionThreadLock);
+        g_sessionThread = hThread;
+        LeaveCriticalSection(&g_sessionThreadLock);
+    } else {
+        TwoStates_OnSessionEnded();
+        SetState(SESSION_IDLE);
+        SetSessionError(Tr("Не удалось запустить поток сервера", "failed to start host session thread"));
+    }
 }
 
 void SaveSync_StartClient(const char* hostIp)
 {
-    if (g_state != SESSION_IDLE) return;
+    if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return;
     TwoStates_MountSaveBank(true);
     g_disconnectRequested = false;
     if (hostIp && hostIp[0]) {
-        strncpy_s(g_targetIp, hostIp, _TRUNCATE);
-        TwoStates_SetSavedJoinAddress(g_targetIp);
+        WriteProtectedString(g_targetIp, sizeof(g_targetIp), hostIp);
+        char targetCopy[64] = {};
+        ReadProtectedString(g_targetIp, targetCopy, sizeof(targetCopy));
+        TwoStates_SetSavedJoinAddress(targetCopy);
         TwoStates_SaveSettings();
     }
     g_isHost = false;
@@ -1928,7 +2159,18 @@ void SaveSync_StartClient(const char* hostIp)
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
     SetState(SESSION_CLIENT_JOINING);
-    CreateThread(nullptr, 0, ClientSessionThread, nullptr, 0, nullptr);
+    JoinAndCloseSessionThread(0);
+    HANDLE hThread = CreateThread(nullptr, 0, ClientSessionThread, nullptr, 0, nullptr);
+    if (hThread) {
+        TsmEnsureCriticalSection(&g_sessionThreadLockOnce, &g_sessionThreadLock);
+        EnterCriticalSection(&g_sessionThreadLock);
+        g_sessionThread = hThread;
+        LeaveCriticalSection(&g_sessionThreadLock);
+    } else {
+        TwoStates_OnSessionEnded();
+        SetState(SESSION_IDLE);
+        SetSessionError(Tr("Не удалось запустить поток подключения", "failed to start client session thread"));
+    }
 }
 
 void SaveSync_RequestDisconnect()
@@ -1939,11 +2181,21 @@ void SaveSync_RequestDisconnect()
         return;
     }
     SaveStatus(g_isHost ? "[HOST] stopping..." : "[CLIENT] disconnecting...");
+    TsmEnsureCriticalSection(&g_activeSockLockOnce, &g_activeSockLock);
+    EnterCriticalSection(&g_activeSockLock);
     g_disconnectRequested = true;
-    // Wakes a blocking recv on the join connection (closed by its owner).
-    SOCKET s = g_activeSock;
-    if (s != INVALID_SOCKET) NetworkShutdownSocket(s);
+    if (g_activeSock != INVALID_SOCKET) {
+        NetworkShutdownSocket(g_activeSock);
+    }
+    LeaveCriticalSection(&g_activeSockLock);
     ResetChannels();
+}
+
+void SaveSync_Shutdown(DWORD waitMs)
+{
+    g_processShuttingDown.store(true);
+    SaveSync_RequestDisconnect();
+    JoinAndCloseSessionThread(waitMs);
 }
 
 void SaveSync_RequestResync()
@@ -2023,6 +2275,7 @@ void SaveSync_Tick()
 {
     SteamP2P_FrameTick();
     DiagLog_FrameTick();
+    ModSync_TickMainThread();
     if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
         SaveSync_EnforceWaitingLobbyHold();
     }
@@ -2049,7 +2302,12 @@ bool SaveSync_IsBusy()           { return g_state != SESSION_IDLE; }
 bool SaveSync_IsHostRole()       { return g_isHost; }
 ULONGLONG SaveSync_GetSessionAgeMs() { return g_state == SESSION_IDLE ? 0 : GetTickCount64() - g_sessionStartTick; }
 bool SaveSync_IsHostAwaitingClient() { return g_state == SESSION_HOST_LISTENING; }
-const char* SaveSync_GetTargetIp() { return g_targetIp; }
+const char* SaveSync_GetTargetIp()
+{
+    static thread_local char tlsTargetIp[64] = {};
+    ReadProtectedString(g_targetIp, tlsTargetIp, sizeof(tlsTargetIp));
+    return tlsTargetIp;
+}
 
 bool SaveSync_ShouldBlockWorldEdits(int sessionState, bool inGameplay, bool syncBlockActive)
 {
@@ -2077,7 +2335,9 @@ bool SaveSync_HadPartnerInSession()
 
 const char* SaveSync_GetLastPartnerPeer()
 {
-    return g_lastPartnerPeer;
+    static thread_local char tlsPartner[64] = {};
+    ReadProtectedString(g_lastPartnerPeer, tlsPartner, sizeof(tlsPartner));
+    return tlsPartner;
 }
 
 void SaveSync_EnforceWaitingLobbyHold(unsigned char* exeBase)
@@ -2140,30 +2400,214 @@ void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession, 
     SetLastPartnerPeer(lastPartnerPeer ? lastPartnerPeer : "");
 }
 
-// The returned buffers are only ever rewritten whole by the session thread;
-// the UI reads them once per frame.
-const char* SaveSync_GetPeerIp()    { return g_peerIp; }
-const char* SaveSync_GetLastError() { return g_lastError; }
+// Thread-safe snapshots into thread-local buffers so UI/logger readers never observe
+// torn writes while session threads update these strings.
+const char* SaveSync_GetPeerIp()
+{
+    static thread_local char tlsPeerIp[64] = {};
+    ReadProtectedString(g_peerIp, tlsPeerIp, sizeof(tlsPeerIp));
+    return tlsPeerIp;
+}
+const char* SaveSync_GetLastError()
+{
+    static thread_local char tlsLastError[256] = {};
+    ReadProtectedString(g_lastError, tlsLastError, sizeof(tlsLastError));
+    return tlsLastError;
+}
+
+static bool IsDualCmdBoundaryBefore(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '"';
+}
+
+static bool IsDualCmdBoundaryAfter(char c)
+{
+    return c == '\0' || IsDualCmdBoundaryBefore(c) || c == '=';
+}
+
+static bool HasCmdLineTokenIgnoreCase(const char* cmdLine, const char* token)
+{
+    if (!cmdLine || !token || !token[0]) return false;
+    size_t tLen = strlen(token);
+    for (const char* p = cmdLine; *p; ++p) {
+        if (p != cmdLine && !IsDualCmdBoundaryBefore(*(p - 1))) continue;
+        if (_strnicmp(p, token, tLen) == 0 && IsDualCmdBoundaryAfter(p[tLen])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsPathSepChar(char c)
+{
+    return c == '\\' || c == '/';
+}
+
+static bool HasPathSegmentIgnoreCase(const char* path, const char* segment)
+{
+    if (!path || !segment || !segment[0]) return false;
+    size_t sLen = strlen(segment);
+    for (const char* p = path; *p; ++p) {
+        if (p != path && !IsPathSepChar(*(p - 1))) continue;
+        if (_strnicmp(p, segment, sLen) == 0 && (p[sLen] == '\0' || IsPathSepChar(p[sLen]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SaveSync_DetectDualTestbedInputs(const char* roleEnv, const char* cmdLine, const char* exePath)
+{
+    if (roleEnv && (_stricmp(roleEnv, "HOST") == 0 || _stricmp(roleEnv, "CLIENT") == 0)) {
+        return true;
+    }
+    if (cmdLine && (HasCmdLineTokenIgnoreCase(cmdLine, "--mp-host") ||
+                    HasCmdLineTokenIgnoreCase(cmdLine, "--mp-left") ||
+                    HasCmdLineTokenIgnoreCase(cmdLine, "--mp-client") ||
+                    HasCmdLineTokenIgnoreCase(cmdLine, "--mp-right"))) {
+        return true;
+    }
+    if (exePath && (HasPathSegmentIgnoreCase(exePath, "test-host") ||
+                    HasPathSegmentIgnoreCase(exePath, "test-client"))) {
+        return true;
+    }
+    return false;
+}
 
 bool SaveSync_IsDualTestbed()
 {
-    static int s_cached = -1;
-    if (s_cached < 0) {
+    static std::atomic<int> s_cached{-1};
+    int cached = s_cached.load(std::memory_order_acquire);
+    if (cached < 0) {
         char envBuf[32] = {};
-        bool dual = (GetEnvironmentVariableA("REPUBLICMP_ROLE", envBuf, sizeof(envBuf)) > 0);
-        if (!dual) {
-            const char* cmdLine = GetCommandLineA();
-            if (cmdLine && (strstr(cmdLine, "--mp-host") || strstr(cmdLine, "--mp-left") ||
-                            strstr(cmdLine, "--mp-client") || strstr(cmdLine, "--mp-right"))) {
-                dual = true;
-            }
+        if (GetEnvironmentVariableA("REPUBLICMP_ROLE", envBuf, sizeof(envBuf)) == 0) {
+            envBuf[0] = '\0';
         }
-        if (!dual) {
-            char exePath[MAX_PATH] = {};
-            GetModuleFileNameA(nullptr, exePath, MAX_PATH);
-            dual = (strstr(exePath, "test-host") != nullptr || strstr(exePath, "test-client") != nullptr);
+        const char* cmdLine = GetCommandLineA();
+        char exePath[MAX_PATH] = {};
+        if (GetModuleFileNameA(nullptr, exePath, MAX_PATH) == 0) {
+            exePath[0] = '\0';
         }
-        s_cached = dual ? 1 : 0;
+        cached = SaveSync_DetectDualTestbedInputs(envBuf, cmdLine, exePath) ? 1 : 0;
+        s_cached.store(cached, std::memory_order_release);
     }
-    return s_cached == 1;
+    return cached == 1;
+}
+
+bool SaveSync_VerifyPeerHelloForTest(const char* magic, int protocol, const char* version,
+                                     unsigned int dllCrc, char* whyOut, size_t whyCap)
+{
+    SessionHello peer = {};
+    if (magic) memcpy(peer.magic, magic, std::min<size_t>(strlen(magic), sizeof(peer.magic)));
+    peer.protocol = protocol;
+    if (version) strncpy_s(peer.version, sizeof(peer.version), version, _TRUNCATE);
+    peer.dllCrc = dllCrc;
+    char localWhy[256] = {};
+    bool ok = HelloMatches(peer, localWhy, sizeof(localWhy));
+    if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, localWhy, _TRUNCATE);
+    return ok;
+}
+
+bool SaveSync_VerifyDlcListsForTest(const char* mineList, bool mineCheck,
+                                    const char* peerList, bool peerCheck,
+                                    char* whyOut, size_t whyCap)
+{
+    SessionDlcs mine = {};
+    memcpy(mine.magic, "RPMPDLC", 8);
+    mine.check = mineCheck ? 1 : 0;
+    strncpy_s(mine.list, sizeof(mine.list), mineList ? mineList : "", _TRUNCATE);
+
+    SessionDlcs theirs = {};
+    memcpy(theirs.magic, "RPMPDLC", 8);
+    theirs.check = peerCheck ? 1 : 0;
+    strncpy_s(theirs.list, sizeof(theirs.list), peerList ? peerList : "", _TRUNCATE);
+
+    char localWhy[512] = {};
+    bool ok = DlcsMatch(mine, theirs, true, localWhy, sizeof(localWhy));
+    if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, localWhy, _TRUNCATE);
+    return ok;
+}
+
+bool SaveSync_ExchangeCustomHelloOverSocketForTest(uintptr_t sockHandle, bool isHost,
+                                                   const char* customMagic, int customProtocol,
+                                                   const char* customVersion, unsigned int customDllCrc,
+                                                   char* whyOut, size_t whyCap)
+{
+    if (whyOut && whyCap > 0) whyOut[0] = '\0';
+    const SOCKET sock = (SOCKET)sockHandle;
+    SessionHello mine = {};
+    MakeHello(&mine);
+    if (customMagic) {
+        memset(mine.magic, 0, sizeof(mine.magic));
+        memcpy(mine.magic, customMagic, std::min<size_t>(strlen(customMagic), sizeof(mine.magic)));
+    }
+    mine.protocol = customProtocol;
+    if (customVersion) {
+        memset(mine.version, 0, sizeof(mine.version));
+        strncpy_s(mine.version, sizeof(mine.version), customVersion, _TRUNCATE);
+    }
+    mine.dllCrc = customDllCrc;
+
+    SessionHello theirs = {};
+    if (isHost) {
+        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) return false;
+        if (!NetworkSendExact(sock, &mine, sizeof(mine))) return false;
+    } else {
+        if (!NetworkSendExact(sock, &mine, sizeof(mine))) return false;
+        if (!NetworkRecvExact(sock, &theirs, sizeof(theirs))) return false;
+    }
+    char localWhy[256] = {};
+    bool ok = HelloMatches(theirs, localWhy, sizeof(localWhy));
+    if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, localWhy, _TRUNCATE);
+    return ok;
+}
+
+bool SaveSync_ExchangeHelloOverSocketForTest(uintptr_t sockHandle, bool isHost, char* whyOut, size_t whyCap)
+{
+    return SaveSync_ExchangeCustomHelloOverSocketForTest(
+        sockHandle, isHost, "RPMPSES", REPUBLICMP_PROTOCOL, REPUBLICMP_VERSION,
+        SaveSync_GetLocalDllCrc(), whyOut, whyCap);
+}
+
+bool SaveSync_ExchangeHandshakeOverSocketForTest(uintptr_t sockHandle, bool isHost,
+                                               const char* dlcList, bool dlcCheck,
+                                               const char* activeSaveDir,
+                                               char* whyOut, size_t whyCap)
+{
+    if (!SaveSync_ExchangeHelloOverSocketForTest(sockHandle, isHost, whyOut, whyCap)) {
+        return false;
+    }
+    const SOCKET sock = (SOCKET)sockHandle;
+    SessionDlcs myDlcs = {};
+    memcpy(myDlcs.magic, "RPMPDLC", 8);
+    myDlcs.check = dlcCheck ? 1 : 0;
+    strncpy_s(myDlcs.list, sizeof(myDlcs.list), dlcList ? dlcList : "", _TRUNCATE);
+
+    SessionDlcs theirDlcs = {};
+    if (!NetworkSendExact(sock, &myDlcs, sizeof(myDlcs)) ||
+        !NetworkRecvExact(sock, &theirDlcs, sizeof(theirDlcs)) ||
+        memcmp(theirDlcs.magic, "RPMPDLC", 8) != 0) {
+        if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, "dlc exchange failed", _TRUNCATE);
+        return false;
+    }
+    char dlcWhy[512] = {};
+    if (!DlcsMatch(myDlcs, theirDlcs, isHost, dlcWhy, sizeof(dlcWhy))) {
+        if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, dlcWhy, _TRUNCATE);
+        return false;
+    }
+    char modWhy[256] = {};
+    if (isHost) {
+        ModSyncHostResult hr = ModSync_HostHandshake(sock, activeSaveDir ? activeSaveDir : "", modWhy, sizeof(modWhy));
+        if (hr != MOD_SYNC_HOST_OK) {
+            if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, modWhy[0] ? modWhy : "mod host failed", _TRUNCATE);
+            return false;
+        }
+    } else {
+        ModSyncClientResult cr = ModSync_ClientHandshake(sock, modWhy, sizeof(modWhy));
+        if (cr != MOD_SYNC_CLIENT_OK) {
+            if (whyOut && whyCap > 0) strncpy_s(whyOut, whyCap, modWhy[0] ? modWhy : "mod client failed", _TRUNCATE);
+            return false;
+        }
+    }
+    return true;
 }

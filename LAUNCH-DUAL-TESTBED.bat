@@ -14,15 +14,10 @@ echo ===========================================================================
 
 if exist "%BUILD_DIR%\plugins\RepublicMP.dll" (
     echo [1/3] Синхронизация свежих DLL из TesmioLoader\build...
-    copy /Y "%BUILD_DIR%\plugins\RepublicMP.dll" "%HOST_DIR%\plugins\RepublicMP.dll" >nul
-    copy /Y "%BUILD_DIR%\tesmioloader.dll" "%HOST_DIR%\tesmioloader.dll" >nul
-    copy /Y "%BUILD_DIR%\dinput8.dll" "%HOST_DIR%\dinput8.dll" >nul
-    copy /Y "%BUILD_DIR%\tesmiolauncher.exe" "%HOST_DIR%\tesmiolauncher.exe" >nul
-
-    copy /Y "%BUILD_DIR%\plugins\RepublicMP.dll" "%CLIENT_DIR%\plugins\RepublicMP.dll" >nul
-    copy /Y "%BUILD_DIR%\tesmioloader.dll" "%CLIENT_DIR%\tesmioloader.dll" >nul
-    copy /Y "%BUILD_DIR%\dinput8.dll" "%CLIENT_DIR%\dinput8.dll" >nul
-    copy /Y "%BUILD_DIR%\tesmiolauncher.exe" "%CLIENT_DIR%\tesmiolauncher.exe" >nul
+    call :sync_dir "%HOST_DIR%"
+    if errorlevel 1 exit /b 1
+    call :sync_dir "%CLIENT_DIR%"
+    if errorlevel 1 exit /b 1
 )
 
 set "AUTO_FLAG=1"
@@ -53,3 +48,20 @@ if "%AUTO_FLAG%"=="1" (
     echo а Клиент автоматически подключится к 127.0.0.1:5556!
     echo Для запуска без авто-входа используйте: LAUNCH-DUAL-TESTBED.bat --menu
 )
+goto :eof
+
+:sync_dir
+if not exist "%~1\plugins" mkdir "%~1\plugins"
+call :sync_file "%BUILD_DIR%\plugins\RepublicMP.dll" "%~1\plugins\RepublicMP.dll" || exit /b 1
+call :sync_file "%BUILD_DIR%\tesmioloader.dll" "%~1\tesmioloader.dll" || exit /b 1
+call :sync_file "%BUILD_DIR%\dinput8.dll" "%~1\dinput8.dll" || exit /b 1
+call :sync_file "%BUILD_DIR%\tesmiolauncher.exe" "%~1\tesmiolauncher.exe" || exit /b 1
+goto :eof
+
+:sync_file
+copy /Y "%~1" "%~2" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy "%~1" to "%~2". Close any running SOVIET64.exe and retry.
+    exit /b 1
+)
+goto :eof

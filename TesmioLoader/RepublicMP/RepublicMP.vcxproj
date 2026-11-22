@@ -105,6 +105,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -126,6 +127,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -145,6 +147,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -166,6 +169,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -222,6 +226,7 @@
     <ClCompile Include="world_sync\terrain\terrain_sync.cpp" />
     <ClCompile Include="save\save_zip.cpp" />
     <ClCompile Include="transport\network.cpp" />
+    <ClCompile Include="transport\lan_discovery.cpp" />
     <ClCompile Include="transport\steam_p2p.cpp" />
     <ClCompile Include="session\save_sync.cpp" />
     <ClCompile Include="ui\native_menu.cpp" />
@@ -229,6 +234,7 @@
     <ClCompile Include="ui\ui_log.cpp" />
     <ClCompile Include="ui\debug_log.cpp" />
     <ClCompile Include="ui\sync_block.cpp" />
+    <ClCompile Include="ui\ui_common.cpp" />
     <!-- miniz (vendored, see save\save_zip.h) - compiled as C, third-party
          code, lives in third_party\miniz\. -->
     <ClCompile Include="third_party\miniz\miniz.c" />
@@ -299,6 +305,7 @@
     <ClInclude Include="core\host_config.h" />
     <ClInclude Include="save\save_zip.h" />
     <ClInclude Include="transport\network.h" />
+    <ClInclude Include="transport\lan_discovery.h" />
     <ClInclude Include="transport\steam_p2p.h" />
     <ClInclude Include="session\save_sync.h" />
     <ClInclude Include="ui\native_menu.h" />
@@ -306,6 +313,7 @@
     <ClInclude Include="ui\ui_log.h" />
     <ClInclude Include="ui\debug_log.h" />
     <ClInclude Include="ui\sync_block.h" />
+    <ClInclude Include="ui\ui_common.h" />
     <ClInclude Include="third_party\miniz\miniz.h" />
     <ClInclude Include="third_party\miniz\miniz_common.h" />
     <ClInclude Include="third_party\miniz\miniz_export.h" />

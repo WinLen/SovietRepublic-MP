@@ -114,6 +114,9 @@
     <ClCompile Include="transport\network.cpp">
       <Filter>transport</Filter>
     </ClCompile>
+    <ClCompile Include="transport\lan_discovery.cpp">
+      <Filter>transport</Filter>
+    </ClCompile>
     <ClCompile Include="session\save_sync.cpp">
       <Filter>session</Filter>
     </ClCompile>
@@ -166,6 +169,9 @@
       <Filter>game</Filter>
     </ClCompile>
     <ClCompile Include="ui\native_menu.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\ui_common.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="ui\ui_log.cpp">
@@ -317,6 +323,9 @@
     <ClInclude Include="transport\network.h">
       <Filter>transport</Filter>
     </ClInclude>
+    <ClInclude Include="transport\lan_discovery.h">
+      <Filter>transport</Filter>
+    </ClInclude>
     <ClInclude Include="session\save_sync.h">
       <Filter>session</Filter>
     </ClInclude>
@@ -369,6 +378,9 @@
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="ui\sync_block.h">
+      <Filter>ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\ui_common.h">
       <Filter>ui</Filter>
     </ClInclude>
     <ClInclude Include="third_party\imgui\imgui.h">

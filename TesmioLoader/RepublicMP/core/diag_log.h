@@ -32,6 +32,7 @@ extern "C" __declspec(dllexport) int DiagLog_IsInSafeSeh(void);
 #include <stdint.h>
 bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const char* reason);
 bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size);
+bool DiagLog_IsSafeRemoteLogFileName(const char* name);
 bool DiagLog_HasPrevCrashOrDesyncLog(void);
 
 // Vehicle synchronization & DLC protection telemetry

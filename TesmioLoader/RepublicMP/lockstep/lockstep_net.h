@@ -30,6 +30,7 @@
 
 #include "tesmio_plugin.h"
 #include "../determinism/state_hash.h"
+#include <stdint.h>
 
 #define LOCKSTEP_PORT 5560
 #define LOCKSTEP_WINDOW 24      // ticks the host may run ahead of the player (~800 ms buffer)
@@ -37,6 +38,7 @@
 #define LS_MAX_PAYLOAD (16u << 20)
 
 void LockstepNet_Bind(const TsmHost* host);
+void LockstepNet_SetPortForTest(uint16_t port);
 
 // Session thread. Blocks until connected, cancelled or timed out.
 bool LockstepNet_Host(DWORD timeoutMs, volatile bool* cancel);

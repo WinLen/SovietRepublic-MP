@@ -9,8 +9,22 @@
 #include "../transport/network.h"
 #include <deque>
 #include <vector>
+#include <atomic>
 #include <string.h>
 #include <stdio.h>
+
+static std::atomic<uint16_t> g_testLockstepPortOverride{0};
+
+static uint16_t EffectiveLockstepPort()
+{
+    const uint16_t p = g_testLockstepPortOverride.load(std::memory_order_acquire);
+    return (p != 0) ? p : static_cast<uint16_t>(LOCKSTEP_PORT);
+}
+
+void LockstepNet_SetPortForTest(uint16_t port)
+{
+    g_testLockstepPortOverride.store(port, std::memory_order_release);
+}
 
 static void Locks();
 
@@ -121,12 +135,17 @@ static bool Send(unsigned type, const void* a, size_t na, const void* b = nullpt
     if (!g_connected) return false;
     LsHeader h = { type, (unsigned)(na + nb) };
     EnterCriticalSection(&g_sendLock);
+    SOCKET s = g_sock;
+    if (!g_connected || s == INVALID_SOCKET) {
+        LeaveCriticalSection(&g_sendLock);
+        return false;
+    }
     static std::vector<unsigned char> s_sendBuf;
     s_sendBuf.resize(sizeof(h) + na + nb);
     memcpy(s_sendBuf.data(), &h, sizeof(h));
     if (na) memcpy(s_sendBuf.data() + sizeof(h), a, na);
     if (nb) memcpy(s_sendBuf.data() + sizeof(h) + na, b, nb);
-    bool ok = NetworkSendExact(g_sock, s_sendBuf.data(), s_sendBuf.size());
+    bool ok = NetworkSendExact(s, s_sendBuf.data(), s_sendBuf.size());
     LeaveCriticalSection(&g_sendLock);
     if (!ok && g_connected) {
         g_connected = false;
@@ -150,15 +169,20 @@ void LockstepNet_SendClientLogs(const char* reason)
     }
 }
 
-static DWORD WINAPI RecvThread(LPVOID)
+static DWORD WINAPI RecvThread(LPVOID lpParam)
 {
-    while (g_connected) {
+    const SOCKET sock = static_cast<SOCKET>(reinterpret_cast<uintptr_t>(lpParam));
+    while (g_connected && sock != INVALID_SOCKET) {
+        int ready = NetworkPollReadable(sock, 20);
+        if (ready < 0) break;
+        if (ready == 0) continue;
+        if (!g_connected) break;
         LsHeader h;
-        if (!NetworkRecvExact(g_sock, &h, sizeof(h)) || h.size > LS_MAX_PAYLOAD) break;
+        if (!NetworkRecvExact(sock, &h, sizeof(h)) || h.size > LS_MAX_PAYLOAD) break;
         LsMessage m;
         m.type = h.type;
         m.data.resize(h.size);
-        if (h.size && !NetworkRecvExact(g_sock, m.data.data(), h.size)) break;
+        if (h.size && !NetworkRecvExact(sock, m.data.data(), h.size)) break;
         g_lastReceived = GetTickCount64();
         if (h.type == LS_PING) {
             if (m.data.size() == sizeof(LsPing)) {
@@ -301,7 +325,8 @@ static bool Started(SOCKET s, bool host)
     g_sock = s;
     g_isHost = host;
     g_connected = true;
-    g_recvThread = CreateThread(nullptr, 0, RecvThread, nullptr, 0, nullptr);
+    g_recvThread = CreateThread(nullptr, 0, RecvThread,
+                                reinterpret_cast<LPVOID>(static_cast<uintptr_t>(s)), 0, nullptr);
     Logf("republicmp  LOCKSTEP: connected as %s", host ? "host" : "player");
     return true;
 }
@@ -311,7 +336,7 @@ bool LockstepNet_Host(DWORD timeoutMs, volatile bool* cancel)
     Locks();
     LockstepNet_Close();
     if (!NetworkInit()) return false;
-    return Started(NetworkHostAcceptOne(LOCKSTEP_PORT, timeoutMs, 0, cancel), true);
+    return Started(NetworkHostAcceptOne(EffectiveLockstepPort(), timeoutMs, 0, cancel), true);
 }
 
 bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel)
@@ -320,8 +345,9 @@ bool LockstepNet_Join(const char* hostIp, DWORD timeoutMs, volatile bool* cancel
     LockstepNet_Close();
     if (!NetworkInit()) return false;
     ULONGLONG start = GetTickCount64();
+    const uint16_t port = EffectiveLockstepPort();
     for (;;) {
-        SOCKET s = NetworkConnect(hostIp, LOCKSTEP_PORT, 5000, 0, cancel);
+        SOCKET s = NetworkConnect(hostIp, port, 5000, 0, cancel);
         if (s != INVALID_SOCKET) return Started(s, false);
         if ((cancel && *cancel) || GetTickCount64() - start > timeoutMs) return false;
         Sleep(500); // the host listens once its own load is done
@@ -336,15 +362,28 @@ void LockstepNet_Close()
         if (!g_isHost) LockstepNet_SendClientLogs("DISCONNECT");
         Send(LS_BYE, nullptr, 0);
     }
+    EnterCriticalSection(&g_sendLock);
+    g_connected = false;
     SOCKET s = (SOCKET)InterlockedExchange64((volatile LONG64*)&g_sock, (LONG64)INVALID_SOCKET);
     if (s != INVALID_SOCKET) {
-        g_connected = false;
-        NetworkCloseSocket(s);
+        NetworkShutdownSocket(s, SD_SEND);
     }
+    LeaveCriticalSection(&g_sendLock);
+
     HANDLE h = InterlockedExchangePointer(&g_recvThread, nullptr);
     if (h) {
-        WaitForSingleObject(h, 5000);
+        if (GetThreadId(h) != GetCurrentThreadId()) {
+            if (WaitForSingleObject(h, 500) == WAIT_TIMEOUT && s != INVALID_SOCKET) {
+                NetworkCloseSocket(s);
+                s = INVALID_SOCKET;
+                WaitForSingleObject(h, 5000);
+            }
+        }
         CloseHandle(h);
+    }
+    if (s != INVALID_SOCKET) {
+        NetworkDrainReadable(s);
+        NetworkCloseSocket(s);
     }
 }
 

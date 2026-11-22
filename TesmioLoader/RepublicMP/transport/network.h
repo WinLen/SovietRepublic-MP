@@ -8,10 +8,21 @@
 #include "tesmio_plugin.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
 void Network_Bind(const TsmHost* host);
 bool NetworkInit();
+void Network_SetLoopbackOnlyForTest(bool enabled);
+
+// Normalizes a target address entered by the user or from a host list:
+// trims leading/trailing ASCII whitespace, validates and preserves steam:<id>
+// or raw >=15-digit SteamID64 (without modifying *outPort), or validates IPv4
+// with optional :port (1..65535). Returns false on null/empty/malformed input
+// or insufficient hostCap (clears outHost on failure).
+bool NetworkNormalizeTargetAddress(const char* rawInput, char* outHost, size_t hostCap,
+                                   uint16_t* outPort = nullptr);
 
 // Listens on port and accepts one client. acceptTimeoutMs bounds the wait
 // (0 = no limit); ioTimeoutMs is the send/recv timeout of the connection.
@@ -44,7 +55,12 @@ bool NetworkRecvExact(SOCKET sock, void* data, size_t size);
 // unread.
 bool NetworkPeerGone(SOCKET sock);
 
-void NetworkShutdownSocket(SOCKET sock);
+// Non-blocking / bounded poll for incoming readability (1 = readable or EOF/error,
+// 0 = timeout, -1 = error or INVALID_SOCKET). SteamP2P sockets return 1 immediately
+// because SteamP2P_RecvExact polls internally and exits on localClosed/remoteFin.
+int NetworkPollReadable(SOCKET sock, DWORD timeoutMs);
+void NetworkDrainReadable(SOCKET sock, size_t maxBytes = 65536u);
+void NetworkShutdownSocket(SOCKET sock, int how = SD_BOTH);
 void NetworkCloseSocket(SOCKET sock);
 void NetworkGetPeerName(SOCKET sock, char* out, size_t outSize);
 
@@ -79,8 +95,13 @@ inline void NetworkLaunchChannelWorker(bool isHostRole, const char* hostIp,
     *cancelConnect = false;
     *connecting = true;
     HANDLE h = CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
+    if (!h) {
+        *connecting = false;
+        if (outThread) *outThread = nullptr;
+        return;
+    }
     if (outThread) *outThread = h;
-    else if (h) CloseHandle(h);
+    else CloseHandle(h);
 }
 
 inline void NetworkJoinAndCloseThread(HANDLE* hThread, DWORD timeoutMs = 2000)

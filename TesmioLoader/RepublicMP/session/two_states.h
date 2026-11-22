@@ -173,6 +173,11 @@ void TwoStates_SetShowMinimapBorders(bool on);
 bool TwoStates_GetShowMinimapBorders();
 void TwoStates_PingAtCursor();
 void TwoStates_AddToast(const char* text, int colorKind = 0);
+void TwoStates_AddToastAtTickForTest(const char* text, int colorKind, unsigned long long createdMs);
+void TwoStates_ClearToastsForTest();
+int TwoStates_GetToastCountForTest();
+bool TwoStates_GetToastForTest(int index, char* outText, size_t outCap,
+                               int* outColorKind, unsigned long long* outDurationMs);
 void TwoStates_DrawOverlay();
 
 // Map expansion: unlock 2km border buffer on all maps (20x20 km full area)

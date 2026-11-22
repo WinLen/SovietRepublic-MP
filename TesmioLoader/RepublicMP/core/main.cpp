@@ -20,6 +20,7 @@
 #include "../determinism/probe_watch.h"
 #include "../save/save_zip.h"
 #include "../transport/network.h"
+#include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
 #include "../session/save_sync.h"
 #include "../world_sync/buildings/build_sync.h"
@@ -129,6 +130,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     ModSync_Init();
     NativeMenu_Install();
     NetworkInit();
+    LanDiscovery_Init();
     Updater_Init();
     DiagLog_LogStartupSummary();
 
@@ -139,4 +141,6 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     return 0;
 }
 
+// Note: Do NOT call LanDiscovery_Shutdown() inside DllMain(DLL_PROCESS_DETACH) — joining
+// worker threads or tearing down Winsock under the OS Loader Lock risks deadlocks.
 BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) { return TRUE; }

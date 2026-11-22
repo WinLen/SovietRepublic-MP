@@ -546,6 +546,7 @@ int main(int argc, char** argv)
             descToSet =
                 "RepublicMP v" REPUBLICMP_VERSION " - Co-op Multiplayer (Friends-Only).\n"
                 "- Lockstep + 1-click Steam P2P\n"
+                "- Full LAN auto-discovery (Radmin VPN / Hamachi / ZeroTier) & Steam-free offline mode\n"
                 "- One State / Two States on One Map\n"
                 "- Automatic Steam Workshop Mod Sync & DLC Guard";
         } else {
@@ -577,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Sync & audit fixes: research recompute prologue/fallback/SP isolation (0x2F6C10), discard cargo / empty storage / parked vehicle cargo (0x8084CA/0x8086A6/0x80874D/0x8087F0/0x7497E2), repair station queue cancel (0x7A87DE), crime cancel assignment (0x76874C), distribution office find connections (0x74AA16), building_copyweights Late tool (0x314356 -> 0x1D7140), and deterministic pre-ApplyGameRules building storage rebuild (0x1A11E0)",
+                "v%s (Protocol %d) - Full LAN multiplayer & Steam-free mode: UDP LAN server auto-discovery (physical LAN + Radmin VPN/Hamachi/ZeroTier), host local IP list with Copy IP, Join menu LAN server browser, autonomous Steam-free / offline Workshop ModSync, firewall-free loopback test mode, and 145+ new LAN/E2E tests (59/59 suites)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -50,6 +50,7 @@ void SaveSync_Bind(const TsmHost* host);
 // Writes to tesmioloader.log and the in-game UI log.
 void SaveStatus(const char* fmt, ...);
 
+#include <cstdint>
 #include <vector>
 #include <string>
 
@@ -69,6 +70,15 @@ void SaveSync_StartClient(const char* hostIp = nullptr); // nullptr = keep last 
 // Ends the session: stops hosting / leaves the host, closes the live sync
 // channels. Waits (accept, connect, save, load) react within ~200ms.
 void SaveSync_RequestDisconnect();
+
+// Process-exit teardown: sets shutdown gate, requests disconnect, and waits for
+// any active Host/Client session thread to exit cleanly before Winsock teardown.
+void SaveSync_Shutdown(DWORD waitMs = 2000);
+
+// Formats a normalized display target string ("host:effectivePort" or "steam:<id>")
+// and indicates whether the target is a SteamID.
+void SaveSync_FormatDisplayTarget(const char* rawTarget, unsigned short defaultPort,
+                                  char* outDisplay, size_t outCap, bool* outIsSteam);
 
 // Host, player in the game: re-sync now (no-op otherwise).
 void SaveSync_RequestResync();
@@ -193,6 +203,7 @@ void SaveSync_EnforceWaitingLobbyHold(unsigned char* exeBase = nullptr);
 void SaveSync_NotifyWaitingLobbyActionBlocked();
 
 // Test-only state injection for unit tests in tests/test_main.cpp.
+void SaveSync_SetTcpPortForTest(uint16_t port);
 void SaveSync_SetTestSessionState(SessionState state, bool hadPartnerInSession = false,
                                   const char* lastPartnerPeer = nullptr);
 void SaveSync_SetTestDlcLists(const char* hostList, const char* clientList);
@@ -201,6 +212,25 @@ bool SaveSync_PreserveClientBackupForTest(const char* destDir);
 bool SaveSync_GetGameSaveDirForTest(char* outPath, size_t outSize, const char* saveName);
 bool SaveSync_ResolveGameSaveDir(HMODULE exeMod, const char* fallbackBaseDir,
                                  char* outPath, size_t outSize, const char* saveName);
+
+// Pure helper for dual-window automation detection (testable without mutating process env).
+bool SaveSync_DetectDualTestbedInputs(const char* roleEnv, const char* cmdLine, const char* exePath);
+
+// Thin test helpers for wire SessionHello / SessionDlcs / ModSync verification.
+bool SaveSync_VerifyPeerHelloForTest(const char* magic, int protocol, const char* version,
+                                     unsigned int dllCrc, char* whyOut, size_t whyCap);
+bool SaveSync_VerifyDlcListsForTest(const char* mineList, bool mineCheck,
+                                    const char* peerList, bool peerCheck,
+                                    char* whyOut, size_t whyCap);
+bool SaveSync_ExchangeHelloOverSocketForTest(uintptr_t sock, bool isHost, char* whyOut, size_t whyCap);
+bool SaveSync_ExchangeCustomHelloOverSocketForTest(uintptr_t sock, bool isHost,
+                                                   const char* customMagic, int customProtocol,
+                                                   const char* customVersion, unsigned int customDllCrc,
+                                                   char* whyOut, size_t whyCap);
+bool SaveSync_ExchangeHandshakeOverSocketForTest(uintptr_t sock, bool isHost,
+                                               const char* dlcList, bool dlcCheck,
+                                               const char* activeSaveDir,
+                                               char* whyOut, size_t whyCap);
 
 // True when running in dual-window automation (REPUBLICMP_ROLE, CLI flags, or test-host/test-client).
 bool SaveSync_IsDualTestbed();
