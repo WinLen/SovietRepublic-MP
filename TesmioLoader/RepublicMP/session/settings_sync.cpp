@@ -26,9 +26,9 @@
 #define SLOT_ENTRY_SIZE 0x10
 #define MAX_SLOTS 16
 
-#define PIPELINE_TO_EXPORT_RVA 0x1D0DA0 // FUN_1401b7af0(world, bld): empties the export slots
-#define PIPELINE_TO_IMPORT_RVA 0x1D0EB0 // FUN_1401b7c00(world, bld): fills the chosen resource
-#define AUTO_PURCHASE_RVA 0x18E2F0      // FUN_1401754d0(world, bld, value)
+#define PIPELINE_TO_EXPORT_RVA 0x1D0C40 // FUN_1401b7af0(world, bld): empties the export slots
+#define PIPELINE_TO_IMPORT_RVA 0x1D0D50 // FUN_1401b7c00(world, bld): fills the chosen resource
+#define AUTO_PURCHASE_RVA 0x18E180      // FUN_1401754d0(world, bld, value)
 
 enum FieldKind { FIELD_BYTES, FIELD_SLOT0 };   // SLOT0: offset is inside storage slot 0
 enum FollowUp { FOLLOW_NONE, FOLLOW_PIPELINE, FOLLOW_AUTO_PURCHASE, FOLLOW_FACTORY_QUEUE };
@@ -146,8 +146,8 @@ static int ReadSlotEntriesRaw(BYTE* exeBase, BYTE* b, int slot, float* data)
     int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
     if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
     BYTE* world = exeBase + WORLD_RVA;
-    BYTE* cbeg = *(BYTE**)(world + 0xC348);
-    BYTE* cend = *(BYTE**)(world + 0xC350);
+    BYTE* cbeg = *(BYTE**)(world + 0xC350);
+    BYTE* cend = *(BYTE**)(world + 0xC358);
     for (int i = 0; i < n; i++) {
         BYTE* res = *(BYTE**)(e + i * SLOT_ENTRY_SIZE);
         float resIdx = -1.0f;
@@ -392,8 +392,8 @@ static bool WriteSlot(BYTE* b, int slot, const float* data, int n)
             BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
             if (e && (int)((ee - e) / SLOT_ENTRY_SIZE) == n) {
                 BYTE* world = g_exeBase + WORLD_RVA;
-                BYTE* cbeg = *(BYTE**)(world + 0xC348);
-                BYTE* cend = *(BYTE**)(world + 0xC350);
+                BYTE* cbeg = *(BYTE**)(world + 0xC350);
+                BYTE* cend = *(BYTE**)(world + 0xC358);
                 for (int i = 0; i < n; i++) {
                     int resIdx = (int)data[i * 3 + 0];
                     if (resIdx >= 0 && cbeg && cend && cbeg + (size_t)resIdx * 0x380 < cend) {
@@ -722,10 +722,10 @@ static void Scan(bool sendChanges)
 // Lockstep (see settings_sync.h)
 // ---------------------------------------------------------------------------
 
-#define SET_PAY_RVA 0x178FF0 // FUN_140160550(world, building, rubles, dollars)
-#define STOP_RVA 0x179010    // FUN_140160570(world, building, 1)
-#define STOP_BODY_RVA 0x179019 // non-RIP-relative body after test rdx,rdx; je
-#define RESUME_RVA 0x179EE0  // FUN_140161440(world, building)
+#define SET_PAY_RVA 0x178E80 // FUN_140160550(world, building, rubles, dollars)
+#define STOP_RVA 0x178EA0    // FUN_140160570(world, building, 1)
+#define STOP_BODY_RVA 0x178EA9 // non-RIP-relative body after test rdx,rdx; je
+#define RESUME_RVA 0x179D70  // FUN_140161440(world, building)
 #define BLD_PAY_OFFSET 0x608
 
 typedef void (__fastcall* SiteStopFn)(__int64 world, BYTE* site, int stop);
@@ -734,12 +734,8 @@ static SiteStopFn g_origSiteStop = nullptr;
 static SiteResumeFn g_origSiteResume = nullptr;
 static volatile LONG g_inApplyConstruction = 0;
 
-static const unsigned char kSiteStopBodyExpect[14] = {
-    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55
-};
-static const unsigned char kSiteResumeExpect[14] = {
-    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56
-};
+static const unsigned char kSiteStopBodyExpect[14] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55 };
+static const unsigned char kSiteResumeExpect[14] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56 };
 
 bool SettingsSync_IsSiteStopUiCallerRva(unsigned callerRva)
 {

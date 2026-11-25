@@ -13,7 +13,7 @@
 #include <string.h>
 #include <vector>
 
-#define WINDOWS_RVA 0xA2BA78     // the open windows
+#define WINDOWS_RVA 0xA2BA80     // the open windows
 #define WINDOW_OBJECT 0x240
 #define WINDOW_KIND 0x248
 #define WINDOW_PARENT 0x5C8      // a selection window's parent window
@@ -23,9 +23,9 @@
 #define PRESS_RVA 0xA9EF51
 #define ENTER_RVA 0xA9ED6C
 #define KEYPAD_ENTER_RVA 0xA9EDEC
-#define VEHICLES_OFFSET 0x128C0
-#define BUILDINGS_OFFSET 0x11BB0
-#define LINES_OFFSET 0x128B0
+#define VEHICLES_OFFSET 0x128C8
+#define BUILDINGS_OFFSET 0x11BB8
+#define LINES_OFFSET 0x128B8
 #define VEHICLE_LINE 0x650
 #define STOPS_LIST 0x638         // a vehicle's stop records, 0x198 each
 #define LINKS_LIST 0xD38         // a building's links (pointers), link +10 its record
@@ -35,9 +35,9 @@
 #define RECORD_BYTES 0x198
 #define HALF_BYTES 0xC8
 #define HALVES 2
-#define RESOURCES 0xC348
+#define RESOURCES 0xC350
 #define RESOURCE_STRIDE 0x380
-#define TYPES 0x128F0
+#define TYPES 0x128F8
 #define TYPE_STRIDE 0xA0C8
 #ifndef MAX_OBJECTS
 #define MAX_OBJECTS CARGO_SETTINGS_MAX_OBJECTS
@@ -46,11 +46,11 @@
 #define MAX_LIST 1000000
 #define MAX_RECORDS 256
 #define MAX_ELEMENTS 4096
-#define DESTROY_RVA 0x124D80
-#define COPY_RVA 0x21FCF0
-#define REFRESH_RVA 0x4BF930
-#define ADD_STATION_RVA 0x2D3580
-#define ADD_STATION_DIST_RVA 0x2D3F00
+#define DESTROY_RVA 0x0F6520
+#define COPY_RVA 0x21FBF0
+#define REFRESH_RVA 0x4BFC10
+#define ADD_STATION_RVA 0x2D36D0
+#define ADD_STATION_DIST_RVA 0x2D4050
 #define MAGIC 0x32534743
 
 
@@ -607,7 +607,7 @@ static void RevertLocalAddedLink(U64 world, U64 bld, U64 targetBld, unsigned lin
 static U64 RunAddStationTool(U64 world, unsigned nativeRva)
 {
     U64 bld = 0;
-    ReadQ(world + 0xD330, bld);
+    ReadQ(world + 0xD338, bld);
     unsigned beforeCount = RecordCount(KIND_LINK, bld);
     U64 res = ((U64(*)(U64))(g_exeBase + nativeRva))(world);
     unsigned afterCount = RecordCount(KIND_LINK, bld);

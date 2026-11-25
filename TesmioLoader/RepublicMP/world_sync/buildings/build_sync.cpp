@@ -34,22 +34,22 @@
 #define UNIVERSAL_THIS_RVA 0xA1EF20      // placement god-object (thisPtr)
 #endif
 #ifndef VEC_BUILDINGS_BEGIN_RVA
-#define VEC_BUILDINGS_BEGIN_RVA 0xA30AD0 // city buildings vector
-#define VEC_BUILDINGS_END_RVA 0xA30AD8
+#define VEC_BUILDINGS_BEGIN_RVA 0xA30AD8 // city buildings vector
+#define VEC_BUILDINGS_END_RVA 0xA30AE0
 #endif
 #ifndef VEC_CONSTRUCTIONS_BEGIN_RVA
-#define VEC_CONSTRUCTIONS_BEGIN_RVA 0xA30BF0 // unfinished / demolition sites vector (thisPtr+0x11c28)
-#define VEC_CONSTRUCTIONS_END_RVA 0xA30BF8
+#define VEC_CONSTRUCTIONS_BEGIN_RVA 0xA30BF8 // unfinished / demolition sites vector (thisPtr+0x11c28)
+#define VEC_CONSTRUCTIONS_END_RVA 0xA30C00
 #endif
 #define OBJ_TYPE_OFFSET 0x318            // building type record
 #define OBJ_PAY_RUB_OFFSET 0x608         // byte: finish construction with rubles
 #define OBJ_PAY_USD_OFFSET 0x609         // byte: finish construction with dollars
-#define SET_PAY_RVA 0x178FF0             // FUN_140160550(this, building, rub, usd): sets both, then RESUME
+#define SET_PAY_RVA 0x178E80             // FUN_140160550(this, building, rub, usd): sets both, then RESUME
 #define OBJ_PROGRESS_OFFSET 0x604        // float: construction progress, 0..1
 #define OBJ_STOPPED_OFFSET 0x879         // byte: construction stopped by the player
-#define STOP_RVA 0x179010                // FUN_140160570(this, building, 1): the window's "stop" - sets
+#define STOP_RVA 0x178EA0                // FUN_140160570(this, building, 1): the window's "stop" - sets
                                          // +0x879 and, unfinished and unpaid, cancels deliveries and workers
-#define RESUME_RVA 0x179EE0              // FUN_140161440(this, building): the window's "continue" - clears
+#define RESUME_RVA 0x179D70              // FUN_140161440(this, building): the window's "continue" - clears
                                          // +0x879 (unless FUN_1401a9d60 says it must stay)
 #define PAY_SCAN_INTERVAL_MS 250
 #define TYPE_CATEGORY_OFFSET 0x368       // int category in the type record
@@ -66,8 +66,8 @@
 #endif
 #define CURSOR_COPY_OFFSET 0xfa8         // mirrors the cursor x/y/z
 #define CURSOR_YAW_OFFSET 0xfc4          // yaw in radians
-#define MIRROR_TOGGLE_OFFSET 0x11e60     // byte: player's mirror toggle
-#define PLACEMENT_RESULT_OFFSET 0x11aa8  // 3 ints: validation result of the last call
+#define MIRROR_TOGGLE_OFFSET 0x11e68     // byte: player's mirror toggle
+#define PLACEMENT_RESULT_OFFSET 0x11ab0  // 3 ints: validation result of the last call
 #ifndef TOOL_GUARD1_OFFSET
 #define TOOL_GUARD1_OFFSET 0xfec         // any nonzero -> placement function returns at once
 #define TOOL_GUARD2_OFFSET 0xfee
@@ -77,13 +77,13 @@
 // first, e.g. "road_onelane"; +0x2b5 a flag, +0x48 the type record), 0 when
 // nothing is selected. FUN_1403c4850 (the road routing a building's access
 // road goes through) reads +0x2b5 without a null check.
-#define SELECTED_ENTRY_OFFSET 0xd4c0
+#define SELECTED_ENTRY_OFFSET 0xd4c8
 // The open windows: a vector of window pointers at this+0xCAC0 (begin) /
 // +0xCAC8 (end), walked by the window dispatcher FUN_1406e9b80. A building
 // window's building is window+0x240 - FUN_1406f8cc0 (the building window)
 // passes it to the stop / continue / pay calls.
-#define OPEN_WINDOWS_BEGIN_OFFSET 0xCB58
-#define OPEN_WINDOWS_END_OFFSET 0xCB60
+#define OPEN_WINDOWS_BEGIN_OFFSET 0xCB60
+#define OPEN_WINDOWS_END_OFFSET 0xCB68
 #define WINDOW_BUILDING_OFFSET 0x240
 #define OPEN_WINDOWS_MAX 64
 #define PLACE_SCOPE_MARGIN 150.0f // view-list scope around a placement
@@ -1136,7 +1136,7 @@ bool BuildSync_ApplyPlacementCommand(const BuildSyncMsg& msg)
         unsigned char savedMirror = *mirror, savedHeld = *held, savedPressed = *pressed;
         __int64 savedSelected = *selected;
         // The clicking PC's pick modes (see BuildSyncMsg::pickModes).
-        unsigned char* pickModes[2] = { (unsigned char*)(thisPtr + 0xF698), (unsigned char*)(thisPtr + 0xF730) };
+        unsigned char* pickModes[2] = { (unsigned char*)(thisPtr + 0xF6A0), (unsigned char*)(thisPtr + 0xF738) };
         unsigned char savedPickModes[2] = { *pickModes[0], *pickModes[1] };
         // This PC's open menus would make the placement return at once
         // (replay_menus.h); they read closed for the call.

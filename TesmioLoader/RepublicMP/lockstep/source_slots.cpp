@@ -16,7 +16,7 @@
 #include <vector>
 
 #define WORLD_RVA 0xA1EF20
-#define WINDOW_BUILDING 0xD330   // the building of the window the tool serves
+#define WINDOW_BUILDING 0xD338   // the building of the window the tool serves
 #define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define SLOTS_OFFSET 0xF78
@@ -26,8 +26,8 @@
 #define MAX_BUILDINGS SOURCE_SLOTS_MAX_BUILDINGS
 #endif
 #define MAX_LIST 1000000
-#define ADD_SOURCE_RVA 0x1EFBD0
-#define COPY_SOURCE_RVA 0x1F1250
+#define ADD_SOURCE_RVA 0x1EFAD0
+#define COPY_SOURCE_RVA 0x1F1150
 #define MAGIC 0x31535253
 
 static const unsigned char kToolEntry[16] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x48, 0x08, 0x55,

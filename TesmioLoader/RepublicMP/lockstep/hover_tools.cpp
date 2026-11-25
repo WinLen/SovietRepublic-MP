@@ -17,21 +17,21 @@ typedef unsigned __int64 U64;
 
 #define WORLD_RVA 0xA1EF20
 #define PRESS_RVA 0xA9EF51
-#define SELECTED_OFFSET 0xD4C0
-#define MENU_OFFSET 0xD318
+#define SELECTED_OFFSET 0xD4C8
+#define MENU_OFFSET 0xD320
 #define MENU_STRIDE 0x2D0
 #define NAME_BYTES 32
 #define FLAG_OFFSET 0xFE9
-#define ROAD_NETWORK 0xF838
-#define RAIL_NETWORK 0xF9A0
+#define ROAD_NETWORK 0xF840
+#define RAIL_NETWORK 0xF9A8
 #define NODES 0x298
 #define EDGES 0x2B0
-#define BUILDINGS 0x11BB0
+#define BUILDINGS 0x11BB8
 #define SCOPE_RADIUS 80.0f
 static const unsigned kMenus[3] = { 0xFEC, 0xFEE, 0xFF3 };
 
 #define KINDS 6
-static const unsigned kRoutines[KINDS] = { 0x43B7B0, 0x43C030, 0x43BAC0, 0x43C320, 0x43CE10, 0x43C130 };
+static const unsigned kRoutines[KINDS] = { 0x43BA60, 0x43C2E0, 0x43BD70, 0x43C5D0, 0x43D0C0, 0x43C3E0 };
 static const unsigned char kEntries[KINDS][16] = {
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x80, 0xb9, 0xec, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x80, 0xb9, 0xec, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
@@ -60,7 +60,7 @@ static bool IsRail(int kind) { return kind == RAIL_PLACE || kind == RAIL_REMOVE;
 
 // The pick state (world +f648..+f6e8, the cursor +f6c, +f90): the pointers as references.
 enum { REF_NONE = 0, REF_NODE = 1, REF_EDGE = 2, REF_ROAD_NODE = 3, REF_ROAD_EDGE = 4, REF_BUILDING = 5 };
-static const unsigned kRefOffsets[8] = { 0xF6E0, 0xF6E8, 0xF738, 0xF770, 0xF718, 0xF728, 0xF760, 0xF768 };
+static const unsigned kRefOffsets[8] = { 0xF6E8, 0xF6F0, 0xF740, 0xF778, 0xF720, 0xF730, 0xF768, 0xF770 };
 
 #pragma pack(push, 1)
 struct PickRef {
@@ -164,36 +164,36 @@ struct RawPick {
 
 static void ReadPick(U64 world, RawPick& r)
 {
-    r.b658 = *(BYTE*)(world + 0xF6F0);
-    r.b668 = *(BYTE*)(world + 0xF700);
-    r.b6e8 = *(BYTE*)(world + 0xF780);
-    r.b698 = *(BYTE*)(world + 0xF730);
-    r.f678 = *(unsigned*)(world + 0xF710);
-    r.f6e0 = *(unsigned*)(world + 0xF778);
-    r.f6e4 = *(unsigned*)(world + 0xF77C);
+    r.b658 = *(BYTE*)(world + 0xF6F8);
+    r.b668 = *(BYTE*)(world + 0xF708);
+    r.b6e8 = *(BYTE*)(world + 0xF788);
+    r.b698 = *(BYTE*)(world + 0xF738);
+    r.f678 = *(unsigned*)(world + 0xF718);
+    r.f6e0 = *(unsigned*)(world + 0xF780);
+    r.f6e4 = *(unsigned*)(world + 0xF784);
     r.f90 = *(unsigned*)(world + 0xFC0);
-    r.f6a8 = *(unsigned*)(world + 0xF740);
-    r.f688 = *(unsigned*)(world + 0xF720);
-    memcpy(r.nodePoint, (const void*)(world + 0xF6F4), 12);
-    memcpy(r.edgePoint, (const void*)(world + 0xF704), 12);
+    r.f6a8 = *(unsigned*)(world + 0xF748);
+    r.f688 = *(unsigned*)(world + 0xF728);
+    memcpy(r.nodePoint, (const void*)(world + 0xF6FC), 12);
+    memcpy(r.edgePoint, (const void*)(world + 0xF70C), 12);
     memcpy(r.cursor, (const void*)(world + 0xF9C), 12);
     for (int i = 0; i < 8; i++) r.refs[i] = Q(world + kRefOffsets[i]);
 }
 
 static void WritePick(U64 world, const RawPick& r)
 {
-    *(BYTE*)(world + 0xF6F0) = r.b658;
-    *(BYTE*)(world + 0xF700) = r.b668;
-    *(BYTE*)(world + 0xF780) = r.b6e8;
-    *(BYTE*)(world + 0xF730) = r.b698;
-    *(unsigned*)(world + 0xF710) = r.f678;
-    *(unsigned*)(world + 0xF778) = r.f6e0;
-    *(unsigned*)(world + 0xF77C) = r.f6e4;
+    *(BYTE*)(world + 0xF6F8) = r.b658;
+    *(BYTE*)(world + 0xF708) = r.b668;
+    *(BYTE*)(world + 0xF788) = r.b6e8;
+    *(BYTE*)(world + 0xF738) = r.b698;
+    *(unsigned*)(world + 0xF718) = r.f678;
+    *(unsigned*)(world + 0xF780) = r.f6e0;
+    *(unsigned*)(world + 0xF784) = r.f6e4;
     *(unsigned*)(world + 0xFC0) = r.f90;
-    *(unsigned*)(world + 0xF740) = r.f6a8;
-    *(unsigned*)(world + 0xF720) = r.f688;
-    memcpy((void*)(world + 0xF6F4), r.nodePoint, 12);
-    memcpy((void*)(world + 0xF704), r.edgePoint, 12);
+    *(unsigned*)(world + 0xF748) = r.f6a8;
+    *(unsigned*)(world + 0xF728) = r.f688;
+    memcpy((void*)(world + 0xF6FC), r.nodePoint, 12);
+    memcpy((void*)(world + 0xF70C), r.edgePoint, 12);
     memcpy((void*)(world + 0xF9C), r.cursor, 12);
     for (int i = 0; i < 8; i++) *(U64*)(world + kRefOffsets[i]) = r.refs[i];
 }

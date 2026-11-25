@@ -127,8 +127,8 @@ static bool SubTest_HeldFrameVehicleGraphAndSmoothOffset()
 
     // Set up engine vehicle render vector at 0xA317E0 with only the lead loco
     std::vector<BYTE*> engineVehList = { loco.data() };
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = engineVehList.data();
-    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = engineVehList.data() + engineVehList.size();
+    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = engineVehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = engineVehList.data() + engineVehList.size();
 
     // 2. Tick 1: HeldFrame_OnSimTick traverses graph without failing on +0x1A68
     HeldFrame_OnSimTick(1);
@@ -166,7 +166,7 @@ static bool SubTest_HeldFrameVehicleGraphAndSmoothOffset()
 
     // 5. Test VehicleGuard Begin/End lifecycle with sub-tick interpolation & dynamic node restore
     GuardModifyContext ctx = { loco.data(), wagon2.data(), locoWheels.data(), 0.0f, 0.0f, 0.0f };
-    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E0, 0.5f, GuardModifyCallback, &ctx));
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E8, 0.5f, GuardModifyCallback, &ctx));
     // Verify wheel pitch & steering were interpolated at alpha=0.5 during guard
     TEST_CHECK_NEAR(ctx.interpSteerDuringGuard, 0.125f, 1e-4f);
     TEST_CHECK_NEAR(ctx.interpWheel0DuringGuard, 1.5f, 1e-4f);
@@ -219,8 +219,8 @@ static bool SubTest_HeldFrameVehicleGraphAndSmoothOffset()
     TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 102.0f, 1e-4f);
     TEST_CHECK_NEAR(*(const float*)(wagon2.data() + 0xD98 + 0x80), 62.0f, 1e-4f);
 
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = nullptr;
     *(BYTE***)(g_mockExeBuffer + 0xA317E8) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = nullptr;
     HeldFrame_Reset();
 
     return true;
@@ -261,8 +261,8 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
 
     // Set engine vehicle list at 0xA317E0
     std::vector<BYTE*> engineVehList = { leadLoco.data() };
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = engineVehList.data();
-    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = engineVehList.data() + engineVehList.size();
+    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = engineVehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = engineVehList.data() + engineVehList.size();
 
     // OnSimTick: Queue must process all up to 2048 without aborting early
     HeldFrame_OnSimTick(10);
@@ -271,7 +271,7 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
     TEST_CHECK(stats.trackedVehicles >= 2048);
 
     // VehicleGuard Begin/End: Must discard invalid pointers without guard fallback
-    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E0, 0.0f));
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E8, 0.0f));
     HeldFrame_GetDiagStats(&stats);
     TEST_CHECK(stats.guardFallbacks == 0);
 
@@ -298,8 +298,8 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
         vehC[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
 
         std::vector<BYTE*> testVehList = { vehA.data(), vehPage, vehC.data() };
-        *(BYTE***)(g_mockExeBuffer + 0xA317E0) = testVehList.data();
-        *(BYTE***)(g_mockExeBuffer + 0xA317E8) = testVehList.data() + testVehList.size();
+        *(BYTE***)(g_mockExeBuffer + 0xA317E8) = testVehList.data();
+        *(BYTE***)(g_mockExeBuffer + 0xA317F0) = testVehList.data() + testVehList.size();
 
         struct UnmapContext {
             BYTE* page;
@@ -312,7 +312,7 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
         };
 
         // Guard Begin succeeds on all 3; in callback vehPage is unmapped; End must safely restore vehA and vehC
-        HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E0, 0.0f, UnmapCallback, &unmapCtx);
+        HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E8, 0.0f, UnmapCallback, &unmapCtx);
 
         VirtualProtect(vehPage, 0x2000, unmapCtx.oldProtect, &unmapCtx.oldProtect);
         TEST_CHECK(vehA[VEH_WORKER_SIM_FLAG_OFFSET] == 1);
@@ -322,8 +322,8 @@ static bool SubTest_HeldFrameQueueBoundAndCorruptedLinks()
     }
 
     // Clean up mock engine vehicle list & reset HeldFrame state
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = nullptr;
     *(BYTE***)(g_mockExeBuffer + 0xA317E8) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = nullptr;
     HeldFrame_Reset();
 
     return true;
@@ -341,15 +341,15 @@ static bool SubTest_WorldSettingMultiToggleAndPerStateBuildMode()
     *(int*)(world + 0xB28) = 70;
     *(int*)(world + 0xB2C) = 1;
     world[0xB30] = 1;
-    world[0xC830] = 1;
-    world[0xC799] = 0x5Au;
+    world[0xC838] = 1;
+    world[0xC7A1] = 0x5Au;
 
     auto runUiFrame = [&](bool clicked, int rub, int usd, BYTE c798) {
         g_mockExeBuffer[0xA9EF51] = clicked ? 1 : 0;
         BuildingSwitches_Before(false);
         *(int*)(world + 0xB20) = rub;
         *(int*)(world + 0xB24) = usd;
-        world[0xC830] = c798;
+        world[0xC838] = c798;
         BuildingSwitches_After(false);
         g_mockExeBuffer[0xA9EF51] = 0;
     };
@@ -374,14 +374,14 @@ static bool SubTest_WorldSettingMultiToggleAndPerStateBuildMode()
     runUiFrame(true, 1, 0, 0);
     TEST_CHECK(Commands_Due(30));
     Commands_Boundary(30);
-    TEST_CHECK(world[0xC830] == 0);
-    TEST_CHECK(world[0xC799] == 0x5Au);
+    TEST_CHECK(world[0xC838] == 0);
+    TEST_CHECK(world[0xC7A1] == 0x5Au);
 
     runUiFrame(true, 1, 0, 1);
     TEST_CHECK(Commands_Due(31));
     Commands_Boundary(31);
-    TEST_CHECK(world[0xC830] == 1);
-    TEST_CHECK(world[0xC799] == 0x5Au);
+    TEST_CHECK(world[0xC838] == 1);
+    TEST_CHECK(world[0xC7A1] == 0x5Au);
 
     // 2. Two-States mode (R4): BuildMode (+0xAF8..+0xB04) is strictly local per state and toggles freely without reverting
     double initRub[2] = { 500000.0, 500000.0 };
@@ -988,30 +988,30 @@ bool Test_BuildingSwitches_Commands_SaveZip()
         BYTE* world = g_mockExeBuffer + WORLD_RVA;
         std::vector<BYTE> pedMgr(0x1000, 0);
         std::vector<BYTE> secRoadMgr(0x1000, 0);
-        *(BYTE**)(world + 0xFA00) = pedMgr.data();     // PEDESTRIAN manager
-        *(BYTE**)(world + 0xF840) = secRoadMgr.data(); // SECOND_ROAD manager
+        *(BYTE**)(world + 0xFA08) = pedMgr.data();     // PEDESTRIAN manager
+        *(BYTE**)(world + 0xF848) = secRoadMgr.data(); // SECOND_ROAD manager
         *(unsigned long long*)(pedMgr.data() + 0x360) = 0x112233445566ULL;
         *(unsigned char*)(pedMgr.data() + 0x390) = 1;
         *(unsigned char*)(pedMgr.data() + 0x748) = 1;
         *(unsigned char*)(pedMgr.data() + 0x749) = 1;
-        *(unsigned long long*)(g_mockExeBuffer + 0xA2E638) = 0xAABBCCDDEEFFULL; // HOVER_ROAD_EDGE_RVA
-        *(unsigned long long*)(g_mockExeBuffer + 0xA2E608) = 0x123456789ABCULL; // HOVER_NODE_RVA (must stay for quick-click cancel Inv #13)
+        *(unsigned long long*)(g_mockExeBuffer + 0xA2E640) = 0xAABBCCDDEEFFULL; // HOVER_ROAD_EDGE_RVA
+        *(unsigned long long*)(g_mockExeBuffer + 0xA2E610) = 0x123456789ABCULL; // HOVER_NODE_RVA (must stay for quick-click cancel Inv #13)
         RoadSync_ClearCategoryPreview(ROAD_SYNC_CATEGORY_PEDESTRIAN);
         TEST_CHECK(*(unsigned long long*)(pedMgr.data() + 0x360) == 0);
         TEST_CHECK(*(unsigned char*)(pedMgr.data() + 0x390) == 0);
         TEST_CHECK(*(unsigned char*)(pedMgr.data() + 0x748) == 0);
         TEST_CHECK(*(unsigned char*)(pedMgr.data() + 0x749) == 0);
-        TEST_CHECK(*(unsigned long long*)(g_mockExeBuffer + 0xA2E638) == 0);
-        TEST_CHECK(*(unsigned long long*)(g_mockExeBuffer + 0xA2E608) == 0x123456789ABCULL);
+        TEST_CHECK(*(unsigned long long*)(g_mockExeBuffer + 0xA2E640) == 0);
+        TEST_CHECK(*(unsigned long long*)(g_mockExeBuffer + 0xA2E610) == 0x123456789ABCULL);
 
         // Verify RoadSync_CancelLocalDrag clears SECOND_ROAD square preview vector (world+0xF6A0..0xF6A8)
         std::vector<unsigned long long> sqSegs = { 0x1001ULL, 0x1002ULL };
-        *(unsigned long long**)(world + 0xF6A0) = sqSegs.data();
-        *(unsigned long long**)(world + 0xF6A8) = sqSegs.data() + sqSegs.size();
-        *(unsigned char*)(world + 0xD344) = 1;
+        *(unsigned long long**)(world + 0xF6A8) = sqSegs.data();
+        *(unsigned long long**)(world + 0xF6B0) = sqSegs.data() + sqSegs.size();
+        *(unsigned char*)(world + 0xD34C) = 1;
         RoadSync_CancelLocalDrag();
-        TEST_CHECK(*(unsigned char*)(world + 0xD344) == 0);
-        TEST_CHECK(*(unsigned long long**)(world + 0xF6A8) == *(unsigned long long**)(world + 0xF6A0));
+        TEST_CHECK(*(unsigned char*)(world + 0xD34C) == 0);
+        TEST_CHECK(*(unsigned long long**)(world + 0xF6B0) == *(unsigned long long**)(world + 0xF6A8));
     }
 
     // 2. Lockstep Commands queue & tick boundary execution
@@ -1445,8 +1445,8 @@ bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     std::vector<BYTE*> segVec = { seg.data() };
     WriteMockVectorHeader(netMgr.data() + 0x2B0, segVec);
 
-    *(int*)(world + 0x140E4) = 1;
-    *(U64*)(world + 0x140E8) = (U64)netMgr.data();
+    *(int*)(world + 0x140EC) = 1;
+    *(U64*)(world + 0x140F0) = (U64)netMgr.data();
     const float qA[3] = { 120.05f, 15.0f, -339.95f };
     const float qB[3] = { 220.0f, 15.0f, -340.0f };
     const float qL[3] = { 260.0f, 16.0f, -350.0f };
@@ -1462,9 +1462,9 @@ bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     const unsigned char sigDestroy[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 };
     const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
     const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
-    memcpy(g_mockExeBuffer + 0x124D80, sigDestroy, 16);
-    memcpy(g_mockExeBuffer + 0x21FCF0, sigCopy, 16);
-    memcpy(g_mockExeBuffer + 0x4BF930, sigRefresh, 16);
+    memcpy(g_mockExeBuffer + 0x0F6520, sigDestroy, 16);
+    memcpy(g_mockExeBuffer + 0x21FBF0, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x4BFC10, sigRefresh, 16);
 
     std::vector<BYTE> distBld(BUILDING_STRUCT_BYTES, 0), storageBldA(BUILDING_STRUCT_BYTES, 0), storageBldB(BUILDING_STRUCT_BYTES, 0);
     *(int*)distBld.data() = 501;
@@ -1489,8 +1489,8 @@ bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     BYTE primeBuf[64] = {};
     *(unsigned*)primeBuf = 0x32534743u;
     CargoSettings_ApplyCommand(primeBuf, sizeof(primeBuf));
-    WriteAbsJmp12(g_mockExeBuffer + 0x124D80, (void*)&MockCargoDestroyFn);
-    WriteAbsJmp12(g_mockExeBuffer + 0x21FCF0, (void*)&MockCargoCopyFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x0F6520, (void*)&MockCargoDestroyFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x21FBF0, (void*)&MockCargoCopyFn);
 
     std::vector<BYTE> pkt;
     auto pushRaw = [&](const void* p, size_t n) { pkt.insert(pkt.end(), (const BYTE*)p, (const BYTE*)p + n); };
@@ -1578,12 +1578,12 @@ bool Test_JoinHubDistOfficeCarrierAndStorageVisuals()
     TEST_CHECK(*(U64*)(depFlatbed.data() + VEH_CARRIED_END_OFFSET) == (U64)(depCarried.data() + 1));
 
     // (c) Recovery fires ONLY on recall / send-home / clear-line, never on release (0x6C5460) / start-toggle (0x6B7810) / line copy (0x7C85F8)
-    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x818CBEu, RVA_VEH_RELEASE, "V"));
-    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x818B5Fu, 0x6EB350u, "V"));
-    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x806678u, 0x4BDCB0u, "MLVbo"));
-    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x818AFBu, 0x41EE40u, "WVbbbb"));
-    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x818B08u, 0x41E960u, "xV"));
-    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x826F3Au, 0x4BDCB0u, "MoVbo"));
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x8190EEu, RVA_VEH_RELEASE, "V"));
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x818F8Fu, 0x6EB6C0u, "V"));
+    TEST_CHECK(!GameCalls_ShouldRecoverCarrierForSiteForTest(0x806AA8u, 0x4BDF90u, "MLVbo"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x818F2Bu, 0x41F0F0u, "WVbbbb"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x818F38u, 0x41EC10u, "xV"));
+    TEST_CHECK(GameCalls_ShouldRecoverCarrierForSiteForTest(0x82736Au, 0x4BDF90u, "MoVbo"));
 
     // 5. Meshless Free Open Storage Visual Goods (FillPrivateVisible inclusion rule)
     TEST_CHECK(SimPatches_ShouldIncludeMeshlessStorageInVisible(false, 0x2000ULL, 0x2018ULL, 350.0f));
@@ -1922,11 +1922,11 @@ bool Test_SystemUiInterceptionAndNetworkTools_M9_1()
     TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB31));  // byte 1
     TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB32));  // byte 2
     TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xB33));  // byte 3
-    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC830)); // byte 0
-    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC831)); // byte 1
-    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC832)); // byte 2
-    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC833)); // byte 3
-    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xC834));
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC838)); // byte 0
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC839)); // byte 1
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC83A)); // byte 2
+    TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(0xC83B)); // byte 3
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(0xC83C));
 
     // 5. Feature 24: Commands_SanitizeCheatState clears terrain editor cheat fields 0xAE18, 0xAE1C
     std::vector<BYTE> mockWorld(0x15000, 0);
@@ -2218,13 +2218,13 @@ static bool SubTest_M9_1_BlindBytesAndSettingsSyncToastSuppression()
     }
 
     // 2. Feature 23: Complete scan of world range 0xC828..0xC840
-    for (unsigned off = 0xC828; off < 0xC830; off += 4) {
+    for (unsigned off = 0xC830; off < 0xC838; off += 4) {
         TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
     }
-    for (unsigned off = 0xC830; off <= 0xC833; ++off) {
+    for (unsigned off = 0xC838; off <= 0xC83B; ++off) {
         TEST_CHECK(BuildingSwitches_IsOneByteWorldSettingForTest(off));
     }
-    for (unsigned off = 0xC834; off <= 0xC840; off += 4) {
+    for (unsigned off = 0xC83C; off <= 0xC848; off += 4) {
         TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(off));
     }
 
@@ -2288,8 +2288,8 @@ bool Test_Stress_M9_1_Challenger1()
 static bool SubTest_M9_2_VehicleAutoReplacementSync()
 {
     // Feature 26: Intercept kind == 0xB in Purchase_Press(), sync replacement manager at *(world + 0xD440)
-    TEST_CHECK(WORLD_AUTO_REPLACE_MGR_OFFSET == 0xD4D8u);
-    TEST_CHECK(RVA_SET_AUTO_REPLACE == 0x63C140u);
+    TEST_CHECK(WORLD_AUTO_REPLACE_MGR_OFFSET == 0xD4E0u);
+    TEST_CHECK(RVA_SET_AUTO_REPLACE == 0x63C410u);
 
     // Verify PurchaseMsg layout & auto-replace semantics
     PurchaseMsg m = {};
@@ -2337,7 +2337,7 @@ static bool SubTest_M9_2_LineWaypointsOnRoadAndAirNetworks()
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    const unsigned kTestFields[] = { 0xF838u, 0xF840u, 0xF9A0u, 0xFAC0u, 0xFAC8u };
+    const unsigned kTestFields[] = { 0xF840u, 0xF848u, 0xF9A8u, 0xFAC8u, 0xFAD0u };
     for (unsigned fieldOffset : kTestFields) {
         std::vector<BYTE> netObj(0x300, 0);
         std::vector<BYTE> nodeObj(32, 0);
@@ -2365,9 +2365,9 @@ static bool SubTest_M9_2_FactoryQueueAndMachineReplacementSites()
 {
     // Feature 29: In game_calls.cpp:
     // Verify site 0x776557 (ReplaceMachines) & removal of broken 0x1A15A8 and read-only 0x7D8738.
-    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7B34E7u, 0x1C1BB0u));
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1A15A8u, 0x1BC010u));
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7B3937u, 0x1C1A50u));
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1A1448u, 0x1BBEB0u));
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8BE8u, 0x664C30u));
 
     // Check non-existent site
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x654321u));

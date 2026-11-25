@@ -73,20 +73,20 @@ void Purchase_Bind(const TsmHost* host)
 }
 
 #define WORLD_RVA 0xA1EF20
-#define CAMPAIGN_RVA 0xA32148          // != -1: a campaign
-#define PRESS_RETURN_RVA 0x852648      // after the relayed call at 810943
+#define CAMPAIGN_RVA 0xA32150          // != -1: a campaign
+#define PRESS_RETURN_RVA 0x852B08      // after the relayed call at 810943
 #define RANDOM_INT_IMPORT 0x8B1AD0     // C3DRandom_Int
-#define BUILDINGS_OFFSET 0x11BB0       // world building vector
-#define VEHICLES_OFFSET 0x128C0        // world vehicle vector
-#define TYPES_OFFSET 0x128F0           // vehicle types, 0x9f08 each
+#define BUILDINGS_OFFSET 0x11BB8       // world building vector
+#define VEHICLES_OFFSET 0x128C8        // world vehicle vector
+#define TYPES_OFFSET 0x128F8           // vehicle types, 0x9f08 each
 #define TYPE_STRIDE 0xA0C8
 #define TYPE_MAX 4096
-#define REALISTIC_OFFSET 0x14502
+#define REALISTIC_OFFSET 0x1450A
 #define FREE_OFFSET 0x5A0
 #define RUBLES_OFFSET 0x5B0
 #define DOLLARS_OFFSET 0x5A8
-#define TOTAL_DOLLARS_OFFSET 0x11548 // month totals, floats
-#define TOTAL_RUBLES_OFFSET 0x1154C
+#define TOTAL_DOLLARS_OFFSET 0x11550 // month totals, floats
+#define TOTAL_RUBLES_OFFSET 0x11554
 #define MARKET_OFFSET 0x50             // used-vehicle market: ten vectors of 0x28-byte records
 #define USED_TARGET 14
 #define USED_RECORD 0x28
@@ -114,20 +114,20 @@ typedef void (*UsedRemoveFn)(BYTE* market, BYTE* type);                         
 typedef void (*UsedApplyFn)(BYTE* record, BYTE* vehicle);                                                               // 660a70
 
 static const TsmRoutineSig kRoutines[] = {
-    { 0x4030F0, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 16 },
-    { 0x64F780, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57 }, 16 },
-    { 0x7A7280, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xee, 0x01, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x20, 0x57, 0x48 }, 16 },
-    { 0x403BB0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8b, 0xec, 0x48 }, 16 },
-    { 0x4206B0, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48 }, 16 },
+    { 0x4033A0, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 16 },
+    { 0x64FA50, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57 }, 16 },
+    { 0x7A76D0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xee, 0x01, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x20, 0x57, 0x48 }, 16 },
+    { 0x403E60, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8b, 0xec, 0x48 }, 16 },
+    { 0x420960, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48 }, 16 },
     { 0x003430, { 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0x8b, 0xfa, 0x48, 0x8b, 0xf1 }, 16 },
-    { 0x2C7230, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xef, 0x05, 0x00, 0x00, 0x4c, 0x8b, 0xdc, 0x4d, 0x89, 0x43, 0x18 }, 16 },
+    { 0x2C7380, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xef, 0x05, 0x00, 0x00, 0x4c, 0x8b, 0xdc, 0x4d, 0x89, 0x43, 0x18 }, 16 },
     { 0x054960, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x41, 0x08, 0x48, 0x8b }, 16 },
-    { 0x409C00, { 0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x70, 0xff, 0xff, 0xff, 0x48, 0x81, 0xec, 0x90 }, 16 },
-    { 0x409680, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 }, 16 },
-    { 0x0E4460, { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0x49, 0x10, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x51, 0x08, 0x49 }, 16 },
-    { 0x689DE0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x26, 0x01, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x66, 0x0f }, 16 },
-    { 0x688380, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xde, 0x00, 0x00, 0x00, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b }, 16 },
-    { 0x63C140, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf0, 0x00, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x82 }, 16 },
+    { 0x409EB0, { 0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x70, 0xff, 0xff, 0xff, 0x48, 0x81, 0xec, 0x90 }, 16 },
+    { 0x409930, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 }, 16 },
+    { 0x0E42F0, { 0x48, 0x83, 0xec, 0x28, 0x4c, 0x8b, 0x49, 0x10, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x51, 0x08, 0x49 }, 16 },
+    { 0x68A0B0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x26, 0x01, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x66, 0x0f }, 16 },
+    { 0x688650, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xde, 0x00, 0x00, 0x00, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b }, 16 },
+    { 0x63C410, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf0, 0x00, 0x00, 0x00, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0x82 }, 16 },
 };
 
 static int g_routinesOk = -1; // -1 not checked yet
@@ -301,8 +301,8 @@ static bool UsedFind(BYTE* world, BYTE* type, double* age, double* age2)
 static BYTE* ResourceAt(BYTE* world, int idx)
 {
     if (idx < 0) return nullptr;
-    BYTE* cbeg = *(BYTE**)(world + 0xC348);
-    BYTE* cend = *(BYTE**)(world + 0xC350);
+    BYTE* cbeg = *(BYTE**)(world + 0xC350);
+    BYTE* cend = *(BYTE**)(world + 0xC358);
     if (!cbeg || cend <= cbeg || (size_t)idx >= (size_t)(cend - cbeg) / 0x380) return nullptr;
     return cbeg + (size_t)idx * 0x380;
 }
@@ -437,12 +437,12 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         m.avail = avail;
         if (*(unsigned*)(type + 0x2B8) == 9) {
             int row = *(int*)(c->Rbp - 0x78);
-            BYTE** rbeg = *(BYTE***)(world + 0x12920);
-            BYTE** rend = *(BYTE***)(world + 0x12928);
+            BYTE** rbeg = *(BYTE***)(world + 0x12928);
+            BYTE** rend = *(BYTE***)(world + 0x12930);
             if (row >= 0 && rbeg && row < (int)(rend - rbeg)) {
                 BYTE* res = rbeg[row];
-                BYTE* cbeg = *(BYTE**)(world + 0xC348);
-                BYTE* cend = *(BYTE**)(world + 0xC350);
+                BYTE* cbeg = *(BYTE**)(world + 0xC350);
+                BYTE* cend = *(BYTE**)(world + 0xC358);
                 if (res && cbeg && res >= cbeg && res < cend && (res - cbeg) % 0x380 == 0)
                     m.resIndex = (int)((res - cbeg) / 0x380);
             }
@@ -576,19 +576,19 @@ static bool Banned(BYTE* world, unsigned kind, unsigned cat)
 {
     auto flag = [&](unsigned o) { return world[o] != 0; };
     if (kind == 2) {
-        if (cat - 1 <= 1) return !flag(0x13757);
-        if (cat - 3 <= 2) return !flag(0x13759);
-        if (cat == 6) return !flag(0x1375B);
-        if (cat == 7) return !flag(0x1375E);
-        if (cat == 8 || cat == 10) return !flag(0x1375D);
+        if (cat - 1 <= 1) return !flag(0x1375F);
+        if (cat - 3 <= 2) return !flag(0x13761);
+        if (cat == 6) return !flag(0x13763);
+        if (cat == 7) return !flag(0x13766);
+        if (cat == 8 || cat == 10) return !flag(0x13765);
         return false;
     }
     if (kind == 1) {
-        if (cat - 1 <= 1) return !flag(0x13756);
-        if (cat - 3 <= 2) return !flag(0x13758);
-        if (cat == 6) return !flag(0x1375A);
-        if (cat == 7) return !flag(0x1375F);
-        if (cat == 8 || cat == 10) return !flag(0x1375C);
+        if (cat - 1 <= 1) return !flag(0x1375E);
+        if (cat - 3 <= 2) return !flag(0x13760);
+        if (cat == 6) return !flag(0x13762);
+        if (cat == 7) return !flag(0x13767);
+        if (cat == 8 || cat == 10) return !flag(0x13764);
     }
     return false;
 }
@@ -609,15 +609,15 @@ static void Pay(BYTE* world, double rubles, double dollars, BYTE* type = nullptr
     }
     if (type && *(unsigned*)(type + 0x2B8) == 9 && res) {
         typedef void (*LedgerFn)(BYTE* world, void* row, BYTE* acct, float avail, unsigned char b5, float mult, unsigned char b7);
-        LedgerFn ledger = (LedgerFn)(g_exeBase + 0x31BE50);
+        LedgerFn ledger = (LedgerFn)(g_exeBase + 0x31C090);
         float amount = *(float*)(res + ((__int64)*(int*)(type + 0x8650) << 5) + 0xCC) * *(float*)(type + 0x8654);
         struct {
             BYTE* res;
             float amount;
             unsigned zero;
         } lrow = { res, amount, 0 };
-        if (dollars != 0.0) ledger(world, &lrow, world + 0x113C8, 0.0f, 0, 1.0f, 0);
-        if (rubles != 0.0) ledger(world, &lrow, world + 0x113F8, 0.0f, 0, 1.0f, 0);
+        if (dollars != 0.0) ledger(world, &lrow, world + 0x113D0, 0.0f, 0, 1.0f, 0);
+        if (rubles != 0.0) ledger(world, &lrow, world + 0x11400, 0.0f, 0, 1.0f, 0);
         return;
     }
     float& tr = *(float*)(world + TOTAL_RUBLES_OFFSET);
@@ -640,20 +640,20 @@ static const char* ReplayBlueprint(BYTE* world, const PurchaseMsg& m, BYTE* type
         return "refused (licence not held)";
     }
     bool fail = !CanPay(world, m.rubles, m.dollars);
-    if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x64F780))(world, depot, type + 0x200) != 0;
+    if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x64FA50))(world, depot, type + 0x200) != 0;
     if (fail) return "refused (money or campaign)";
     Pay(world, m.rubles, m.dollars, type, ResourceAt(world, m.resIndex));
     if (licence) {
         type[VEH_TYPE_HAS_LICENCE_OFFSET] = 1;
         TwoStates_NotifyVehicleLicenseChanged(world);
-        if (campaign != -1 && !strcmp((const char*)(world + 0x133F8), "BuyVehicle")) world[0x13701] = 1;
+        if (campaign != -1 && !strcmp((const char*)(world + 0x13400), "BuyVehicle")) world[0x13709] = 1;
         return nullptr;
     }
     int def = *(int*)(type + 0x6674);
     RandomIntFn random = *(RandomIntFn*)(g_exeBase + RANDOM_INT_IMPORT);
     auto draw = [&]() { return depot[0x1271] ? random(*(int*)(type + 0x6670)) : def; };
-    LoadTypeFn loadType = (LoadTypeFn)(g_exeBase + 0x409C00);
-    LoadMaterialFn loadMaterial = (LoadMaterialFn)(g_exeBase + 0x409680);
+    LoadTypeFn loadType = (LoadTypeFn)(g_exeBase + 0x409EB0);
+    LoadMaterialFn loadMaterial = (LoadMaterialFn)(g_exeBase + 0x409930);
     if (*(BYTE**)(depot + 0x11C8) && *(int*)(btype + 0x368) == 0x28) {
         BYTE* vec = depot + 0x11D8;
         BYTE*& end = *(BYTE**)(vec + 8);
@@ -661,7 +661,7 @@ static const char* ReplayBlueprint(BYTE* world, const PurchaseMsg& m, BYTE* type
             ++*(int*)(end - 4);
         } else {
             int variant = draw();
-            if (end == *(BYTE**)(vec + 0x10)) ((GrowFn)(g_exeBase + 0x0E4460))(vec);
+            if (end == *(BYTE**)(vec + 0x10)) ((GrowFn)(g_exeBase + 0x0E42F0))(vec);
             BYTE* e = end;
             if (e) {
                 *(BYTE**)e = type;
@@ -679,9 +679,9 @@ static const char* ReplayBlueprint(BYTE* world, const PurchaseMsg& m, BYTE* type
         loadType(world, type);
         loadMaterial(world, type, (unsigned)*(int*)(type + 0x6674));
     }
-    if (campaign != -1 && !strcmp((const char*)(world + 0x133F8), "BuildVehicle") &&
-        !strcmp((const char*)(type + 0x200), (const char*)(world + 0x13364)))
-        world[0x13701] = 1;
+    if (campaign != -1 && !strcmp((const char*)(world + 0x13400), "BuildVehicle") &&
+        !strcmp((const char*)(type + 0x200), (const char*)(world + 0x1336C)))
+        world[0x13709] = 1;
     return nullptr;
 }
 
@@ -698,14 +698,14 @@ static void ApplyUsedMarketStep(BYTE* market, BYTE* type, const PurchaseMsg& m, 
     memcpy(rec, &type, 8);
     memcpy(rec + 8, &m.usedAge, 8);
     memcpy(rec + 16, &m.usedAge2, 8);
-    ((UsedRemoveFn)(g_exeBase + 0x689DE0))(market, type);
-    ((UsedApplyFn)(g_exeBase + 0x688380))(rec, v);
+    ((UsedRemoveFn)(g_exeBase + 0x68A0B0))(market, type);
+    ((UsedApplyFn)(g_exeBase + 0x688650))(rec, v);
 }
 
 static void SpawnTrailersInSlot(BYTE* world, BYTE* type, BYTE* depot, BYTE* leadVehicle, __int64 trailers, unsigned slot)
 {
-    CreateFn create = (CreateFn)(g_exeBase + 0x403BB0);
-    CoupleFn couple = (CoupleFn)(g_exeBase + 0x4206B0);
+    CreateFn create = (CreateFn)(g_exeBase + 0x403E60);
+    CoupleFn couple = (CoupleFn)(g_exeBase + 0x420960);
     const unsigned __int64 minusOne = 0xFFFFFFFFu;
     for (__int64 i = 1; i <= trailers; i++) {
         BYTE* t = *(BYTE**)(type + 0x7C58) + (i - 1) * 0x110;
@@ -729,12 +729,12 @@ static void PlaceRealisticVehicleAtBorder(BYTE* world, const PurchaseMsg& m, BYT
     typedef void (*StartBorderMoveFn)(BYTE* v, int a2, int a3, int a4);
     Vec3 depotPos = {}, borderPos = {};
     (*(GetBldPosFn*)(g_exeBase + 0x8B1858))(depot + 0x320, &depotPos);
-    ((FindBorderFn)(g_exeBase + 0x44F9E0))(world, &borderPos, &depotPos, 0xA, m.kind == 2 ? 1 : 0);
+    ((FindBorderFn)(g_exeBase + 0x44FC90))(world, &borderPos, &depotPos, 0xA, m.kind == 2 ? 1 : 0);
     if (vcat == 8 || vcat == 10) *(int*)(v + 0x1A9C) = 2;
     Vec2 pos2 = {};
     (*(Vec3To2Fn*)(g_exeBase + 0x8B1010))(&pos2, &borderPos);
-    ((PlaceAtBorderFn)(g_exeBase + 0x6E1550))(v, &pos2, 0.0f, 0, borderPos.y, 0.0f);
-    ((InitBorderFn)(g_exeBase + 0x6E0E70))(v);
+    ((PlaceAtBorderFn)(g_exeBase + 0x6E18C0))(v, &pos2, 0.0f, 0, borderPos.y, 0.0f);
+    ((InitBorderFn)(g_exeBase + 0x6E11E0))(v);
     if (vcat == 6) {
         *(int*)(v + 0x182C) = (m.kind == 2) ? -1 : -2;
         *(float*)(v + 0x1B94) = *(float*)(*(BYTE**)(v + 0x1748) + 0x7AA8);
@@ -746,8 +746,8 @@ static void PlaceRealisticVehicleAtBorder(BYTE* world, const PurchaseMsg& m, BYT
             push(v + 0x6A0, &nullPtr);
         }
     }
-    ((SendToDepotFn)(g_exeBase + 0x6EAD50))(v, depot);
-    ((StartBorderMoveFn)(g_exeBase + 0x6ECB90))(v, 0, 0, 0);
+    ((SendToDepotFn)(g_exeBase + 0x6EB0C0))(v, depot);
+    ((StartBorderMoveFn)(g_exeBase + 0x6ECF00))(v, 0, 0, 0);
 }
 
 static void RouteRealisticVehicleDelivery(BYTE* world, const PurchaseMsg& m, BYTE* depot, BYTE* customs, int slot, BYTE* v)
@@ -776,7 +776,7 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
                                            bool realistic, bool customsDepot, unsigned cat, BYTE* win,
                                            BYTE* customs, int campaign, int& slot, BYTE*& market)
 {
-    SlotFn slotOf = (SlotFn)(g_exeBase + 0x4030F0);
+    SlotFn slotOf = (SlotFn)(g_exeBase + 0x4033A0);
     if (m.used) {
         market = *(BYTE**)(world + MARKET_OFFSET);
         if (!market) return "not carried (no used market)";
@@ -796,7 +796,7 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
     if (!CanPay(world, m.rubles, m.dollars) && !fail) fail = "refused (money)";
     if (!SaveSync_CheckVehicleDlcAllowed(type)) return "refused (DLC not allowed in session)";
     if (!ModSync_CheckVehicleTypeAllowed(type)) return "refused (mod not allowed in session)";
-    if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x64F780))(world, depot, type + 0x200) ? "refused (campaign)" : nullptr;
+    if (campaign != -1) fail = ((CampaignFn)(g_exeBase + 0x64FA50))(world, depot, type + 0x200) ? "refused (campaign)" : nullptr;
     if (fail) return fail;
     if (Banned(world, m.kind, cat)) return "refused (banned)";
     return nullptr;
@@ -807,8 +807,8 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
 #define IMPORT_PLAY_SOUND_RVA   0x8B22E8
 #define SND_CLICK_NAME_RVA      0x8BB3C8
 #define SOUND_MUTE_BYTE_RVA     0xA1EF5C
-#define SOUND_ENGINE_PTR_RVA    0xA2ECC0
-#define SOUND_MGR_RVA           0xA2ECC8
+#define SOUND_ENGINE_PTR_RVA    0xA2ECC8
+#define SOUND_MGR_RVA           0xA2ECD0
 
 static void PlayPurchaseSoundSafe()
 {
@@ -849,10 +849,10 @@ static void PlayPurchaseSoundSafe()
 static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, BYTE* depot, BYTE* customsRub,
                                  BYTE* customsUsd, int campaign)
 {
-    CreateFn create = (CreateFn)(g_exeBase + 0x403BB0);
-    CoupleFn couple = (CoupleFn)(g_exeBase + 0x4206B0);
+    CreateFn create = (CreateFn)(g_exeBase + 0x403E60);
+    CoupleFn couple = (CoupleFn)(g_exeBase + 0x420960);
     AddToSlotFn addToSlot = (AddToSlotFn)(g_exeBase + 0x003430);
-    SlotDoneFn slotDone = (SlotDoneFn)(g_exeBase + 0x2C7230);
+    SlotDoneFn slotDone = (SlotDoneFn)(g_exeBase + 0x2C7380);
     unsigned cat = *(unsigned*)(type + 0x2B8);
     BYTE* dtype = *(BYTE**)(depot + 0x318);
     unsigned dkind = dtype ? *(unsigned*)(dtype + 0x368) : 0xFFFFFFFFu;
@@ -866,7 +866,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     *(BYTE**)(win + 0x2C8) = customsUsd;
     BYTE* customs = nullptr;
     if (realistic) {
-        if (win[0x2B8]) ((RefillFn)(g_exeBase + 0x7A7280))(world, win);
+        if (win[0x2B8]) ((RefillFn)(g_exeBase + 0x7A76D0))(world, win);
         customs = m.kind == 2 ? *(BYTE**)(win + 0x2C0) : *(BYTE**)(win + 0x2C8);
     }
     int slot = -1;
@@ -886,7 +886,7 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
                 if (amount != 0.0f) {
                     struct { BYTE* res; float amount; unsigned zero; } imp = { res, amount, 0 };
                     typedef void (*ImportContainerFn)(BYTE*, BYTE*, void*, unsigned char, BYTE*);
-                    ((ImportContainerFn)(g_exeBase + 0x1E5940))(world, depot, &imp, 0, type);
+                    ((ImportContainerFn)(g_exeBase + 0x1E5840))(world, depot, &imp, 0, type);
                 }
             }
             slotDone(world, depot, *(BYTE**)(depot + 0x970) + (__int64)slot * 0xE0);

@@ -481,11 +481,11 @@ static bool SubTest_M6_C2_BrushStrokeContinuityAndRecovery()
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false;
 
     // Valid ledger offset with empty / unknown resource
-    lm.ledger = 0x113C8; // dollars
+    lm.ledger = 0x113D0; // dollars
     strncpy_s(lm.resource, "UNKNOWN_RESOURCE_XYZ", _TRUNCATE);
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false; // not present in world
 
-    lm.ledger = 0x113F8; // rubles
+    lm.ledger = 0x11400; // rubles
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false;
 
     return true;

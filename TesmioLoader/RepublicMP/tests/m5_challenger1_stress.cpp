@@ -34,7 +34,7 @@
 #define M5_C1_KIND_RESEARCH    0xE
 
 #define M5_C1_WORLD_RVA 0xA1EF20
-#define M5_C1_CITY_LIST 0x103E0
+#define M5_C1_CITY_LIST 0x103E8
 #define M5_C1_MAX_CITIES 4096
 
 #pragma pack(push, 1)

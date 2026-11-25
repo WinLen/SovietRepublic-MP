@@ -19,7 +19,7 @@
 #define SAVE_FOLDER_PREFIX    "save\\"
 
 // Save side (fields of the world object at WORLD_THIS_RVA).
-#define SAVE_DELAY_COUNTER_OFFSET   0x14DE8   // float: frames to wait - forced to 0
+#define SAVE_DELAY_COUNTER_OFFSET   0x14DF0   // float: frames to wait - forced to 0
 #define SAVE_NAME_FIELD_PREFIX      "save/"
 
 void SaveLoad_Bind(const TsmHost* host);

@@ -56,33 +56,33 @@ struct DetPatch {
 #define NOP23 NOP21, 0x90, 0x90
 
 static const DetPatch kPatches[] = {
-    { 0x6d8bb5, 26, { 0x80, 0xbb, 0x18, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x84, 0xe6, 0x08, 0x00, 0x00, 0x80, 0xbb, 0x19, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x85, 0xd9, 0x08, 0x00, 0x00 }, { 0xe9, 0xee, 0x08, 0x00, 0x00, NOP21 }, "vehicle became visible (6d89b0)" },
-    { 0x6df5a2, 28, { 0x41, 0x80, 0xbf, 0x18, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x84, 0xc2, 0x03, 0x00, 0x00, 0x41, 0x80, 0xbf, 0x19, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x85, 0xb4, 0x03, 0x00, 0x00 }, { 0xe9, 0xc7, 0x03, 0x00, 0x00, NOP23 }, "vehicle became visible (6daec0)" },
-    { 0x6e2dc1, 6, { 0x0f, 0x85, 0x0d, 0x01, 0x00, 0x00 }, { 0xe9, 0x0e, 0x01, 0x00, 0x00, 0x90 }, "road vehicle placement (6e2bb0)" },
-    { 0x6e1630, 6, { 0x0f, 0x85, 0x16, 0x01, 0x00, 0x00 }, { 0xe9, 0x17, 0x01, 0x00, 0x00, 0x90 }, "rail vehicle placement (6e13b0)" },
-    { 0x69ef0c, 7, { 0x0f, 0xb6, 0x83, 0x18, 0x14, 0x00, 0x00 }, { 0x31, 0xc0, NOP5 }, "vehicle checked flag" },
-    { 0x69f751, 2, { 0x74, 0x0f }, { 0xeb, 0x0f }, "docked rail wagon: camera-visible parent step" },
-    { 0x56ed36, 2, { 0x75, 0x10 }, { NOP2 }, "road sign zones" },
-    { 0x155957, 20, { 0xf3, 0x0f, 0x11, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x48, 0x8b, 0x44, 0x24, 0x40, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x01 }, { 0xc7, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x00, 0x50, 0xc3, 0x47, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x1f, 0x00 }, "building pass: off-camera flags on the visible branch" },
-    { 0x174356, 13, { 0x80, 0xbf, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x84, 0x89, 0x01, 0x00, 0x00 }, { 0xe9, 0x1d, 0x00, 0x00, 0x00, NOP8 }, "construction update: every site as one on the camera" },
-    { 0x138c2, 5, { 0xe8, 0xa9, 0xa6, 0x68, 0x00 }, { NOP5 }, "follow camera: train head" },
-    { 0x138f7, 5, { 0xe8, 0x74, 0xa6, 0x68, 0x00 }, { NOP5 }, "follow camera: wagon" },
-    { 0x1392d, 5, { 0xe8, 0x3e, 0xa6, 0x68, 0x00 }, { NOP5 }, "follow camera: vehicle" },
-    { 0x139a2, 5, { 0xe8, 0xc9, 0xa5, 0x68, 0x00 }, { NOP5 }, "ride camera: vehicle" },
-    { 0x41de3f, 2, { 0x75, 0x29 }, { NOP2 }, "follow camera: worker list" },
-    { 0x1562ce, 2, { 0x74, 0x6a }, { 0xeb, 0x6a }, "building pass: Ctrl+N" },
-    { 0x15634e, 6, { 0x0f, 0x84, 0xe2, 0x00, 0x00, 0x00 }, { 0xe9, 0xe3, 0x00, 0x00, 0x00, 0x90 }, "building pass: Ctrl+M" },
-    { 0x6d186c, 6, { 0x0f, 0x85, 0x83, 0x38, 0x00, 0x00 }, { NOP6 }, "vehicle routine: T" },
-    { 0x33483a, 6, { 0x0f, 0x84, 0x06, 0x01, 0x00, 0x00 }, { 0xe9, 0x07, 0x01, 0x00, 0x00, 0x90 }, "Late body: H (networks)" },
-    { 0x3349c3, 2, { 0x74, 0x48 }, { 0xeb, 0x48 }, "Late body: H (cursor)" },
-    { 0x76ef33, 6, { 0x0f, 0x84, 0x2b, 0x01, 0x00, 0x00 }, { 0xe9, 0x2c, 0x01, 0x00, 0x00, 0x90 }, "school window: Ctrl list cleanup" },
-    { 0x165305, 2, { 0x74, 0x6f }, { 0xeb, 0x6f }, "car building: Ctrl+I list cleanup" },
-    { 0x1d655b, 2, { 0x74, 0x21 }, { 0xeb, 0x21 }, "depot: E+L+C slot word" },
-    { 0x32b17b, 2, { 0x74, 0x41 }, { 0xeb, 0x41 }, "Early: K (the agents' debug branch)" },
-    { 0x873e03, 7, { 0x48, 0x8b, 0x53, 0x38, 0x48, 0x85, 0xd2 }, { 0xe9, 0xe2, 0x00, 0x00, 0x00, NOP2 }, "agents: every one on the every-frame list" },
+    { 0x6d8f25, 26, { 0x80, 0xbb, 0x18, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x84, 0xe6, 0x08, 0x00, 0x00, 0x80, 0xbb, 0x19, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x85, 0xd9, 0x08, 0x00, 0x00 }, { 0xe9, 0xee, 0x08, 0x00, 0x00, NOP21 }, "vehicle became visible (6d89b0)" },
+    { 0x6df912, 28, { 0x41, 0x80, 0xbf, 0x18, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x84, 0xc2, 0x03, 0x00, 0x00, 0x41, 0x80, 0xbf, 0x19, 0x14, 0x00, 0x00, 0x00, 0x0f, 0x85, 0xb4, 0x03, 0x00, 0x00 }, { 0xe9, 0xcb, 0x03, 0x00, 0x00, NOP23 }, "vehicle became visible (6daec0)" },
+    { 0x6e3131, 6, { 0x0f, 0x85, 0x0d, 0x01, 0x00, 0x00 }, { 0xe9, 0x0e, 0x01, 0x00, 0x00, 0x90 }, "road vehicle placement (6e2bb0)" },
+    { 0x6e19a0, 6, { 0x0f, 0x85, 0x16, 0x01, 0x00, 0x00 }, { 0xe9, 0x17, 0x01, 0x00, 0x00, 0x90 }, "rail vehicle placement (6e13b0)" },
+    { 0x69f1dc, 7, { 0x0f, 0xb6, 0x83, 0x18, 0x14, 0x00, 0x00 }, { 0x31, 0xc0, NOP5 }, "vehicle checked flag" },
+    { 0x69fa21, 2, { 0x74, 0x0f }, { 0xeb, 0x0f }, "docked rail wagon: camera-visible parent step" },
+    { 0x56f016, 2, { 0x75, 0x10 }, { NOP2 }, "road sign zones" },
+    { 0x1557E7, 20, { 0xf3, 0x0f, 0x11, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x48, 0x8b, 0x44, 0x24, 0x40, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x01 }, { 0xc7, 0x80, 0x5c, 0x11, 0x00, 0x00, 0x00, 0x50, 0xc3, 0x47, 0xc6, 0x80, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x1f, 0x00 }, "building pass: off-camera flags on the visible branch" },
+    { 0x1741E6, 13, { 0x80, 0xbf, 0x5a, 0x11, 0x00, 0x00, 0x00, 0x0f, 0x84, 0x89, 0x01, 0x00, 0x00 }, { 0xe9, 0x1d, 0x00, 0x00, 0x00, NOP8 }, "construction update: every site as one on the camera" },
+    { 0x138c2, 5, { 0xe8, 0x79, 0xa9, 0x68, 0x00 }, { NOP5 }, "follow camera: train head" },
+    { 0x138f7, 5, { 0xe8, 0x44, 0xa9, 0x68, 0x00 }, { NOP5 }, "follow camera: wagon" },
+    { 0x1392d, 5, { 0xe8, 0x0e, 0xa9, 0x68, 0x00 }, { NOP5 }, "follow camera: vehicle" },
+    { 0x139a2, 5, { 0xe8, 0x99, 0xa8, 0x68, 0x00 }, { NOP5 }, "ride camera: vehicle" },
+    { 0x41e0ef, 2, { 0x75, 0x29 }, { NOP2 }, "follow camera: worker list" },
+    { 0x15615e, 2, { 0x74, 0x6a }, { 0xeb, 0x6a }, "building pass: Ctrl+N" },
+    { 0x1561de, 6, { 0x0f, 0x84, 0xe2, 0x00, 0x00, 0x00 }, { 0xe9, 0xe3, 0x00, 0x00, 0x00, 0x90 }, "building pass: Ctrl+M" },
+    { 0x6d1bdc, 6, { 0x0f, 0x85, 0x83, 0x38, 0x00, 0x00 }, { NOP6 }, "vehicle routine: T" },
+    { 0x334a7a, 6, { 0x0f, 0x84, 0x06, 0x01, 0x00, 0x00 }, { 0xe9, 0x07, 0x01, 0x00, 0x00, 0x90 }, "Late body: H (networks)" },
+    { 0x334c03, 2, { 0x74, 0x48 }, { 0xeb, 0x48 }, "Late body: H (cursor)" },
+    { 0x76f383, 6, { 0x0f, 0x84, 0x2b, 0x01, 0x00, 0x00 }, { 0xe9, 0x2c, 0x01, 0x00, 0x00, 0x90 }, "school window: Ctrl list cleanup" },
+    { 0x165195, 2, { 0x74, 0x6f }, { 0xeb, 0x6f }, "car building: Ctrl+I list cleanup" },
+    { 0x1d63fb, 2, { 0x74, 0x21 }, { 0xeb, 0x21 }, "depot: E+L+C slot word" },
+    { 0x32b3bb, 2, { 0x74, 0x41 }, { 0xeb, 0x41 }, "Early: K (the agents' debug branch)" },
+    { 0x8742f3, 7, { 0x48, 0x8b, 0x53, 0x38, 0x48, 0x85, 0xd2 }, { 0xe9, 0xe2, 0x00, 0x00, 0x00, NOP2 }, "agents: every one on the every-frame list" },
     { 0x12411, 2, { 0x74, 0x5a }, { 0xeb, 0x5a }, "render: debug calendar keys" },
-    { 0x1b1f63, 2, { 0x74, 0x13 }, { 0xeb, 0x13 }, "building consume: LCtrl+Numpad5 debug 5x" },
-    { 0x1556c9, 2, { 0x74, 0x1a }, { 0xeb, 0x1a }, "building pass: selected tool" },
+    { 0x1b1e03, 2, { 0x74, 0x13 }, { 0xeb, 0x13 }, "building consume: LCtrl+Numpad5 debug 5x" },
+    { 0x155559, 2, { 0x74, 0x1a }, { 0xeb, 0x1a }, "building pass: selected tool" },
 };
 #define PATCH_COUNT (sizeof(kPatches) / sizeof(kPatches[0]))
 
@@ -124,10 +124,10 @@ static void Write(BYTE* at, const unsigned char* bytes, size_t n)
 // for its tools is the preview scope below; the doors the pass no longer
 // moves are moved and drawn for this PC by held_frame.cpp.
 
-#define GETNODE_SITE 0x155900
+#define GETNODE_SITE 0x155790
 #define GETNODE_IMPORT 0x8B15D0 // the import slot the site calls through
 typedef void* (*GetNodeFn)(void* tree, int index);
-static const unsigned char kGetNodeOriginal[6] = { 0xff, 0x15, 0xca, 0xbc, 0x75, 0x00 };
+static const unsigned char kGetNodeOriginal[6] = { 0xff, 0x15, 0x3a, 0xbe, 0x75, 0x00 };
 
 static void* DetGetNode(void* tree, int index)
 {
@@ -146,21 +146,21 @@ static void* DetGetNode(void* tree, int index)
 // render thread still makes where it used to (adding trees on the simulation
 // thread raced the forest's renderer).
 
-#define SAPLING_START_RVA 0x317160
-#define SAPLING_GROWTH_RVA 0x317270
+#define SAPLING_START_RVA 0x3173A0
+#define SAPLING_GROWTH_RVA 0x3174B0
 #define SAPLING_RENDER_CALL 0xAC48
-#define SAPLING_LATE_CALL 0x32BF85
+#define SAPLING_LATE_CALL 0x32C1C5
 #define SAPLING_ENGINE_RVA 0x9DDC88  // engine object
 #define SAPLING_ENGINE_MAP 0xF80     // +f80 map, its trees +2f8..+300
 #define SAPLING_ENGINE_FOREST 0x1060 // +1060 forest
 #define SAPLING_ADD_IMPORT 0x8B22B0  // C3D_FOREST::EditorAddCursorTreesSoviet
-#define SAPLING_LIST 0x117D8
+#define SAPLING_LIST 0x117E0
 #define SAPLING_ENTRY 0x34
 #define SAPLING_TIMER 0x20
 #define SAPLING_NAME 0x20
 #define SAPLING_POSITION 0x28
 #define SAPLING_START_BITS 0x3a83126f // 0.001f
-static const unsigned char kSaplingRenderOriginal[5] = { 0xe8, 0x13, 0xc5, 0x30, 0x00 };
+static const unsigned char kSaplingRenderOriginal[5] = { 0xe8, 0x53, 0xc7, 0x30, 0x00 };
 static const unsigned char kSaplingLateOriginal[5] = { 0xe8, 0xe6, 0xb2, 0xfe, 0xff };
 
 typedef void (*SaplingStartFn)(__int64, __int64, __int64, __int64);
@@ -275,14 +275,12 @@ static void DetSaplingRender(__int64 a, __int64 b, __int64 c, __int64 d)
 // autosave fires on each PC's own real time (world float +0, accumulated in
 // Late). While the layer is on, every Late starts with that timer at 0.
 
-#define LATE_RVA 0x32B680
-#define POPULATION_OFFSET 0xC7B8
-#define CITIZENS_OFFSET 0x12758
+#define LATE_RVA 0x32B8C0
+#define POPULATION_OFFSET 0xC7C0
+#define CITIZENS_OFFSET 0x12760
 #define AUTOSAVE_TIMER_OFFSET 0x0
 // push rbp / push r12..r15 / lea rbp,[rsp-2420h]
-static const unsigned char kLateExpect[18] = {
-    0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xE0, 0xDB, 0xFF, 0xFF
-};
+static const unsigned char kLateExpect[18] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xE0, 0xDB, 0xFF, 0xFF };
 typedef void (*LateFn)(__int64 world);
 static LateFn o_late = nullptr;
 static volatile int g_lastPopulation = -1;
@@ -346,11 +344,11 @@ static BYTE g_privateToolSearch[72] = {};
 // local list for newly placed buildings and camera movement while paused.
 // This existing preview scope is limited to those phases; it does not replace
 // the native building update or wrap the renderer.
-#define VISIBLE_OFFSET 0x11E70
+#define VISIBLE_OFFSET 0x11E78
 #define ENGINE_RVA 0x9DDC88       // engine object: +1098 models, +f80 map quadtree
 #define FRAGMENT_IMPORT 0x8B2008  // a model's fragment
-#define BUILDINGS_BEGIN_RVA 0xA30AD0
-#define BUILDINGS_END_RVA 0xA30AD8
+#define BUILDINGS_BEGIN_RVA 0xA30AD8
+#define BUILDINGS_END_RVA 0xA30AE0
 static BYTE g_privateVisible[24] = {}; // a vector header: begin, end, capacity
 static bool g_visibleFresh = false;
 // The visible branch also gives a building its camera distance (+115c, from
@@ -624,15 +622,15 @@ static void PrivateViewIn(PrivateView& kept)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     kept.visible = VisibleIn();
-    memcpy(kept.search, world + 0x14528, sizeof(kept.search));
-    memcpy(world + 0x14528, g_privateToolSearch, sizeof(kept.search));
+    memcpy(kept.search, world + 0x14530, sizeof(kept.search));
+    memcpy(world + 0x14530, g_privateToolSearch, sizeof(kept.search));
 }
 
 static void PrivateViewOut(const PrivateView& kept)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
-    memcpy(g_privateToolSearch, world + 0x14528, sizeof(kept.search));
-    memcpy(world + 0x14528, kept.search, sizeof(kept.search));
+    memcpy(g_privateToolSearch, world + 0x14530, sizeof(kept.search));
+    memcpy(world + 0x14530, kept.search, sizeof(kept.search));
     VisibleOut(kept.visible);
 }
 
@@ -716,53 +714,53 @@ static void HookedLate(__int64 world)
 // frame); otherwise it calls straight through. The calls to the name compare
 // 84f520 are left alone.
 static const unsigned kToolCalls[][2] = {
-    { 0x330EC1, 0x2372C0 }, { 0x330F4E, 0x22F370 }, { 0x331188, 0x2D7670 }, { 0x3311AA, 0x25E7B0 },
-    { 0x3311D0, 0x317810 }, { 0x3311F4, 0x3C7820 }, { 0x33121F, 0x3C7820 }, { 0x331242, 0x3C7820 },
-    { 0x331267, 0x3C7820 }, { 0x33128C, 0x3C7820 }, { 0x3312B0, 0x34BBA0 }, { 0x3312D2, 0x3CAA40 },
-    { 0x3312F4, 0x3CCD30 }, { 0x331316, 0x3EBB20 }, { 0x33133A, 0x24FC60 }, { 0x331365, 0x24FC60 },
-    { 0x331388, 0x24FC60 }, { 0x3313AD, 0x24FC60 }, { 0x3313D2, 0x24FC60 }, { 0x3313FA, 0x250350 },
-    { 0x331422, 0x250350 }, { 0x331451, 0x250350 }, { 0x33147C, 0x250350 }, { 0x3314A1, 0x250350 },
-    { 0x3314C8, 0x250350 }, { 0x3314F0, 0x250350 }, { 0x331518, 0x250350 }, { 0x331540, 0x250350 },
-    { 0x331568, 0x250350 }, { 0x33158C, 0x250580 }, { 0x3315B0, 0x250580 }, { 0x3315D4, 0x2507B0 },
-    { 0x3315F8, 0x2507B0 }, { 0x33161C, 0x253550 }, { 0x331640, 0x253550 }, { 0x331667, 0x3EE4A0 },
-    { 0x331751, 0x3EE4A0 }, { 0x3316D4, 0x3EE4A0 }, { 0x3316FC, 0x3EE4A0 }, { 0x331723, 0x3EE4A0 },
-    { 0x331751, 0x3EE4A0 }, { 0x331751, 0x3EE4A0 }, { 0x3316D4, 0x3EE4A0 }, { 0x3316FC, 0x3EE4A0 },
-    { 0x331723, 0x3EE4A0 }, { 0x331667, 0x3EE4A0 }, { 0x33180A, 0x3EEEA0 }, { 0x33182F, 0x3EEEA0 },
-    { 0x33180A, 0x3EEEA0 }, { 0x331870, 0x3EEEA0 }, { 0x33189C, 0x3EEEA0 }, { 0x3318EA, 0x3EEEA0 },
-    { 0x331910, 0x3EEEA0 }, { 0x33193C, 0x3EEEA0 }, { 0x33196B, 0x3EEEA0 }, { 0x331999, 0x3EEEA0 },
-    { 0x3319C7, 0x3EEEA0 }, { 0x331A16, 0x3EEEA0 }, { 0x331A3C, 0x3EEEA0 }, { 0x331A68, 0x3EEEA0 },
-    { 0x331A91, 0x3EEEA0 }, { 0x331AB8, 0x3EEEA0 }, { 0x331ADF, 0x3EEEA0 }, { 0x331B06, 0x3EEEA0 },
-    { 0x331B2D, 0x3EEEA0 }, { 0x331B54, 0x3EEEA0 }, { 0x331B7B, 0x3EEEA0 }, { 0x331BA2, 0x3EEEA0 },
-    { 0x331BC9, 0x3EEEA0 }, { 0x331BF0, 0x3EEEA0 }, { 0x331C17, 0x3EEEA0 }, { 0x331C3E, 0x3EEEA0 },
-    { 0x331C65, 0x3EEEA0 }, { 0x331C8C, 0x3EEEA0 }, { 0x331CB3, 0x3EEEA0 }, { 0x331CDA, 0x3EEEA0 },
-    { 0x331D01, 0x3EEEA0 }, { 0x331D28, 0x3EEEA0 }, { 0x331D4E, 0x3EEEA0 }, { 0x331D7A, 0x3EEEA0 },
-    { 0x331DA2, 0x3EEEA0 }, { 0x331DC8, 0x3EEEA0 }, { 0x331DE8, 0x43B7B0 }, { 0x331E08, 0x2CDC80 },
-    { 0x331E2A, 0x3E87B0 }, { 0x331E37, 0x3ED3A0 }, { 0x331E43, 0x3ED400 }, { 0x331E57, 0x3ECF60 },
-    { 0x331E76, 0x43C030 }, { 0x331E80, 0x43BAC0 }, { 0x331EA3, 0x3CD9E0 }, { 0x331EDC, 0x3CD9E0 },
-    { 0x331F02, 0x3CD9E0 }, { 0x331FF6, 0x3D0060 }, { 0x331FF6, 0x3D0060 }, { 0x331FF6, 0x3D0060 },
-    { 0x331FF6, 0x3D0060 }, { 0x331F62, 0x3CFC10 }, { 0x331F62, 0x3CFC10 }, { 0x331F3C, 0x3CFC10 },
-    { 0x33211E, 0x3D25D0 }, { 0x332144, 0x3D25D0 }, { 0x33216B, 0x3D25D0 }, { 0x332192, 0x3D25D0 },
-    { 0x3321B9, 0x3D25D0 }, { 0x3321E0, 0x3D25D0 }, { 0x332207, 0x3D25D0 }, { 0x33222E, 0x3D25D0 },
-    { 0x332255, 0x3D25D0 }, { 0x33227C, 0x3D25D0 }, { 0x3322A2, 0x3D25D0 }, { 0x33232E, 0x3D2FE0 },
-    { 0x332533, 0x3D9C80 }, { 0x332533, 0x3D9C80 }, { 0x332559, 0x3D9C80 }, { 0x3325A7, 0x3D9C80 },
-    { 0x332533, 0x3D9C80 }, { 0x332533, 0x3D9C80 }, { 0x332533, 0x3D9C80 }, { 0x332533, 0x3D9C80 },
-    { 0x3325CD, 0x3D9C80 }, { 0x3325CD, 0x3D9C80 }, { 0x3325F3, 0x3D9C80 }, { 0x332640, 0x3D9C80 },
-    { 0x332364, 0x3D7530 }, { 0x332364, 0x3D7530 }, { 0x33238A, 0x3D7530 }, { 0x3323D8, 0x3D7530 },
-    { 0x33249A, 0x3D7530 }, { 0x33249A, 0x3D7530 }, { 0x3324C0, 0x3D7530 }, { 0x33250D, 0x3D7530 },
-    { 0x332877, 0x3F34E0 }, { 0x332931, 0x43CE10 }, { 0x332993, 0x2D03E0 }, { 0x3329E1, 0x2CE030 },
-    { 0x332A01, 0x2CD190 }, { 0x332A23, 0x2CE6A0 }, { 0x332A45, 0x2CE6A0 }, { 0x332A65, 0x2CF610 },
-    { 0x332A85, 0x2D0010 }, { 0x332AA5, 0x2D3100 }, { 0x332BB7, 0x1EFBD0 }, { 0x332BD7, 0x1F1250 },
-    { 0x332C17, 0x1F43B0 }, { 0x332C37, 0x1F4FB0 }, { 0x332C57, 0x1F16E0 }, { 0x332C77, 0x1F2E40 },
-    { 0x332C97, 0x1F32D0 }, { 0x332CB7, 0x1F6410 }, { 0x332CD7, 0x1F6770 }, { 0x332CFA, 0x3F5C20 },
-    { 0x332D1A, 0x3F5C20 }, { 0x332D3A, 0x3F5C20 }, { 0x332D44, 0x2D5470 }, { 0x332D4E, 0x2D05F0 },
-    { 0x332D5E, 0x43C320 }, { 0x332D94, 0x3F5660 }, { 0x332DB9, 0x3F5660 }, { 0x332DDF, 0x3F5660 },
-    { 0x332E05, 0x3F5660 }, { 0x332E2B, 0x3F5660 }, { 0x332E51, 0x3F5660 }, { 0x332E77, 0x3F5660 },
-    { 0x332E9D, 0x3F5660 }, { 0x332EC3, 0x3F5660 }, { 0x332EE9, 0x3F5660 }, { 0x332F0B, 0x3E7360 },
-    { 0x332F2E, 0x3E7360 }, { 0x332F51, 0x3EAD50 }, { 0x332F74, 0x3EAD50 }, { 0x332F99, 0x3E7EE0 },
-    { 0x332FBF, 0x3E7EE0 }, { 0x332FE4, 0x3E7EE0 }, { 0x33300A, 0x3E7EE0 }, { 0x333030, 0x3E7EE0 },
-    { 0x333050, 0x2D3580 }, { 0x333070, 0x2D3F00 }, { 0x333090, 0x2D4F10 }, { 0x3330B0, 0x2318D0 },
-    { 0x3330D0, 0x231AC0 }, { 0x333157, 0x3E9310 }, { 0x333174, 0x3E9E80 }, { 0x333185, 0x22F680 },
-    { 0x33318F, 0x22E9C0 }, { SITE_TOOL_COPY_WEIGHTS_RVA, FN_TOOL_COPY_WEIGHTS_RVA },
+    { 0x331101, 0x237170 }, { 0x33118E, 0x22F270 }, { 0x3313C8, 0x2D77C0 }, { 0x3313EA, 0x25E660 },
+    { 0x331410, 0x317A50 }, { 0x331434, 0x3C7AD0 }, { 0x33145F, 0x3C7AD0 }, { 0x331482, 0x3C7AD0 },
+    { 0x3314A7, 0x3C7AD0 }, { 0x3314CC, 0x3C7AD0 }, { 0x3314F0, 0x34BE50 }, { 0x331512, 0x3CACF0 },
+    { 0x331534, 0x3CCFE0 }, { 0x331556, 0x3EBDD0 }, { 0x33157A, 0x24FB10 }, { 0x3315A5, 0x24FB10 },
+    { 0x3315C8, 0x24FB10 }, { 0x3315ED, 0x24FB10 }, { 0x331612, 0x24FB10 }, { 0x33163A, 0x250200 },
+    { 0x331662, 0x250200 }, { 0x331691, 0x250200 }, { 0x3316BC, 0x250200 }, { 0x3316E1, 0x250200 },
+    { 0x331708, 0x250200 }, { 0x331730, 0x250200 }, { 0x331758, 0x250200 }, { 0x331780, 0x250200 },
+    { 0x3317A8, 0x250200 }, { 0x3317CC, 0x250430 }, { 0x3317F0, 0x250430 }, { 0x331814, 0x250660 },
+    { 0x331838, 0x250660 }, { 0x33185C, 0x253400 }, { 0x331880, 0x253400 }, { 0x3318A7, 0x3EE750 },
+    { 0x331991, 0x3EE750 }, { 0x331914, 0x3EE750 }, { 0x33193C, 0x3EE750 }, { 0x331963, 0x3EE750 },
+    { 0x331991, 0x3EE750 }, { 0x331991, 0x3EE750 }, { 0x331914, 0x3EE750 }, { 0x33193C, 0x3EE750 },
+    { 0x331963, 0x3EE750 }, { 0x3318A7, 0x3EE750 }, { 0x331A4A, 0x3EF150 }, { 0x331A6F, 0x3EF150 },
+    { 0x331A4A, 0x3EF150 }, { 0x331AB0, 0x3EF150 }, { 0x331ADC, 0x3EF150 }, { 0x331B2A, 0x3EF150 },
+    { 0x331B50, 0x3EF150 }, { 0x331B7C, 0x3EF150 }, { 0x331BAB, 0x3EF150 }, { 0x331BD9, 0x3EF150 },
+    { 0x331C07, 0x3EF150 }, { 0x331C56, 0x3EF150 }, { 0x331C7C, 0x3EF150 }, { 0x331CA8, 0x3EF150 },
+    { 0x331CD1, 0x3EF150 }, { 0x331CF8, 0x3EF150 }, { 0x331D1F, 0x3EF150 }, { 0x331D46, 0x3EF150 },
+    { 0x331D6D, 0x3EF150 }, { 0x331D94, 0x3EF150 }, { 0x331DBB, 0x3EF150 }, { 0x331DE2, 0x3EF150 },
+    { 0x331E09, 0x3EF150 }, { 0x331E30, 0x3EF150 }, { 0x331E57, 0x3EF150 }, { 0x331E7E, 0x3EF150 },
+    { 0x331EA5, 0x3EF150 }, { 0x331ECC, 0x3EF150 }, { 0x331EF3, 0x3EF150 }, { 0x331F1A, 0x3EF150 },
+    { 0x331F41, 0x3EF150 }, { 0x331F68, 0x3EF150 }, { 0x331F8E, 0x3EF150 }, { 0x331FBA, 0x3EF150 },
+    { 0x331FE2, 0x3EF150 }, { 0x332008, 0x3EF150 }, { 0x332028, 0x43BA60 }, { 0x332048, 0x2CDDD0 },
+    { 0x33206A, 0x3E8A60 }, { 0x332077, 0x3ED650 }, { 0x332083, 0x3ED6B0 }, { 0x332097, 0x3ED210 },
+    { 0x3320B6, 0x43C2E0 }, { 0x3320C0, 0x43BD70 }, { 0x3320E3, 0x3CDC90 }, { 0x33211C, 0x3CDC90 },
+    { 0x332142, 0x3CDC90 }, { 0x332236, 0x3D0310 }, { 0x332236, 0x3D0310 }, { 0x332236, 0x3D0310 },
+    { 0x332236, 0x3D0310 }, { 0x3321A2, 0x3CFEC0 }, { 0x3321A2, 0x3CFEC0 }, { 0x33217C, 0x3CFEC0 },
+    { 0x33235E, 0x3D2880 }, { 0x332384, 0x3D2880 }, { 0x3323AB, 0x3D2880 }, { 0x3323D2, 0x3D2880 },
+    { 0x3323F9, 0x3D2880 }, { 0x332420, 0x3D2880 }, { 0x332447, 0x3D2880 }, { 0x33246E, 0x3D2880 },
+    { 0x332495, 0x3D2880 }, { 0x3324BC, 0x3D2880 }, { 0x3324E2, 0x3D2880 }, { 0x33256E, 0x3D3290 },
+    { 0x332773, 0x3D9F30 }, { 0x332773, 0x3D9F30 }, { 0x332799, 0x3D9F30 }, { 0x3327E7, 0x3D9F30 },
+    { 0x332773, 0x3D9F30 }, { 0x332773, 0x3D9F30 }, { 0x332773, 0x3D9F30 }, { 0x332773, 0x3D9F30 },
+    { 0x33280D, 0x3D9F30 }, { 0x33280D, 0x3D9F30 }, { 0x332833, 0x3D9F30 }, { 0x332880, 0x3D9F30 },
+    { 0x3325A4, 0x3D77E0 }, { 0x3325A4, 0x3D77E0 }, { 0x3325CA, 0x3D77E0 }, { 0x332618, 0x3D77E0 },
+    { 0x3326DA, 0x3D77E0 }, { 0x3326DA, 0x3D77E0 }, { 0x332700, 0x3D77E0 }, { 0x33274D, 0x3D77E0 },
+    { 0x332AB7, 0x3F3790 }, { 0x332B71, 0x43D0C0 }, { 0x332BD3, 0x2D0530 }, { 0x332C21, 0x2CE180 },
+    { 0x332C41, 0x2CD2E0 }, { 0x332C63, 0x2CE7F0 }, { 0x332C85, 0x2CE7F0 }, { 0x332CA5, 0x2CF760 },
+    { 0x332CC5, 0x2D0160 }, { 0x332CE5, 0x2D3250 }, { 0x332DF7, 0x1EFAD0 }, { 0x332E17, 0x1F1150 },
+    { 0x332E57, 0x1F42B0 }, { 0x332E77, 0x1F4EB0 }, { 0x332E97, 0x1F15E0 }, { 0x332EB7, 0x1F2D40 },
+    { 0x332ED7, 0x1F31D0 }, { 0x332EF7, 0x1F6310 }, { 0x332F17, 0x1F6670 }, { 0x332F3A, 0x3F5ED0 },
+    { 0x332F5A, 0x3F5ED0 }, { 0x332F7A, 0x3F5ED0 }, { 0x332F84, 0x2D55C0 }, { 0x332F8E, 0x2D0740 },
+    { 0x332F9E, 0x43C5D0 }, { 0x332FD4, 0x3F5910 }, { 0x332FF9, 0x3F5910 }, { 0x33301F, 0x3F5910 },
+    { 0x333045, 0x3F5910 }, { 0x33306B, 0x3F5910 }, { 0x333091, 0x3F5910 }, { 0x3330B7, 0x3F5910 },
+    { 0x3330DD, 0x3F5910 }, { 0x333103, 0x3F5910 }, { 0x333129, 0x3F5910 }, { 0x33314B, 0x3E7610 },
+    { 0x33316E, 0x3E7610 }, { 0x333191, 0x3EB000 }, { 0x3331B4, 0x3EB000 }, { 0x3331D9, 0x3E8190 },
+    { 0x3331FF, 0x3E8190 }, { 0x333224, 0x3E8190 }, { 0x33324A, 0x3E8190 }, { 0x333270, 0x3E8190 },
+    { 0x333290, 0x2D36D0 }, { 0x3332B0, 0x2D4050 }, { 0x3332D0, 0x2D5060 }, { 0x3332F0, 0x2317D0 },
+    { 0x333310, 0x2319C0 }, { 0x333397, 0x3E95C0 }, { 0x3333B4, 0x3EA130 }, { 0x3333C5, 0x22F580 },
+    { 0x3333CF, 0x22E8C0 }, { SITE_TOOL_COPY_WEIGHTS_RVA, FN_TOOL_COPY_WEIGHTS_RVA },
 };
 #define TOOL_CALL_COUNT (sizeof(kToolCalls) / sizeof(kToolCalls[0]))
 #define TOOL_STUB_SIZE 32
@@ -955,14 +953,14 @@ static void SimPatches_BuildingPlacementTool(__int64 param_1, char* param_2, cha
         SimPatches_ClearPlacementActive();
     }
 
-    ((UniversalFn)(g_exeBase + 0x2D75B0))(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
+    ((UniversalFn)(g_exeBase + 0x2D77C0))(param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
 }
 
 static bool SimPatches_BlockAreaCloneTool()
 {
     if (SaveSync_GetState() == SESSION_IDLE && !Determinism_SessionRunning())
         return false;
-    *(uintptr_t*)(g_exeBase + WORLD_RVA + 0xD4C0) = 0;
+    *(uintptr_t*)(g_exeBase + WORLD_RVA + 0xD4C8) = 0;
     static ULONGLONG s_lastToast = 0;
     ULONGLONG now = GetTickCount64();
     if (now - s_lastToast > 2000) {
@@ -977,14 +975,14 @@ static void SimPatches_AreaCopyTool(__int64 a1, __int64 a2, __int64 a3, __int64 
 {
     if (SimPatches_BlockAreaCloneTool()) return;
     typedef void (*Fn)(__int64, __int64, __int64, __int64);
-    ((Fn)(g_exeBase + 0x231430))(a1, a2, a3, a4);
+    ((Fn)(g_exeBase + 0x2317D0))(a1, a2, a3, a4);
 }
 
 static void SimPatches_AreaPasteTool(__int64 a1, __int64 a2, __int64 a3, __int64 a4)
 {
     if (SimPatches_BlockAreaCloneTool()) return;
     typedef void (*Fn)(__int64, __int64, __int64, __int64);
-    ((Fn)(g_exeBase + 0x231620))(a1, a2, a3, a4);
+    ((Fn)(g_exeBase + 0x2319C0))(a1, a2, a3, a4);
 }
 
 bool SimPatches_GetActivePlacementInfo(char* outName, size_t maxLen, float* outX, float* outY, float* outZ)
@@ -1030,7 +1028,7 @@ static bool InstallToolStubs()
         }
     }
     SIZE_T size = TOOL_STUB_SIZE * (TOOL_CALL_COUNT + 16);
-    g_toolStubs = AllocNear(g_exeBase + 0x330E23, size);
+    g_toolStubs = AllocNear(g_exeBase + 0x331063, size);
     if (!g_toolStubs) return false;
     DWORD old;
     VirtualProtect(g_toolStubs, size, PAGE_EXECUTE_READWRITE, &old);
@@ -1040,39 +1038,39 @@ static bool InstallToolStubs()
         static const unsigned char jmpR10[] = { 0x41, 0xFF, 0xE2 };
         BYTE* p = g_toolStubs + TOOL_STUB_SIZE * i;
         // The copy line and depot tools go through their routes (lockstep/route_tools), which call them.
-        unsigned __int64 target = kToolCalls[i][1] == 0x2D05F0   ? (unsigned __int64)&RouteTools_LineCopyTool
-                                  : kToolCalls[i][1] == 0x2CE6A0 ? (unsigned __int64)&RouteTools_DepotTool
-                                  : kToolCalls[i][1] == 0x3EE4A0 ? (unsigned __int64)&RouteTools_SecondRoadTool
-                                  : kToolCalls[i][1] == 0x3E9310 ? (unsigned __int64)&RouteTools_GoThereTool
-                                  : kToolCalls[i][1] == 0x3E7360 ? (unsigned __int64)&RouteTools_BojkaTool
-                                  : kToolCalls[i][1] == 0x2CDC80 ? (unsigned __int64)&RouteTools_JoinHubStopTool
-                                  : kToolCalls[i][1] == 0x3E87B0 ? (unsigned __int64)&RouteTools_JoinHubTool
-                                  : kToolCalls[i][1] == 0x2D5470 ? (unsigned __int64)&RouteTools_WorkerRelocateTool
-                                  : kToolCalls[i][1] == 0x2CD190 ? (unsigned __int64)&RouteTools_VehicleCopyTool
-                                  : kToolCalls[i][1] == 0x2CF610 ? (unsigned __int64)&RouteTools_VehicleReplaceTool
-                                  : kToolCalls[i][1] == 0x2D0010 ? (unsigned __int64)&RouteTools_VehicleReplaceAutoTool
-                                  : kToolCalls[i][1] == 0x2D3100 ? (unsigned __int64)&RouteTools_VehicleToVehicleTool
-                                  : kToolCalls[i][1] == 0x1F32D0 ? (unsigned __int64)&RouteTools_VehicleSendConstrTool
-                                  : kToolCalls[i][1] == 0x317810 ? (unsigned __int64)&BrushTools_Tree
-                                  : kToolCalls[i][1] == 0x3C7820 ? (unsigned __int64)&BrushTools_Terrain
-                                  : kToolCalls[i][1] == 0x3CCD30 ? (unsigned __int64)&BrushTools_DemolishTrees
-                                  : kToolCalls[i][1] == 0x3EBB20 ? (unsigned __int64)&BrushTools_Topsoil
-                                  : kToolCalls[i][1] == 0x43B7B0 ? (unsigned __int64)&HoverTools_Waypoint
-                                  : kToolCalls[i][1] == 0x43C030 ? (unsigned __int64)&HoverTools_SignErase
-                                  : kToolCalls[i][1] == 0x43BAC0 ? (unsigned __int64)&HoverTools_Sign
-                                  : kToolCalls[i][1] == 0x43C320 ? (unsigned __int64)&HoverTools_RailPlace
-                                  : kToolCalls[i][1] == 0x43CE10 ? (unsigned __int64)&HoverTools_RailRemove
-                                  : kToolCalls[i][1] == 0x43C130 ? (unsigned __int64)&HoverTools_Junction
-                                  : kToolCalls[i][1] == 0x1EFBD0 ? (unsigned __int64)&SourceSlots_AddSourceTool
-                                  : kToolCalls[i][1] == 0x1F1250 ? (unsigned __int64)&SourceSlots_CopySourceTool
-                                  : kToolCalls[i][1] == 0x22F680 ? (unsigned __int64)&RoadSync_CtrlRectUpgradeTool
-                                  : kToolCalls[i][1] == 0x22E9C0 ? (unsigned __int64)&RoadSync_CtrlRectDemolishTool
-                                  : kToolCalls[i][1] == 0x22F370 ? (unsigned __int64)&RoadSync_ShiftCancelTool
-                                  : kToolCalls[i][1] == 0x2D3580 ? (unsigned __int64)&CargoSettings_AddStationTool
-                                  : kToolCalls[i][1] == 0x2D3F00 ? (unsigned __int64)&CargoSettings_AddStationDistTool
-                                  : kToolCalls[i][1] == 0x2D7670 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
-                                  : kToolCalls[i][1] == 0x2318D0 ? (unsigned __int64)&SimPatches_AreaCopyTool
-                                  : kToolCalls[i][1] == 0x231AC0 ? (unsigned __int64)&SimPatches_AreaPasteTool
+        unsigned __int64 target = kToolCalls[i][1] == 0x2D0740   ? (unsigned __int64)&RouteTools_LineCopyTool
+                                  : kToolCalls[i][1] == 0x2CE7F0 ? (unsigned __int64)&RouteTools_DepotTool
+                                  : kToolCalls[i][1] == 0x3EE750 ? (unsigned __int64)&RouteTools_SecondRoadTool
+                                  : kToolCalls[i][1] == 0x3E95C0 ? (unsigned __int64)&RouteTools_GoThereTool
+                                  : kToolCalls[i][1] == 0x3E7610 ? (unsigned __int64)&RouteTools_BojkaTool
+                                  : kToolCalls[i][1] == 0x2CDDD0 ? (unsigned __int64)&RouteTools_JoinHubStopTool
+                                  : kToolCalls[i][1] == 0x3E8A60 ? (unsigned __int64)&RouteTools_JoinHubTool
+                                  : kToolCalls[i][1] == 0x2D55C0 ? (unsigned __int64)&RouteTools_WorkerRelocateTool
+                                  : kToolCalls[i][1] == 0x2CD2E0 ? (unsigned __int64)&RouteTools_VehicleCopyTool
+                                  : kToolCalls[i][1] == 0x2CF760 ? (unsigned __int64)&RouteTools_VehicleReplaceTool
+                                  : kToolCalls[i][1] == 0x2D0160 ? (unsigned __int64)&RouteTools_VehicleReplaceAutoTool
+                                  : kToolCalls[i][1] == 0x2D3250 ? (unsigned __int64)&RouteTools_VehicleToVehicleTool
+                                  : kToolCalls[i][1] == 0x1F31D0 ? (unsigned __int64)&RouteTools_VehicleSendConstrTool
+                                  : kToolCalls[i][1] == 0x317A50 ? (unsigned __int64)&BrushTools_Tree
+                                  : kToolCalls[i][1] == 0x3C7AD0 ? (unsigned __int64)&BrushTools_Terrain
+                                  : kToolCalls[i][1] == 0x3CCFE0 ? (unsigned __int64)&BrushTools_DemolishTrees
+                                  : kToolCalls[i][1] == 0x3EBDD0 ? (unsigned __int64)&BrushTools_Topsoil
+                                  : kToolCalls[i][1] == 0x43BA60 ? (unsigned __int64)&HoverTools_Waypoint
+                                  : kToolCalls[i][1] == 0x43C2E0 ? (unsigned __int64)&HoverTools_SignErase
+                                  : kToolCalls[i][1] == 0x43BD70 ? (unsigned __int64)&HoverTools_Sign
+                                  : kToolCalls[i][1] == 0x43C5D0 ? (unsigned __int64)&HoverTools_RailPlace
+                                  : kToolCalls[i][1] == 0x43D0C0 ? (unsigned __int64)&HoverTools_RailRemove
+                                  : kToolCalls[i][1] == 0x43C3E0 ? (unsigned __int64)&HoverTools_Junction
+                                  : kToolCalls[i][1] == 0x1EFAD0 ? (unsigned __int64)&SourceSlots_AddSourceTool
+                                  : kToolCalls[i][1] == 0x1F1150 ? (unsigned __int64)&SourceSlots_CopySourceTool
+                                  : kToolCalls[i][1] == 0x22F580 ? (unsigned __int64)&RoadSync_CtrlRectUpgradeTool
+                                  : kToolCalls[i][1] == 0x22E8C0 ? (unsigned __int64)&RoadSync_CtrlRectDemolishTool
+                                  : kToolCalls[i][1] == 0x22F270 ? (unsigned __int64)&RoadSync_ShiftCancelTool
+                                  : kToolCalls[i][1] == 0x2D36D0 ? (unsigned __int64)&CargoSettings_AddStationTool
+                                  : kToolCalls[i][1] == 0x2D4050 ? (unsigned __int64)&CargoSettings_AddStationDistTool
+                                  : kToolCalls[i][1] == 0x2D77C0 ? (unsigned __int64)&SimPatches_BuildingPlacementTool
+                                  : kToolCalls[i][1] == 0x2317D0 ? (unsigned __int64)&SimPatches_AreaCopyTool
+                                  : kToolCalls[i][1] == 0x2319C0 ? (unsigned __int64)&SimPatches_AreaPasteTool
                                   : kToolCalls[i][1] == FN_TOOL_COPY_WEIGHTS_RVA ? (unsigned __int64)&BuildingSwitches_CopyWeightsTool
                                                                  : (unsigned __int64)(g_exeBase + kToolCalls[i][1]);
         p = EmitImm(p, 0x49, 0xBB, target); // mov r11, target
@@ -1123,12 +1121,12 @@ int SimPatches_LastPopulation() { return g_lastPopulation; }
 // it takes the renderer lock (where vanilla only takes the lock), so the
 // render and the simulation never overlap. Costs frame rate, not visuals.
 
-#define FRAME_LOCK_SITE 0x11D9F3   // call [EnterCriticalSection] on renderer+0x80
+#define FRAME_LOCK_SITE 0x11D883   // call [EnterCriticalSection] on renderer+0x80
 #define FRAME_LOCK_IMPORT 0x8B2830
 #define RENDERER_RVA 0x9E03A0      // renderer object; +0x68 its "finished" event
 #define RENDERER_FINISHED 0x68
 #define RENDER_WAIT_MS 2000
-static const unsigned char kFrameLockOriginal[6] = { 0xff, 0x15, 0x37, 0x4e, 0x79, 0x00 };
+static const unsigned char kFrameLockOriginal[6] = { 0xff, 0x15, 0xa7, 0x4f, 0x79, 0x00 };
 typedef void (WINAPI* EnterCsFn)(LPCRITICAL_SECTION);
 static volatile LONG g_renderWaitTimeouts = 0;
 
@@ -1177,12 +1175,12 @@ static void DetFrameLock(LPCRITICAL_SECTION cs)
 // and the render wait before Early keep the simulation out meanwhile.
 // (by SoylentGreed)
 
-#define UI_ROUTINE_RVA 0x3365B0
-#define UI_ROUTINE_CALL 0x4A8CE7
-#define SEARCH_WORKSPACE_OFFSET 0x14528
+#define UI_ROUTINE_RVA 0x3367F0
+#define UI_ROUTINE_CALL 0x4A8FC7
+#define SEARCH_WORKSPACE_OFFSET 0x14530
 #define SEARCH_WORKSPACE_SIZE 72 // three vector headers {begin, end, capacity}
 #define GAME_TIMER_RVA_VIEW 0xA1EEF0
-static const unsigned char kUiCallOriginal[5] = { 0xe8, 0xc4, 0xd8, 0xe8, 0xff };
+static const unsigned char kUiCallOriginal[5] = { 0xe8, 0x24, 0xd8, 0xe8, 0xff };
 static BYTE g_privateSearch[SEARCH_WORKSPACE_SIZE] = {};
 static volatile LONG g_uiEnclosed = 0;
 static LARGE_INTEGER g_viewClock = {}, g_uiClock = {}, g_viewFrequency = {};
@@ -1275,10 +1273,10 @@ static __int64 DetUiRoutine(void* world)
 // the camera followed. While the layer is on, Prepare runs with the speed
 // word at 0; the frame controller raises it only for Early. (by SoylentGreed)
 
-#define PREPARE_RVA 0x3F73C0
-#define PREPARE_CALL 0x11DA56
+#define PREPARE_RVA 0x3F7670
+#define PREPARE_CALL 0x11D8E6
 #define WORLD_SPEED_OFFSET 0x5CC
-static const unsigned char kPrepareCallOriginal[5] = { 0xe8, 0x65, 0x99, 0x2d, 0x00 };
+static const unsigned char kPrepareCallOriginal[5] = { 0xe8, 0x85, 0x9d, 0x2d, 0x00 };
 
 // The frame controller gives the game timer (exe+9d4ee0) the tick's fixed rate
 // and pauses it on held frames, which is right for the simulation but not for
@@ -1357,17 +1355,17 @@ static void DetPrepare(__int64 world)
 static void DetPieceSpeed(void* network)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*))(g_exeBase + 0x56E0F0))(network);
+        ((void (*)(void*))(g_exeBase + 0x56E3D0))(network);
 }
 static void DetWeather(void* world, unsigned long long init)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*, unsigned long long))(g_exeBase + 0x352540))(world, init);
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x3527F0))(world, init);
 }
 static void DetRoadWeather(void* world, unsigned long long init)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*, unsigned long long))(g_exeBase + 0x5F76A0))(world, init);
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x5F7970))(world, init);
 }
 // Two more queues the Late body works off by frame, not by tick (30d6bc,
 // 30d6c4): 12fd80 drains the list at world+11fa0 with a budget of 1000 per
@@ -1381,12 +1379,12 @@ static void DetRoadWeather(void* world, unsigned long long init)
 static void DetBuildingLinks(void* world, unsigned long long all)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*, unsigned long long))(g_exeBase + 0x148770))(world, all);
+        ((void (*)(void*, unsigned long long))(g_exeBase + 0x148600))(world, all);
 }
 static void DetConnectionChecks(void* world)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*))(g_exeBase + 0x147630))(world);
+        ((void (*)(void*))(g_exeBase + 0x1474C0))(world);
 }
 // The ground-paint queue world+130d0 (filled by 40eaa0 when roads and
 // buildings are built) is drained by 40ece0 at 3155f4 on every frame too: a
@@ -1395,7 +1393,7 @@ static void DetConnectionChecks(void* world)
 static void DetGroundPaint(void* world)
 {
     if (!Determinism_IsActive() || Determinism_IsStepFrame())
-        ((void (*)(void*))(g_exeBase + 0x432A50))(world);
+        ((void (*)(void*))(g_exeBase + 0x432D00))(world);
 }
 // The building windows (6f8cc0, 7fc880) show a construction cost every frame
 // through 1a48c0, whose 1a0570 starts with building +0x600 = +0x604 (1a0612).
@@ -1405,7 +1403,7 @@ static void DetGroundPaint(void* world)
 static float DetDisplayCost(void* world, BYTE* building, unsigned long long flag)
 {
     typedef float (*CostFn)(void*, BYTE*, unsigned long long);
-    CostFn original = (CostFn)(g_exeBase + 0x1BD700);
+    CostFn original = (CostFn)(g_exeBase + 0x1BD5A0);
     if (!Determinism_IsActive() || !building) return original(world, building, flag);
     unsigned kept = 0;
     __try {
@@ -1425,9 +1423,9 @@ static float DetDisplayCost(void* world, BYTE* building, unsigned long long flag
 // and places when the spot is valid. In lockstep that press becomes a
 // placement command instead (world_sync/local_builds), and the game reads it
 // as not pressed; every other read of the mouse in the tool stays real.
-#define PLACE_PRESS_SITE 0x2E8DBC
+#define PLACE_PRESS_SITE 0x2E8F0C
 #define PLACE_PRESS_IMPORT 0x8B1958 // C3D_INPUT::GetMouseLeftPress
-static const unsigned char kPlacePressOriginal[6] = { 0xff, 0x15, 0x96, 0x8b, 0x5c, 0x00 };
+static const unsigned char kPlacePressOriginal[6] = { 0xff, 0x15, 0x46, 0x8a, 0x5c, 0x00 };
 typedef bool (*PressFn)(void* input);
 
 static bool DetPlacePress(void* input)
@@ -1440,8 +1438,8 @@ static bool DetPlacePress(void* input)
 // The purchase window's Buy press (80cc60 reads it at 810943, from the
 // interface): in lockstep it becomes a purchase command (lockstep/purchase),
 // read from the caller's registers one frame up. (by SoylentGreed)
-#define BUY_PRESS_SITE 0x852642
-static const unsigned char kBuyPressOriginal[6] = { 0xff, 0x15, 0x10, 0xf3, 0x05, 0x00 };
+#define BUY_PRESS_SITE 0x852B02
+static const unsigned char kBuyPressOriginal[6] = { 0xff, 0x15, 0x50, 0xee, 0x05, 0x00 };
 
 static bool DetBuyPress(void* input)
 {
@@ -1498,11 +1496,11 @@ static U64 DetDepotMark(U64 w, U64 depot, U64 a3, U64 a4, U64 a5)
 // PC; this PC's own hover and previews keep its mouse ray.
 #define PICK_RAY_SITES 4
 #define NORMALIZE_IMPORT 0x8B1118 // C3DVec3Normalize
-static const unsigned kPickRaySites[PICK_RAY_SITES] = { 0x3E3751, 0x3F39FF, 0x3CD494, 0x3EF520 };
-static const unsigned char kPickRayOriginal[PICK_RAY_SITES][6] = { { 0xff, 0x15, 0xc1, 0xd9, 0x4c, 0x00 },
-                                                                   { 0xff, 0x15, 0x13, 0xd7, 0x4b, 0x00 },
-                                                                   { 0xff, 0x15, 0x7e, 0x3c, 0x4e, 0x00 },
-                                                                   { 0xff, 0x15, 0xf2, 0x1b, 0x4c, 0x00 } };
+static const unsigned kPickRaySites[PICK_RAY_SITES] = { 0x3E3A01, 0x3F3CAF, 0x3CD744, 0x3EF7D0 };
+static const unsigned char kPickRayOriginal[PICK_RAY_SITES][6] = { { 0xff, 0x15, 0x11, 0xd7, 0x4c, 0x00 },
+                                                                   { 0xff, 0x15, 0x63, 0xd4, 0x4b, 0x00 },
+                                                                   { 0xff, 0x15, 0xce, 0x39, 0x4e, 0x00 },
+                                                                   { 0xff, 0x15, 0x42, 0x19, 0x4c, 0x00 } };
 static bool PickRaySitesAre()
 {
     for (int i = 0; i < PICK_RAY_SITES; i++)
@@ -1553,7 +1551,7 @@ static void DetVehHighlightExtra(void* vehicle, unsigned char a2, unsigned char 
     HeldFrame_SubmitVehicleHighlight(vehicle, a2, a3, colorRgba, flag, true);
 }
 
-#define HOVER_PICK_RVA 0x30DBC0
+#define HOVER_PICK_RVA 0x30DD10
 static void DetHoverPick(__int64 world)
 {
     typedef void (*HoverPickFn)(__int64);
@@ -1574,8 +1572,8 @@ static void DetHoverPick(__int64 world)
 }
 
 #define STEP_CALL_COUNT 39
-static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x32C9AC, 0x32C9B8, 0x32C9C4, 0x32BFB0, 0x32BFBA, 0x32BC98, 0x32BCA0, 0x333DF4, 0x72EF89, 0x72F078, 0x72F1BE, 0x7303F9, 0x73044D, 0x83CFE6, 0x83D0DC, 0x83D200, 0x2CE0D0, 0x2D0493, 0x2D09EC, 0x2CF0BE, 0x2D351A, 0x2D59F3, 0x2CDA22, 0x2CFDEF, 0x2CFF5B, 0x2D036F, 0x1F38D6, 0x1F3BB8, CHEAT_KEYS_CALL_RVA, 0x274865, 0x43018F, 0x4301A8, 0x430A16, 0x430A2D, 0x431623, 0x43163B, 0x4321E9, 0x4321FE, 0x11DB39 };
-static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x56E0F0, 0x56E0F0, 0x56E0F0, 0x352540, 0x5F76A0, 0x148770, 0x147630, 0x432A50, 0x1BD700, 0x1BD700, 0x1BD700, 0x1BD700, 0x1BD700, 0x1BD700, 0x1BD700, 0x1BD700, 0x2D0AB0, 0x2D0AB0, 0x430A90, 0x42F980, 0x430A90, 0x42F980, 0x42F980, 0x42F980, 0x42F980, 0x42F980, 0x42F980, 0x42F980, CHEAT_KEYS_STEP_RVA, 0x41BA30, 0x6A2010, 0x69FB10, 0x6A2010, 0x69FB10, 0x6A2010, 0x69FB10, 0x6A2010, 0x69FB10, HOVER_PICK_RVA };
+static const unsigned kStepCalls[STEP_CALL_COUNT] = { 0x32CBEC, 0x32CBF8, 0x32CC04, 0x32C1F0, 0x32C1FA, 0x32BED8, 0x32BEE0, 0x334034, 0x72F2F9, 0x72F3E8, 0x72F52E, 0x730769, 0x7307BD, 0x83D4A6, 0x83D59C, 0x83D6C0, 0x2CE220, 0x2D05E3, 0x2D0B3C, 0x2CF20E, 0x2D366A, 0x2D5B43, 0x2CDB72, 0x2CFF3F, 0x2D00AB, 0x2D04BF, 0x1F37D6, 0x1F3AB8, CHEAT_KEYS_CALL_RVA, 0x274715, 0x43043F, 0x430458, 0x430CC6, 0x430CDD, 0x4318D3, 0x4318EB, 0x432499, 0x4324AE, 0x11D9C9 };
+static const unsigned kStepTargets[STEP_CALL_COUNT] = { 0x56E3D0, 0x56E3D0, 0x56E3D0, 0x3527F0, 0x5F7970, 0x148600, 0x1474C0, 0x432D00, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x1BD5A0, 0x2D0C00, 0x2D0C00, 0x430D40, 0x42FC30, 0x430D40, 0x42FC30, 0x42FC30, 0x42FC30, 0x42FC30, 0x42FC30, 0x42FC30, 0x42FC30, CHEAT_KEYS_STEP_RVA, 0x41BCE0, 0x6A22E0, 0x69FDE0, 0x6A22E0, 0x69FDE0, 0x6A22E0, 0x69FDE0, 0x6A22E0, 0x69FDE0, HOVER_PICK_RVA };
 static const int kStepSlots[STEP_CALL_COUNT] = { 6, 6, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 15, 16, 17, 18,
                                                  17, 18, 18, 18, 18, 18, 18, 18, 20, 21,
                                                  22, 23, 22, 23, 22, 23, 22, 23,
@@ -1609,10 +1607,8 @@ static bool CallTo(unsigned int site, BYTE* target, unsigned char out[5])
     return true;
 }
 
-#define BUILDING_RENDER_PASS_RVA 0x2F8F50
-static const unsigned char kBuildingRenderExpect[18] = {
-    0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xC0, 0xCE, 0xFF, 0xFF
-};
+#define BUILDING_RENDER_PASS_RVA 0x2F90A0
+static const unsigned char kBuildingRenderExpect[18] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xC0, 0xCE, 0xFF, 0xFF };
 typedef void* (*BuildingRenderPassFn)(void* rcx, void* rdx, void* r8, void* r9);
 static BuildingRenderPassFn o_buildingRenderPass = nullptr;
 
@@ -1795,9 +1791,7 @@ void SimPatches_TestC3dRestoreOriginalValues(void* material)
 // Terminal & Attached Aircraft Stand Arrival/Corridor Lock Sanitizer (0x6CD1E0)
 // ---------------------------------------------------------------------------
 
-static const unsigned char kVehArrivalStepExpect[15] = {
-    0x40, 0x53, 0x55, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00
-};
+static const unsigned char kVehArrivalStepExpect[15] = { 0x40, 0x53, 0x55, 0x56, 0x41, 0x54, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 };
 typedef void (__fastcall* VehicleArrivalStepFn)(void* vehicle);
 static VehicleArrivalStepFn o_vehicleArrivalStep = nullptr;
 
@@ -2043,10 +2037,7 @@ void SimPatches_TestHookedVehicleArrivalStep(void* vehicle)
     HookedVehicleArrivalStep(vehicle);
 }
 
-static const unsigned char kIsVehicleAtDepotOrStopExpect[18] = {
-    0x4D, 0x8B, 0xD0, 0x48, 0x85, 0xD2, 0x75, 0x03, 0x32, 0xC0,
-    0xC3, 0x48, 0x8B, 0x82, 0xB0, 0x05, 0x00, 0x00
-};
+static const unsigned char kIsVehicleAtDepotOrStopExpect[18] = { 0x4D, 0x8B, 0xD0, 0x48, 0x85, 0xD2, 0x75, 0x03, 0x32, 0xC0, 0xC3, 0x48, 0x8B, 0x82, 0xB0, 0x05, 0x00, 0x00 };
 static void* o_isVehicleAtDepotOrStop = nullptr;
 
 static unsigned char IsVehicleAtDepotOrStopInner(const BYTE* bld, const BYTE* veh, unsigned char a4)
@@ -2078,9 +2069,9 @@ static unsigned char IsVehicleAtDepotOrStopInner(const BYTE* bld, const BYTE* ve
     if (bldCat == 0x0E) {
         int32_t bldSub = *(const int32_t*)(bldType + 0x36C);
         if (bldSub == 0x24) {
-            if (g_exeBase && g_exeBase[0x6F15B0] != 0x00 && g_exeBase[0x6F15B0] != 0xC3) {
+            if (g_exeBase && g_exeBase[0x6F1920] != 0x00 && g_exeBase[0x6F1920] != 0xC3) {
                 typedef unsigned char (__fastcall* Sub24CheckFn)(const BYTE*, unsigned int);
-                return ((Sub24CheckFn)(g_exeBase + 0x6F15B0))(veh, (unsigned int)a4);
+                return ((Sub24CheckFn)(g_exeBase + 0x6F1920))(veh, (unsigned int)a4);
             }
             return a4 ? 1 : 0;
         }
@@ -2118,10 +2109,7 @@ unsigned char SimPatches_TestIsVehicleAtDepotOrStop(const void* bld, const void*
 
 // Crash A: guard 0x41E9F0 (UpdateSignalBlock) against corrupt segment->signalBlock pointers
 // such as 0x90 dereferenced at 0x41EA0C ([rdx+0x14]) or missing node ptr at 0x41EB5A ([rdx+0x08]).
-static const unsigned char kUpdateSignalBlockExpect[16] = {
-    0x48, 0x89, 0x5C, 0x24, 0x18, 0x56, 0x48, 0x83,
-    0xEC, 0x30, 0x48, 0x8B, 0xF2, 0x48, 0x8B, 0xD9
-};
+static const unsigned char kUpdateSignalBlockExpect[16] = { 0x48, 0x89, 0x5C, 0x24, 0x18, 0x56, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8B, 0xF2, 0x48, 0x8B, 0xD9 };
 typedef void (__fastcall* UpdateSignalBlockFn)(void* world, void* segPtr);
 static UpdateSignalBlockFn o_updateSignalBlock = nullptr;
 

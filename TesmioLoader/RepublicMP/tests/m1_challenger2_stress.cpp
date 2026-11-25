@@ -34,7 +34,7 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
 
     // Set up Road manager (0xF7A0)
     std::vector<BYTE> roadMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF838) = roadMgr.data();
+    *(BYTE**)(world + 0xF840) = roadMgr.data();
 
     // 1. Local player initiates active drag
     *(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
@@ -62,13 +62,13 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localRoute.data() + localRoute.size();
 
     // Setup mock function return stubs
-    g_mockExeBuffer[0x3EEEA0] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x522E00] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x53ED90] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x238460] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x568C10] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3EF150] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x522630] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x5230E0] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x53F070] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x238310] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x568EF0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x568DC0] = 0xC3; // queueDeleteMesh ret
 
     // 2. Simulate 1,000 rapid interleaved commands from 3 remote players (Player 2, 3, 4)
     int successfulReplays = 0;
@@ -135,7 +135,7 @@ static bool SubTest_M1_Challenger2_RapidInterleavedDragContinuity()
     TEST_CHECK(*(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) == 0);
 
     // Teardown world reference to avoid dangling pointer
-    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xF840) = nullptr;
 
     printf("      Verified: 1,000 rapid interleaved commands applied with 0 heap corruption, 0 double frees, 100%% drag continuity.\n");
     fflush(stdout);
@@ -185,15 +185,15 @@ static bool SubTest_M1_Challenger2_SnapshotManagerRouteMemorySafety()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF838) = roadMgr.data();
+    *(BYTE**)(world + 0xF840) = roadMgr.data();
 
-    g_mockExeBuffer[0x3EEEA0] = 0xC3;
-    g_mockExeBuffer[0x522350] = 0xC3;
-    g_mockExeBuffer[0x522E00] = 0xC3;
-    g_mockExeBuffer[0x53ED90] = 0xC3;
-    g_mockExeBuffer[0x238460] = 0xC3;
-    g_mockExeBuffer[0x568C10] = 0xC3;
-    g_mockExeBuffer[0x568AE0] = 0xC3;
+    g_mockExeBuffer[0x3EF150] = 0xC3;
+    g_mockExeBuffer[0x522630] = 0xC3;
+    g_mockExeBuffer[0x5230E0] = 0xC3;
+    g_mockExeBuffer[0x53F070] = 0xC3;
+    g_mockExeBuffer[0x238310] = 0xC3;
+    g_mockExeBuffer[0x568EF0] = 0xC3;
+    g_mockExeBuffer[0x568DC0] = 0xC3;
 
     auto remoteMsgPtr = std::make_unique<RoadSyncMsg>();
     RoadSyncMsg& remoteMsg = *remoteMsgPtr;
@@ -280,7 +280,7 @@ static bool SubTest_M1_Challenger2_SnapshotManagerRouteMemorySafety()
     TEST_CHECK(oracleCount == 0);
 
     // Teardown
-    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xF840) = nullptr;
     printf("      Verified: Pointer validation boundaries confirmed; non-canonical route pointer failure mode isolated.\n");
     fflush(stdout);
     return true;
@@ -298,7 +298,7 @@ static bool SubTest_M1_Challenger2_MultiThreadedConcurrencyStress()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF838) = roadMgr.data();
+    *(BYTE**)(world + 0xF840) = roadMgr.data();
 
     *(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
     *(void**)(roadMgr.data() + 0x5F8) = (void*)0xAAAAULL;
@@ -314,13 +314,13 @@ static bool SubTest_M1_Challenger2_MultiThreadedConcurrencyStress()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x418) = localPts + 2;
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localPts + 2;
 
-    g_mockExeBuffer[0x3EEEA0] = 0xC3;
-    g_mockExeBuffer[0x522350] = 0xC3;
-    g_mockExeBuffer[0x522E00] = 0xC3;
-    g_mockExeBuffer[0x53ED90] = 0xC3;
-    g_mockExeBuffer[0x238460] = 0xC3;
-    g_mockExeBuffer[0x568C10] = 0xC3;
-    g_mockExeBuffer[0x568AE0] = 0xC3;
+    g_mockExeBuffer[0x3EF150] = 0xC3;
+    g_mockExeBuffer[0x522630] = 0xC3;
+    g_mockExeBuffer[0x5230E0] = 0xC3;
+    g_mockExeBuffer[0x53F070] = 0xC3;
+    g_mockExeBuffer[0x238310] = 0xC3;
+    g_mockExeBuffer[0x568EF0] = 0xC3;
+    g_mockExeBuffer[0x568DC0] = 0xC3;
 
     // Concurrent execution across 2 threads simulating simultaneous network packet arrivals
     std::atomic<bool> startFlag{false};
@@ -363,7 +363,7 @@ static bool SubTest_M1_Challenger2_MultiThreadedConcurrencyStress()
     TEST_CHECK(_CrtCheckMemory() == TRUE);
 
     // Teardown
-    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xF840) = nullptr;
 
     printf("      Completed: 100 concurrent calls executed; heap integrity intact (_CrtCheckMemory == TRUE).\n");
     fflush(stdout);

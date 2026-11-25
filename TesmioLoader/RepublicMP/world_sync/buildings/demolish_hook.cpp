@@ -87,27 +87,27 @@ static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigne
     msg.demolishEb1 = *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET);
     msg.demolishShift = (*(int*)(g_exeBase + 0xA1FA40) != 0) ? 1 : 0;
     msg.demolishCtrl  = (*(int*)(g_exeBase + 0xA1FA44) != 0) ? 1 : 0;
-    msg.fromDialog424 = (callerRva == 0x83D5A2) ? 1 : 0;
-    msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC830);
-    msg.assignFromTool = (callerRva == 0x1F54A8 || callerRva == 0x1F5A2E) ? 1 : 0;
+    msg.fromDialog424 = (callerRva == 0x83DA62) ? 1 : 0;
+    msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC838);
+    msg.assignFromTool = (callerRva == 0x1F53A8 || callerRva == 0x1F592E) ? 1 : 0;
     msg.assignPriority = (*(unsigned char*)(g_exeBase + 0xA9EC6D) != 0) ? 1 : 0;
     msg.assignIsDemolishOffice = 0;
     msg.sliderValue = 0;
-    void* sliderWidget = *(void**)(thisPtr + 0xC828);
+    void* sliderWidget = *(void**)(thisPtr + 0xC830);
     if (sliderWidget && (msg.demolishEb1 != 0 || msg.fromDialog424)) {
         typedef float (*ReadSliderFn)(void*);
-        msg.sliderValue = (int)((ReadSliderFn)(g_exeBase + 0x117290))(sliderWidget);
+        msg.sliderValue = (int)((ReadSliderFn)(g_exeBase + 0x117120))(sliderWidget);
     }
     msg.assignOffice = kNoRef;
     msg.assignDist = 0.0f;
     if (msg.assignFromTool) {
-        U64 office = *(U64*)(thisPtr + 0xD330);
+        U64 office = *(U64*)(thisPtr + 0xD338);
         if (office && Ref_Building(office, msg.assignOffice)) {
             // Native 0x1DAFFD passes (office->cat == 0x1C [RCO]) ? 1 : 0 as 0x17A750's triggerImmediateScan.
             msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == (int)BLD_CAT_RAIL_CO) ? 1 : 0;
         }
-        if (callerRva == 0x1F5A2E)
-            msg.assignDist = *(float*)(thisPtr + 0xF658);
+        if (callerRva == 0x1F592E)
+            msg.assignDist = *(float*)(thisPtr + 0xF660);
     }
 }
 
@@ -182,8 +182,8 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
-            if (callerRva == 0x83D5A2) {
-                *retSlot = g_exeBase + 0x83D5F1;
+            if (callerRva == 0x83DA62) {
+                *retSlot = g_exeBase + 0x83DAB1;
             }
             SaveSync_NotifyWaitingLobbyActionBlocked();
             InterlockedDecrement(&g_depth);
@@ -191,10 +191,10 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
         }
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args, callerRva)) {
-            if (callerRva == 0x83D5A2) {
+            if (callerRva == 0x83DA62) {
                 // Skip post-call 0x7FD000..0x7FD04E on the UI pass so it does not write
                 // +0x879/+0x630 before 0x168730 runs at the Lockstep boundary.
-                *retSlot = g_exeBase + 0x83D5F1;
+                *retSlot = g_exeBase + 0x83DAB1;
             }
             InterlockedDecrement(&g_depth);
             return;
@@ -275,11 +275,11 @@ bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyn
                 if (office) {
                     typedef void (*AssignOfficeFn)(__int64 world, __int64 office, __int64 target,
                                                    float dist, unsigned char p5, unsigned char isDemolishOffice);
-                    ((AssignOfficeFn)(g_exeBase + 0x17A750))(thisPtr, (__int64)office, building,
+                    ((AssignOfficeFn)(g_exeBase + 0x17A5E0))(thisPtr, (__int64)office, building,
                                                              msg.assignDist, 0, msg.assignIsDemolishOffice);
                     if (msg.assignPriority) {
                         typedef void (*SetPriorityFn)(__int64 world, __int64 target, unsigned char prio);
-                        ((SetPriorityFn)(g_exeBase + 0x1B9310))(thisPtr, building, 1);
+                        ((SetPriorityFn)(g_exeBase + 0x1B91B0))(thisPtr, building, 1);
                     }
                 }
             }

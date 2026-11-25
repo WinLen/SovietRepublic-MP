@@ -60,8 +60,8 @@ static bool SubTest_M1_Bug1_CurrencyDenomination()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     BYTE* curStat = world + WORLD_STAT_CURRENT_OFFSET;
 
-    TEST_CHECK(SITE_DENOMINATION_RVA == 0x83CBD0u);
-    TEST_CHECK(FN_CURRENCY_DENOMINATION_RVA == 0x318220u);
+    TEST_CHECK(SITE_DENOMINATION_RVA == 0x83D090u);
+    TEST_CHECK(FN_CURRENCY_DENOMINATION_RVA == 0x318460u);
     TEST_CHECK(WINDOW_POPUP_TYPE_OFFSET == 0x34u);
     TEST_CHECK(WINDOW_POPUP_TYPE_DENOMINATION == 0x13);
     TEST_CHECK(CURRENCY_DENOMINATION_DIVISOR == 100.0);
@@ -239,9 +239,9 @@ static bool SubTest_M1_Bug2_FactoryReplaceMachines()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(SITE_FACTORY_REPLACE_MACHINES_1_RVA == 0x7B3274u);
-    TEST_CHECK(SITE_FACTORY_REPLACE_MACHINES_2_RVA == 0x7B34E7u);
-    TEST_CHECK(RVA_START_PLANNED_CONSTRUCTION == 0x1C1BB0u);
+    TEST_CHECK(SITE_FACTORY_REPLACE_MACHINES_1_RVA == 0x7B36C4u);
+    TEST_CHECK(SITE_FACTORY_REPLACE_MACHINES_2_RVA == 0x7B3937u);
+    TEST_CHECK(RVA_START_PLANNED_CONSTRUCTION == 0x1C1A50u);
 
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_FACTORY_REPLACE_MACHINES_1_RVA, RVA_START_PLANNED_CONSTRUCTION));
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_FACTORY_REPLACE_MACHINES_2_RVA, RVA_START_PLANNED_CONSTRUCTION));
@@ -309,8 +309,8 @@ static bool SubTest_M1_Bug3_AutoReplaceClear()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(SITE_AUTO_REPLACE_CLEAR_RVA == 0x84F9DFu);
-    TEST_CHECK(RVA_SET_AUTO_REPLACE == 0x63C140u);
+    TEST_CHECK(SITE_AUTO_REPLACE_CLEAR_RVA == 0x84FE9Fu);
+    TEST_CHECK(RVA_SET_AUTO_REPLACE == 0x63C410u);
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_AUTO_REPLACE_CLEAR_RVA, RVA_SET_AUTO_REPLACE));
     TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_AUTO_REPLACE_CLEAR_RVA), "Mxx") == 0);
 
@@ -397,8 +397,8 @@ static bool SubTest_M1_Bug4_LineAssignFromLinesList()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(SITE_LINES_LIST_ASSIGN_VEHICLE_RVA == 0x379360u);
-    TEST_CHECK(RVA_LINES_ASSIGN_VEHICLE == 0x4BDCB0u);
+    TEST_CHECK(SITE_LINES_LIST_ASSIGN_VEHICLE_RVA == 0x379610u);
+    TEST_CHECK(RVA_LINES_ASSIGN_VEHICLE == 0x4BDF90u);
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_LINES_LIST_ASSIGN_VEHICLE_RVA, RVA_LINES_ASSIGN_VEHICLE));
     TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_LINES_LIST_ASSIGN_VEHICLE_RVA), "MLVbo") == 0);
 
@@ -472,7 +472,7 @@ bool Test_R2Bugs_DenomReplaceAutoReplaceLineSet()
     printf("    [Bug #2: Factory ReplaceMachines (0x7762E4 & 0x776557 WObb, TwoStates Collision)] ...\n"); fflush(stdout);
     if (!SubTest_M1_Bug2_FactoryReplaceMachines()) return false;
 
-    printf("    [Bug #3: Auto-Replace Rule Clear (0x80F4FE -> 0x63C140, kind=0xB used=2)] ...\n"); fflush(stdout);
+    printf("    [Bug #3: Auto-Replace Rule Clear (0x80F4FE -> 0x63C410, kind=0xB used=2)] ...\n"); fflush(stdout);
     if (!SubTest_M1_Bug3_AutoReplaceClear()) return false;
 
     printf("    [Bug #4: Line Assignment from Lines List (0x35A870 -> 0x497AA0, MLVbo)] ...\n"); fflush(stdout);
@@ -553,14 +553,14 @@ static bool SubTest_M2_Bug5_RecallPersonalCars()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(RVA_DETACH_PERSONAL_CAR == 0x872E80u);
-    TEST_CHECK(SITE_RECALL_DETACH_PERSONAL_CAR_RVA == 0x7DF518u);
-    TEST_CHECK(SITE_RECALL_SEND_TO_DEPOT_RVA == 0x7DF53Bu);
+    TEST_CHECK(RVA_DETACH_PERSONAL_CAR == 0x873370u);
+    TEST_CHECK(SITE_RECALL_DETACH_PERSONAL_CAR_RVA == 0x7DF968u);
+    TEST_CHECK(SITE_RECALL_SEND_TO_DEPOT_RVA == 0x7DF98Bu);
     TEST_CHECK(VEH_OWNER_CITIZEN_OFFSET == 0x04E8u);
     TEST_CHECK(CIT_PERSONAL_CAR_OFFSET == 0x0688u);
 
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_RECALL_DETACH_PERSONAL_CAR_RVA, RVA_DETACH_PERSONAL_CAR));
-    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_RECALL_SEND_TO_DEPOT_RVA, 0x41EE40u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_RECALL_SEND_TO_DEPOT_RVA, 0x41F0F0u));
     TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_RECALL_DETACH_PERSONAL_CAR_RVA), "WV") == 0);
     TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_RECALL_SEND_TO_DEPOT_RVA), "WVbbbb") == 0);
 
@@ -572,7 +572,7 @@ static bool SubTest_M2_Bug5_RecallPersonalCars()
     g_m2DepotLastVeh = nullptr;
     memset(g_m2DepotLastArgs, 0, sizeof(g_m2DepotLastArgs));
     WriteAbsJmp12(g_mockExeBuffer + RVA_DETACH_PERSONAL_CAR, (void*)&MockDetachPersonalCar);
-    WriteAbsJmp12(g_mockExeBuffer + 0x41EE40u, (void*)&MockSendToDepot);
+    WriteAbsJmp12(g_mockExeBuffer + 0x41F0F0u, (void*)&MockSendToDepot);
 
     std::vector<BYTE> bldWest(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> bldEast(BUILDING_STRUCT_BYTES, 0);
@@ -670,16 +670,16 @@ static bool SubTest_M2_Bug6_AutoBuyExportSliders()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(SITE_BLD_INIT_SLIDERS_DISABLE_RVA == 0x74792Bu);
-    TEST_CHECK(SITE_BLD_AUTO_BUY_DISABLE_RVA == 0x74793Du);
-    TEST_CHECK(SITE_AUTO_BUY_DISABLE_AFTER_RVA == 0x747942u);
-    TEST_CHECK(SITE_AUTO_BUY_DISABLE_SKIP_RVA == 0x747949u);
-    TEST_CHECK(SITE_BLD_INIT_SLIDERS_CANCEL_RVA == 0x7479C0u);
-    TEST_CHECK(SITE_MANUAL_BUY_AFTER_RVA == 0x747A50u);
-    TEST_CHECK(SITE_MANUAL_BUY_SKIP_RVA == 0x747A57u);
-    TEST_CHECK(SITE_BLD_AUTO_BUY_APPLY_RVA == 0x747AD2u);
-    TEST_CHECK(SITE_AUTO_BUY_APPLY_AFTER_RVA == 0x747AD7u);
-    TEST_CHECK(SITE_AUTO_BUY_APPLY_SKIP_RVA == 0x747ADEu);
+    TEST_CHECK(SITE_BLD_INIT_SLIDERS_DISABLE_RVA == 0x747D7Bu);
+    TEST_CHECK(SITE_BLD_AUTO_BUY_DISABLE_RVA == 0x747D8Du);
+    TEST_CHECK(SITE_AUTO_BUY_DISABLE_AFTER_RVA == 0x747D92u);
+    TEST_CHECK(SITE_AUTO_BUY_DISABLE_SKIP_RVA == 0x747D99u);
+    TEST_CHECK(SITE_BLD_INIT_SLIDERS_CANCEL_RVA == 0x747E10u);
+    TEST_CHECK(SITE_MANUAL_BUY_AFTER_RVA == 0x747EA0u);
+    TEST_CHECK(SITE_MANUAL_BUY_SKIP_RVA == 0x747EA7u);
+    TEST_CHECK(SITE_BLD_AUTO_BUY_APPLY_RVA == 0x747F22u);
+    TEST_CHECK(SITE_AUTO_BUY_APPLY_AFTER_RVA == 0x747F27u);
+    TEST_CHECK(SITE_AUTO_BUY_APPLY_SKIP_RVA == 0x747F2Eu);
 
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_BLD_INIT_SLIDERS_DISABLE_RVA, BLD_INIT_RES_SLIDERS_RVA));
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_BLD_INIT_SLIDERS_CANCEL_RVA, BLD_INIT_RES_SLIDERS_RVA));
@@ -797,7 +797,7 @@ static bool SubTest_M2_Bug6_AutoBuyExportSliders()
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
     // 6. Waiting Lobby blocks capture AND advances +7 retAddr for all three sites
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     TEST_CHECK(SaveSync_IsWaitingLobbyActive());
@@ -846,9 +846,9 @@ static bool SubTest_M2_Bug7_FactoryQueueWorkerLimit()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT == 0x1C5540u);
-    TEST_CHECK(SITE_FACTORY_QUEUE_LIMIT_DEC_RVA == 0x789BD6u);
-    TEST_CHECK(SITE_FACTORY_QUEUE_LIMIT_INC_RVA == 0x78A11Bu);
+    TEST_CHECK(RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT == 0x1C53E0u);
+    TEST_CHECK(SITE_FACTORY_QUEUE_LIMIT_DEC_RVA == 0x78A026u);
+    TEST_CHECK(SITE_FACTORY_QUEUE_LIMIT_INC_RVA == 0x78A56Bu);
     TEST_CHECK(BLD_FACTORY_MAX_WORKERS_OFFSET == 0x0DF0u);
     TEST_CHECK(BLD_FACTORY_QUEUE_BEGIN_OFFSET == 0x0FF0u);
     TEST_CHECK(BLD_FACTORY_QUEUE_END_OFFSET == 0x0FF8u);
@@ -1070,27 +1070,27 @@ static void __fastcall MockHubAddNode(unsigned long long hub, unsigned long long
 static void SeedRouteToolsRoutinesForTest()
 {
     static const TsmRoutineSig kRouteSigs[] = {
-        { 0x2D0AB0, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x41 }, 0 },
-        { 0x2CE030, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x30, 0xd3, 0x00, 0x00, 0x48 }, 0 },
-        { 0x2D03E0, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x30, 0xd3, 0x00, 0x00, 0x48, 0x8b }, 0 },
-        { 0x2D05F0, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 }, 0 },
-        { 0x430A90, { 0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf0, 0xe5, 0xff, 0xff, 0xb8, 0x10, 0x1b, 0x00 }, 0 },
-        { 0x4BEB30, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 }, 0 },
-        { 0x1C3380, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 }, 0 },
-        { 0x3DA0E0, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xe4, 0x05, 0x00, 0x00 }, 0 },
-        { 0x4BDCB0, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 }, 0 },
-        { 0x2CE6A0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xd8 }, 0 },
-        { 0x2CE6B0, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
-        { 0x42F980, { 0x40, 0x55, 0x53, 0x56, 0x48, 0x8d, 0xac, 0x24, 0xe0, 0xe5, 0xff, 0xff, 0xb8, 0x20, 0x1b, 0x00 }, 0 },
-        { 0x6BD9B0, { 0x48, 0x8b, 0x81, 0x48, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 }, 0 },
-        { 0x4019C0, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 }, 0 },
-        { 0x4030F0, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 0 },
-        { 0x3C26A0, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 }, 0 },
-        { 0x3C25E0, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a }, 0 },
-        { 0x7132E0, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x9c, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 }, 0 },
-        { 0x1C6F50, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 }, 0 },
-        { 0x6EAD50, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 }, 0 },
-        { 0x6EB100, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 }, 0 },
+        { 0x2D0C00, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x89, 0x54, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x41 }, 0 },
+        { 0x2CE180, { 0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x99, 0x38, 0xd3, 0x00, 0x00, 0x48 }, 0 },
+        { 0x2D0530, { 0x40, 0x53, 0x57, 0x48, 0x83, 0xec, 0x48, 0x48, 0x8b, 0xb9, 0x38, 0xd3, 0x00, 0x00, 0x48, 0x8b }, 0 },
+        { 0x2D0740, { 0x40, 0x55, 0x56, 0x41, 0x54, 0x48, 0x8d, 0x6c, 0x24, 0xd0, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00 }, 0 },
+        { 0x430D40, { 0x40, 0x55, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0xf0, 0xe5, 0xff, 0xff, 0xb8, 0x10, 0x1b, 0x00 }, 0 },
+        { 0x4BEE10, { 0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83 }, 0 },
+        { 0x1C3220, { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x9a, 0xf8, 0x04, 0x00 }, 0 },
+        { 0x3DA390, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x50, 0x83, 0xb9, 0xe4, 0x05, 0x00, 0x00 }, 0 },
+        { 0x4BDF90, { 0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xf0 }, 0 },
+        { 0x2CE7F0, { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xd8 }, 0 },
+        { 0x2CE800, { 0xfe, 0xff, 0xff, 0x48, 0x81, 0xec, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, 10 },
+        { 0x42FC30, { 0x40, 0x55, 0x53, 0x56, 0x48, 0x8d, 0xac, 0x24, 0xe0, 0xe5, 0xff, 0xff, 0xb8, 0x20, 0x1b, 0x00 }, 0 },
+        { 0x6BDC80, { 0x48, 0x8b, 0x81, 0x48, 0x17, 0x00, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x29, 0xf3, 0x0f, 0x10, 0x05 }, 0 },
+        { 0x401C70, { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x44, 0x88, 0x4c, 0x24, 0x20, 0x56 }, 0 },
+        { 0x4033A0, { 0x44, 0x89, 0x4c, 0x24, 0x20, 0x53, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x48, 0x83, 0xec }, 0 },
+        { 0x3C2950, { 0x48, 0x8b, 0x82, 0x48, 0x0a, 0x00, 0x00, 0x45, 0x33, 0xc0, 0x48, 0x2b, 0x82, 0x40, 0x0a, 0x00 }, 0 },
+        { 0x3C2890, { 0x45, 0x33, 0xd2, 0x0f, 0x28, 0xd9, 0x45, 0x85, 0xc9, 0x79, 0x56, 0x49, 0x8b, 0x80, 0x48, 0x0a }, 0 },
+        { 0x713650, { 0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x83, 0xb9, 0x9c, 0x1a, 0x00, 0x00, 0x03, 0x48, 0x8b, 0xf9 }, 0 },
+        { 0x1C6DF0, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd9, 0x00, 0x00, 0x00, 0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48 }, 0 },
+        { 0x6EB0C0, { 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0xe0, 0x01, 0x00, 0x00, 0x48 }, 0 },
+        { 0x6EB470, { 0x40, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x28, 0x48, 0x89, 0x5c, 0x24, 0x40, 0x4d, 0x8b, 0xf8 }, 0 },
     };
     for (const auto& s : kRouteSigs) {
         const size_t len = s.size ? s.size : 16u;
@@ -1106,10 +1106,10 @@ static bool SubTest_M3_R1_1A_WasteContainerSplitMerge()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(SITE_WASTE_CONTAINER_SPLIT_RVA == 0x7CBB2Au);
-    TEST_CHECK(FN_WASTE_CONTAINER_SPLIT_RVA == 0x1B66D0u);
-    TEST_CHECK(SITE_WASTE_CONTAINER_MERGE_RVA == 0x7CBD5Bu);
-    TEST_CHECK(FN_WASTE_CONTAINER_MERGE_RVA == 0x1B61D0u);
+    TEST_CHECK(SITE_WASTE_CONTAINER_SPLIT_RVA == 0x7CBF7Au);
+    TEST_CHECK(FN_WASTE_CONTAINER_SPLIT_RVA == 0x1B6570u);
+    TEST_CHECK(SITE_WASTE_CONTAINER_MERGE_RVA == 0x7CC1ABu);
+    TEST_CHECK(FN_WASTE_CONTAINER_MERGE_RVA == 0x1B6070u);
 
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_WASTE_CONTAINER_SPLIT_RVA, FN_WASTE_CONTAINER_SPLIT_RVA));
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_WASTE_CONTAINER_MERGE_RVA, FN_WASTE_CONTAINER_MERGE_RVA));
@@ -1189,7 +1189,7 @@ static bool SubTest_M3_R1_1A_WasteContainerSplitMerge()
     TEST_CHECK(g_m3WasteMergeLastSlot == westSlot2);
 
     // Waiting Lobby blocks capture
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     TEST_CHECK(GameCalls_RunSiteForTest(SITE_WASTE_CONTAINER_SPLIT_RVA, splitIn, &ret));
@@ -1216,12 +1216,12 @@ static bool SubTest_M3_R1_1B_SetForBioAndExclusion()
     BuildingSwitches_Reset();
     Commands_SetSession(COMMANDS_OFF);
 
-    TEST_CHECK(SITE_SET_FOR_BIO_WASTE_WIN_RVA == 0x73EA38u);
-    TEST_CHECK(SITE_SET_FOR_BIO_RES_WIN_RVA == 0x72E090u);
-    TEST_CHECK(FN_SET_FOR_BIO_RVA == 0x1A36B0u);
+    TEST_CHECK(SITE_SET_FOR_BIO_WASTE_WIN_RVA == 0x73ED98u);
+    TEST_CHECK(SITE_SET_FOR_BIO_RES_WIN_RVA == 0x72E400u);
+    TEST_CHECK(FN_SET_FOR_BIO_RVA == 0x1A3540u);
     TEST_CHECK(BLD_BIO_TRANSFER_LOG0_OFFSET == 0x1308u);
     TEST_CHECK(BLD_BIO_TRANSFER_LOG1_OFFSET == 0x130Cu);
-    TEST_CHECK(FLT_BIO_SCALE_130C_RVA == 0x951FACu);
+    TEST_CHECK(FLT_BIO_SCALE_130C_RVA == 0x952064u);
 
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SET_FOR_BIO_WASTE_WIN_RVA, FN_SET_FOR_BIO_RVA));
     TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SET_FOR_BIO_RES_WIN_RVA, FN_SET_FOR_BIO_RVA));
@@ -1328,7 +1328,7 @@ static bool SubTest_M3_R1_1B_SetForBioAndExclusion()
     TEST_CHECK_NEAR(*(float*)(bldWest.data() + BLD_BIO_TRANSFER_LOG1_OFFSET), 1350.0f, 1e-4f);
 
     // Waiting Lobby: returns 0.0f bits and does not queue
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     retBits = 99;
@@ -1359,14 +1359,14 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
     SeedRouteToolsRoutinesForTest();
     TEST_CHECK(RouteTools_Ready());
 
-    *(float*)(g_mockExeBuffer + 0x951F24) = 1000.0f;
+    *(float*)(g_mockExeBuffer + 0x951FDC) = 1000.0f;
     g_m3CrossroadAddToolCalls = 0;
-    WriteAbsJmp12(g_mockExeBuffer + 0x2CDC80, (void*)&MockCrossroadAddTool);
-    WriteAbsJmp12(g_mockExeBuffer + 0x1114C0, (void*)&MockHubRemoveNode);
-    WriteAbsJmp12(g_mockExeBuffer + 0x23DD00, (void*)&MockHubUpdateArms);
-    WriteAbsJmp12(g_mockExeBuffer + 0x23E550, (void*)&MockHubAddNode);
-    WriteAbsJmp12(g_mockExeBuffer + 0x240380, (void*)&MockHubCanJoin);
-    WriteAbsJmp12(g_mockExeBuffer + 0x2406E0, (void*)&MockHubDistance);
+    WriteAbsJmp12(g_mockExeBuffer + 0x2CDDD0, (void*)&MockCrossroadAddTool);
+    WriteAbsJmp12(g_mockExeBuffer + 0x111350, (void*)&MockHubRemoveNode);
+    WriteAbsJmp12(g_mockExeBuffer + 0x23DBB0, (void*)&MockHubUpdateArms);
+    WriteAbsJmp12(g_mockExeBuffer + 0x23E400, (void*)&MockHubAddNode);
+    WriteAbsJmp12(g_mockExeBuffer + 0x240230, (void*)&MockHubCanJoin);
+    WriteAbsJmp12(g_mockExeBuffer + 0x240590, (void*)&MockHubDistance);
 
     std::vector<BYTE> net(0x300, 0);
     std::vector<BYTE> firstNode(0x100, 0), stopNode(0x100, 0), otherNode(0x100, 0);
@@ -1379,9 +1379,9 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
 
     std::vector<BYTE*> netNodes = { firstNode.data(), stopNode.data(), otherNode.data() };
     WriteMockVectorHeader(net.data() + 0x298, netNodes);
-    *(BYTE**)(world + 0xF838) = net.data();
-    *(int*)(world + 0x140E4) = 1;
-    *(BYTE**)(world + 0x140E8) = net.data();
+    *(BYTE**)(world + 0xF840) = net.data();
+    *(int*)(world + 0x140EC) = 1;
+    *(BYTE**)(world + 0x140F0) = net.data();
 
     std::vector<BYTE> liveHub(0x148, 0), winCopy(0x148, 0), otherHub(0x148, 0), winObj(0x300, 0);
     std::vector<BYTE*> liveNodes(8, nullptr);
@@ -1407,9 +1407,9 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
     *(BYTE**)(winObj.data() + 0x270) = winCopy.data();
     *(int*)(winObj.data() + 0x264) = 1;
 
-    *(BYTE**)(world + 0xD330) = winCopy.data();
-    *(BYTE**)(world + 0xD338) = winObj.data();
-    *(BYTE**)(world + 0xF6E8) = stopNode.data();
+    *(BYTE**)(world + 0xD338) = winCopy.data();
+    *(BYTE**)(world + 0xD340) = winObj.data();
+    *(BYTE**)(world + 0xF6F0) = stopNode.data();
 
     Commands_SetSession(COMMANDS_HOST);
     BYTE* press = g_mockExeBuffer + 0xA9EF51;
@@ -1457,7 +1457,7 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
     TEST_CHECK((*(BYTE**)(winCopy.data() + 0x90) - *(BYTE**)(winCopy.data() + 0x88)) == 8);
     TEST_CHECK(*(BYTE**)(stopNode.data() + 0xC0) == nullptr);
 
-    // 3b. Unrelated window at world+0xD338 MUST NOT be corrupted on add or remove when m.origin == g_origin
+    // 3b. Unrelated window at world+0xD340 MUST NOT be corrupted on add or remove when m.origin == g_origin
     std::vector<BYTE> diffHub(0x148, 0), diffCopy(0x148, 0), diffWin(0x300, 0);
     std::vector<BYTE*> diffNodes(8, nullptr);
     diffNodes[0] = otherNode.data();
@@ -1474,12 +1474,12 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
 
     // Add with unrelated window open before boundary
     *(int*)(diffWin.data() + 0x264) = 42;
-    *(BYTE**)(world + 0xD330) = winCopy.data();
-    *(BYTE**)(world + 0xD338) = winObj.data();
+    *(BYTE**)(world + 0xD338) = winCopy.data();
+    *(BYTE**)(world + 0xD340) = winObj.data();
     RouteTools_JoinHubStopTool((unsigned long long)(uintptr_t)world);
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
-    *(BYTE**)(world + 0xD330) = diffCopy.data();
-    *(BYTE**)(world + 0xD338) = diffWin.data();
+    *(BYTE**)(world + 0xD338) = diffCopy.data();
+    *(BYTE**)(world + 0xD340) = diffWin.data();
     Commands_Boundary(Commands_ApplyEpoch());
     TEST_CHECK((*(BYTE**)(liveHub.data() + 0x90) - *(BYTE**)(liveHub.data() + 0x88)) == 16);
     TEST_CHECK(*(BYTE**)(stopNode.data() + 0xC0) == liveHub.data());
@@ -1489,12 +1489,12 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
 
     // Remove with unrelated window open before boundary
     *(int*)(diffWin.data() + 0x264) = 9;
-    *(BYTE**)(world + 0xD330) = liveHub.data();
-    *(BYTE**)(world + 0xD338) = winObj.data();
+    *(BYTE**)(world + 0xD338) = liveHub.data();
+    *(BYTE**)(world + 0xD340) = winObj.data();
     RouteTools_JoinHubStopTool((unsigned long long)(uintptr_t)world);
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
-    *(BYTE**)(world + 0xD330) = diffCopy.data();
-    *(BYTE**)(world + 0xD338) = diffWin.data();
+    *(BYTE**)(world + 0xD338) = diffCopy.data();
+    *(BYTE**)(world + 0xD340) = diffWin.data();
     Commands_Boundary(Commands_ApplyEpoch());
     TEST_CHECK((*(BYTE**)(liveHub.data() + 0x90) - *(BYTE**)(liveHub.data() + 0x88)) == 8);
     TEST_CHECK(*(BYTE**)(stopNode.data() + 0xC0) == nullptr);
@@ -1505,8 +1505,8 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
     // Mismatched TARGET_OFFSET == liveHub with unrelated WINDOW_OFFSET == diffWin also preserves diffWin+0x264,
     // while matching direct-hub window (TARGET_OFFSET == liveHub && directWin+0x240 == liveHub) updates +0x264.
     *(int*)(diffWin.data() + 0x264) = 77;
-    *(BYTE**)(world + 0xD330) = liveHub.data();
-    *(BYTE**)(world + 0xD338) = diffWin.data();
+    *(BYTE**)(world + 0xD338) = liveHub.data();
+    *(BYTE**)(world + 0xD340) = diffWin.data();
     RouteTools_JoinHubStopTool((unsigned long long)(uintptr_t)world);
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
     Commands_Boundary(Commands_ApplyEpoch());
@@ -1515,18 +1515,18 @@ static bool SubTest_M3_R1_2A_CrossroadAddCopyAndMultiHubGuard()
     std::vector<BYTE> directWin(0x300, 0);
     *(BYTE**)(directWin.data() + 0x240) = liveHub.data();
     *(int*)(directWin.data() + 0x264) = 1;
-    *(BYTE**)(world + 0xD330) = liveHub.data();
-    *(BYTE**)(world + 0xD338) = directWin.data();
+    *(BYTE**)(world + 0xD338) = liveHub.data();
+    *(BYTE**)(world + 0xD340) = directWin.data();
     RouteTools_JoinHubStopTool((unsigned long long)(uintptr_t)world);
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
     Commands_Boundary(Commands_ApplyEpoch());
     TEST_CHECK(*(int*)(directWin.data() + 0x264) == 0);
     TEST_CHECK(*(BYTE**)(stopNode.data() + 0xC0) == nullptr);
 
-    *(BYTE**)(world + 0xD330) = winCopy.data();
-    *(BYTE**)(world + 0xD338) = winObj.data();
+    *(BYTE**)(world + 0xD338) = winCopy.data();
+    *(BYTE**)(world + 0xD340) = winObj.data();
 
-    // 4. Singleplayer isolation (!Commands_TakeLocal()): calls 0x2CDC80 directly without submitting command
+    // 4. Singleplayer isolation (!Commands_TakeLocal()): calls 0x2CDDD0 directly without submitting command
     Commands_SetSession(COMMANDS_OFF);
     TEST_CHECK(g_m3CrossroadAddToolCalls == 8);
     *press = 1;
@@ -1544,7 +1544,7 @@ static bool SubTest_M3_R1_2B_EditorModeOffsetAndBrushes()
     Commands_SetSession(COMMANDS_OFF);
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    TEST_CHECK(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10430u);
+    TEST_CHECK(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10438u);
 
     // 1. Commands_SanitizeCheatState clears world[0x10430] and is idempotent
     world[WORLD_MAP_EDITOR_MODE_OFFSET] = 1;
@@ -1801,7 +1801,7 @@ static bool SubTest_M1_FireDispatchBehaviorAndSkip()
     TEST_CHECK(*(BYTE*)(vehRoadWest.data() + VEH_BAY_ARRIVED_FLAG_OFFSET) == 1);
 
     // 4. Waiting lobby blocks heli dispatch and still skips 0x1D4FCD -> 0x1D4FD4
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_FIRESTATION_DISPATCH_HELI_AFTER_RVA);
@@ -1946,12 +1946,12 @@ static bool SubTest_M1_RunAuditBugRegressions()
 
     unsigned long long ret = 0;
     const unsigned long long relEastArgs[7] = { (unsigned long long)(uintptr_t)vehEast.data(), 0, 0, 0, 0, 0, 0 };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x818CBEu, relEastArgs, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x8190EEu, relEastArgs, &ret));
     TEST_CHECK(*(BYTE*)(vehEast.data() + VEH_CABLEWAY_START_FLAG_OFF) == 1);
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
     const unsigned long long relWestArgs[7] = { (unsigned long long)(uintptr_t)vehWest.data(), 0, 0, 0, 0, 0, 0 };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x818CBEu, relWestArgs, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x8190EEu, relWestArgs, &ret));
     TEST_CHECK(*(BYTE*)(vehWest.data() + VEH_CABLEWAY_START_FLAG_OFF) == 0);
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
     Commands_SetSession(COMMANDS_OFF);
@@ -1965,7 +1965,7 @@ static bool SubTest_M1_RunAuditBugRegressions()
         (unsigned long long)(uintptr_t)vehWest.data(),
         0, 0, 0, 0
     };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x8060A7u, selfDropUncouple, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x8064D7u, selfDropUncouple, &ret));
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
     // Reset session state and verify subsequent non-self couple at 0x8060F8 is NOT suppressed
@@ -1976,30 +1976,30 @@ static bool SubTest_M1_RunAuditBugRegressions()
         (unsigned long long)(uintptr_t)vehEast.data(),
         0, 1, 0, 0
     };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x8060F8u, validCouple, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x806528u, validCouple, &ret));
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
 
     // Repeat self-drop, trigger waiting lobby block, and verify g_skipDepotRowCouple was cleared
     Commands_SetSession(COMMANDS_OFF);
     Commands_SetSession(COMMANDS_HOST);
-    TEST_CHECK(GameCalls_RunSiteForTest(0x8060A7u, selfDropUncouple, &ret));
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    TEST_CHECK(GameCalls_RunSiteForTest(0x8064D7u, selfDropUncouple, &ret));
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     const unsigned long long dummySkin[7] = { (unsigned long long)(uintptr_t)vehWest.data(), 0, 0, 0, 0, 0, 0 };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x81921Bu, dummySkin, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x81964Bu, dummySkin, &ret));
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    TEST_CHECK(GameCalls_RunSiteForTest(0x8060F8u, validCouple, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x806528u, validCouple, &ret));
     TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
 
     // 3. Survey 2 Bug #2: SafeReadPod / SEH protection on HandleInviteCitizensUi and ExecuteNonCaptureCall
     Commands_SetSession(COMMANDS_OFF);
-    WriteAbsJmp12(g_mockExeBuffer + 0x422BB0u, (void*)&MockPlaySoundNoop);
+    WriteAbsJmp12(g_mockExeBuffer + 0x422E60u, (void*)&MockPlaySoundNoop);
     TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
     const unsigned long long badInviteArgs[7] = { (unsigned long long)(uintptr_t)world, 0, 0, 0x12345678ULL, 0, 0, 0 };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x734C6Eu, badInviteArgs, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x734FDEu, badInviteArgs, &ret));
     const unsigned long long badReleaseArgs[7] = { 0x12345678ULL, 0, 0, 0, 0, 0, 0 };
-    TEST_CHECK(GameCalls_RunSiteForTest(0x818CBEu, badReleaseArgs, &ret));
+    TEST_CHECK(GameCalls_RunSiteForTest(0x8190EEu, badReleaseArgs, &ret));
     TwoStates_OnSessionEnded();
 
     return true;
@@ -2219,10 +2219,10 @@ static bool SubTest_A7_Bug1_ResearchRecomputeAndSpIsolation()
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    // 1. Verify exact 16-byte SOVIET64.exe v1.1.1.13 RVA_RESEARCH_RECOMPUTE prologue match & stale rejection
+    // 1. Verify exact 16-byte SOVIET64.exe v1.2.0.9 RVA_RESEARCH_RECOMPUTE prologue match & stale rejection
     const BYTE validPrologue[16] = {
         0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x8D,
-        0x15, 0x4B, 0xE7, 0x5D, 0x00, 0xC7, 0x81, 0xF4
+        0x15, 0xF3, 0xE4, 0x5D, 0x00, 0xC7, 0x81, 0xFC
     };
     const BYTE stalePrologue[16] = {
         0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C,
@@ -2369,13 +2369,13 @@ static bool SubTest_A7_Bug2_DiscardAndEmptySites()
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
     // Waiting Lobby block on SITE_EMPTY_STORAGE_RVA
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     TEST_CHECK(GameCalls_RunSiteForTest(SITE_EMPTY_STORAGE_RVA, slotWestArgs, &ret) && ret == 0);
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
 
     // Own West actions: capture, skip retAddr, zero local mutation before boundary
     const unsigned long long discardWest[7] = { (unsigned long long)(uintptr_t)vehWest.data(), 1, 0, 0, 0, 0, 0 };
@@ -2507,7 +2507,7 @@ static bool SubTest_A7_Bug3_Bug4_RepairAndCrimeCancel()
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
     // Waiting Lobby block on both
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     TEST_CHECK(GameCalls_RunSiteForTest(SITE_REPAIR_CANCEL_QUEUE_RVA, repairWest, &ret));
@@ -2516,7 +2516,7 @@ static bool SubTest_A7_Bug3_Bug4_RepairAndCrimeCancel()
     TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_CANCEL_CRIME_ASSIGN_SKIP_RVA));
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
 
     // Capture wrong-check rejection message while live, then submit live West repair + crime cancel
     BYTE rawCrimeMsg[256] = {};
@@ -2658,7 +2658,7 @@ static bool SubTest_A7_Bug5_DoFindConnections()
     TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_SKIP_RVA));
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
@@ -2666,7 +2666,7 @@ static bool SubTest_A7_Bug5_DoFindConnections()
     TEST_CHECK(retAddr == (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_SKIP_RVA));
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
 
     retAddr = (unsigned long long)(uintptr_t)(g_mockExeBuffer + SITE_DO_FIND_CONNECTIONS_AFTER_RVA);
     TEST_CHECK(GameCalls_RunSiteWithRetAddrForTest(SITE_DO_FIND_CONNECTIONS_RVA, doWestArgs, &ret, &retAddr));
@@ -2750,7 +2750,7 @@ static bool SubTest_A7_Bug6_CopyWeightsTool()
 
     // 2. Waiting lobby block clears PRESS_RVA temporarily and notifies without mutating or submitting
     Commands_SetSession(COMMANDS_HOST);
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     g_a7CopyHoverDst = dstWest.data();
@@ -2760,7 +2760,7 @@ static bool SubTest_A7_Bug6_CopyWeightsTool()
     TEST_CHECK(*(uint64_t*)(dstWest.data() + BLD_COPY_WEIGHTS_BEGIN_OFFSET) == 0ULL);
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
 
     // 3. Hover without press (PRESS_RVA == 0) submits nothing
     g_mockExeBuffer[0xA9EF51] = 0;
@@ -2845,14 +2845,14 @@ static bool SubTest_A7_Bug7_GameRulesRebuildStorages()
     for (unsigned site : kRebuildSites) {
         TEST_CHECK(GameCalls_RunSiteForTest(site, rebuildArgs, &ret));
     }
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
     for (unsigned site : kRebuildSites) {
         TEST_CHECK(GameCalls_RunSiteForTest(site, rebuildArgs, &ret));
     }
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
     TEST_CHECK(g_a7RebuildStoragesCalls == 1);
     TEST_CHECK(!Commands_Due(Commands_ApplyEpoch()));
 

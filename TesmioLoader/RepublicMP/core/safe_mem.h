@@ -120,7 +120,7 @@ inline bool SafeIsWorldLoaded(const void* exeBase)
     if (!exeBase) return false;
     const uint8_t* base = (const uint8_t*)exeBase;
     uintptr_t b = 0, e = 0;
-    return SafeReadPod(base + 0xA30AD0, &b) && SafeReadPod(base + 0xA30AD8, &e) && b != 0 && e != 0;
+    return SafeReadPod(base + 0xA30AD8, &b) && SafeReadPod(base + 0xA30AE0, &e) && b != 0 && e != 0;
 }
 
 inline bool SafeIsToolGuardBusy(uintptr_t worldThisPtr)

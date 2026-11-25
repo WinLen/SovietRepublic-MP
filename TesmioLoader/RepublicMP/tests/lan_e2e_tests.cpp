@@ -83,7 +83,7 @@ static constexpr uint32_t kIfWifi     = 71u;
 static constexpr uint32_t kIfTunnel   = 131u;
 
 static constexpr size_t kStandaloneExeSize = 0x1000000u;
-static constexpr uintptr_t kWorldRoadNetRva = 0xA2E758u;
+static constexpr uintptr_t kWorldRoadNetRva = 0xA2E760u;
 
 // ---------------------------------------------------------------------------
 // RAII Guards & Standalone Harness

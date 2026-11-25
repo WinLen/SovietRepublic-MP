@@ -30,18 +30,18 @@
 #pragma intrinsic(_ReturnAddress)
 
 #define GAME_TIMER_RVA 0xA1EEF0
-#define FAST_FACTOR_RVA 0x95123C
+#define FAST_FACTOR_RVA 0x9512F4
 // The main loop's speed-2/3 factor (105d66): Hyper (left Ctrl + Numpad1, or turbo).
 // Speed 4 (Plaid / LCtrl+Numpad2) is disabled in multiplayer to keep simulation drift-free.
-#define HYPER_FACTOR_RVA 0x9510D0   // 0.05
+#define HYPER_FACTOR_RVA 0x951188   // 0.05
 #define DETERMINISM_MAX_TICK_SPEED 3
 #define DETERMINISM_MAX_BOOST 1
 #define KEYS_RVA 0xA9EC50           // C3D_INPUT key bytes
 #define KEY_LCTRL 0x1D
 #define KEY_NUMPAD1 0x4F
 #define FAST_HELD_RVA (0xA1EF20 + 0x5CA) // the speed panel's fast button held
-#define SIM_STEP_RVA 0x32AC70   // FUN_14032ac70(world): one simulation step
-#define LOAD_WORLD_RVA 0x455050 // FUN_140455050(): loads the save named in the load globals
+#define SIM_STEP_RVA 0x32AEB0   // FUN_14032ac70(world): one simulation step
+#define LOAD_WORLD_RVA 0x455300 // FUN_140455050(): loads the save named in the load globals
 
 #define DLL_C3D "C3DDLL64.dll"
 #define DLL_CRT_UTILITY "api-ms-win-crt-utility-l1-1-0.dll"
@@ -53,15 +53,9 @@
 
 // Prologues of the two inline-hooked functions (SOVIET64.exe, PE 6A3EB6AD):
 // mov rax,rsp / push rdi / sub rsp,60h / mov [rax+10h],rbx / [rax+18h],rbp / [rax+20h],rsi
-static const unsigned char kSimStepExpect[20] = {
-    0x48, 0x8B, 0xC4, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x89,
-    0x58, 0x10, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20,
-};
+static const unsigned char kSimStepExpect[20] = { 0x48, 0x8B, 0xC4, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20 };
 // push rbp / push r12..r15 / lea rbp,[rsp-0C800h]
-static const unsigned char kLoadWorldExpect[18] = {
-    0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-    0x48, 0x8D, 0xAC, 0x24, 0xF0, 0x33, 0xFF, 0xFF,
-};
+static const unsigned char kLoadWorldExpect[18] = { 0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xF0, 0x33, 0xFF, 0xFF };
 
 void Determinism_Bind(const TsmHost* host)
 {
@@ -99,10 +93,10 @@ static void LedgerDraw(unsigned site, int value, bool worker);
 // shift nothing else, and the probe leaves them out of its counts.
 // (by SoylentGreed)
 static const unsigned kPresentationSites[] = {
-    0x6D72B5, 0x6D82C3, 0x6D88A4, 0x6DE7AB, // vehicle sounds
-    0x6CD0E8, 0x6DADB4,                     // electric wire sparks
-    0x69E57C, 0x6A0A26, 0x6A0EF0,           // vehicle animation starts
-    0x1561F8, 0x15628E,                     // ambient sounds
+    0x6D7625, 0x6D8633, 0x6D8C14, 0x6DEB1B, // vehicle sounds
+    0x6CD458, 0x6DB124,                     // electric wire sparks
+    0x69E84C, 0x6A0CF6, 0x6A11C0,           // vehicle animation starts
+    0x156088, 0x15611E,                     // ambient sounds
 };
 static bool IsPresentationSite(unsigned site)
 {
@@ -330,8 +324,8 @@ static DWORD ExeFunctionRva(void* addr)
 // FUN_140139a70 decides from a held key and the real FPS whether all objects
 // update this step or a third of them with a tripled step; FUN_140699420
 // also reads a key. Under the layer both see "not pressed".
-#define KEY_SIM_FUNC1_RVA 0x152520
-#define KEY_SIM_FUNC2_RVA 0x6CCA50
+#define KEY_SIM_FUNC1_RVA 0x1523B0
+#define KEY_SIM_FUNC2_RVA 0x6CCDC0
 
 typedef bool (*GetKeyDownFn)(void* input, int key);
 static GetKeyDownFn o_getKeyDown;
@@ -1007,7 +1001,7 @@ static void CompareData()
 // entries), and the chooser (420350) picks from the results. A load does not
 // empty them, so the first choice after it saw what the earlier game last
 // searched. Each probe run starts with them empty (capacity kept).
-#define SEARCH_POOL_OFFSET 0x14528
+#define SEARCH_POOL_OFFSET 0x14530
 static void EmptySearchPool()
 {
     BYTE* pool = g_exeBase + WORLD_RVA_PROBE + SEARCH_POOL_OFFSET;
@@ -1390,8 +1384,8 @@ static void RecordMoneyTick()
         BYTE* world = g_exeBase + 0xA1EF20;
         t.usd = *(double*)(world + 0x5A8);
         t.rub = *(double*)(world + 0x5B0);
-        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD0);
-        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AD8);
+        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD8);
+        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AE0);
         for (; it && it < end; ++it) {
             if (!*it) continue;
             float p = *(float*)(*it + 0x604);
@@ -1434,8 +1428,8 @@ static void LogSessionProgress(const StateSummary& s)
     int sites = 0, paid = 0, stopped = 0, free = 0;
     __try {
         free = *(int*)(g_exeBase + 0xA1EF20 + 0x5A0); // != 0: nothing is ever charged (session/money.h)
-        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD0);
-        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AD8);
+        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD8);
+        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AE0);
         for (; it && it < end; ++it) {
             BYTE* bld = *it;
             if (!bld) continue;
@@ -1499,7 +1493,7 @@ static void ProbeAdmission(BYTE* timer)
     bool running = !g_probeBusy || GetProbeState() == PROBE_RUNNING;
     // Tool hold (by SoylentGreed): tools act only on held frames, so while
     // one is selected and actions become commands, no tick is admitted.
-    bool toolHold = Commands_Capturing() && *(__int64*)(g_exeBase + 0xA1EF20 + 0xD4C0) != 0;
+    bool toolHold = Commands_Capturing() && *(__int64*)(g_exeBase + 0xA1EF20 + 0xD4C8) != 0;
     bool paused = g_paused || timer[13] != 0 || toolHold;
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);

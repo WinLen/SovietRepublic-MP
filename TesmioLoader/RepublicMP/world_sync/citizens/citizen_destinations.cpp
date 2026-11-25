@@ -20,7 +20,7 @@ constexpr uint32_t kFormat = 0x44535431;
 constexpr uintptr_t kWorld = 0xA1EF20;
 constexpr uintptr_t kBuildingsBegin = VEC_BUILDINGS_BEGIN_RVA, kBuildingsEnd = VEC_BUILDINGS_END_RVA;
 constexpr uintptr_t kConstructionsBegin = VEC_CONSTRUCTIONS_BEGIN_RVA, kConstructionsEnd = VEC_CONSTRUCTIONS_END_RVA;
-constexpr uintptr_t kAdd = 0x1EED60, kRemove = 0x1EEE70;
+constexpr uintptr_t kAdd = 0x1EEC60, kRemove = 0x1EED70;
 
 struct Entry { float share; unsigned char flags[4]; BYTE* target; };
 struct Vector { Entry* begin; Entry* end; Entry* capacity; };

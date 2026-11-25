@@ -19,7 +19,7 @@
 #define WORLD_THIS_RVA 0xA1EF20
 #define TERRAIN_HOLDER_RVA 0x9DDC88 // *(exe+0x9941F0) + 0xED8 = C3D_TERRAIN*
 #define TERRAIN_HOLDER_OFFSET 0xF78
-#define ACTIVE_TOOL_OFFSET 0xD4C0 // *(char**)(thisPtr+0xD428) = active tool name (FUN_14030d1a0 strcmp's it)
+#define ACTIVE_TOOL_OFFSET 0xD4C8 // *(char**)(thisPtr+0xD428) = active tool name (FUN_14030d1a0 strcmp's it)
 
 volatile long g_terrainApplyingRemote = 0;
 
@@ -59,85 +59,85 @@ struct KnownCaller {
 };
 static const KnownCaller kKnownCallers[] = {
     // FUN_1403a8a70 - game terrain tool (mode 0 raise, 1 lower, 2 level, 3 level2, 4 level3)
-    {0x3C9C0E, "tool.raise(a8a70)"},
-    {0x3C9D36, "tool.lower(a8a70)"},
-    {0x3C9F38, "tool.level2-3a(a8a70)"},
-    {0x3C9FC2, "tool.level2-3b(a8a70)"},
-    {0x3CA0EC, "tool.level3(a8a70)"},
-    {0x3C87D8, "tool.cost-a(a8a70)"},
-    {0x3C88AB, "tool.cost-b(a8a70)"},
-    {0x3C79F6, "tool.open(a8a70)"},
-    {0x3C7A0A, "tool.open(a8a70)"},
-    {0x3CA166, "tool.close(a8a70)"},
-    {0x3CA17A, "tool.close(a8a70)"},
+    {0x3C9EBE, "tool.raise(a8a70)"},
+    {0x3C9FE6, "tool.lower(a8a70)"},
+    {0x3CA1E8, "tool.level2-3a(a8a70)"},
+    {0x3CA272, "tool.level2-3b(a8a70)"},
+    {0x3CA39C, "tool.level3(a8a70)"},
+    {0x3C8A88, "tool.cost-a(a8a70)"},
+    {0x3C8B5B, "tool.cost-b(a8a70)"},
+    {0x3C7CA6, "tool.open(a8a70)"},
+    {0x3C7CBA, "tool.open(a8a70)"},
+    {0x3CA416, "tool.close(a8a70)"},
+    {0x3CA42A, "tool.close(a8a70)"},
     // FUN_140234a50 - map editor tool
-    {0x24FF44, "editor.raiselower(234a50)"},
-    {0x24FFEC, "editor.level(234a50)"},
-    {0x250094, "editor.smooth(234a50)"},
-    {0x250175, "editor.toheight(234a50)"},
-    {0x250983, "editor?(235370)"},
-    {0x250784, "editor?(235580)"},
+    {0x24FDF4, "editor.raiselower(234a50)"},
+    {0x24FE9C, "editor.level(234a50)"},
+    {0x24FF44, "editor.smooth(234a50)"},
+    {0x250025, "editor.toheight(234a50)"},
+    {0x250833, "editor?(235370)"},
+    {0x250634, "editor?(235580)"},
     // FUN_1402bade0 - building placement
-    {0x2E7E22, "building.level-click(bade0)"},
-    {0x2E8567, "building.level-paid(bade0)"},
-    {0x2E30FB, "building.open(bade0)"},
-    {0x2E7E43, "building.close(bade0)"},
-    {0x2E840F, "building.open(bade0)"},
-    {0x2E8719, "building.close(bade0)"},
-    {0x2E5286, "building.mask-open(bade0)"},
-    {0x2E5500, "building.mask-close(bade0)"},
-    {0x2E5B31, "building.mask-open(bade0)"},
-    {0x2E7958, "building.mask-close(bade0)"},
+    {0x2E7F72, "building.level-click(bade0)"},
+    {0x2E86B7, "building.level-paid(bade0)"},
+    {0x2E7E55, "building.open(bade0)"},
+    {0x2E7F93, "building.close(bade0)"},
+    {0x2E855F, "building.open(bade0)"},
+    {0x2E8869, "building.close(bade0)"},
+    {0x2E53D6, "building.mask-open(bade0)"},
+    {0x2E5650, "building.mask-close(bade0)"},
+    {0x2E5C81, "building.mask-open(bade0)"},
+    {0x2E7AA8, "building.mask-close(bade0)"},
     // FUN_1404fcaf0 - drag tick / FUN_140518a80 - drag commit
-    {0x53D9A2, "drag.tick-a(fcaf0)"},
-    {0x53DA3F, "drag.tick-b(fcaf0)"},
-    {0x53D6FD, "drag.open(fcaf0)"},
-    {0x53DCF0, "drag.close(fcaf0)"},
-    {0x53D048, "drag.mask-open(fcaf0)"},
-    {0x53D134, "drag.mask-close(fcaf0)"},
-    {0x53FE44, "commit(a80)"},
-    {0x53FCD6, "commit.open(a80)"},
-    {0x53FE88, "commit.close(a80)"},
+    {0x53DC82, "drag.tick-a(fcaf0)"},
+    {0x53DD1F, "drag.tick-b(fcaf0)"},
+    {0x53D9DD, "drag.open(fcaf0)"},
+    {0x53DFD0, "drag.close(fcaf0)"},
+    {0x53D328, "drag.mask-open(fcaf0)"},
+    {0x53D414, "drag.mask-close(fcaf0)"},
+    {0x540124, "commit(a80)"},
+    {0x53FFB6, "commit.open(a80)"},
+    {0x540168, "commit.close(a80)"},
     // FUN_14040ece0 - per-frame drain of the mask-paint queue thisPtr+0x130d0
     // (filled by FUN_14040eaa0 next to its particle spawn)
-    {0x432BFF, "maskqueue(40ece0)"},
+    {0x432EAF, "maskqueue(40ece0)"},
     // FUN_1403ccd70 - terrain_restore_topsoil
-    {0x3EBD42, "topsoil.open(ccd70)"},
-    {0x3EC5D9, "topsoil.close(ccd70)"},
-    {0x3EBD56, "topsoil.mask-open(ccd70)"},
-    {0x3EC5ED, "topsoil.mask-close(ccd70)"},
+    {0x3EBFF2, "topsoil.open(ccd70)"},
+    {0x3EC889, "topsoil.close(ccd70)"},
+    {0x3EC006, "topsoil.mask-open(ccd70)"},
+    {0x3EC89D, "topsoil.mask-close(ccd70)"},
     // Open/Close without any Edit* in the same function - possible direct
     // texture writes that the Edit* hooks cannot see
-    {0x13B28D, "direct?.mask-open(1226a0)"},
-    {0x13C326, "direct?.mask-close(1226a0)"},
-    {0x1F7F56, "direct?.mask-open(1dd200)"},
-    {0x1F88E8, "direct?.mask-close(1dd200)"},
-    {0x25D106, "direct?.mask-open(2412f0)"},
-    {0x25D11A, "direct?.open(2412f0)"},
-    {0x25D136, "direct?.mask-close(2412f0)"},
-    {0x25D14A, "direct?.close(2412f0)"},
-    {0x50D837, "direct?.mask-open(4e7440)"},
-    {0x50D84B, "direct?.open(4e7440)"},
-    {0x5154A8, "direct?.mask-close(4e7440)"},
-    {0x5154BC, "direct?.close(4e7440)"},
-    {0x3333F7, "dispatcher.mask-open(30d1a0)"},
-    {0x3334C2, "dispatcher.mask-close(30d1a0)"},
+    {0x13B11D, "direct?.mask-open(1226a0)"},
+    {0x13C1B6, "direct?.mask-close(1226a0)"},
+    {0x1F7E56, "direct?.mask-open(1dd200)"},
+    {0x1F87E8, "direct?.mask-close(1dd200)"},
+    {0x25CFB6, "direct?.mask-open(2412f0)"},
+    {0x25CFCA, "direct?.open(2412f0)"},
+    {0x25CFE6, "direct?.mask-close(2412f0)"},
+    {0x25CFFA, "direct?.close(2412f0)"},
+    {0x50DB17, "direct?.mask-open(4e7440)"},
+    {0x50DB2B, "direct?.open(4e7440)"},
+    {0x515788, "direct?.mask-close(4e7440)"},
+    {0x51579C, "direct?.close(4e7440)"},
+    {0x333637, "dispatcher.mask-open(30d1a0)"},
+    {0x333702, "dispatcher.mask-close(30d1a0)"},
     // map generation / load
-    {0x24B148, "mapgen(22eea0)"},
-    {0x24B549, "mapgen(22eea0)"},
-    {0x24B2ED, "mapgen(22eea0)"},
-    {0x24B6DE, "mapgen(22eea0)"},
-    {0x260235, "smoothlimits(2436b0)"},
-    {0x24899A, "regen(22d340)"},
-    {0x2489AE, "regen(22d340)"},
-    {0x255E5F, "regen(239b90)"},
-    {0x255E73, "regen(239b90)"},
-    {0x2677C3, "load(2479a0)"},
-    {0x2677AF, "load(2479a0)"},
-    {0x2676BF, "load(2479a0)"},
-    {0x33CB9C, "load(317db0)"},
-    {0x33CBB0, "load(317db0)"},
-    {0x249E0A, "setheight(22e1c0)"},
+    {0x24AFF8, "mapgen(22eea0)"},
+    {0x24B3F9, "mapgen(22eea0)"},
+    {0x24B19D, "mapgen(22eea0)"},
+    {0x24B58E, "mapgen(22eea0)"},
+    {0x2600E5, "smoothlimits(2436b0)"},
+    {0x24884A, "regen(22d340)"},
+    {0x24885E, "regen(22d340)"},
+    {0x255D0F, "regen(239b90)"},
+    {0x255D23, "regen(239b90)"},
+    {0x267673, "load(2479a0)"},
+    {0x267687, "load(2479a0)"},
+    {0x26756F, "load(2479a0)"},
+    {0x33CDFC, "load(317db0)"},
+    {0x33CE10, "load(317db0)"},
+    {0x249CBA, "setheight(22e1c0)"},
 };
 
 static const char* CallerLabel(unsigned long long rva)
@@ -358,8 +358,8 @@ static bool IsMapGenCaller(void* returnAddress)
 {
     if (!g_exeBase || !returnAddress) return false;
     unsigned long long rva = (unsigned long long)((BYTE*)returnAddress - g_exeBase);
-    return rva == 0x24B148 || rva == 0x24B549 || rva == 0x24B2ED ||
-           rva == 0x24B6DE || rva == 0x260235;
+    return rva == 0x24AFF8 || rva == 0x24B3F9 || rva == 0x24B19D ||
+           rva == 0x24B58E || rva == 0x2600E5;
 }
 
 static bool BeginEdit(int method, void* returnAddress, TerrainArgs& x)
@@ -613,7 +613,7 @@ bool TerrainHook_ApplyCommand(const void* data, size_t size)
     InterlockedIncrement(&g_terrainApplyingRemote);
     bool heightOpen = false;
     bool maskOpen = false;
-    ClearGroundObjectsFn clearGround = (ClearGroundObjectsFn)(g_exeBase + 0x3CCED0);
+    ClearGroundObjectsFn clearGround = (ClearGroundObjectsFn)(g_exeBase + 0x3CD180);
     void* world = (void*)(g_exeBase + WORLD_THIS_RVA);
     for (size_t i = 0; i < n; i++) {
         int m = e[i].method;

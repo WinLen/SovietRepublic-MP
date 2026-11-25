@@ -58,14 +58,8 @@ static void EnsureToastLock()
 // Minimap Hook Constants & Trampolines
 // ---------------------------------------------------------------------------
 
-static const BYTE kMinimapDrawContentExpect[16] = {
-    0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41,
-    0x56, 0x48, 0x8D, 0xA8, 0x28, 0xFF, 0xFF, 0xFF
-};
-static const BYTE kMinimapDrawButtonsExpect[15] = {
-    0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xA1,
-    0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00
-};
+static const BYTE kMinimapDrawContentExpect[16] = { 0x48, 0x8B, 0xC4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x48, 0x8D, 0xA8, 0x28, 0xFF, 0xFF, 0xFF };
+static const BYTE kMinimapDrawButtonsExpect[15] = { 0x48, 0x8B, 0xC4, 0x55, 0x48, 0x8D, 0x68, 0xA1, 0x48, 0x81, 0xEC, 0xF0, 0x00, 0x00, 0x00 };
 
 typedef void (__fastcall* MinimapDrawFn)(BYTE* mm);
 static MinimapDrawFn o_minimapDrawContent = nullptr;
@@ -967,7 +961,7 @@ static bool IsMinimapMouseInputAllowed(const BYTE* mm)
     if (!g_exeBase || !mm) return false;
     if (mm[0x5C] != 0 || mm[0x69] != 0) return false;
     if (*(BYTE*)(g_exeBase + 0xA1FF13) != 0) return false;
-    const BYTE* pMgr = *(const BYTE* const*)(g_exeBase + 0xA2C400);
+    const BYTE* pMgr = *(const BYTE* const*)(g_exeBase + 0xA2C408);
     if (IsPointerLikeX64((uintptr_t)pMgr) && pMgr[0x160] != 0) return false;
     if (*(BYTE*)(g_exeBase + 0xA1FF10) != 0 && *(BYTE*)(g_exeBase + 0xA1FF0A) == 0) return false;
     return true;

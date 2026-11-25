@@ -38,16 +38,16 @@ bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName
 // Engine addresses (RVAs into SOVIET64.exe) and object offsets
 // ---------------------------------------------------------------------------
 
-#define FC040_RVA 0x522350                // drag start
-#define FCAF0_RVA 0x522E00                // drag tick
-#define COMMIT_RVA 0x53ED90               // commit
-#define VEC_ASSIGN_RVA 0x238460           // std::vector<24-byte record>::operator=
-#define MANAGER_RESET_RVA 0x568C10        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
+#define FC040_RVA 0x522630                // drag start
+#define FCAF0_RVA 0x5230E0                // drag tick
+#define COMMIT_RVA 0x53F070               // commit
+#define VEC_ASSIGN_RVA 0x238310           // std::vector<24-byte record>::operator=
+#define MANAGER_RESET_RVA 0x568EF0        // FUN_140542a30(manager, manager+0x408): clears the tool's preview state
 #define ROAD_DEMOLISH_TYPE 0x65           // fcaf0 type argument of the demolish tool
 
 #define LMB_HELD_RVA 0xA9EF50             // byte: left mouse button held
 #define LMB_JUST_PRESSED_RVA 0xA9EF51     // byte: left mouse button pressed this frame
-#define PRESET_CURVE_MODE_RVA 0xA32148    // int: preset curve index, -1 = free curve
+#define PRESET_CURVE_MODE_RVA 0xA32150    // int: preset curve index, -1 = free curve
 
 // Hover state the tools read from the local mouse.
 //
@@ -60,27 +60,27 @@ bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName
 // pointer was stale (the segment rebuilt meanwhile), the lookup gave -1 and
 // the commit crashed half-way (0x56DFE4 via FUN_1405446d0), leaving the tool
 // broken and the game crashing on the next frame.
-static const unsigned int kHoverPtrRvas[] = { 0xA2E690, 0xA2E608, 0xA2E600, 0xA2E688, 0xA2E680,
-                                              0xA2E638, 0xA2E648 };
-#define HOVER_FLAG_RVA 0xA2E6A0
+static const unsigned int kHoverPtrRvas[] = { 0xA2E698, 0xA2E610, 0xA2E608, 0xA2E690, 0xA2E688,
+                                              0xA2E640, 0xA2E650 };
+#define HOVER_FLAG_RVA 0xA2E6A8
 // The footpath tool's road link (see RoadSync_ReadFootpathLinks).
-#define HOVER_ROAD_EDGE_RVA 0xA2E638   // road edge under the cursor
-#define HOVER_ROAD_POINT_RVA 0xA2E640  // int: its point the path would split it at
-#define HOVER_ROAD_NODE_RVA 0xA2E648   // road node under the cursor
+#define HOVER_ROAD_EDGE_RVA 0xA2E640   // road edge under the cursor
+#define HOVER_ROAD_POINT_RVA 0xA2E648  // int: its point the path would split it at
+#define HOVER_ROAD_NODE_RVA 0xA2E650   // road node under the cursor
 #define MGR_ROAD_LINK_POINT_OFFSET 0x368
-#define ROAD_NETWORK_OFFSET 0xf838      // world+0xf7a0 = DAT_1409e46b0, the road network
+#define ROAD_NETWORK_OFFSET 0xf840      // world+0xf7a0 = DAT_1409e46b0, the road network
 #ifndef NET_NODES_OFFSET
 #define NET_NODES_OFFSET 0x298          // committed nodes: begin, end
 #endif
-#define HOVER_NODE_RVA 0xA2E608  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
-#define HOVER_PORT_BUILDING_RVA 0xA2E658  // building whose connection port is hovered
-#define HOVER_PORT_INDEX_RVA 0xA2E660     // that port's index
+#define HOVER_NODE_RVA 0xA2E610  // thisPtr+0xf650: hovered path node (fcaf0 DAT_1409e4560)
+#define HOVER_PORT_BUILDING_RVA 0xA2E660  // building whose connection port is hovered
+#define HOVER_PORT_INDEX_RVA 0xA2E668     // that port's index
 
 // thisPtr fields used by the tool wrappers (TOOL_GUARD1/2/3_OFFSET in engine_rva.h).
 #define CONTINUING_Y_OFFSET_OFFSET 0xfc0  // added to cursor Y on drag ticks
-#define SNAP_TARGET_PTR_OFFSET 0xf770     // drag-start snap target
-#define SNAP_MODE_A_OFFSET 0xf6f0
-#define SNAP_MODE_B_OFFSET 0xf700
+#define SNAP_TARGET_PTR_OFFSET 0xf778     // drag-start snap target
+#define SNAP_MODE_A_OFFSET 0xf6f8
+#define SNAP_MODE_B_OFFSET 0xf708
 
 // Manager fields.
 #define MGR_CURVE_OFFSET 0x48
@@ -154,30 +154,30 @@ typedef void (*ManagerResetFn)(__int64 manager, __int64 state);
 // connections (FUN_140546db0) and changes their direction without a commit;
 // that travels as RoadSyncDirectionMsg.
 static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
-    { "ROAD",        0xf838, true  },
-    { "PIPE",        0xf8f0, true  },
-    { "WATERPIPE",   0xfb88, true  },
-    { "HEATPIPE",    0xfb30, true  },
-    { "RAIL",        0xf9a0, true  },
-    { "PEDESTRIAN",  0xfa00, true  },
-    { "FENCE",       0xf948, true  },
-    { "POWER_HIGH",  0xfab0, true  },
-    { "POWER_LOW",   0xfab8, true  },
-    { "CONVEYOR",    0xf898, true  },
-    { "CABLEWAY",    0xfad8, true  },
-    { "AIRROAD",     0xfac8, true  },
-    { "FACTORYCONN", 0xfa58, true  },
+    { "ROAD",        0xf840, true  },
+    { "PIPE",        0xf8f8, true  },
+    { "WATERPIPE",   0xfb90, true  },
+    { "HEATPIPE",    0xfb38, true  },
+    { "RAIL",        0xf9a8, true  },
+    { "PEDESTRIAN",  0xfa08, true  },
+    { "FENCE",       0xf950, true  },
+    { "POWER_HIGH",  0xfab8, true  },
+    { "POWER_LOW",   0xfac0, true  },
+    { "CONVEYOR",    0xf8a0, true  },
+    { "CABLEWAY",    0xfae0, true  },
+    { "AIRROAD",     0xfad0, true  },
+    { "FACTORYCONN", 0xfa60, true  },
     // The second-road network (pavements and decoration paths: second_road_airplane type 0,
     // _basicroad 1, _l2 2, _l3 -2, _l4 -3). Its handler 3cf6f0 begins on the press and finishes
     // on the release; after a finish that appended an edge it starts the edge's construction
     // (5247f0) and clears the ground under it (3ae120) itself, so the replay's release through
     // the handler makes those steps too. (by SoylentGreed)
-    { "SECOND_ROAD", 0xf840, true  },
+    { "SECOND_ROAD", 0xf848, true  },
 };
 
 static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
-    0x3EEEA0, 0x3D0060, 0x3CFC10, 0x3D2FE0, 0x3F34E0, 0x3F5660, 0x3D25D0,
-    0x3D9C80, 0x3D7530, 0x3CD9E0, 0x3EAD50, 0x3E7EE0, 0x3F5C20, 0x3EE4A0,
+    0x3EF150, 0x3D0310, 0x3CFEC0, 0x3D3290, 0x3F3790, 0x3F5910, 0x3D2880,
+    0x3D9F30, 0x3D77E0, 0x3CDC90, 0x3EB000, 0x3E8190, 0x3F5ED0, 0x3EE750,
 };
 
 const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category)
@@ -282,11 +282,11 @@ static void HoverGlobals_Clear()
         for (size_t i = 0; i < sizeof(kHoverPtrRvas) / sizeof(kHoverPtrRvas[0]); i++)
             *(long long*)((uintptr_t)g_exe + kHoverPtrRvas[i]) = 0;
         *(unsigned char*)((uintptr_t)g_exe + HOVER_FLAG_RVA) = 0;
-        *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 0;
-        memset((void*)((uintptr_t)g_exe + 0xA2E614), 0, 12);
-        *(unsigned char*)((uintptr_t)g_exe + 0xA2E620) = 0;
-        memset((void*)((uintptr_t)g_exe + 0xA2E624), 0, 12);
-        *(unsigned char*)((uintptr_t)g_exe + 0xA2E650) = 0;
+        *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 0;
+        memset((void*)((uintptr_t)g_exe + 0xA2E61C), 0, 12);
+        *(unsigned char*)((uintptr_t)g_exe + 0xA2E628) = 0;
+        memset((void*)((uintptr_t)g_exe + 0xA2E62C), 0, 12);
+        *(unsigned char*)((uintptr_t)g_exe + 0xA2E658) = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 }
@@ -475,12 +475,12 @@ void RoadSync_ReadFootpathLinks(__int64 manager, int category, RoadSyncSegment& 
         __int64 startOwnNode = *(__int64*)(manager + 0x348);
         ReadNetworkLink(manager, startOwnEdge, 0, startOwnNode, seg.startOwnLink);
 
-        __int64 endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0xA2E600);
+        __int64 endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0xA2E608);
         if (!endOwnEdge || !InPointerList(manager + MGR_SEGMENTS_BEGIN_OFFSET, endOwnEdge))
-            endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0xA2E680);
-        __int64 endOwnNode = *(__int64*)((uintptr_t)g_exe + 0xA2E608);
+            endOwnEdge = *(__int64*)((uintptr_t)g_exe + 0xA2E688);
+        __int64 endOwnNode = *(__int64*)((uintptr_t)g_exe + 0xA2E610);
         if (!endOwnNode || !InPointerList(manager + NET_NODES_OFFSET, endOwnNode))
-            endOwnNode = *(__int64*)((uintptr_t)g_exe + 0xA2E688);
+            endOwnNode = *(__int64*)((uintptr_t)g_exe + 0xA2E690);
         ReadNetworkLink(manager, endOwnEdge, 0, endOwnNode, seg.endOwnLink);
 
         seg.snapModeStart = *(unsigned char*)(manager + 0x74A);
@@ -557,15 +557,15 @@ static void SetOwnHover(__int64 manager, const RoadSyncRoadLink& l, const char* 
     __try {
         __int64 edge = FindNetworkLinkEdge(manager, l);
         __int64 node = FindNetworkLinkNode(manager, l);
-        *(long long*)((uintptr_t)g_exe + 0xA2E600) = edge;
-        *(long long*)((uintptr_t)g_exe + 0xA2E680) = edge;
-        *(long long*)((uintptr_t)g_exe + 0xA2E608) = node;
-        *(long long*)((uintptr_t)g_exe + 0xA2E688) = node;
+        *(long long*)((uintptr_t)g_exe + 0xA2E608) = edge;
+        *(long long*)((uintptr_t)g_exe + 0xA2E688) = edge;
+        *(long long*)((uintptr_t)g_exe + 0xA2E610) = node;
+        *(long long*)((uintptr_t)g_exe + 0xA2E690) = node;
         if (node) {
-            *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 1;
-            memcpy((void*)((uintptr_t)g_exe + 0xA2E614), (const void*)(node + NODE_POS_OFFSET), 12);
+            *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 1;
+            memcpy((void*)((uintptr_t)g_exe + 0xA2E61C), (const void*)(node + NODE_POS_OFFSET), 12);
         } else {
-            *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 0;
+            *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 0;
         }
         Logf("republicmp  ROAD_SYNC:   %s own-network link: edge %s, node %s", which,
              !l.hasEdge ? "-" : edge ? "found" : "NOT FOUND",
@@ -685,7 +685,7 @@ static void ResetManagerDragState(__int64 manager)
     if (!manager) return;
     __try {
         typedef void (*QueueDeleteMeshFn)(__int64 mgr, void* mesh);
-        QueueDeleteMeshFn queueDeleteMesh = (QueueDeleteMeshFn)((uintptr_t)g_exe + 0x568AE0);
+        QueueDeleteMeshFn queueDeleteMesh = (QueueDeleteMeshFn)((uintptr_t)g_exe + 0x568DC0);
         const int kExtraPreviewOffsets[2] = { 0x5F8, 0x600 };
         for (int off : kExtraPreviewOffsets) {
             void* p = *(void**)(manager + off);
@@ -838,9 +838,9 @@ static bool ApplySegmentImpl(const RoadSyncSegment& seg, bool* outEngineAccepted
     return ok;
 }
 
-#define OPERATOR_NEW_RVA 0x890724
-#define NODE_ALLOC_RVA 0x890724 // operator new
-#define NODE_CTOR_RVA 0x117540  // node constructor (returns the node)
+#define OPERATOR_NEW_RVA 0x890C14
+#define NODE_ALLOC_RVA 0x890C14 // operator new
+#define NODE_CTOR_RVA 0x1173D0  // node constructor (returns the node)
 #define NODE_OBJECT_SIZE 0xE8
 typedef __int64 (*AllocFn)(unsigned long long size);
 typedef __int64 (*NodeCtorFn)(__int64 node);
@@ -1053,18 +1053,18 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             SetOwnHover(manager, seg.startOwnLink, "start");
             SetHoveredPort(seg.startPort, "start");
             bool wantStartAttached = (seg.snapFlags & 0x01) != 0;
-            if (wantStartAttached && *(long long*)((uintptr_t)g_exe + 0xA2E608) == 0) {
+            if (wantStartAttached && *(long long*)((uintptr_t)g_exe + 0xA2E610) == 0) {
                 __int64 fallbackStart = FindNetworkNodeAt(manager, seg.startNode);
                 if (fallbackStart) {
-                    *(long long*)((uintptr_t)g_exe + 0xA2E608) = fallbackStart;
-                    *(long long*)((uintptr_t)g_exe + 0xA2E688) = fallbackStart;
-                    *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 1;
-                    memcpy((void*)((uintptr_t)g_exe + 0xA2E614), (const void*)(fallbackStart + NODE_POS_OFFSET), 12);
+                    *(long long*)((uintptr_t)g_exe + 0xA2E610) = fallbackStart;
+                    *(long long*)((uintptr_t)g_exe + 0xA2E690) = fallbackStart;
+                    *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 1;
+                    memcpy((void*)((uintptr_t)g_exe + 0xA2E61C), (const void*)(fallbackStart + NODE_POS_OFFSET), 12);
                 }
             }
             if (seg.snapModeStart == 2) {
-                *(unsigned char*)((uintptr_t)g_exe + 0xA2E620) = 1;
-                float* snapPtA = (float*)((uintptr_t)g_exe + 0xA2E624);
+                *(unsigned char*)((uintptr_t)g_exe + 0xA2E628) = 1;
+                float* snapPtA = (float*)((uintptr_t)g_exe + 0xA2E62C);
                 snapPtA[0] = seg.startNode[0] - seg.snapOffsetStart[0];
                 snapPtA[1] = seg.startNode[1] - seg.snapOffsetStart[1];
                 snapPtA[2] = seg.startNode[2] - seg.snapOffsetStart[2];
@@ -1086,7 +1086,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 (seg.snapModeStart == 2) ? (seg.startNode[2] - seg.snapOffsetStart[2]) : 0.0f
             };
             if (wantStartAttached) {
-                unsigned __int64 existingStartHover = *(unsigned __int64*)((uintptr_t)g_exe + 0xA2E608);
+                unsigned __int64 existingStartHover = *(unsigned __int64*)((uintptr_t)g_exe + 0xA2E610);
                 char fuzzyStart = (seg.snapModeStart == 2) ? 0 : 1;
                 ((Fc040Fn)((uintptr_t)g_exe + FC040_RVA))(manager, start, 0, fuzzyStart,
                     Fc040Param5ForCategory(seg.category, seg.typeId), existingStartHover, startDir);
@@ -1129,8 +1129,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             }
             SetOwnHover(manager, seg.endOwnLink, "end");
             if (seg.snapModeEnd == 2) {
-                *(unsigned char*)((uintptr_t)g_exe + 0xA2E620) = 1;
-                float* snapPt = (float*)((uintptr_t)g_exe + 0xA2E624);
+                *(unsigned char*)((uintptr_t)g_exe + 0xA2E628) = 1;
+                float* snapPt = (float*)((uintptr_t)g_exe + 0xA2E62C);
                 snapPt[0] = seg.endNode[0] - seg.snapOffsetEnd[0];
                 snapPt[1] = seg.endNode[1] - seg.snapOffsetEnd[1];
                 snapPt[2] = seg.endNode[2] - seg.snapOffsetEnd[2];
@@ -1149,8 +1149,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             }
             RawVectorHeader route = { seg.points, seg.points + seg.pointCount, seg.points + seg.pointCount };
             if (endHoverNode) {
-                *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 1;
-                memcpy((void*)((uintptr_t)g_exe + 0xA2E614), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
+                *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 1;
+                memcpy((void*)((uintptr_t)g_exe + 0xA2E61C), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
             }
             float end[3] = { seg.endNode[0], seg.endNode[1], seg.endNode[2] };
             *(float*)(thisPtr + CURSOR_X_OFFSET) = seg.endNode[0];
@@ -1219,8 +1219,8 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
             // Force valid state so a false-positive obstacle/slope check on fcaf0's internal
             // curve [rbp+0x170] never drops a segment that the sender already validated.
             if (endHoverNode) {
-                *(unsigned char*)((uintptr_t)g_exe + 0xA2E610) = 1;
-                memcpy((void*)((uintptr_t)g_exe + 0xA2E614), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
+                *(unsigned char*)((uintptr_t)g_exe + 0xA2E618) = 1;
+                memcpy((void*)((uintptr_t)g_exe + 0xA2E61C), (const void*)(endHoverNode + NODE_POS_OFFSET), 12);
             }
             *(__int64*)(manager + MGR_UPG_SEGMENT_OFFSET) = 0;
             *(unsigned char*)(manager + MGR_UPG_GATE_OFFSET) = 0;
@@ -1265,7 +1265,7 @@ static bool ApplySegmentImplInner(const RoadSyncSegment& seg, bool* outEngineAcc
                 *(float*)(manager + MGR_RELAX_TIMER_OFFSET) = savedRelax;
                 RestoreManagerDragState(thisPtr, manager, &savedDrag);
             }
-            *(unsigned char*)((uintptr_t)g_exe + 0xA2E620) = 0;
+            *(unsigned char*)((uintptr_t)g_exe + 0xA2E628) = 0;
             ClearHoveredPort();
             HoverGlobals_Clear();
         }
@@ -1465,7 +1465,7 @@ static bool ApplyUpgradePieceInner(int category, const RoadSyncUpgradeMsg& msg, 
         __int64 thisPtr = GetWorldThisPtr();
         __int64 pedMgr = 0;
         if (category == ROAD_SYNC_CATEGORY_ROAD) {
-            pedMgr = *(__int64*)(thisPtr + 0xFA00);
+            pedMgr = *(__int64*)(thisPtr + 0xFA08);
             __int64 anchorNode = ResolvePedestrianAnchorNode(pedMgr, seg, rs, re, count);
             *(long long*)(manager + MGR_ROAD_LINK_OFFSET) = seg;
             *(long long*)(manager + MGR_ROAD_LINK_EXTRA_OFFSET) = anchorNode;
@@ -1683,8 +1683,8 @@ static bool ApplyDemolishInner(const RoadSyncDemolishMsg& m, bool* outRemoved);
 // The pick finds the piece wherever this player's camera is.
 // Lockstep: the hovered node / edge a hover demolition carries (main thread, during its apply).
 static const RoadSyncDemolishHover* g_applyHover = nullptr;
-static const unsigned kHoverNodeRvas[2] = { 0xA2E608, 0xA2E688 };
-static const unsigned kHoverEdgeRvas[2] = { 0xA2E600, 0xA2E680 };
+static const unsigned kHoverNodeRvas[2] = { 0xA2E610, 0xA2E690 };
+static const unsigned kHoverEdgeRvas[2] = { 0xA2E608, 0xA2E688 };
 
 static bool SamePos(const float* a, const float* b)
 {
@@ -2707,16 +2707,16 @@ void RoadSync_CancelLocalDrag()
     __try {
         __int64 thisPtr = GetWorldThisPtr();
         if (*(char*)(thisPtr + TOOL_DRAG_ACTIVE_OFFSET) == 0) return;
-        __int64 secondRoadMgr = *(__int64*)(thisPtr + 0xF840);
-        __int64* sqBegin = *(__int64**)(thisPtr + 0xF6A0);
-        __int64* sqEnd = *(__int64**)(thisPtr + 0xF6A8);
+        __int64 secondRoadMgr = *(__int64*)(thisPtr + 0xF848);
+        __int64* sqBegin = *(__int64**)(thisPtr + 0xF6A8);
+        __int64* sqEnd = *(__int64**)(thisPtr + 0xF6B0);
         if (secondRoadMgr && sqBegin && sqEnd > sqBegin && (sqEnd - sqBegin) <= 4096) {
             typedef void (*CancelSegFn)(__int64, __int64, int, int, unsigned char);
-            CancelSegFn cancelSeg = (CancelSegFn)((uintptr_t)g_exe + 0x5696A0);
+            CancelSegFn cancelSeg = (CancelSegFn)((uintptr_t)g_exe + 0x569980);
             for (__int64* it = sqBegin; it < sqEnd; ++it) {
                 if (*it) cancelSeg(secondRoadMgr, *it, 0, -1, 0);
             }
-            *(__int64**)(thisPtr + 0xF6A8) = sqBegin;
+            *(__int64**)(thisPtr + 0xF6B0) = sqBegin;
         }
         for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
             __int64 manager = *(__int64*)(thisPtr + g_categories[c].managerOffset);
@@ -2851,7 +2851,7 @@ bool RoadSync_ApplyCommandDemolish(const RoadSyncDemolishMsg& msg)
 #endif
 #define NODE_BUILDINGS_BEGIN_OFFSET 0x70 // node: buildings attached to it
 #define NODE_BUILDINGS_END_OFFSET 0x78
-#define REFRESH_BUILDING_RVA 0x1AA770    // FUN_140191950(thisPtr, building)
+#define REFRESH_BUILDING_RVA 0x1AA600    // FUN_140191950(thisPtr, building)
 #define DIR_SCAN_INTERVAL_MS 250
 #define DIR_SCAN_MAX 4096
 
@@ -2966,15 +2966,15 @@ static void ApplyDirectionAndAck(const RoadSyncDirectionMsg& m)
 // Starting planned construction (see RoadSyncPlanStartMsg)
 // ---------------------------------------------------------------------------
 
-#define PLAN_START_RVA 0x54BC30        // FUN_1405258e0(network, dollars, rubles, count, group)
-#define PLAN_START_EXCEPT_RVA 0x54BF80 // FUN_140525c30(network, dollars, rubles, -, group)
-#define PLAN_COLLECT_UI_RVA 0x9E950    // FUN_140086a40(world, &groupVec, &netVec, &hasGroupFlag)
-#define LEFT_MENU_PLAN_UI_RVA 0x9EE50  // FUN_140086f40(world, x, y, flag)
-#define BOTTOM_BAR_PLAN_UI_RVA 0x3B4A30 // FUN_140395c90(world)
+#define PLAN_START_RVA 0x54BF10        // FUN_1405258e0(network, dollars, rubles, count, group)
+#define PLAN_START_EXCEPT_RVA 0x54C260 // FUN_140525c30(network, dollars, rubles, -, group)
+#define PLAN_COLLECT_UI_RVA 0x9E7E0    // FUN_140086a40(world, &groupVec, &netVec, &hasGroupFlag)
+#define LEFT_MENU_PLAN_UI_RVA 0x9ECE0  // FUN_140086f40(world, x, y, flag)
+#define BOTTOM_BAR_PLAN_UI_RVA 0x3B4CE0 // FUN_140395c90(world)
 #define EDGE_GROUP_OFFSET 0x124
 #define PLAN_CAPTURE_MAX 16
-#define WORLD_NETWORK_COUNT_OFFSET 0x140E4 // int: entries below
-#define WORLD_NETWORK_ENTRIES_OFFSET 0x140E8 // entries of 0x50, the network at +0
+#define WORLD_NETWORK_COUNT_OFFSET 0x140EC // int: entries below
+#define WORLD_NETWORK_ENTRIES_OFFSET 0x140F0 // entries of 0x50, the network at +0
 #define WORLD_NETWORK_ENTRY_SIZE 0x50
 
 struct MaskedPlannedSeg {
@@ -3049,22 +3049,18 @@ static void UntagPlannedSegment(__int64 seg)
 }
 
 // mov rax,rsp / mov [rax+10h],dl / push rbp,rsi,rdi,r12,r13,r14 - 15 bytes
-static const unsigned char kPlanStartExpect[15] = {
-    0x48, 0x8B, 0xC4, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56
-};
+static const unsigned char kPlanStartExpect[15] = { 0x48, 0x8B, 0xC4, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 };
 // mov rax,rsp / mov [rax+18h],r8b / mov [rax+10h],dl / push rbp,rsi,rdi,r12 - 15 bytes
-static const unsigned char kPlanStartExceptExpect[15] = {
-    0x48, 0x8B, 0xC4, 0x44, 0x88, 0x40, 0x18, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54
-};
+static const unsigned char kPlanStartExceptExpect[15] = { 0x48, 0x8B, 0xC4, 0x44, 0x88, 0x40, 0x18, 0x88, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54 };
 
 // The interface's calls (return addresses = CALL + 5): the construction
 // menu (FUN_140086f40), the construction window and the network tool panel
 // (FUN_140395c90). The others - a building's placement, the area paste -
 // start their own plans as part of an action that is synced itself.
 static const unsigned int kPlanStartUiReturns[] = {
-    0x96C60, 0x96E90, 0x97090, 0xA00C1, 0xA0921, 0xA0BD1, 0x3BDE70, 0x3BE4A8, 0x3BE688
+    0x96AF0, 0x96D20, 0x96F20, 0x9FF51, 0xA07B1, 0xA0A61, 0x3BE120, 0x3BE758, 0x3BE938
 };
-static const unsigned int kPlanStartExceptUiReturns[] = { 0x96C3A, 0x96E6A, 0x9706A, 0xA009D, 0xA08FD, 0xA0BAD };
+static const unsigned int kPlanStartExceptUiReturns[] = { 0x96ACA, 0x96CFA, 0x96EFA, 0x9FF2D, 0xA078D, 0xA0A3D };
 
 typedef __int64 (*PlanStartFn)(__int64 network, unsigned char dollars, unsigned char rubles, __int64 count, __int64 group);
 static PlanStartFn g_origPlanStart = nullptr;
@@ -3172,19 +3168,13 @@ static __int64 HookedPlanStartExcept(__int64 network, unsigned char dollars, uns
 }
 
 typedef __int64 (*CancelSegFn)(__int64 network, __int64 seg, unsigned char p3, int p4, unsigned char p5);
-#define CANCEL_SEG_RVA 0x5696A0
-#define BOTTOM_BAR_CANCEL_CALL_RVA 0x3BE247
-#define LEFT_MENU_CANCEL_CALL_RVA 0xA05D3
+#define CANCEL_SEG_RVA 0x569980
+#define BOTTOM_BAR_CANCEL_CALL_RVA 0x3BE4F7
+#define LEFT_MENU_CANCEL_CALL_RVA 0xA0463
 
-static const unsigned char kPlanCollectUiExpect[16] = {
-    0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56
-};
-static const unsigned char kLeftMenuPlanUiExpect[14] = {
-    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
-};
-static const unsigned char kBottomBarPlanUiExpect[15] = {
-    0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20
-};
+static const unsigned char kPlanCollectUiExpect[16] = { 0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x57, 0x41, 0x55, 0x41, 0x56 };
+static const unsigned char kLeftMenuPlanUiExpect[14] = { 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 };
+static const unsigned char kBottomBarPlanUiExpect[15] = { 0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20 };
 
 typedef unsigned char (*PlanCollectUiFn)(__int64 world, void* a2, void* a3, void* a4);
 typedef void (*LeftMenuPlanUiFn)(__int64 world, float a2, float a3, unsigned char a4);
@@ -3291,7 +3281,7 @@ bool RoadSync_InstallPlanStartHooks()
     // segments_begin == segments_end (0 == 0). The original `je +0x11` (74 11) jumped to
     // 0x3CFA5B (`mov rbp, [rcx-8]`) and read `[0 - 8]` -> AV crash when building from an
     // existing road node. Redirecting to +0x0B lands on `je 0x1403D00C8` (0F 84 6B 06 00 00).
-    BYTE* secRoadJe = g_exeBase + 0x3EE7F8;
+    BYTE* secRoadJe = g_exeBase + 0x3EEAA8;
     if (secRoadJe[0] == 0x74 && secRoadJe[1] == 0x11 &&
         secRoadJe[2 + 0x0B] == 0x0F && secRoadJe[2 + 0x0B + 1] == 0x84) {
         DWORD oldProt = 0;
@@ -3357,9 +3347,9 @@ static bool CallCancelAllPlanned(__int64 network, int category, int* outRemoved)
                 if (i > end - begin) i = end - begin;
             }
         }
-        ((void(*)(__int64))(g_exeBase + 0x521160))(network);
+        ((void(*)(__int64))(g_exeBase + 0x521440))(network);
         if (category == ROAD_SYNC_CATEGORY_RAIL) {
-            ((void(*)(__int64))(g_exeBase + 0x5B8C70))(GetWorldThisPtr() + 0xF9A0);
+            ((void(*)(__int64))(g_exeBase + 0x5B8F50))(GetWorldThisPtr() + 0xF9A8);
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -3453,22 +3443,20 @@ static void ApplyPlanStartAndAck(const RoadSyncPlanStartMsg& m)
 // Group construction tools (see RoadSyncGroupToolMsg)
 // ---------------------------------------------------------------------------
 
-#define GROUP_TOOL_RVA 0x2372C0
-#define CTRL_RECT_DEMOLISH_RVA 0x22E9C0
-#define CTRL_RECT_UPGRADE_RVA 0x22F680
-#define SHIFT_CANCEL_PLAN_RVA 0x22F370
+#define GROUP_TOOL_RVA 0x237170
+#define CTRL_RECT_DEMOLISH_RVA 0x22E8C0
+#define CTRL_RECT_UPGRADE_RVA 0x22F580
+#define SHIFT_CANCEL_PLAN_RVA 0x22F270
 #define GROUP_TOOL_YAW_RVA 0xA33DE0   // float: camera yaw that turns the box
 #define GROUP_TOOL_DOWN_RVA 0xA9EF50  // byte: mouse button held
 #define GROUP_TOOL_PRESS_RVA 0xA9EF51 // byte: mouse button pressed this frame
-#define WORLD_GROUP_BOX_OFFSET 0x1400c
-#define WORLD_GROUP_DRAG_OFFSET 0x140e3
+#define WORLD_GROUP_BOX_OFFSET 0x14014
+#define WORLD_GROUP_DRAG_OFFSET 0x140eb
 #define WORLD_CURSOR_OFFSET 0xf9c
 #define GROUP_CAPTURE_MAX 8
 
 // mov rax,rsp / push rbp,rsi,rdi,r12,r13,r14,r15 / lea rbp,[rsp-70h] - 19 bytes
-static const unsigned char kGroupToolExpect[19] = {
-    0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0x90
-};
+static const unsigned char kGroupToolExpect[19] = { 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24, 0x90 };
 
 typedef __int64 (*GroupToolFn)(__int64 world, int mode);
 static GroupToolFn g_origGroupTool = nullptr;
@@ -3652,7 +3640,7 @@ static void HandleCtrlRectTool(__int64 world, int mode, unsigned int rva)
         m.yaw = s.yaw;
         m.buildMode = BuildMode_Read();
         __try {
-            const char* tool = *(const char**)(world + 0xD4C0);
+            const char* tool = *(const char**)(world + 0xD4C8);
             if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
             for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; c++) {
                 __int64 mgr = *(__int64*)(world + g_categories[c].managerOffset);
@@ -3701,7 +3689,7 @@ static void FillShiftCancelMsg(__int64 world, RoadSyncGroupToolMsg& m)
         memcpy(m.box + 3, (const void*)(g_exeBase + 0xA33DD0), 12);
         memcpy(m.cursor, (const void*)(world + WORLD_CURSOR_OFFSET), 12);
         m.buildMode = BuildMode_Read();
-        const char* tool = *(const char**)(world + 0xD4C0);
+        const char* tool = *(const char**)(world + 0xD4C8);
         if (tool) strncpy_s(m.toolName, sizeof(m.toolName), tool, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -3767,8 +3755,8 @@ static bool CallGroupTool(__int64 world, const RoadSyncGroupToolMsg& m)
         static char s_fakeToolRecord[0x400];
         memset(s_fakeToolRecord, 0, sizeof(s_fakeToolRecord));
         strncpy_s(s_fakeToolRecord, sizeof(s_fakeToolRecord), m.toolName, _TRUNCATE);
-        void* savedTool = *(void**)(world + 0xD4C0);
-        *(void**)(world + 0xD4C0) = s_fakeToolRecord;
+        void* savedTool = *(void**)(world + 0xD4C8);
+        *(void**)(world + 0xD4C8) = s_fakeToolRecord;
         if (m.mode == 10) {
             ((void(*)(__int64))(g_exeBase + CTRL_RECT_DEMOLISH_RVA))(world);
         } else if (m.mode == 11) {
@@ -3802,7 +3790,7 @@ static bool CallGroupTool(__int64 world, const RoadSyncGroupToolMsg& m)
             memcpy((void*)(world + 0xF90), savedRay, 12);
             memcpy((void*)(g_exeBase + 0xA33DD0), savedEye, 12);
         }
-        *(void**)(world + 0xD4C0) = savedTool;
+        *(void**)(world + 0xD4C8) = savedTool;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

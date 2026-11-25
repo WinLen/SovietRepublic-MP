@@ -12,14 +12,14 @@
 #include <math.h>
 
 #define WORLD_THIS_RVA 0xA1EF20
-#define VEC_BUILDINGS_BEGIN_RVA 0xA30AD0 // city buildings vector: non-null once a world is loaded
-#define VEC_BUILDINGS_END_RVA 0xA30AD8
+#define VEC_BUILDINGS_BEGIN_RVA 0xA30AD8 // city buildings vector: non-null once a world is loaded
+#define VEC_BUILDINGS_END_RVA 0xA30AE0
 
 // Mask-paint queue: std::vector of 28-byte records at thisPtr+0x130d0,
 // filled by FUN_14040eaa0 and drained every frame by FUN_14040ece0 (which
 // empties it by setting end = begin). Records are plain data.
-#define MASK_QUEUE_BEGIN_OFFSET 0x13180
-#define MASK_QUEUE_END_OFFSET 0x13188
+#define MASK_QUEUE_BEGIN_OFFSET 0x13188
+#define MASK_QUEUE_END_OFFSET 0x13190
 #define MASK_QUEUE_RECORD_SIZE 0x1c
 
 // Payloads at least this big are compressed.

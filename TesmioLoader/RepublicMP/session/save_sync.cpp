@@ -2196,7 +2196,7 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 // The world's road network (world+0xf7a0): made with every world, an empty
 // map too; deleted and zeroed when the world is torn down (0x9952C,
 // 0x29564E) - back in the main menu, or while another save loads.
-#define WORLD_ROAD_NETWORK_RVA 0xA2E758
+#define WORLD_ROAD_NETWORK_RVA 0xA2E760
 // Out of the world this long in a session ends it (a load's teardown is
 // shorter, and joins/re-syncs are not checked at all).
 #define OUT_OF_WORLD_GRACE_MS 1500

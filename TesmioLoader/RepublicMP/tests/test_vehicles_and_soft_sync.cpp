@@ -685,7 +685,7 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
     for (int i = 0; i < 9; ++i) {
         BYTE* wr = wasteResPool.data() + (size_t)i * WORLD_RESOURCE_STRIDE;
         strcpy_s((char*)wr, 32, kWasteNames[i]);
-        *(BYTE**)(world + 0xC3C8 + (size_t)i * 8u) = wr;
+        *(BYTE**)(world + 0xC3D0 + (size_t)i * 8u) = wr;
     }
     std::vector<BYTE> skdTruck(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(skdTruck.data() + VEH_ID_OFFSET) = 121;
@@ -726,9 +726,9 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
 static bool SubTest_CoopGameSpeedAndTimerScaling()
 {
     ResetMockWorldMemory();
-    *(float*)(g_mockExeBuffer + 0x95123C) = 0.35f; // FAST_FACTOR_RVA (2x)
-    *(float*)(g_mockExeBuffer + 0x9510D0) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
-    *(float*)(g_mockExeBuffer + 0x951048) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
+    *(float*)(g_mockExeBuffer + 0x9512F4) = 0.35f; // FAST_FACTOR_RVA (2x)
+    *(float*)(g_mockExeBuffer + 0x951188) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
+    *(float*)(g_mockExeBuffer + 0x951100) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
     *(uint8_t*)(g_mockExeBuffer + 0xA1EEF0 + 13) = 0;
     *(uint8_t*)(g_mockExeBuffer + 0xA1EF20 + 0x5CA) = 0;
     *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x1D) = 0;
@@ -1042,14 +1042,14 @@ bool Test_VehicleCargoAndScheduleSync()
 #define IMPORT_GET_SOUND_RVA    0x86CD18
 #endif
 #ifndef SOUND_ENGINE_PTR_RVA
-#define SOUND_ENGINE_PTR_RVA    0xA2ECC0
+#define SOUND_ENGINE_PTR_RVA    0xA2ECC8
 #endif
 #ifndef SOUND_MGR_RVA
-#define SOUND_MGR_RVA           0xA2ECC8
+#define SOUND_MGR_RVA           0xA2ECD0
 #endif
 #ifndef M4_BUILDINGS_BEGIN_RVA
-#define M4_BUILDINGS_BEGIN_RVA  0xA30AD0
-#define M4_BUILDINGS_END_RVA    0xA30AD8
+#define M4_BUILDINGS_BEGIN_RVA  0xA30AD8
+#define M4_BUILDINGS_END_RVA    0xA30AE0
 #endif
 
 // 1. R10: Vehicle SoftSync, Smoothing, EMA Decay & Passengers
@@ -1705,8 +1705,8 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     *(float*)(loco.data() + VEH_STEER_CURRENT_OFFSET) = 0.10f;
     *(float*)(loco.data() + VEH_STEER_TARGET_OFFSET) = 0.50f;
     std::vector<BYTE*> vehList = { loco.data() };
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = vehList.data();
-    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = vehList.data() + 1;
+    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = vehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = vehList.data() + 1;
 
     HeldFrame_OnSimTick(10);
 
@@ -1728,7 +1728,7 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
         auto* c = (GuardCtx*)ud;
         c->xDuring = *(const float*)(c->veh + 0xD98 + 0x80);
     };
-    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E0, 0.5f, guardCb, &gctx));
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E8, 0.5f, guardCb, &gctx));
     TEST_CHECK_NEAR(gctx.xDuring, 104.0f, 1e-4f);
     TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 108.0f, 1e-4f);
 
@@ -1756,8 +1756,8 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     TEST_CHECK(hlCtx.calls == 2);
     TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 109.5f, 1e-4f);
 
-    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = nullptr;
     *(BYTE***)(g_mockExeBuffer + 0xA317E8) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0xA317F0) = nullptr;
     HeldFrame_Reset();
     return true;
 }

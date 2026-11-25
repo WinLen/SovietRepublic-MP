@@ -49,7 +49,7 @@
   2. **Живая папка подписки Steam Workshop на ПК (`3823543010` — основной, `3834234182` — зеркало, откуда реально грузится Steam-игра):**
      - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\TesmioLoader\build\plugins\RepublicMP.dll`
      - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\TesmioLoader\build\tesmioloader.dll`
-     - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\dinput8.dll` (+ `START-COOP.bat`, `README-RU.txt`, `LICENSE`, `TesmioLoader\build\tesmiolauncher.exe` с проверкой `kSupportedVersions` для `v1.2.0.8` / `0x6B0097B2`)
+     - `C:\Program Files (x86)\Steam\steamapps\workshop\content\784150\3823543010\dinput8.dll` (+ `START-COOP.bat`, `README-RU.txt`, `LICENSE`, `TesmioLoader\build\tesmiolauncher.exe` с проверкой `kSupportedVersions` для `v1.2.0.9` / `0x6B05A574`)
      - (аналогично синхронизируется совместимое зеркало `...\784150\3834234182\...`)
      - `C:\Program Files (x86)\Steam\steamapps\common\SovietRepublic\dinput8.dll`
   3. **Локальные тестовые стенды (Двухоконный стенд на одном ПК):**
@@ -226,32 +226,32 @@
 
 ---
 
-## 3. Справочник ключевых RVA и смещений (`SOVIET64.exe` `v1.2.0.8`, PE `0x6B0097B2`, Steam Build `26869140`)
+## 3. Справочник ключевых RVA и смещений (`SOVIET64.exe` `v1.2.0.9`, PE `0x6B05A574`, Steam Build `26898154`)
 
-> **Примечание по порту `v1.2.0.8` (Phase 0+1):** Ниже приведены актуализированные под `v1.2.0.8` базовые адреса мира, структур и ключевых подсистем из [`engine_rva.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/engine_rva.h) и [`test_harness.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/tests/test_harness.h). Полный канонический список всех RVA-констант и `static_assert`-проверок хранится в [`engine_rva.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/engine_rva.h) (единый источник истины).
+> **Примечание по порту `v1.2.0.9` (Hotfix):** Ниже приведены актуализированные под `v1.2.0.9` базовые адреса мира, структур и ключевых подсистем из [`engine_rva.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/engine_rva.h) и [`test_harness.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/tests/test_harness.h) (`WORLD`-смещения `>= 0xC348` сдвинуты ровно на `+0x8` относительно `v1.2.0.8`). Полный канонический список всех RVA-констант и `static_assert`-проверок хранится в [`engine_rva.h`](file:///d:/SovietRepublic%20MP/TesmioLoader/RepublicMP/core/engine_rva.h) (единый источник истины).
 
-| Назначение | RVA / Смещение (`v1.2.0.8`) | Примечание |
+| Назначение | RVA / Смещение (`v1.2.0.9`) | Примечание |
 | :--- | :--- | :--- |
 | `WORLD_RVA` (`WORLD_THIS_RVA`) | `0xA1EF20` | Глобальный объект мира и главного меню (`menuObj`) |
-| `WORLD_CHEAT_MODE_OFFSET` / `DEV` / `MAP_EDITOR` | `world + 0x9` / `+0xA` / `+0x10430` | `BYTE`: флаги чит-режима (`C+H+E`), dev-режима (`D+E+V`) и режима редактора карт (`WORLD_MAP_EDITOR_MODE_OFFSET = 0x10430`) |
+| `WORLD_CHEAT_MODE_OFFSET` / `DEV` / `MAP_EDITOR` | `world + 0x9` / `+0xA` / `+0x10438` | `BYTE`: флаги чит-режима (`C+H+E`), dev-режима (`D+E+V`) и режима редактора карт (`WORLD_MAP_EDITOR_MODE_OFFSET = 0x10438`) |
 | `VEHICLE_STRUCT_BYTES` / `VEH_SPEED_OFFSET` | `0x1C30` / `vehicle + 0xD44` | Размер структуры `VEHICLE` (`0x1C30`) и текущая скорость (`float`, `+0xD44u`) |
 | `VEH_STEER_CURRENT_OFFSET` / `TARGET` | `vehicle + 0x1194` / `+0x1198` | `float`: текущий и целевой углы поворота передних колёс |
 | `VEH_WHEELS_BEGIN_OFFSET` / `END` | `vehicle + 0x1478` / `+0x1480` | `std::vector<Wheel>` (шаг `VEH_WHEEL_STRUCT_STRIDE = 24` байта) |
-| `VEH_SIXTH_NODE_OFFSET` | `vehicle + 0x1350` (`+0x134C >= 0`) | 6-й узел `C3D_NODE` (`0xBC` байт); динамические матрицы для `HeldFrame` в `+0x14C0..+0x172F` (`0x6A4FB7`) |
-| `WORLD_VEHICLE_TYPES_OFFSET` / `STRIDE` | `world + 0x128F0` / `0xA0C8` | Вектор типов техники (`WORLD_VEHICLE_TYPE_STRIDE = 0xA0C8`, вектор прицепов `+0x7C58..+0x7C60`) |
-| `WORLD_RESOURCES_OFFSET` / `STRIDE` | `world + 0xC348` / `0x380` | Ресурсы мира (`WORLD_RESOURCE_STRIDE = 0x380`) |
-| `WORLD_ECON_TAB_OFFSET` / `WORLD_LOANS_OFFSET` | `world + 0xC6F4` / `+0x10C68` | Вкладка экономики (`0xC6F4`) и `std::vector<SovietLoan>` (`WORLD_LOANS_OFFSET = 0x10C68`) |
-| `WORLD_AUTO_REPLACE_MGR_OFFSET` / `WORKSHOP_MGR_PTR_RVA` | `world + 0xD4D8` / `0xA2C360` | Менеджер автозамены и указатель `SOVIET_WORKSHOP_MANAGER*` |
-| `VEC_BUILDINGS_BEGIN_RVA` / `CONSTRUCTIONS` | `0xA30AD0` (`world + 0x11BB0`) / `0xA30BF0` (`+0x11CD0`) | Векторы готовых зданий и стройплощадок |
-| `BLD_TYPE_CAT_OFF` / `CUSTOMS_SUBTYPE` / `IS_DORM` | `+0x368u` / `+0x738u` / `+0xAF8u` | Смещения внутри `BUILDING_TYPE` (`v1.2.0.8`) |
-| `WORLD_RESEARCH_UNLOCKS_OFFSET` / `VEC` / `STRIDE` | `world + 0x117F4` / `+0x11810` / `0x138` | Флаги разблокировки технологий, `std::vector<ResearchItem>` (`RESEARCH_ITEM_STRIDE = 0x138u`) и `RVA_RESEARCH_RECOMPUTE = 0x314F90` |
-| `WORLD_STAT_CURRENT_OFFSET` / `HISTORY` | `world + 0x113C0` / `+0x117C0` | `$STAT_CURRENT` и `$STAT_RECORD` (`RVA_STAT_RECORD_CLEAR = 0x31A5E0`) |
-| `WORLD_HUD_POP_BLOCK_OFFSET` / `TRACKER` / `CITIZENS` | `world + 0xC760` / `+0x10A38` / `+0x12758` | Население HUD, блок трекеров и вектор граждан (`RVA_CITIZEN_STARVE_STEP = 0x876010`) |
-| `WORLD_LINES_OFFSET` / `CAMERA_RVA` | `world + 0x128B0` / `0xA33D50` | Менеджер маршрутов и глобальная камера |
-| `SAVE_NAME_FIELD_OFFSET` / `SAVE_TRIGGER` / `DAT` | `world + 0xA20` / `+0x14DE5` / `0x9DECA0` | Путь сохранения, триггер сохранения и буферы загрузки (`LOAD_TRIGGER_DAT_RVA = 0x9DEC9A`) |
-| `RVA_MINIMAP_DRAW_CONTENT` / `BUTTONS` | `0x4E4010` / `0x4E60D0` | Нативный рендер миникарты и 6-й кнопки границ |
-| `RVA_ASSIGN_CONSTRUCTION_OFFICE` / `BLD_STEP_PRODUCTION` | `0x17A750` / `0x1A1E50` | Назначение стройконтор и производственный шаг здания |
-| `RVA_BLD_COUNT_LIMIT_CHECK` / `GET` / `TOOLTIP` | `0x61AA20` / `0x61AAC0` / `0x7EA247` | Лимиты `$COUNT_LIMIT` и тултипы |
+| `VEH_SIXTH_NODE_OFFSET` | `vehicle + 0x1350` (`+0x134C >= 0`) | 6-й узел `C3D_NODE` (`0xBC` байт); динамические матрицы для `HeldFrame` в `+0x14C0..+0x172F` (`0x6A52A7`) |
+| `WORLD_VEHICLE_TYPES_OFFSET` / `STRIDE` | `world + 0x128F8` / `0xA0C8` | Вектор типов техники (`WORLD_VEHICLE_TYPE_STRIDE = 0xA0C8`, вектор прицепов `+0x7C58..+0x7C60`) |
+| `WORLD_RESOURCES_OFFSET` / `STRIDE` | `world + 0xC350` / `0x380` | Ресурсы мира (`WORLD_RESOURCE_STRIDE = 0x380`) |
+| `WORLD_ECON_TAB_OFFSET` / `WORLD_LOANS_OFFSET` | `world + 0xC6FC` / `+0x10C70` | Вкладка экономики (`0xC6FC`) и `std::vector<SovietLoan>` (`WORLD_LOANS_OFFSET = 0x10C70`) |
+| `WORLD_AUTO_REPLACE_MGR_OFFSET` / `WORKSHOP_MGR_PTR_RVA` | `world + 0xD4E0` / `0xA2C368` | Менеджер автозамены и указатель `SOVIET_WORKSHOP_MANAGER*` |
+| `VEC_BUILDINGS_BEGIN_RVA` / `CONSTRUCTIONS` | `0xA30AD8` (`world + 0x11BB8`) / `0xA30BF8` (`+0x11CD8`) | Векторы готовых зданий и стройплощадок |
+| `BLD_TYPE_CAT_OFF` / `CUSTOMS_SUBTYPE` / `IS_DORM` | `+0x368u` / `+0x738u` / `+0xAF8u` | Смещения внутри `BUILDING_TYPE` (`v1.2.0.9`) |
+| `WORLD_RESEARCH_UNLOCKS_OFFSET` / `VEC` / `STRIDE` | `world + 0x117FC` / `+0x11818` / `0x138` | Флаги разблокировки технологий, `std::vector<ResearchItem>` (`RESEARCH_ITEM_STRIDE = 0x138u`) и `RVA_RESEARCH_RECOMPUTE = 0x315120` |
+| `WORLD_STAT_CURRENT_OFFSET` / `HISTORY` | `world + 0x113C8` / `+0x117C8` | `$STAT_CURRENT` и `$STAT_RECORD` (`RVA_STAT_RECORD_CLEAR = 0x31A770`) |
+| `WORLD_HUD_POP_BLOCK_OFFSET` / `TRACKER` / `CITIZENS` | `world + 0xC768` / `+0x10A40` / `+0x12760` | Население HUD, блок трекеров и вектор граждан (`RVA_CITIZEN_STARVE_STEP = 0x876500`) |
+| `WORLD_LINES_OFFSET` / `CAMERA_RVA` | `world + 0x128B8` / `0xA33D50` | Менеджер маршрутов и глобальная камера |
+| `SAVE_NAME_FIELD_OFFSET` / `SAVE_TRIGGER` / `DAT` | `world + 0xA20` / `+0x14DED` / `0x9DECA0` | Путь сохранения, триггер сохранения и буферы загрузки (`LOAD_TRIGGER_DAT_RVA = 0x9DEC9A`) |
+| `RVA_MINIMAP_DRAW_CONTENT` / `BUTTONS` | `0x4E42F0` / `0x4E63B0` | Нативный рендер миникарты и 6-й кнопки границ |
+| `RVA_ASSIGN_CONSTRUCTION_OFFICE` / `BLD_STEP_PRODUCTION` | `0x17A5F0` / `0x1A1CF0` | Назначение стройконтор и производственный шаг здания |
+| `RVA_BLD_COUNT_LIMIT_CHECK` / `GET` / `TOOLTIP` | `0x61ACF0` / `0x61AD90` / `0x7EA697` | Лимиты `$COUNT_LIMIT` и тултипы |
 | `DLC5` (`Space Program`) | `mask |= (1u << 4)` | Метаданные `dlc5` в `SaveSync_FormatDlcNames` / `SaveSync_GetDlcMask` (+ фоллбэк `dlc6..16`); синхронизация геймплея запланирована в фазах 2–5 |
 
 

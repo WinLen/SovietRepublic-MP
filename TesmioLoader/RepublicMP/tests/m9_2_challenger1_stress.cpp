@@ -54,8 +54,8 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    const unsigned kFiveNetworks[5] = { 0xF838u, 0xF840u, 0xF9A0u, 0xFAC0u, 0xFAC8u };
-    const char* kNetNames[5] = { "ROAD (0xF838)", "SECOND_ROAD (0xF840)", "RAIL (0xF9A0)", "WATER (0xFAC0)", "AIRROAD (0xFAC8)" };
+    const unsigned kFiveNetworks[5] = { 0xF840u, 0xF848u, 0xF9A8u, 0xFAC8u, 0xFAD0u };
+    const char* kNetNames[5] = { "ROAD (0xF840)", "SECOND_ROAD (0xF848)", "RAIL (0xF9A8)", "WATER (0xFAC8)", "AIRROAD (0xFAD0)" };
 
     // 1. Single Network Boundary Oracle for Each Network
     for (int k = 0; k < 5; ++k) {
@@ -124,10 +124,10 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
     // 2. Corrupted Vector Headers & Empty Lists
     {
         std::vector<BYTE> netObj(0x300, 0);
-        *(BYTE**)(world + 0xF838) = netObj.data();
+        *(BYTE**)(world + 0xF840) = netObj.data();
 
         // Empty vector (begin == end == 0)
-        RouteRef refEmpty = { 0xF838, 0, 0x1234 };
+        RouteRef refEmpty = { 0xF840, 0, 0x1234 };
         TEST_CHECK(Ref_NodeAt(refEmpty) == 0);
 
         // Inverted vector (end < begin)
@@ -139,7 +139,7 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
         RouteRef nullRef = kNoRef;
         TEST_CHECK(!Ref_Node(0, nullRef));
 
-        *(BYTE**)(world + 0xF838) = nullptr;
+        *(BYTE**)(world + 0xF840) = nullptr;
     }
 
     // 3. Concurrent Multi-Network Population (50 Nodes per Network = 250 Nodes)
@@ -259,7 +259,7 @@ static bool SubTest_M9_2_C1_StorageEmptyButton_RapidOscillationAndNoiseFilter()
     const unsigned kOscillationOffsets[] = {
         0x1008u, // Slot 0, Region 1 empty button
         0x5008u, // Slot 1, Region 1 empty button
-        0xD018u, // Slot 3, Region 1 empty button
+        0xD020u, // Slot 3, Region 1 empty button
         0x1000u, // Slot 0, Region 1 non-button
         0x0010u, // Slot 0, Region 0 metadata (< 0x48)
         0x2008u  // Slot 0, Region 2 slot word
@@ -375,8 +375,8 @@ static bool SubTest_M9_2_C1_SourceSlots_ConstructionsOffsetAndCapacityAudit()
     // 2. Canonical RVAs and Offsets in engine_rva.h:
     // BUILDINGS_OFFSET = 0x11BB0 -> VEC_BUILDINGS_BEGIN_RVA = WORLD_RVA + 0x11BB0 (0xA30AD0)
     // CONSTRUCTIONS_OFFSET = 0x11CD0 -> VEC_CONSTRUCTIONS_BEGIN_RVA = WORLD_RVA + 0x11CD0 (0xA30BF0)
-    TEST_CHECK(WORLD_BUILDINGS_OFFSET == 0x11BB0u);
-    TEST_CHECK(WORLD_CONSTRUCTIONS_OFFSET == 0x11CD0u);
+    TEST_CHECK(WORLD_BUILDINGS_OFFSET == 0x11BB8u);
+    TEST_CHECK(WORLD_CONSTRUCTIONS_OFFSET == 0x11CD8u);
     TEST_CHECK(VEC_BUILDINGS_BEGIN_RVA == (WORLD_RVA + WORLD_BUILDINGS_OFFSET));
     TEST_CHECK(VEC_CONSTRUCTIONS_BEGIN_RVA == (WORLD_RVA + WORLD_CONSTRUCTIONS_OFFSET));
 
@@ -430,7 +430,7 @@ static bool SubTest_M9_2_C1_SourceSlots_ConstructionsOffsetAndCapacityAudit()
     TEST_CHECK(slotWasReverted);    // Empirically proves conBld WAS held from canonical 0x11CD0!
     TEST_CHECK(commandSubmitted);  // Empirically proves lockstep command WAS submitted!
 
-    printf("      [AUDIT VERIFIED] source_slots.cpp uses WORLD_CONSTRUCTIONS_OFFSET 0x11CD0 (0xA30BF0).\n");
+    printf("      [AUDIT VERIFIED] source_slots.cpp uses WORLD_CONSTRUCTIONS_OFFSET 0x11CD8 (0xA30BF8).\n");
     printf("      Empirical proof: Construction office in canonical VEC_CONSTRUCTIONS was scanned by CollectSlotBuildings.\n");
     printf("      Slot rollback was executed (slotWasReverted=1) and lockstep sync was submitted (commandSubmitted=1).\n");
     fflush(stdout);

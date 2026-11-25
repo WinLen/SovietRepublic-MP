@@ -169,7 +169,7 @@ bool Test_WaitingLobbyAndActionLock()
     TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_IN_GAME, true, true));
 
     // Mark mock world as loaded (WORLD_ROAD_NETWORK_RVA = 0xA2E758 != 0 and LOAD_TRIGGER_DAT_RVA == 0)
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     TEST_CHECK(SaveSync_IsWorldLoaded());
 
@@ -198,7 +198,7 @@ bool Test_WaitingLobbyAndActionLock()
     *(unsigned char*)(world + 0x5CA) = 1;                     // GAME_SPEED_HOLD_OFFSET
     *(unsigned char*)(g_mockExeBuffer + 0xA1EEF0 + 12) = 0;   // timer paused byte (0 = running)
     *(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = (void*)0x12345678ULL;
-    *(unsigned char*)(world + 0xD344) = 1;                    // TOOL_DRAG_ACTIVE_OFFSET
+    *(unsigned char*)(world + 0xD34C) = 1;                    // TOOL_DRAG_ACTIVE_OFFSET
     *(unsigned char*)(g_mockExeBuffer + 0xA9EF50) = 1;        // LMB_HELD_RVA
     *(unsigned char*)(g_mockExeBuffer + 0xA9EF51) = 1;        // LMB_JUST_PRESSED_RVA
 
@@ -210,7 +210,7 @@ bool Test_WaitingLobbyAndActionLock()
     TEST_CHECK(*(unsigned char*)(world + 0x5CA) == 0);
     TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA1EEF0 + 12) == 1);
     TEST_CHECK(*(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == nullptr);
-    TEST_CHECK(*(unsigned char*)(world + 0xD344) == 0);
+    TEST_CHECK(*(unsigned char*)(world + 0xD34C) == 0);
     TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA9EF50) == 0);
     TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA9EF51) == 0);
 
@@ -311,7 +311,7 @@ bool Test_WaitingLobbyAndActionLock()
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     SyncBlock_SetActive(false, nullptr);
     TwoStates_OnSessionEnded();
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
     return true;
 }
 

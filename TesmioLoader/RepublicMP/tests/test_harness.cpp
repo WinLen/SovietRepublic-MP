@@ -70,9 +70,9 @@ void InitMockHarness()
     }
     if (!g_mockExeBuffer) { abort(); }
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
-    g_mockExeBuffer[0x568AE0] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
-    g_mockExeBuffer[0x568C10] = 0xC3; // ret for MANAGER_RESET_RVA
-    g_mockExeBuffer[0x5696A0] = 0xC3; // ret for CANCEL_SEG_RVA
+    g_mockExeBuffer[0x568DC0] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
+    g_mockExeBuffer[0x568EF0] = 0xC3; // ret for MANAGER_RESET_RVA
+    g_mockExeBuffer[0x569980] = 0xC3; // ret for CANCEL_SEG_RVA
 
     char tmpPath[MAX_PATH] = {};
     GetTempPathA(sizeof(tmpPath), tmpPath);
@@ -108,12 +108,12 @@ void ResetMockWorldMemory()
     TwoStates_ClearToastsForTest();
     if (!g_mockExeBuffer) return;
     memset(g_mockExeBuffer, 0, MOCK_EXE_SIZE);
-    g_mockExeBuffer[0x568AE0] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
-    g_mockExeBuffer[0x568C10] = 0xC3; // ret for MANAGER_RESET_RVA
-    g_mockExeBuffer[0x5696A0] = 0xC3; // ret for CANCEL_SEG_RVA
-    g_mockExeBuffer[0x18E2F0] = 0xC3; // ret for AUTO_PURCHASE_RVA
-    g_mockExeBuffer[0x1D0DA0] = 0xC3; // ret for PIPELINE_TO_EXPORT_RVA
-    g_mockExeBuffer[0x1D0EB0] = 0xC3; // ret for PIPELINE_TO_IMPORT_RVA
+    g_mockExeBuffer[0x568DC0] = 0xC3; // ret for QUEUE_DELETE_MESH_RVA
+    g_mockExeBuffer[0x568EF0] = 0xC3; // ret for MANAGER_RESET_RVA
+    g_mockExeBuffer[0x569980] = 0xC3; // ret for CANCEL_SEG_RVA
+    g_mockExeBuffer[0x18E180] = 0xC3; // ret for AUTO_PURCHASE_RVA
+    g_mockExeBuffer[0x1D0C40] = 0xC3; // ret for PIPELINE_TO_EXPORT_RVA
+    g_mockExeBuffer[0x1D0D50] = 0xC3; // ret for PIPELINE_TO_IMPORT_RVA
     g_mockExeBuffer[RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT] = 0xC3; // ret for RVA_RECOMPUTE_FACTORY_QUEUE_LIMIT
 }
 

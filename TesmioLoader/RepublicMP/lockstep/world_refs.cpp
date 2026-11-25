@@ -11,7 +11,7 @@
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define NODE_LIST 0x298
 
-static const unsigned kNodeFields[5] = { 0xF838, 0xF840, 0xF9A0, 0xFAC0, 0xFAC8 };
+static const unsigned kNodeFields[5] = { 0xF840, 0xF848, 0xF9A8, 0xFAC8, 0xFAD0 };
 
 const RouteRef kNoRef = { 0, -1, 0 };
 

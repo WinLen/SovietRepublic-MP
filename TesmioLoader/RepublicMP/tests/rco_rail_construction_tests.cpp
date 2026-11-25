@@ -18,10 +18,10 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
 
     // 1. Verify exact H_SiteStop UI caller whitelist (ONLY 0x72FD17)
     TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(RVA_SITE_STOP_UI_RET));
-    TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(0x72FD17u));
+    TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(0x730087u));
     TEST_CHECK(!SettingsSync_IsSiteStopUiCallerRva(0u));
     const unsigned kInternalStopCallers[] = {
-        0x21C865u, 0x21CAF3u, 0x3BD7D7u, 0x3BD8D8u, 0x3BE8E5u, 0x3BE957u, 0x6FA0E2u,
+        0x21C865u, 0x21CAF3u, 0x3BD927u, 0x3BD8D8u, 0x3BE8E5u, 0x3BE957u, 0x6FA0E2u,
     };
     for (unsigned rva : kInternalStopCallers) {
         TEST_CHECK(!SettingsSync_IsSiteStopUiCallerRva(rva));
@@ -39,7 +39,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
         TEST_CHECK(SettingsSync_IsSiteResumeUiCallerRva(rva));
     }
     const unsigned kInternalResumeCallers[] = {
-        0u, 0x138237u, 0x140160u, 0x15C126u, 0x21C8FFu, 0x3BD7C4u, 0x540CE3u, 0x543C07u, 0x6F9E6Du,
+        0u, 0x138237u, 0x140160u, 0x15BFD6u, 0x21C8FFu, 0x3BD7C4u, 0x540CE3u, 0x543C07u, 0x6F9E6Du,
     };
     for (unsigned rva : kInternalResumeCallers) {
         TEST_CHECK(!SettingsSync_IsSiteResumeUiCallerRva(rva));
@@ -54,7 +54,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
 
     // Internal caller (e.g. network edit 0x3BD7D7) must NOT be intercepted and must NOT clobber +0x879
     site[BLD_STOPPED_OFFSET] = 0;
-    TEST_CHECK(!SettingsSync_TestSiteCallFilter(site.data(), true, 0, true, 0x3BD7D7u));
+    TEST_CHECK(!SettingsSync_TestSiteCallFilter(site.data(), true, 0, true, 0x3BD927u));
     TEST_CHECK(site[BLD_STOPPED_OFFSET] == 0u);
 
     // When captureUi is false (Lockstep replay / inactive session), even UI caller passes through natively
@@ -65,7 +65,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
     // 4. Test H_SiteResume capture behavior:
     //    UI caller clears +0x879 -> 0; simulation caller (0x15C126) is NOT intercepted and preserves +0x879 == 1
     site[BLD_STOPPED_OFFSET] = 1u;
-    TEST_CHECK(!SettingsSync_TestSiteCallFilter(site.data(), false, 0, true, 0x15C126u));
+    TEST_CHECK(!SettingsSync_TestSiteCallFilter(site.data(), false, 0, true, 0x15BFD6u));
     TEST_CHECK(site[BLD_STOPPED_OFFSET] == 1u);
 
     TEST_CHECK(SettingsSync_TestSiteCallFilter(site.data(), false, 0, true, RVA_SITE_RESUME_UI_RET_PAY_RUB));
@@ -76,7 +76,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
 
 static bool RcoTest_Arg6SemanticsAndRailChainGuard()
 {
-    printf("    [RCO-2] 0x17A750 Arg6 triggerImmediateScan & Rail Auto-Chain (0x1729ED) Guard ...\n");
+    printf("    [RCO-2] 0x17A5E0 Arg6 triggerImmediateScan & Rail Auto-Chain (0x17287D) Guard ...\n");
     fflush(stdout);
 
     ResetMockWorldMemory();
@@ -256,10 +256,10 @@ static bool RcoTest_QueueReorderPermutationAndCommand()
 
 static bool RcoTest_GameCallsSitesClean()
 {
-    printf("    [RCO-4] 0x7D8738 Removed & Rail Assign CO Tool Sites Preserved ...\n");
+    printf("    [RCO-4] 0x7D8BE8 Removed & Rail Assign CO Tool Sites Preserved ...\n");
     fflush(stdout);
 
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8BE8u, 0x664C30u));
 
     const unsigned kRailAssignSites[][2] = {
         { SITE_ASSIGN_CO_SINGLE_RAIL_START_RVA, RVA_START_PLANNED_CONSTRUCTION },

@@ -36,7 +36,7 @@ void LocalBuilds_Bind(const TsmHost* host)
 
 const unsigned char kUniversalExpect[21] = {
     0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
-    0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0xD8,
+    0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x88,
     0x53, 0xFF, 0xFF
 };
 
@@ -54,16 +54,16 @@ RoadCommitFn g_origRoadCommit = nullptr;
 // Engine addresses and offsets
 // ---------------------------------------------------------------------------
 
-#define HOVER_PORT_BUILDING_RVA 0xA2E658 // building whose connection port is hovered
-#define HOVER_PORT_INDEX_RVA 0xA2E660
-#define HOVER_NODE_RVA 0xA2E608          // network node under the cursor (power lines join on it)
-#define HOVER_EDGE_RVA 0xA2E600          // network edge under the cursor
+#define HOVER_PORT_BUILDING_RVA 0xA2E660 // building whose connection port is hovered
+#define HOVER_PORT_INDEX_RVA 0xA2E668
+#define HOVER_NODE_RVA 0xA2E610          // network node under the cursor (power lines join on it)
+#define HOVER_EDGE_RVA 0xA2E608          // network edge under the cursor
 
 // thisPtr fields.
 #define CURSOR_YAW_OFFSET 0xfc4          // placement yaw (radians)
-#define PLACEMENT_RESULT_OFFSET 0x11aa8  // validation code after a placement call
-#define MIRROR_EFFECTIVE_OFFSET 0x11e61  // byte: mirror state the last placement call used
-#define ACTIVE_TOOL_OFFSET 0xD4C0        // char*: name of the active tool
+#define PLACEMENT_RESULT_OFFSET 0x11ab0  // validation code after a placement call
+#define MIRROR_EFFECTIVE_OFFSET 0x11e69  // byte: mirror state the last placement call used
+#define ACTIVE_TOOL_OFFSET 0xD4C8        // char*: name of the active tool
 
 // Building object fields.
 #define OBJ_ROT_SIN_OFFSET 0x340
@@ -991,7 +991,7 @@ void HookedRoadCommit(__int64 manager,
         return;
     }
     uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
-    bool fromToolWrapper = (retRva >= 0x3CCCD0 && retRva < 0x3F6A20);
+    bool fromToolWrapper = (retRva >= 0x3CB060 && retRva < 0x3F70D0);
     if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
         !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
         TakeCommitAsCommand(manager, category))
@@ -1282,7 +1282,7 @@ bool LocalBuilds_PlacementPress()
         msg.cursorRot = *(float*)(world + CURSOR_YAW_OFFSET);
         msg.param5 = (unsigned long long)g_placeParam5;
         msg.mirrored = *(unsigned char*)(world + MIRROR_EFFECTIVE_OFFSET) != 0;
-        msg.pickModes = (*(unsigned char*)(world + 0xF698) ? 1 : 0) | (*(unsigned char*)(world + 0xF730) ? 2 : 0);
+        msg.pickModes = (*(unsigned char*)(world + 0xF6A0) ? 1 : 0) | (*(unsigned char*)(world + 0xF738) ? 2 : 0);
         strncpy_s(msg.typeName, typeName, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

@@ -17,8 +17,8 @@ typedef unsigned __int64 U64;
 #define DOWN_RVA 0xA9EF50
 #define PRESS_RVA 0xA9EF51
 #define INPUT_RVA 0xA9EC50      // C3D_INPUT
-#define SELECTED_OFFSET 0xD4C0
-#define MENU_OFFSET 0xD318      // the build menu's records: begin, end
+#define SELECTED_OFFSET 0xD4C8
+#define MENU_OFFSET 0xD320      // the build menu's records: begin, end
 #define MENU_STRIDE 0x2D0       // name at +0
 #define NAME_BYTES 32
 static const unsigned kMenus[3] = { 0xFEC, 0xFEE, 0xFF3 };
@@ -26,17 +26,17 @@ static const unsigned kMenus[3] = { 0xFEC, 0xFEE, 0xFF3 };
 // World words of a sample and of the tool's state.
 #define CURSOR_OFFSET 0xF9C
 #define BRUSH_OFFSET 0xFC8
-#define HELD_OFFSET 0xD354
-#define COST_OFFSET 0xD408
-#define SETTING374_OFFSET 0xD40C
-#define SETTING338_OFFSET 0xD3D0
-#define TARGET_OFFSET 0xD4F0    // the level height
-#define TIMERS_OFFSET 0xD4F4    // ten sound timers
-#define TREE_OFFSET 0x117F0     // the tree tool's accumulator
+#define HELD_OFFSET 0xD35C
+#define COST_OFFSET 0xD410
+#define SETTING374_OFFSET 0xD414
+#define SETTING338_OFFSET 0xD3D8
+#define TARGET_OFFSET 0xD4F8    // the level height
+#define TIMERS_OFFSET 0xD4FC    // ten sound timers
+#define TREE_OFFSET 0x117F8     // the tree tool's accumulator
 
 #define KINDS 4
 #define TREE_KIND 3
-static const unsigned kRoutines[KINDS] = { 0x3C7820, 0x3CCD30, 0x3EBB20, 0x317810 };
+static const unsigned kRoutines[KINDS] = { 0x3C7AD0, 0x3CCFE0, 0x3EBDD0, 0x317A50 };
 static const unsigned char kEntries[KINDS][16] = {
     { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xd8 },
     { 0x40, 0x53, 0x48, 0x83, 0xec, 0x50, 0x80, 0xb9, 0xec, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
@@ -49,14 +49,14 @@ static const char* const kKindText[KINDS] = { "terrain", "tree demolition", "top
 struct InputSite {
     unsigned site, getter;
 };
-static const InputSite kInputSites[3] = { { 0x3C9600, 0 }, { 0x3C9808, 1 }, { 0x3C9859, 1 } };
+static const InputSite kInputSites[3] = { { 0x3C98B0, 0 }, { 0x3C9AB8, 1 }, { 0x3C9B09, 1 } };
 static const unsigned kInputSlots[2] = { 0x8B1950, 0x8B1958 };
 
 // 3a8a70's, 2bade0's and 4fcaf0's construction ledger rows (call 2fdb00, 5 bytes): the stroke's
 // cost in dollars (world +11330) and in rubles (+11360), written when it pays.
-#define LEDGER_RVA 0x31BE50
-#define RESOURCE_BY_NAME_RVA 0x2C6230 // (world, name) -> resource definition
-static const unsigned kLedgerCalls[6] = { 0x3C997D, 0x3C9A93, 0x2E8274, 0x2E8362, 0x53D554, 0x53D651 };
+#define LEDGER_RVA 0x31C090
+#define RESOURCE_BY_NAME_RVA 0x2C6380 // (world, name) -> resource definition
+static const unsigned kLedgerCalls[6] = { 0x3C9C2D, 0x3C9D43, 0x2E83C4, 0x2E84B2, 0x53D834, 0x53D931 };
 
 #pragma pack(push, 1)
 struct BrushState {
@@ -148,7 +148,7 @@ static U64 RelayLedger(U64 world, U64 row, U64 ledger, float a4, U64 a5, float a
     __try {
         m.ledger = (unsigned)(ledger - world);
         U64 resource = *(U64*)row;
-        if ((m.ledger != 0x113C8 && m.ledger != 0x113F8) || !resource) return original(world, row, ledger, a4, a5, a6, a7);
+        if ((m.ledger != 0x113D0 && m.ledger != 0x11400) || !resource) return original(world, row, ledger, a4, a5, a6, a7);
         strncpy_s(m.resource, (const char*)resource, _TRUNCATE);
         m.value8 = *(float*)(row + 8);
         m.valueC = *(unsigned*)(row + 12);
@@ -169,7 +169,7 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     LedgerMsg m;
     memcpy(&m, data, sizeof(m));
     m.resource[sizeof(m.resource) - 1] = 0;
-    if (m.ledger != 0x113C8 && m.ledger != 0x113F8) return false;
+    if (m.ledger != 0x113D0 && m.ledger != 0x11400) return false;
     U64 world = (U64)World();
     __try {
         U64 resource = ((ResourceByNameFn)(g_exeBase + RESOURCE_BY_NAME_RVA))(world, m.resource);
@@ -189,10 +189,10 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     return true;
 }
 
-#define CLEAR_TREES_RVA 0x3CCED0
-#define PAINT_GROUND_RVA 0x432800
-#define DEMOLISH_TREES_SITE_RVA 0x3CCC66
-#define DEMOLISH_PAINT_SITE_RVA 0x3CCCC2
+#define CLEAR_TREES_RVA 0x3CD180
+#define PAINT_GROUND_RVA 0x432AB0
+#define DEMOLISH_TREES_SITE_RVA 0x3CCF16
+#define DEMOLISH_PAINT_SITE_RVA 0x3CCF72
 #define KIND_DEMOLISH_GROUND 4
 
 typedef void (*ClearTreesFn)(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5);
@@ -611,7 +611,7 @@ bool BrushTools_ApplyCommand(const void* data, size_t size)
         U64 world = (U64)World();
         __try {
             ((ClearTreesFn)(g_exeBase + CLEAR_TREES_RVA))(world, m.sample.cursor, m.sample.brush, 1, 0);
-            U64 tp = *(U64*)(world + 0xF608);
+            U64 tp = *(U64*)(world + 0xF610);
             if (tp) ((PaintGroundFn)(g_exeBase + PAINT_GROUND_RVA))(tp, 0, m.sample.cursor, 3.0f, 0.0f, 0);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;

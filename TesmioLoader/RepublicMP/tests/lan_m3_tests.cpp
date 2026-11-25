@@ -86,7 +86,7 @@ struct M3TestEnvGuard {
         LanDiscovery_SetSelfPidOverrideForTest(0, false);
         SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
         if (g_mockExeBuffer) {
-            *(int64_t*)(g_mockExeBuffer + 0xA2E758) = 0;
+            *(int64_t*)(g_mockExeBuffer + 0xA2E760) = 0;
             *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
         }
         TwoStates_ClearToastsForTest();
@@ -860,7 +860,7 @@ static int RenderSyncBlockAtSizeAndCountVerts(float w, float h)
 static bool SubTest_M3_SyncBlockHeadlessDrawAndStateTransitions()
 {
     if (g_mockExeBuffer) {
-        *(int64_t*)(g_mockExeBuffer + 0xA2E758) = 0x1000LL;
+        *(int64_t*)(g_mockExeBuffer + 0xA2E760) = 0x1000LL;
         *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     }
 
@@ -912,7 +912,7 @@ static bool SubTest_M3_SyncBlockHeadlessDrawAndStateTransitions()
     SyncBlock_SetActive(false, nullptr);
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     if (g_mockExeBuffer) {
-        *(int64_t*)(g_mockExeBuffer + 0xA2E758) = 0;
+        *(int64_t*)(g_mockExeBuffer + 0xA2E760) = 0;
         *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     }
     return true;

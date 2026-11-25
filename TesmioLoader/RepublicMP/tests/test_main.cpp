@@ -92,7 +92,7 @@ int main()
         { "LanUiBrowserHostIpAndToasts_M3 (F9-F11)", &Test_LanUiBrowserHostIpAndToastsDirectSmoke_M3 },
         { "LanE2eSuite_M4 (145 Cases: F1-F11, Tiers 1-5)", &Test_LanE2eSuite_M4 },
         { "HotfixV171_CrashesHostLostSteamFriendsAckSpeed (Issues #1-#4)", &Test_HotfixV171_All },
-        { "RcoRailConstructionFixes (Bugs #1-#6: SiteStopFilter, DemolArg6, RailChain, QueueReorder, 0x7D8738)", &Test_RcoRailConstructionFixes_All },
+        { "RcoRailConstructionFixes (Bugs #1-#6: SiteStopFilter, DemolArg6, RailChain, QueueReorder, 0x7D8BE8)", &Test_RcoRailConstructionFixes_All },
         { "TwoStatesResearchDesyncFixes (HashResearch, MidStep DailyUpdate/Customs, BeforeStep Idempotency)", &Test_TwoStatesResearchDesyncFixes },
         { "RcoRefuelHeldFrameAndSoftSyncFixes (VehicleRefuel float ABI, HeldFrame SameTick Refresh, SoftSync Exact Cargo, DesyncBreakdown)", &Test_RcoRefuelHeldFrameAndSoftSyncFixes },
         { "Perf_BldPtrOwnerCacheParityAndInvalidation (1A: 512+ Overflow, Gen Bumps, SessionRunning Gate)", &TestPerf_BldPtrOwnerCacheParityAndInvalidation },

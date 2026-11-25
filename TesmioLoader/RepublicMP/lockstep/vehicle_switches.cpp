@@ -14,7 +14,7 @@
 #include <string.h>
 #include <vector>
 
-#define VEHICLES_OFFSET 0x128C0
+#define VEHICLES_OFFSET 0x128C8
 #define VEHICLE_BYTES 0x1C30
 #define STOPS_LIST 0x638         // stop records, 0x198 each
 #define STOP_BYTES 0x198

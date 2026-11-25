@@ -149,9 +149,9 @@ bool Test_TwoStates_ZonesAndEconomy()
     *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
 
     // Planned road segment ownership & per-republic separation for "Build planned" / "Cancel all planned"
-    WriteAbsJmp12(g_mockExeBuffer + 0x54BC30, (void*)&MockPlanStartFn);
-    WriteAbsJmp12(g_mockExeBuffer + 0x5696A0, (void*)&MockCancelSegFn);
-    g_mockExeBuffer[0x521160] = 0xC3;
+    WriteAbsJmp12(g_mockExeBuffer + 0x54BF10, (void*)&MockPlanStartFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x569980, (void*)&MockCancelSegFn);
+    g_mockExeBuffer[0x521440] = 0xC3;
 
     auto makeNode = [](float x, float y, float z) {
         std::vector<BYTE> n(0x40, 0);
@@ -188,7 +188,7 @@ bool Test_TwoStates_ZonesAndEconomy()
     std::vector<BYTE> roadMgr(0x800, 0);
     std::vector<BYTE*> roadSegs = { segHost.data(), segClient.data(), segBorder.data() };
     WriteMockVectorHeader(roadMgr.data() + 0x2B0, roadSegs);
-    *(__int64*)(g_mockExeBuffer + UNIVERSAL_THIS_RVA + 0xF838) = (__int64)roadMgr.data();
+    *(__int64*)(g_mockExeBuffer + UNIVERSAL_THIS_RVA + 0xF840) = (__int64)roadMgr.data();
 
     // Host (State 1) presses "Build planned": only segHost starts; segClient and segBorder stay planned
     RoadSyncPlanStartMsg msgStart = {};
@@ -334,13 +334,13 @@ bool Test_TwoStates_SaveMetaAndScriptIniSafety()
     TEST_CHECK(TwoStates_GetBuildingOwner(777, -500.0f, 0.0f) == 2);
 
     // Ending a session while the world remains loaded must NOT double treasuries on subsequent PrepareHostSave/save
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // WORLD_ROAD_NETWORK_RVA != 0 (world loaded)
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1; // WORLD_ROAD_NETWORK_RVA != 0 (world loaded)
     TwoStates_OnSessionEnded();
     double prepRub[2] = {}, prepUsd[2] = {};
     TwoStates_PrepareHostSave(false, prepRub, prepUsd);
     TEST_CHECK_NEAR(prepRub[0], 1234567.89, 1e-2);
     TEST_CHECK_NEAR(prepRub[1], 987654.32, 1e-2);
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
 
     // Staging save promotion: a newer mp_syncsave_* folder with header.bin, stats.ini, and republicmp_coop.ini
     // must be promoted to coop_last_session so user saves into mp_syncsave_* are never lost.
@@ -522,7 +522,7 @@ static bool TestLoans_LockstepBorrowAndRepay()
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1; // world loaded
 
     double initRub[2] = { 1000000.0, 500000.0 };
     double initUsd[2] = { 300000.0,  200000.0 };
@@ -635,7 +635,7 @@ static bool TestLoans_LockstepBorrowAndRepay()
     Commands_SetSession(COMMANDS_OFF);
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     TwoStates_OnSessionEnded();
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
     return true;
 }
 
@@ -957,10 +957,10 @@ static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
         // Simulate Economy & Trade Window (0x361BB0) calling LedgerAdd (0x2FDB00) on temporary UI vector world+0xC7F0:
         // must NOT unswap curStat or histBuf mid-render!
         SovietStatResEntry uiTmpPool[4] = {};
-        *(SovietStatResEntry**)(world + 0xC7F0 + 0x00) = uiTmpPool;
-        *(SovietStatResEntry**)(world + 0xC7F0 + 0x08) = uiTmpPool;
-        *(SovietStatResEntry**)(world + 0xC7F0 + 0x10) = uiTmpPool + 4;
-        TwoStates_LedgerAddForTest(world, &hb[0], world + 0xC7F0, 1.0f);
+        *(SovietStatResEntry**)(world + 0xC7F8 + 0x00) = uiTmpPool;
+        *(SovietStatResEntry**)(world + 0xC7F8 + 0x08) = uiTmpPool;
+        *(SovietStatResEntry**)(world + 0xC7F8 + 0x10) = uiTmpPool + 4;
+        TwoStates_LedgerAddForTest(world, &hb[0], world + 0xC7F8, 1.0f);
 
         SovietStatResEntry* hbAfter = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x00);
         SovietStatResEntry* heAfter = *(SovietStatResEntry**)(histBuf.data() + STAT_RES_VEC_BASE_OFF + 0x08);
@@ -1526,8 +1526,8 @@ static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
     *(float*)(cityObj.data() + 8)  = 42.5f;   // Local terrain Y = 42.5f
     *(float*)(cityObj.data() + 12) = 200.0f;
     BYTE* cityPtrs[1] = { cityObj.data() };
-    *(BYTE***)(world + 0x103E0 + 0x00) = cityPtrs;
-    *(BYTE***)(world + 0x103E0 + 0x08) = cityPtrs + 1;
+    *(BYTE***)(world + 0x103E8 + 0x00) = cityPtrs;
+    *(BYTE***)(world + 0x103E8 + 0x08) = cityPtrs + 1;
 
     #pragma pack(push, 1)
     struct LocalRenameMsg {
@@ -1986,7 +1986,7 @@ static bool TestSingleplayer_InitialDormancy()
 static bool TestSingleplayer_OverlayZeroDrawCalls()
 {
     ResetMockWorldMemory();
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // mock world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1; // mock world loaded
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     TEST_CHECK(SaveSync_IsWorldLoaded());
 
@@ -2071,7 +2071,7 @@ static bool TestSingleplayer_SessionTransitionReset()
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1; // world loaded
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     // 1. Setup co-op Two States session with distinct balances and ownership
@@ -2268,7 +2268,7 @@ bool Test_CameraPersistenceAndFraming()
     *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = nullptr;
 
     // 4. Pending Camera Restore: re-apply client target over first 10 frames against engine overwrite, then unlock
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
     *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     const float clientSavedTargetPos[3]  = { 4500.0f, 220.0f, -3200.0f };
@@ -2407,7 +2407,7 @@ bool Test_CameraPersistenceAndFraming()
     TwoStates_GetCursorWorldPos(&curWx, &curWy, &curWz);
     TEST_CHECK(DiagLog_GetSafeSehDepthForTest() == initialSehDepth);
 
-    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 0;
     std::filesystem::remove_all(camSaveDir, ec);
     return true;
 }

@@ -49,31 +49,31 @@
 
 static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
 {
-    printf("    [Challenger2-1.1] GameCalls Sites 0x776557, Removed Read-Only 0x7D8738 & Broken Sites, Relay Headroom ...\n");
+    printf("    [Challenger2-1.1] GameCalls Sites 0x776557, Removed Read-Only 0x7D8BE8 & Broken Sites, Relay Headroom ...\n");
     fflush(stdout);
 
     // 1. Verify existence of valid call sites added in Milestone M9.2 + M1 click mutators
     // Site 0x776557 (factory window: replace machines) -> routine 0x1A8D90
-    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7B34E7u, 0x1C1BB0u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7B3937u, 0x1C1A50u));
 
     // Read-only per-frame predicate 0x7D8738 -> 0x664940 was removed to stop Lockstep floods
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8BE8u, 0x664C30u));
 
     // Verify all 9 removed broken per-frame tool-loop / simulation sites are absent
     const unsigned kRemovedSites[][2] = {
         { 0x31484Du, 0x5EED80u }, { 0x3142D6u, 0x1D4820u }, { 0x3142F6u, 0x1DB130u },
         { 0x314356u, 0x1D7140u }, { 0x314893u, 0x5F7860u }, { 0x3135F9u, 0x418210u },
-        { 0x1A131Eu, 0x1B9310u }, { 0x1A1343u, 0x1B9310u }, { 0x1A15A8u, 0x1BC010u },
+        { 0x1A131Eu, 0x1B91B0u }, { 0x1A1343u, 0x1B91B0u }, { 0x1A1448u, 0x1BBEB0u },
     };
     for (size_t i = 0; i < sizeof(kRemovedSites) / sizeof(kRemovedSites[0]); ++i) {
         TEST_CHECK(!GameCalls_HasCallSiteForTest(kRemovedSites[i][0], kRemovedSites[i][1]));
     }
 
     // 2. Negative oracle: verify nonexistent or mismatched site/target combinations are rejected
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7B34E7u, 0x123456u)); // correct site, wrong target
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x1C1BB0u)); // wrong site, correct target
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1EF8F9u, 0x664940u)); // cross target mismatch
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x1BC010u)); // cross target mismatch
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7B3937u, 0x123456u)); // correct site, wrong target
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x1C1A50u)); // wrong site, correct target
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1EF7F9u, 0x664C30u)); // cross target mismatch
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8BE8u, 0x1BBEB0u)); // cross target mismatch
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x000000u, 0x000000u)); // null query
 
     // 3. Relay Buffer Capacity & Headroom Oracle
@@ -85,15 +85,15 @@ static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
 
     // Verify key known existing sites are still intact and present alongside new sites
     const unsigned kKnownSites[][2] = {
-        { 0x7E7D11u, 0x4BDCB0u }, // line window: copy schedule
-        { 0x7E7E59u, 0x1C38E0u }, // line window: replace vehicle
-        { 0x818AFBu, 0x41EE40u }, // vehicle window: send to depot
-        { 0x81921Bu, 0x6A1E10u }, // vehicle window: next skin
-        { 0x8132D8u, 0x3DA0E0u }, // line window: launch vehicle
-        { 0x737BBEu, 0x41EE40u }, // building: call vehicles home
-        { 0x7AD3F4u, 0x1B9310u }, // office window: toggle priority
-        { 0x7BACE7u, 0x1B9310u }, // building window: toggle priority
-        { 0x7B34E7u, 0x1C1BB0u }, // M9.2: replace machines
+        { 0x7E8161u, 0x4BDF90u }, // line window: copy schedule
+        { 0x7E82A9u, 0x1C3780u }, // line window: replace vehicle
+        { 0x818F2Bu, 0x41F0F0u }, // vehicle window: send to depot
+        { 0x81964Bu, 0x6A20E0u }, // vehicle window: next skin
+        { 0x813708u, 0x3DA390u }, // line window: launch vehicle
+        { 0x737F2Eu, 0x41F0F0u }, // building: call vehicles home
+        { 0x7AD844u, 0x1B91B0u }, // office window: toggle priority
+        { 0x7BB137u, 0x1B91B0u }, // building window: toggle priority
+        { 0x7B3937u, 0x1C1A50u }, // M9.2: replace machines
         { SITE_FIRESTATION_DISPATCH_ROAD_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_FIRESTATION_DISPATCH_HELI_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_ASSIGN_CO_SINGLE_START_RVA, RVA_START_PLANNED_CONSTRUCTION },

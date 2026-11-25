@@ -181,7 +181,7 @@ static bool SubTest_V171_ClientHostLostModalAndExit()
     std::vector<BYTE> dummyBld(0x2000, 0);
     std::vector<BYTE*> blds = { dummyBld.data() };
     WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
-    *reinterpret_cast<uint64_t*>(g_mockExeBuffer + 0xA2E758u) = 0x1000ULL; // ROAD_NETWORK_RVA non-null
+    *reinterpret_cast<uint64_t*>(g_mockExeBuffer + 0xA2E760u) = 0x1000ULL; // ROAD_NETWORK_RVA non-null
     *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     TEST_CHECK(SaveSync_IsWorldLoaded());

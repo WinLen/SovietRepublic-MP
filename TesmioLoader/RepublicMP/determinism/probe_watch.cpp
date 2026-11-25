@@ -5,7 +5,7 @@
 #include <string.h>
 
 #define WORLD_RVA 0xA1EF20
-#define CITIZEN_LIST_OFFSET 0x12758
+#define CITIZEN_LIST_OFFSET 0x12760
 #define CIT_POS_OFFSET 0x620
 
 // What to watch: the citizen nearest to a spot (the one standing there now),

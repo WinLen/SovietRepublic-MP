@@ -13,10 +13,10 @@
 typedef unsigned __int64 U64;
 
 #define WORLD_RVA 0xA1EF20
-#define ROAD_NETWORK 0xF838
+#define ROAD_NETWORK 0xF840
 #define NETWORK_NODES 0x298
 #define JUNCTION_OF_NODE 0xC0   // a road node's junction
-#define LIST_FIELD 0x128B8      // [world+12808]+38: the traffic-light junctions
+#define LIST_FIELD 0x128C0      // [world+12808]+38: the traffic-light junctions
 #define LIST_OFFSET 0x38
 #define OBJECT_BYTES 0x148
 #define NODES_OFFSET 0x88
@@ -29,12 +29,12 @@ typedef unsigned __int64 U64;
 #define MAX_PHASES 32
 #define MAX_KIND 2
 
-#define CACHE_BEGIN 0xC748    // after the block the window empties this world vector (7595f9..)
-#define CACHE_END 0xC750
-#define RESET_RVA 0x23F4B0
-#define COPY_RVA 0x2416E0
-#define MARK_RVA 0x245880
-#define UNMARK_RVA 0x1114C0
+#define CACHE_BEGIN 0xC750    // after the block the window empties this world vector (7595f9..)
+#define CACHE_END 0xC758
+#define RESET_RVA 0x23F360
+#define COPY_RVA 0x241590
+#define MARK_RVA 0x245730
+#define UNMARK_RVA 0x111350
 
 #pragma pack(push, 1)
 struct NodeRef {

@@ -7,8 +7,8 @@ void TwoStates_BindPersistence(const TsmHost* host) { if (host) TsmBind(host); }
 // Module-Private Persistence State & MasterSave Hook Contract
 // ---------------------------------------------------------------------------
 
-#define RVA_MASTER_SAVE             0x450CA0
-#define RVA_MASTER_SAVE_AUTOSAVE_JE 0x450D31
+#define RVA_MASTER_SAVE             0x450F50
+#define RVA_MASTER_SAVE_AUTOSAVE_JE 0x450FB9
 
 static volatile bool g_sendClientLogs = true;
 static volatile bool g_importingSpSave = false;
@@ -17,10 +17,7 @@ static char g_savedJoinAddress[64] = "";
 static volatile LONG g_saveInProgress = 0;
 static volatile LONGLONG g_completedSaveCount = 0;
 
-static const BYTE kMasterSaveExpect[19] = {
-    0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
-    0x41, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x0A, 0x00, 0x00
-};
+static const BYTE kMasterSaveExpect[19] = { 0x4C, 0x8B, 0xDC, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0x40, 0x0A, 0x00, 0x00 };
 typedef void (__fastcall* MasterSaveFn)(BYTE* world);
 static MasterSaveFn o_masterSave = nullptr;
 
@@ -2219,7 +2216,7 @@ static void __fastcall H_MasterSave(BYTE* world)
     DiagLog_BeginSafeSeh();
     __try {
         if (world) {
-            memcpy(searchPoolBackup, world + 0x14528, sizeof(searchPoolBackup));
+            memcpy(searchPoolBackup, world + 0x14530, sizeof(searchPoolBackup));
             searchPoolSaved = true;
             strncpy_s(saveRel, (const char*)(world + SAVE_NAME_FIELD_OFFSET), _TRUNCATE);
             bool isManualIntoStaging = (strstr(saveRel, "mp_syncsave_") != nullptr) &&
@@ -2231,8 +2228,8 @@ static void __fastcall H_MasterSave(BYTE* world)
                 // lost to staging cleanup and always appear in "Continue Co-op" / auto-host.
                 strncpy_s((char*)(world + SAVE_NAME_FIELD_OFFSET), SAVE_NAME_FIELD_MAX_LEN, "save/coop_last_session", _TRUNCATE);
                 strncpy_s(saveRel, "save/coop_last_session", _TRUNCATE);
-                prevFc90 = *(BYTE*)(world + 0xFD28);
-                *(BYTE*)(world + 0xFD28) = 1;
+                prevFc90 = *(BYTE*)(world + 0xFD30);
+                *(BYTE*)(world + 0xFD30) = 1;
                 fc90Patched = true;
             }
             if (saveRel[0] && BuildFullSaveDir(saveRel, fullSaveDir, sizeof(fullSaveDir))) {
@@ -2240,8 +2237,8 @@ static void __fastcall H_MasterSave(BYTE* world)
                 char scriptPath[MAX_PATH] = {};
                 _snprintf_s(scriptPath, sizeof(scriptPath), _TRUNCATE, "%s\\script.ini", fullSaveDir);
                 if (!fc90Patched && GetFileAttributesA(scriptPath) == INVALID_FILE_ATTRIBUTES) {
-                    prevFc90 = *(BYTE*)(world + 0xFD28);
-                    *(BYTE*)(world + 0xFD28) = 1; // force C3D_TERRAIN::Save to write script.ini & terrain files
+                    prevFc90 = *(BYTE*)(world + 0xFD30);
+                    *(BYTE*)(world + 0xFD30) = 1; // force C3D_TERRAIN::Save to write script.ini & terrain files
                     fc90Patched = true;
                 }
             }
@@ -2289,14 +2286,14 @@ static void __fastcall H_MasterSave(BYTE* world)
     DiagLog_BeginSafeSeh();
     __try {
         if (searchPoolSaved && world) {
-            memcpy(world + 0x14528, searchPoolBackup, sizeof(searchPoolBackup));
+            memcpy(world + 0x14530, searchPoolBackup, sizeof(searchPoolBackup));
         }
         if (autosaveJePatched && autosaveJeAddr) {
             *autosaveJeAddr = prevAutosaveJe;
             VirtualProtect(autosaveJeAddr, 2, oldProt, &oldProt);
         }
         if (fc90Patched && world) {
-            *(BYTE*)(world + 0xFD28) = prevFc90;
+            *(BYTE*)(world + 0xFD30) = prevFc90;
         }
         if (moneySwapped) {
             *WorldRubles()  = prevRub;

@@ -150,7 +150,7 @@ struct SupportedGameVersion
 };
 
 static const SupportedGameVersion kSupportedVersions[] = {
-    { { 1, 2, 0, 8 }, 0x6B0097B2u, L"1.2.0.8" },
+    { { 1, 2, 0, 9 }, 0x6B05A574u, L"1.2.0.9" },
 };
 #define GAME_VER_COUNT (sizeof(kSupportedVersions) / sizeof(kSupportedVersions[0]))
 
