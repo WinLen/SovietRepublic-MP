@@ -80,6 +80,8 @@ static char g_peerIp[64] = "";
 static char g_lastPartnerPeer[64] = "";
 static char g_lastError[256] = "";
 static ClientHostLostInfo g_clientHostLost = {};
+static bool g_hostLostReconnectPending = false;
+static ClientHostLostInfo g_hostLostReconnectSnapshot = {};
 
 // Set by SaveSync_RequestDisconnect; reset at the start of every session.
 static volatile bool g_disconnectRequested = false;
@@ -246,6 +248,43 @@ static void ClearClientHostLost()
     LeaveCriticalSection(&g_saveSyncStrLock);
 }
 
+static void ClearHostLostReconnectState()
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    g_hostLostReconnectPending = false;
+    memset(&g_hostLostReconnectSnapshot, 0, sizeof(g_hostLostReconnectSnapshot));
+    LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static void SetHostLostReconnectPending(const ClientHostLostInfo& snap)
+{
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    g_clientHostLost.active = false;
+    g_hostLostReconnectPending = true;
+    g_hostLostReconnectSnapshot = snap;
+    g_hostLostReconnectSnapshot.active = true;
+    LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static bool ConsumeHostLostReconnectSnapshot(ClientHostLostInfo* out)
+{
+    if (!out) return false;
+    TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
+    EnterCriticalSection(&g_saveSyncStrLock);
+    const bool pending = g_hostLostReconnectPending;
+    if (pending) {
+        *out = g_hostLostReconnectSnapshot;
+    } else {
+        memset(out, 0, sizeof(*out));
+    }
+    g_hostLostReconnectPending = false;
+    memset(&g_hostLostReconnectSnapshot, 0, sizeof(g_hostLostReconnectSnapshot));
+    LeaveCriticalSection(&g_saveSyncStrLock);
+    return pending;
+}
+
 static void RecordClientHostLost(const char* addr, const char* label, const char* reason)
 {
     TsmEnsureCriticalSection(&g_saveSyncStrLockOnce, &g_saveSyncStrLock);
@@ -257,6 +296,20 @@ static void RecordClientHostLost(const char* addr, const char* label, const char
     strncpy_s(g_clientHostLost.reason, sizeof(g_clientHostLost.reason), reason ? reason : "", _TRUNCATE);
     g_clientHostLost.lostTick = GetTickCount64();
     LeaveCriticalSection(&g_saveSyncStrLock);
+}
+
+static void RestoreHostLostAfterFailedReconnect(const ClientHostLostInfo& prior, const char* fallbackTarget,
+                                                const char* reasonOverride)
+{
+    const char* addr = prior.hostAddress[0] ? prior.hostAddress : (fallbackTarget ? fallbackTarget : "");
+    const char* label = prior.hostLabel[0] ? prior.hostLabel : addr;
+    const char* lastErr = SaveSync_GetLastError();
+    const char* reason = (reasonOverride && reasonOverride[0]) ? reasonOverride
+                         : (lastErr && lastErr[0]) ? lastErr
+                         : (prior.reason[0] ? prior.reason
+                                            : Tr("Хост ещё не готов к подключению", "Host server is not ready yet"));
+    RecordClientHostLost(addr, label, reason);
+    SaveSync_EnforceWaitingLobbyHold();
 }
 
 static void SetSessionError(const char* fmt, ...)
@@ -2002,7 +2055,7 @@ static bool ClientConnectLockstep(SOCKET sock)
 // Returns true when the player is in the host's game with all channels up.
 // rejoin: coming back for a re-sync - the host may need a moment to listen
 // again, so refused connects are retried.
-static bool RunClientJoin(bool rejoin)
+static bool RunClientJoin(bool rejoin, bool holdPauseOnFailure = false)
 {
     g_resyncAnnounced = false;
     SyncBlock_SetActive(true, rejoin
@@ -2051,27 +2104,41 @@ static bool RunClientJoin(bool rejoin)
 
     ClearAndCloseActiveSock(sock);
     SyncBlock_SetActive(false, nullptr);
-    if (!joined) EnsureGameUnpaused();
+    if (!joined && !holdPauseOnFailure) EnsureGameUnpaused();
     return joined;
 }
 
 static void RunClientSession()
 {
+    ClientHostLostInfo priorHostLost = {};
+    bool fromHostLost = ConsumeHostLostReconnectSnapshot(&priorHostLost);
     char targetCopy[64] = {};
     ReadProtectedString(g_targetIp, targetCopy, sizeof(targetCopy));
     SetPeerIp(targetCopy);
     bool rejoin = false;
     for (;;) {
         SetState(SESSION_CLIENT_JOINING);
-        bool joined = RunClientJoin(rejoin);
+        const bool holdPauseOnFail = SaveSync_ShouldRestoreClientHostLostOnJoinFailure(
+            fromHostLost, SaveSync_IsWorldLoaded(), g_processShuttingDown.load());
+        bool joined = RunClientJoin(rejoin, holdPauseOnFail);
         g_resyncing = false;
         if (!joined) {
             TwoStates_OnSessionEnded();
             ResetChannels();
             if (g_disconnectRequested) SaveStatus("[CLIENT] cancelled");
             else SaveStatus("[CLIENT] couldn't join: %s", SaveSync_GetLastError());
+            if (SaveSync_ShouldRestoreClientHostLostOnJoinFailure(
+                    fromHostLost, SaveSync_IsWorldLoaded(), g_processShuttingDown.load())) {
+                const char* overrideReason = g_disconnectRequested
+                    ? Tr("Повторное подключение отменено — сервер ещё не готов",
+                         "Reconnect cancelled — host server is not ready yet")
+                    : nullptr;
+                RestoreHostLostAfterFailedReconnect(priorHostLost, targetCopy, overrideReason);
+                SaveStatus("[CLIENT] reconnect failed - keeping game paused & showing Host-Lost recovery prompt");
+            }
             return;
         }
+        fromHostLost = false;
 
         SetState(SESSION_CLIENT_IN_GAME);
         SaveStatus("[CLIENT] in the game at %s - live sync running, paused until either player resumes", targetCopy);
@@ -2215,6 +2282,7 @@ void SaveSync_StartHost()
         g_lockstepChosen = true;
     }
     ClearClientHostLost();
+    ClearHostLostReconnectState();
     g_disconnectRequested = false;
     g_isHost = true;
     g_hadPartnerInSession = false;
@@ -2244,10 +2312,15 @@ void SaveSync_StartHost()
     }
 }
 
-void SaveSync_StartClient(const char* hostIp)
+static bool StartClientInternal(const char* hostIp, bool fromHostLost, const ClientHostLostInfo* priorHostLost)
 {
-    if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return;
-    ClearClientHostLost();
+    if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return false;
+    if (fromHostLost && priorHostLost) {
+        SetHostLostReconnectPending(*priorHostLost);
+    } else {
+        ClearClientHostLost();
+        ClearHostLostReconnectState();
+    }
     TwoStates_MountSaveBank(true);
     g_disconnectRequested = false;
     if (hostIp && hostIp[0]) {
@@ -2271,11 +2344,22 @@ void SaveSync_StartClient(const char* hostIp)
         EnterCriticalSection(&g_sessionThreadLock);
         g_sessionThread = hThread;
         LeaveCriticalSection(&g_sessionThreadLock);
-    } else {
-        TwoStates_OnSessionEnded();
-        SetState(SESSION_IDLE);
-        SetSessionError(Tr("Не удалось запустить поток подключения", "failed to start client session thread"));
+        return true;
     }
+    TwoStates_OnSessionEnded();
+    SetSessionError(Tr("Не удалось запустить поток подключения", "failed to start client session thread"));
+    if (SaveSync_ShouldRestoreClientHostLostOnJoinFailure(
+            fromHostLost, SaveSync_IsWorldLoaded(), g_processShuttingDown.load()) && priorHostLost) {
+        ClearHostLostReconnectState();
+        RestoreHostLostAfterFailedReconnect(*priorHostLost, hostIp, nullptr);
+    }
+    SetState(SESSION_IDLE);
+    return false;
+}
+
+void SaveSync_StartClient(const char* hostIp)
+{
+    (void)StartClientInternal(hostIp, false, nullptr);
 }
 
 void SaveSync_RequestDisconnect()
@@ -2300,6 +2384,7 @@ void SaveSync_RequestDisconnect()
 void SaveSync_Shutdown(DWORD waitMs)
 {
     ClearClientHostLost();
+    ClearHostLostReconnectState();
     g_processShuttingDown.store(true);
     SaveSync_RequestDisconnect();
     JoinAndCloseSessionThread(waitMs);
@@ -2401,6 +2486,20 @@ bool SaveSync_GetClientHostLostInfo(ClientHostLostInfo* out)
 void SaveSync_DismissClientHostLost()
 {
     ClearClientHostLost();
+    ClearHostLostReconnectState();
+}
+
+bool SaveSync_ShouldRestoreClientHostLostOnJoinFailure(bool fromHostLost, bool worldLoaded, bool shuttingDown)
+{
+    return fromHostLost && worldLoaded && !shuttingDown;
+}
+
+bool SaveSync_ReconnectAfterHostLost()
+{
+    if (g_processShuttingDown.load() || g_state != SESSION_IDLE) return false;
+    ClientHostLostInfo snap = {};
+    if (!SaveSync_GetClientHostLostInfo(&snap) || !snap.active) return false;
+    return StartClientInternal(snap.hostAddress[0] ? snap.hostAddress : nullptr, true, &snap);
 }
 
 bool SaveSync_ShouldShowClientHostLostModal(int sessionState, bool worldLoaded, bool hostLostFlag)
@@ -2411,6 +2510,7 @@ bool SaveSync_ShouldShowClientHostLostModal(int sessionState, bool worldLoaded, 
 bool SaveSync_ExitToMainMenu(unsigned char* exeBase)
 {
     ClearClientHostLost();
+    ClearHostLostReconnectState();
     if (g_state != SESSION_IDLE) {
         SaveSync_RequestDisconnect();
     }

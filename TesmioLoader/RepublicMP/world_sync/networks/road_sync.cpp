@@ -18,6 +18,7 @@
 #include "../../core/safe_mem.h"
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
+#include <algorithm>
 #include <vector>
 #include <unordered_map>
 #include <stdio.h>
@@ -3864,31 +3865,41 @@ bool RoadSync_ApplyCommandGroupTool(const RoadSyncGroupToolMsg& msg)
     return true;
 }
 
-static std::unordered_map<__int64, int> g_lsDirections;
+struct LsDirEntry {
+    __int64 seg;
+    int direction;
+};
+static std::vector<LsDirEntry> g_lsDirections;
 
 void RoadSync_LockstepDirectionsBaseline()
 {
     g_lsDirections.clear();
-    int n = ReadFactoryDirections();
+    const int n = ReadFactoryDirections();
+    if (n <= 0) return;
+    g_lsDirections.resize((size_t)n);
     for (int i = 0; i < n; i++) {
-        g_lsDirections[g_dirSnapshot[i].seg] = g_dirSnapshot[i].direction;
+        g_lsDirections[(size_t)i] = { g_dirSnapshot[i].seg, g_dirSnapshot[i].direction };
     }
+    std::sort(g_lsDirections.begin(), g_lsDirections.end(),
+              [](const LsDirEntry& a, const LsDirEntry& b) { return a.seg < b.seg; });
 }
 
 void RoadSync_LockstepDirectionsDetect()
 {
-    int n = ReadFactoryDirections();
+    const int n = ReadFactoryDirections();
+    if (n <= 0 || g_lsDirections.empty()) return;
     for (int i = 0; i < n; i++) {
         const DirSnapshot& s = g_dirSnapshot[i];
-        auto old = g_lsDirections.find(s.seg);
-        if (old == g_lsDirections.end() || old->second == s.direction) continue;
+        auto it = std::lower_bound(g_lsDirections.begin(), g_lsDirections.end(), s.seg,
+                                   [](const LsDirEntry& a, __int64 seg) { return a.seg < seg; });
+        if (it == g_lsDirections.end() || it->seg != s.seg || it->direction == s.direction) continue;
         RoadSyncDirectionMsg m = {};
         m.category = ROAD_SYNC_CATEGORY_FACTORYCONN;
         m.piece = s.piece;
         m.direction = s.direction;
         Commands_Submit(LS_CMD_DIRECTION, &m, sizeof(m));
         RoadSyncDirectionMsg back = m; // this PC's own segment, as it was
-        back.direction = old->second;
+        back.direction = it->direction;
         int local = 0;
         ApplyDirection(back, &local);
     }

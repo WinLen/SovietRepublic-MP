@@ -8,6 +8,8 @@
 #include "held_frame.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/lockstep_net.h"
+#include "../lockstep/building_switches.h"
+#include "../lockstep/vehicle_switches.h"
 #include "../game/save_load.h"
 #include "../session/game_speed.h"
 #include "../session/save_sync.h" // SaveSync_IsBusy - no probe during a session
@@ -20,20 +22,23 @@
 #include <intrin.h>           // _ReturnAddress
 #include <math.h>
 #include <stdio.h>
+#include <algorithm>
+#include <atomic>
+#include <stdint.h>
 #include <unordered_map>
 
 #pragma intrinsic(_ReturnAddress)
 
 #define GAME_TIMER_RVA 0x9D4EE0
 #define FAST_FACTOR_RVA 0x909D6C
-// The main loop's other speed-2 factors (105d66 / 105d9f): Hyper (left Ctrl +
-// Numpad1, or turbo) and Plaid (left Ctrl + Numpad2, or the fast button held).
+// The main loop's speed-2/3 factor (105d66): Hyper (left Ctrl + Numpad1, or turbo).
+// Speed 4 (Plaid / LCtrl+Numpad2) is disabled in multiplayer to keep simulation drift-free.
 #define HYPER_FACTOR_RVA 0x909C1C   // 0.05
-#define PLAID_FACTOR_RVA 0x909B98   // 0.01
+#define DETERMINISM_MAX_TICK_SPEED 3
+#define DETERMINISM_MAX_BOOST 1
 #define KEYS_RVA 0xA54B90           // C3D_INPUT key bytes
 #define KEY_LCTRL 0x1D
 #define KEY_NUMPAD1 0x4F
-#define KEY_NUMPAD2 0x50
 #define FAST_HELD_RVA (0x9D4F10 + 0x5A2) // the speed panel's fast button held
 #define SIM_STEP_RVA 0x30C710   // FUN_14030c790(world): one simulation step
 #define LOAD_WORLD_RVA 0x430F50 // FUN_140430fc0(): loads the save named in the load globals
@@ -110,9 +115,28 @@ static bool IsPresentationSite(unsigned site)
 // Call-site generator
 // ---------------------------------------------------------------------------
 
+static constexpr uint32_t kSiteTableSize = 2048u;
+static constexpr uint32_t kSiteTableMask = kSiteTableSize - 1u;
+static constexpr uint32_t kSiteEmpty = 0xFFFFFFFFu;
+static constexpr uint32_t kSiteMaxLoad = 1536u;
+static constexpr uint32_t kSiteProbeLimit = 64u;
+
+struct SiteSlot {
+    uint32_t site;
+    uint32_t calls;
+};
+static_assert(sizeof(SiteSlot) * kSiteTableSize == 16384u, "SiteCounters flat table must be 16 KB");
+
 struct SiteCounters {
-    LONG epoch;
-    std::unordered_map<unsigned, unsigned> calls;
+    LONG epoch = 0;
+    uint32_t count = 0;
+    SiteSlot slots[kSiteTableSize];
+    std::unordered_map<uint32_t, uint32_t> overflow;
+
+    SiteCounters()
+    {
+        std::fill_n(slots, kSiteTableSize, SiteSlot{ kSiteEmpty, 0u });
+    }
 };
 static thread_local SiteCounters* t_sites = nullptr;
 static thread_local SiteCounters* t_privateSites = nullptr;
@@ -130,21 +154,55 @@ static inline unsigned long long SplitMix(unsigned long long x)
     return x ^ (x >> 31);
 }
 
-// 0..32767, like the CRT's rand(). site = return address of the game's call.
-static int SiteRand(void* returnAddress)
+static inline uint32_t HashSiteRva(uint32_t site)
 {
-    unsigned site = (unsigned)((BYTE*)returnAddress - g_exeBase);
+    uint32_t h = site;
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    return h & kSiteTableMask;
+}
+
+static uint32_t NextSiteCall(SiteCounters* counters, uint32_t site, LONG epoch)
+{
+    if (counters->epoch != epoch) {
+        if (counters->count > 0) {
+            std::fill_n(counters->slots, kSiteTableSize, SiteSlot{ kSiteEmpty, 0u });
+        }
+        counters->count = 0;
+        counters->overflow.clear();
+        counters->epoch = epoch;
+    }
+    if (site == kSiteEmpty) {
+        return counters->overflow[site]++;
+    }
+    const uint32_t idx = HashSiteRva(site);
+    for (uint32_t step = 0; step < kSiteProbeLimit; ++step) {
+        SiteSlot& slot = counters->slots[(idx + step) & kSiteTableMask];
+        if (slot.site == site) {
+            return slot.calls++;
+        }
+        if (slot.site == kSiteEmpty) {
+            if (counters->count < kSiteMaxLoad) {
+                slot.site = site;
+                slot.calls = 1u;
+                ++counters->count;
+                return 0u;
+            }
+            break;
+        }
+    }
+    return counters->overflow[site]++;
+}
+
+static int SiteRandForSite(unsigned site)
+{
     // Held presentation and UI can call the same native routines as a tick.
     // Separate counters keep any number of local frames out of that stream.
     bool privateDraw = t_privateDepth || GetCurrentThreadId() == (DWORD)g_privateWorker;
     SiteCounters*& counters = privateDraw ? t_privateSites : t_sites;
-    if (!counters) counters = new SiteCounters{ 0, {} };
-    LONG epoch = g_epoch;
-    if (counters->epoch != epoch) {
-        counters->calls.clear();
-        counters->epoch = epoch;
-    }
-    unsigned n = counters->calls[site]++;
+    if (!counters) counters = new SiteCounters();
+    const uint32_t n = NextSiteCall(counters, site, g_epoch);
     unsigned long long x = SplitMix(g_seed ^ ((unsigned long long)site << 32) ^ n);
     int value = (int)((x >> 33) & 0x7FFF);
     if (!privateDraw && g_inEarly && !IsPresentationSite(site)) {
@@ -157,6 +215,13 @@ static int SiteRand(void* returnAddress)
         }
     }
     return value;
+}
+
+// 0..32767, like the CRT's rand(). site = return address of the game's call.
+static int SiteRand(void* returnAddress)
+{
+    unsigned site = (unsigned)((BYTE*)returnAddress - g_exeBase);
+    return SiteRandForSite(site);
 }
 
 typedef int (__cdecl* RandFn)(void);
@@ -209,12 +274,21 @@ static __declspec(noinline) void __cdecl H_randStart(void)
 
 typedef void (*TimerStopFn)(void* timer);
 static TimerStopFn o_timerStop, o_timerStart;
+static std::atomic<int64_t> g_afterLateEndQpc{0};
 
 // The frame loop's first call (105c90): the timer is started and rescaled for
 // the game speed right after. The render thread must not be reading it then.
 static void H_timerStart(void* timer)
 {
-    if (g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA) SimPatches_WaitRender();
+    if (g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA) {
+        if (!Determinism_WorldLoading()) {
+            const int64_t prevAfterLate = g_afterLateEndQpc.exchange(0, std::memory_order_relaxed);
+            if (prevAfterLate > 0) {
+                DiagPerf_Record(DIAG_PERF_INTERFRAME_GAP, DiagPerf_Now() - prevAfterLate);
+            }
+        }
+        SimPatches_WaitRender(true);
+    }
     o_timerStart(timer);
     if (!g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA &&
         (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded()))) {
@@ -262,11 +336,44 @@ static DWORD ExeFunctionRva(void* addr)
 typedef bool (*GetKeyDownFn)(void* input, int key);
 static GetKeyDownFn o_getKeyDown;
 
+static constexpr size_t kKeyDownCacheSize = 32u;
+struct KeyDownRetCacheEntry {
+    const void* retAddr;
+    DWORD fnRva;
+    bool valid;
+};
+static thread_local KeyDownRetCacheEntry t_keyDownCache[kKeyDownCacheSize] = {};
+static thread_local const BYTE* t_keyDownCacheBase = nullptr;
+
+static bool IsKeyDownSuppressedCaller(const void* retAddr, bool* outCacheHit = nullptr)
+{
+    if (outCacheHit) *outCacheHit = false;
+    if (t_keyDownCacheBase != g_exeBase) {
+        for (size_t i = 0; i < kKeyDownCacheSize; ++i) {
+            t_keyDownCache[i] = {};
+        }
+        t_keyDownCacheBase = g_exeBase;
+    }
+    const uintptr_t v = (uintptr_t)retAddr;
+    const size_t slot = (size_t)(((v ^ (v >> 12)) * 0x9E3779B97F4A7C15ull) >> 59) & (kKeyDownCacheSize - 1u);
+    KeyDownRetCacheEntry& entry = t_keyDownCache[slot];
+    DWORD fn = 0;
+    if (entry.valid && entry.retAddr == retAddr) {
+        if (outCacheHit) *outCacheHit = true;
+        fn = entry.fnRva;
+    } else {
+        fn = ExeFunctionRva(const_cast<void*>(retAddr));
+        entry.retAddr = retAddr;
+        entry.fnRva = fn;
+        entry.valid = true;
+    }
+    return fn == KEY_SIM_FUNC1_RVA || fn == KEY_SIM_FUNC2_RVA;
+}
+
 static __declspec(noinline) bool H_getKeyDown(void* input, int key)
 {
-    if (g_active) {
-        DWORD fn = ExeFunctionRva(_ReturnAddress());
-        if (fn == KEY_SIM_FUNC1_RVA || fn == KEY_SIM_FUNC2_RVA) return false;
+    if (g_active && IsKeyDownSuppressedCaller(_ReturnAddress())) {
+        return false;
     }
     return o_getKeyDown(input, key);
 }
@@ -311,8 +418,35 @@ static void ClearStdVecEndSafe(BYTE* vecHdr)
     }
 }
 
+static std::atomic<HANDLE> g_fillingStartEvent{ nullptr };
+static SRWLOCK g_fillingCacheLock = SRWLOCK_INIT;
+static uint64_t g_fillingCacheEpoch = 0;
+static int g_fillingCreatingCount = 0;
+static HANDLE g_fillingStaleEvent = nullptr;
+
+static inline void Determinism_InvalidateFillingEventCache()
+{
+    AcquireSRWLockExclusive(&g_fillingCacheLock);
+    ++g_fillingCacheEpoch;
+    g_fillingStaleEvent = nullptr;
+    g_fillingStartEvent.store(nullptr, std::memory_order_release);
+    ReleaseSRWLockExclusive(&g_fillingCacheLock);
+}
+
+static HANDLE ReadCurrentFillingStartEventSafe()
+{
+    if (g_exeBase == nullptr) return nullptr;
+    uint64_t objAddr = 0;
+    if (!SafeReadPod(g_exeBase + FILLING_OBJ_RVA, &objAddr) || !IsPointerLikeX64(objAddr)) return nullptr;
+    BYTE* obj = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(objAddr));
+    HANDLE ev = nullptr;
+    if (!SafeReadPod(obj + FILLING_START_EVENT_OFFSET, &ev)) return nullptr;
+    return ev;
+}
+
 void Determinism_ClearFillingWorkQueues(unsigned char* exeBase)
 {
+    Determinism_InvalidateFillingEventCache();
     BYTE* base = exeBase ? exeBase : g_exeBase;
     if (!base) return;
     ClearStdVecEndSafe(base + VEC_FILLING_VEHICLES_BEGIN_RVA);
@@ -341,44 +475,114 @@ static HANDLE WINAPI H_createEventW(LPSECURITY_ATTRIBUTES attr, BOOL manualReset
     // same kernel event objects and signal/reset each other's RenderThread, MainThread,
     // and Filling worker thread! Stripping `name` makes each event anonymous and
     // strictly private to this process.
+    const bool isFillingStart = (name && wcscmp(name, L"FillingrStart") == 0);
+    if (isFillingStart) {
+        const HANDLE prevObjEvent = ReadCurrentFillingStartEventSafe();
+        AcquireSRWLockExclusive(&g_fillingCacheLock);
+        ++g_fillingCacheEpoch;
+        ++g_fillingCreatingCount;
+        const HANDLE prevCached = g_fillingStartEvent.exchange(nullptr, std::memory_order_acq_rel);
+        if (prevObjEvent != nullptr) {
+            g_fillingStaleEvent = prevObjEvent;
+        } else if (prevCached != nullptr) {
+            g_fillingStaleEvent = prevCached;
+        }
+        ReleaseSRWLockExclusive(&g_fillingCacheLock);
+    }
     if (name && name[0]) {
         Logf("republicmp  DETERMINISM: isolated named engine event '%ls' to process-private anonymous event", name);
     }
-    return o_createEventW(attr, manualReset, initialState, nullptr);
+    HANDLE ret = o_createEventW ? o_createEventW(attr, manualReset, initialState, nullptr)
+                                : CreateEventW(attr, manualReset, initialState, nullptr);
+    if (isFillingStart) {
+        AcquireSRWLockExclusive(&g_fillingCacheLock);
+        ++g_fillingCacheEpoch;
+        if (g_fillingCreatingCount > 0) --g_fillingCreatingCount;
+        if (ret == nullptr || ret == g_fillingStaleEvent) {
+            g_fillingStaleEvent = nullptr;
+        }
+        ReleaseSRWLockExclusive(&g_fillingCacheLock);
+    }
+    return ret;
+}
+
+static bool HandleSetEventFillingCheck(HANDLE h, bool* outMatchedFilling, bool* outUsedFastSkip, BYTE** outWaitObj)
+{
+    if (outMatchedFilling) *outMatchedFilling = false;
+    if (outUsedFastSkip) *outUsedFastSkip = false;
+    if (outWaitObj) *outWaitObj = nullptr;
+    if (!h || g_exeBase == nullptr) return false;
+
+    const HANDLE cached = g_fillingStartEvent.load(std::memory_order_acquire);
+    if (cached != nullptr && h != cached) {
+        if (outUsedFastSkip) *outUsedFastSkip = true;
+        return false;
+    }
+
+    AcquireSRWLockExclusive(&g_fillingCacheLock);
+    const uint64_t epochBefore = g_fillingCacheEpoch;
+    const bool creatingNow = (g_fillingCreatingCount > 0);
+    const HANDLE staleEvent = g_fillingStaleEvent;
+    ReleaseSRWLockExclusive(&g_fillingCacheLock);
+
+    uint64_t objAddr = 0;
+    if (!SafeReadPod(g_exeBase + FILLING_OBJ_RVA, &objAddr) || !IsPointerLikeX64(objAddr)) {
+        Determinism_InvalidateFillingEventCache();
+        return false;
+    }
+    BYTE* obj = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(objAddr));
+    HANDLE startEvent = nullptr;
+    if (!SafeReadPod(obj + FILLING_START_EVENT_OFFSET, &startEvent) || startEvent == nullptr) {
+        Determinism_InvalidateFillingEventCache();
+        return false;
+    }
+    BYTE quitting = 0;
+    if (!SafeReadPod(obj + FILLING_QUIT_OFFSET, &quitting)) {
+        Determinism_InvalidateFillingEventCache();
+        return false;
+    }
+    if (quitting != 0) {
+        // Crash B: UnloadWorld (0x294B80 -> 0x2592C0) sets quit=1 and wakes Filling
+        // after Determinism_SetActive(false) may already have run. Clear any stale/freed
+        // vehicle pointers from Filling's queues BEFORE waking the worker thread, and
+        // never cache a dying startEvent (even on unrelated SetEvent calls).
+        Determinism_InvalidateFillingEventCache();
+        if (h == startEvent) {
+            if (outMatchedFilling) *outMatchedFilling = true;
+            Determinism_ClearFillingWorkQueues(g_exeBase);
+            Logf("republicmp  CRASH_FIX_B: cleared Filling queues before worker shutdown SetEvent");
+        }
+        return false;
+    }
+    if (!creatingNow && startEvent != staleEvent) {
+        AcquireSRWLockExclusive(&g_fillingCacheLock);
+        if (g_fillingCacheEpoch == epochBefore && g_fillingCreatingCount == 0 &&
+            startEvent != g_fillingStaleEvent) {
+            g_fillingStaleEvent = nullptr;
+            g_fillingStartEvent.store(startEvent, std::memory_order_release);
+        }
+        ReleaseSRWLockExclusive(&g_fillingCacheLock);
+    }
+    if (h != startEvent) return false;
+
+    if (outMatchedFilling) *outMatchedFilling = true;
+    if (outWaitObj) *outWaitObj = obj;
+    return g_active;
 }
 
 static BOOL WINAPI H_setEvent(HANDLE h)
 {
-    if (g_exeBase != nullptr) {
-        uint64_t objAddr = 0;
-        if (SafeReadPod(g_exeBase + FILLING_OBJ_RVA, &objAddr) && IsPointerLikeX64(objAddr)) {
-            BYTE* obj = reinterpret_cast<BYTE*>(static_cast<uintptr_t>(objAddr));
-            HANDLE startEvent = nullptr;
-            if (SafeReadPod(obj + FILLING_START_EVENT_OFFSET, &startEvent) &&
-                h != nullptr && h == startEvent) {
-                BYTE quitting = 0;
-                (void)SafeReadPod(obj + FILLING_QUIT_OFFSET, &quitting);
-                if (quitting != 0) {
-                    // Crash B: UnloadWorld (0x294B80 -> 0x2592C0) sets quit=1 and wakes Filling
-                    // after Determinism_SetActive(false) may already have run. Clear any stale/freed
-                    // vehicle pointers from Filling's queues BEFORE waking the worker thread.
-                    Determinism_ClearFillingWorkQueues(g_exeBase);
-                    Logf("republicmp  CRASH_FIX_B: cleared Filling queues before worker shutdown SetEvent");
-                    return o_setEvent ? o_setEvent(h) : TRUE;
-                }
-                BOOL r = o_setEvent ? o_setEvent(h) : TRUE;
-                if (g_active) {
-                    volatile BYTE* done = obj + FILLING_DONE_OFFSET;
-                    volatile BYTE* quitPtr = obj + FILLING_QUIT_OFFSET;
-                    g_workerPhase = true;
-                    while (!*done && !*quitPtr) YieldProcessor();
-                    g_workerPhase = false;
-                }
-                return r;
-            }
-        }
+    BYTE* waitObj = nullptr;
+    const bool shouldWait = HandleSetEventFillingCheck(h, nullptr, nullptr, &waitObj);
+    BOOL r = o_setEvent ? o_setEvent(h) : TRUE;
+    if (shouldWait && waitObj != nullptr) {
+        volatile BYTE* done = waitObj + FILLING_DONE_OFFSET;
+        volatile BYTE* quitPtr = waitObj + FILLING_QUIT_OFFSET;
+        g_workerPhase = true;
+        while (!*done && !*quitPtr) YieldProcessor();
+        g_workerPhase = false;
     }
-    return o_setEvent ? o_setEvent(h) : TRUE;
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,24 +671,22 @@ static size_t g_commandsRecorded = 0, g_commandsReplayed = 0;
 static bool g_frameStep = false, g_frameEarly = false, g_frameFault = false, g_haveStep = false;
 static bool g_framesReady = false, g_paused = false, g_buttonsArmed = false;
 static int g_tickSpeed = 1, g_requestedSpeed = 1;
-// Lockstep tick speeds: 1 normal, 2 fast, 3 Hyper, 4 Plaid (the last two only on
-// top of fast, as in the game). The host's boost is its own keys or the player's
-// request (a speed request of 10 + boost); the grant carries the tick speed.
+// Lockstep tick speeds: 1 normal, 2 fast, 3 Hyper (max allowed speed). Speeds > 3
+// (Plaid / LCtrl+Numpad2) are blocked; holding the UI fast button caps at Hyper.
 static int g_remoteBoost = 0, g_sentBoost = 0;
 static volatile LONG g_uiButtonSpeed = -1;
 static volatile LONG g_uiFastHeld = 0;
 
-// This PC's boost from the same inputs the main loop reads: 0 none, 1 Hyper, 2 Plaid.
+// This PC's boost from allowed inputs: 0 none, 1 Hyper (LCtrl+Numpad1 or UI fast button held).
 static int LocalBoost()
 {
     const BYTE* keys = g_exeBase + KEYS_RVA;
-    if (keys[KEY_LCTRL] && keys[KEY_NUMPAD2]) return 2;
-    if (g_exeBase[FAST_HELD_RVA] || g_uiFastHeld != 0) return 2;
     if (keys[KEY_LCTRL] && keys[KEY_NUMPAD1]) return 1;
+    if (g_exeBase[FAST_HELD_RVA] || g_uiFastHeld != 0) return 1;
     return 0;
 }
 
-// The game's own speed (world +5a4) for a tick speed: Hyper and Plaid are fast with a smaller step.
+// The game's own speed (world +5a4) for a tick speed: Hyper runs on speed 2 with a smaller step.
 static int GameSpeedOf(int tickSpeed) { return tickSpeed > 2 ? 2 : tickSpeed; }
 static unsigned g_holdsLeft = 0, g_menuFrames = 0;
 static unsigned long long g_holdCount[2] = {}, g_speedChanges[2] = {};
@@ -847,7 +1049,9 @@ static void HookedLoadWorld(void)
             } else {
                 InterlockedExchange(&g_probeState, PROBE_FAILED);
             }
-            SafeCallLoadWorld();
+            Determinism_InvalidateFillingEventCache();
+    SafeCallLoadWorld();
+    Determinism_InvalidateFillingEventCache();
             TwoStates_OnAnyWorldLoaded(false);
             g_inLoadWorldCall = false;
             return;
@@ -862,7 +1066,9 @@ static void HookedLoadWorld(void)
             *(int*)(g_exeBase + rva) = 0;
         }
     }
+    Determinism_InvalidateFillingEventCache();
     SafeCallLoadWorld();
+    Determinism_InvalidateFillingEventCache();
     if (session) {
         // The same start on both PCs as a probe run gets: the shared
         // simulation begins at this load, paused until a player resumes.
@@ -924,6 +1130,7 @@ static void RecordSample()
 // the admitted tick's timer restored. (by SoylentGreed)
 static void ResetFrames()
 {
+    g_afterLateEndQpc.store(0, std::memory_order_relaxed);
     g_framePhase = 0;
     g_frameStep = g_frameEarly = g_frameFault = g_paused = g_buttonsArmed = false;
     g_tickSpeed = g_requestedSpeed = g_probeSpeed > 1 ? 2 : 1;
@@ -1010,6 +1217,7 @@ bool Determinism_SessionRunning()
 
 void Determinism_EndSession()
 {
+    g_afterLateEndQpc.store(0, std::memory_order_relaxed);
     // A session whose load refused the simulation patches left the layer on
     // with nothing running: the game stayed paused (no ticks admitted).
     if (!g_sessionRunning && !g_sessionLoadPending && !g_sessionArmed) return;
@@ -1033,6 +1241,13 @@ bool Determinism_RequestPauseToggle()
 {
     if (!g_active) return false;
     InterlockedIncrement(&g_pauseRequests);
+    return true;
+}
+
+bool Determinism_RequestSpeed(int speed)
+{
+    if (!g_active || speed < 0 || speed > 2) return false;
+    InterlockedExchange(&g_uiButtonSpeed, (LONG)speed);
     return true;
 }
 
@@ -1251,6 +1466,8 @@ void Determinism_BeforePrepare()
         g_postLoadInitPending = false;
         EmptySearchPool();
         SimPatches_ResetSearches();
+        BuildingSwitches_Reset();
+        VehicleSwitches_Reset();
         TwoStates_OnWorldLoaded();
     }
     if (g_exeBase[GAME_TIMER_RVA + 13]) g_menuFrames = 30;
@@ -1264,9 +1481,10 @@ void Determinism_BeforePrepare()
     BYTE* timer = g_exeBase + GAME_TIMER_RVA;
     if (g_sessionRunning) SessionAdmission(timer);
     else ProbeAdmission(timer);
-    // Speed 2 scales the timer by the game's own factor (105db9: exe+909d5c,
-    // 0.345268), as the native loop would have done before this point.
-    unsigned factor = g_tickSpeed == 4 ? PLAID_FACTOR_RVA : g_tickSpeed == 3 ? HYPER_FACTOR_RVA : FAST_FACTOR_RVA;
+    // Speed 2/3 scales the timer by the game's own factor (105d66 / 105dc1),
+    // capped at Hyper (speed 3).
+    if (g_tickSpeed > DETERMINISM_MAX_TICK_SPEED) g_tickSpeed = DETERMINISM_MAX_TICK_SPEED;
+    unsigned factor = (g_tickSpeed >= 3) ? HYPER_FACTOR_RVA : FAST_FACTOR_RVA;
     *(float*)timer = DETERMINISM_FIXED_FPS * (g_tickSpeed >= 2 ? *(float*)(g_exeBase + factor) : 1.0f);
     *(float*)(timer + 4) = DETERMINISM_FIXED_FPS;
     *(int*)(timer + 8) = (int)DETERMINISM_FIXED_FPS;
@@ -1299,7 +1517,9 @@ static void ProbeAdmission(BYTE* timer)
     }
     int nextSpeed = g_probeBusy ? (g_probeFuzz ? 1 + int((g_runStep / 300) & 1) : g_probeSpeed) : g_requestedSpeed;
     int boost = g_probeBusy ? 0 : LocalBoost();
+    if (boost > DETERMINISM_MAX_BOOST) boost = DETERMINISM_MAX_BOOST;
     nextSpeed = (nextSpeed > 1 || boost > 0) ? 2 + boost : 1;
+    if (nextSpeed > DETERMINISM_MAX_TICK_SPEED) nextSpeed = DETERMINISM_MAX_TICK_SPEED;
     if (g_frameStep && nextSpeed != g_tickSpeed && g_probeBusy) ++g_speedChanges[g_probeRun];
     if (g_frameStep) g_tickSpeed = nextSpeed;
 }
@@ -1358,7 +1578,7 @@ static void SessionClientAdmission(BYTE* timer, double elapsed)
         g_tickDebt -= 1.0;
         if (backlog <= 3 && g_tickDebt > 0.95) g_tickDebt = 0.95;
         ResetSubTickOnStep();
-        g_tickSpeed = speed < 1 ? 1 : speed > 4 ? 4 : speed;
+        g_tickSpeed = speed < 1 ? 1 : speed > DETERMINISM_MAX_TICK_SPEED ? DETERMINISM_MAX_TICK_SPEED : speed;
     } else if (!hold) {
         AdvanceSubTickOnHold(elapsed * DETERMINISM_FIXED_FPS * rate);
     }
@@ -1386,7 +1606,7 @@ static void SessionAdmission(BYTE* timer)
     }
     if (LockstepNet_TakePauseToggles() & 1) g_paused = !g_paused;
     int wanted = LockstepNet_TakeSpeedRequest();
-    if (wanted >= 10) g_remoteBoost = wanted - 10 > 2 ? 2 : wanted - 10;
+    if (wanted >= 10) g_remoteBoost = (wanted == 10 + DETERMINISM_MAX_BOOST) ? DETERMINISM_MAX_BOOST : 0;
     else if (wanted > 0) g_requestedSpeed = wanted > 1 ? 2 : 1;
     bool waitingLobby = SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded());
     if (waitingLobby) g_paused = true;
@@ -1409,8 +1629,11 @@ static void SessionAdmission(BYTE* timer)
         g_tickDebt -= 1.0;
         if (g_tickDebt > 0.95) g_tickDebt = 0.95;
         ResetSubTickOnStep();
-        int boost = LocalBoost() > g_remoteBoost ? LocalBoost() : g_remoteBoost;
+        int localBoost = LocalBoost();
+        int boost = localBoost > g_remoteBoost ? localBoost : g_remoteBoost;
+        if (boost > DETERMINISM_MAX_BOOST) boost = DETERMINISM_MAX_BOOST;
         g_tickSpeed = (g_requestedSpeed > 1 || boost > 0) ? 2 + boost : 1;
+        if (g_tickSpeed > DETERMINISM_MAX_TICK_SPEED) g_tickSpeed = DETERMINISM_MAX_TICK_SPEED;
         LockstepNet_Grant(g_stepCount + 1, g_tickSpeed);
     } else if (!hold) {
         AdvanceSubTickOnHold(elapsed * DETERMINISM_FIXED_FPS);
@@ -1436,9 +1659,14 @@ static void HookedSimStep(__int64 world)
     if (!g_frameStep) {
         g_framePhase = 3;
         if (GetProbeState() == PROBE_RUNNING) ++g_holdCount[g_probeRun];
-        if (!g_frameFault && GetProbeState() != PROBE_WAIT_LOAD && !g_sessionLoadPending && !HeldFrame_Draw(g_haveStep)) {
-            g_frameFault = true;
-            Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+        if (!g_frameFault && GetProbeState() != PROBE_WAIT_LOAD && !g_sessionLoadPending) {
+            const int64_t heldT0 = DiagPerf_Now();
+            bool drawn = HeldFrame_Draw(g_haveStep);
+            DiagPerf_Record(DIAG_PERF_HELD, DiagPerf_Now() - heldT0);
+            if (!drawn) {
+                g_frameFault = true;
+                Logf("republicmp  PROBE: held presentation failed - no successful result can be reported");
+            }
         }
         g_framePhase = 4;
         return;
@@ -1448,14 +1676,27 @@ static void HookedSimStep(__int64 world)
     WriteGameSpeed(GameSpeedOf(g_tickSpeed));
     // Early keeps the tool: its one read that changed the simulation (the
     // building pass, 13cc11) is patched in sim_patches. (by SoylentGreed)
+    const int64_t beforeEarlyT0 = DiagPerf_Now();
     SimPatches_BeforeEarly(world);
-    TwoStates_BeforeStep((BYTE*)world);
+    int64_t beforeEarlyTicks = DiagPerf_Now() - beforeEarlyT0;
+    if (beforeEarlyTicks < 0) beforeEarlyTicks = 0;
+    const int64_t tsBeforeT0 = DiagPerf_Now();
+    TwoStates_BeforeSubStep((BYTE*)world, true);
+    DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsBeforeT0);
     g_inEarly = true;
+    const int64_t earlyT0 = DiagPerf_Now();
     o_simStep(world);
+    DiagPerf_Record(DIAG_PERF_EARLY, DiagPerf_Now() - earlyT0);
     g_inEarly = false;
-    TwoStates_AfterStep((BYTE*)world);
+    const int64_t tsAfterT0 = DiagPerf_Now();
+    TwoStates_AfterSubStep((BYTE*)world, true);
+    DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsAfterT0);
+    const int64_t afterEarlyT0 = DiagPerf_Now();
     SimPatches_AfterEarly();
     HeldFrame_UpdateCameraAfterSimStep();
+    int64_t afterEarlyTicks = DiagPerf_Now() - afterEarlyT0;
+    if (afterEarlyTicks < 0) afterEarlyTicks = 0;
+    DiagPerf_Record(DIAG_PERF_BEFORE_AFTER_EARLY, beforeEarlyTicks + afterEarlyTicks);
     WriteGameSpeed(0);
     *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
     memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));
@@ -1482,7 +1723,9 @@ void Determinism_BeforeLate()
     // and nothing was charged for it.
     if (g_frameStep && g_frameEarly) {
         WriteGameSpeed(GameSpeedOf(g_tickSpeed));
-        TwoStates_BeforeStep(g_exeBase + 0x9D4F10);
+        const int64_t tsBeforeLateT0 = DiagPerf_Now();
+        TwoStates_BeforeSubStep(g_exeBase + 0x9D4F10, false);
+        DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsBeforeLateT0);
     }
 }
 
@@ -1497,7 +1740,9 @@ void Determinism_AfterLate()
         if (*speed == GameSpeedOf(g_tickSpeed)) WriteGameSpeed(0);
         ++g_stepCount;
         HeldFrame_OnSimTick(g_stepCount);
-        TwoStates_AfterStep(g_exeBase + 0x9D4F10);
+        const int64_t tsAfterLateT0 = DiagPerf_Now();
+        TwoStates_AfterSubStep(g_exeBase + 0x9D4F10, false);
+        DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsAfterLateT0);
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         if (g_sessionRunning) {
             if (g_sessionHost) VehicleSoftSync_HostTick(g_stepCount);
@@ -1505,7 +1750,10 @@ void Determinism_AfterLate()
             if (!g_sessionHost) LockstepNet_Ack(g_stepCount);
             if (g_stepCount % LOCKSTEP_HASH_TICKS == 0) {
                 StateSummary s;
-                if (StateHash_Compute(&s)) {
+                const int64_t hashT0 = DiagPerf_Now();
+                bool hashed = StateHash_Compute(&s);
+                DiagPerf_Record(DIAG_PERF_STATE_HASH, DiagPerf_Now() - hashT0);
+                if (hashed) {
                     LockstepNet_StateAfter(g_stepCount, s);
                     if (g_stepCount % (LOCKSTEP_HASH_TICKS * 5) == 0) LogSessionProgress(s);
                 }
@@ -1528,6 +1776,7 @@ void Determinism_AfterLate()
     // Publish completion only after the final Late and all frame cleanup.
     if (GetProbeState() == PROBE_RUNNING && (g_frameFault || g_runStep >= (unsigned long long)g_probeSteps))
         InterlockedExchange(&g_probeState, PROBE_RUN_DONE);
+    g_afterLateEndQpc.store(DiagPerf_Now(), std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,10 +1796,46 @@ void Determinism_AfterLate()
 typedef void* (*MallocFn)(size_t size);
 static MallocFn o_malloc;
 
+struct MallocPerfBatch {
+    uint32_t calls;
+    uint32_t _pad;
+    int64_t bytes;
+    int64_t sampledTicks;
+    int64_t maxSampleTicks;
+};
+static thread_local MallocPerfBatch t_mallocBatch = {};
+
 static void* H_malloc(size_t size)
 {
     void* p = o_malloc(size);
-    if (p) memset(p, 0, size);
+    if (p) {
+        const uint32_t callIdx = t_mallocBatch.calls;
+        if ((callIdx & 63u) == 0u) {
+            const int64_t zT0 = DiagPerf_Now();
+            memset(p, 0, size);
+            int64_t zDt = DiagPerf_Now() - zT0;
+            if (zDt < 0) zDt = 0;
+            t_mallocBatch.sampledTicks += zDt;
+            if (zDt > t_mallocBatch.maxSampleTicks) {
+                t_mallocBatch.maxSampleTicks = zDt;
+            }
+        } else {
+            memset(p, 0, size);
+        }
+        t_mallocBatch.calls = callIdx + 1u;
+        t_mallocBatch.bytes += (int64_t)size;
+        if (t_mallocBatch.calls >= 256u) {
+            const int64_t flushBytes = t_mallocBatch.bytes;
+            const int64_t flushSampledTicks = t_mallocBatch.sampledTicks;
+            const int64_t flushMaxTicks = t_mallocBatch.maxSampleTicks;
+            t_mallocBatch.calls = 0;
+            t_mallocBatch.bytes = 0;
+            t_mallocBatch.sampledTicks = 0;
+            t_mallocBatch.maxSampleTicks = 0;
+            DiagPerf_RecordMallocBatch(256, flushBytes);
+            DiagPerf_RecordBatch(DIAG_PERF_MALLOC_ZERO, 256, flushSampledTicks * 64, flushMaxTicks);
+        }
+    }
     return p;
 }
 
@@ -1625,9 +1910,56 @@ void Determinism_SetActiveForTest(bool active)
     g_active = active;
 }
 
+void Determinism_SetSessionRunningForTest(bool running)
+{
+    g_sessionRunning = running;
+}
+
+void Determinism_SetStepCountForTest(unsigned long long stepCount)
+{
+    g_stepCount = stepCount;
+}
+
 bool Determinism_IsActive() { return g_active; }
-void Determinism_Restart() { InterlockedIncrement(&g_epoch); }
+void Determinism_Restart()
+{
+    Determinism_InvalidateFillingEventCache();
+    InterlockedIncrement(&g_epoch);
+}
 unsigned long long Determinism_StepCount() { return g_stepCount; }
+
+void Determinism_SetSeedForTest(unsigned long long seed)
+{
+    g_seed = seed;
+    Determinism_Restart();
+}
+
+int Determinism_SiteRandForTest(unsigned siteRva)
+{
+    return SiteRandForSite(siteRva);
+}
+
+void Determinism_GetSiteTableStatsForTest(bool privateTable, unsigned* outFlatCount, size_t* outOverflowCount)
+{
+    SiteCounters* c = privateTable ? t_privateSites : t_sites;
+    if (outFlatCount) *outFlatCount = c ? (unsigned)c->count : 0u;
+    if (outOverflowCount) *outOverflowCount = c ? c->overflow.size() : 0u;
+}
+
+bool Determinism_IsKeyDownSuppressedForTest(const void* retAddr, bool* outCacheHit)
+{
+    return IsKeyDownSuppressedCaller(retAddr, outCacheHit);
+}
+
+bool Determinism_SetEventFastPathForTest(HANDLE h, bool* outMatchedFilling, bool* outUsedFastSkip)
+{
+    return HandleSetEventFillingCheck(h, outMatchedFilling, outUsedFastSkip, nullptr);
+}
+
+HANDLE Determinism_CreateEventForTest(LPCWSTR name)
+{
+    return H_createEventW(nullptr, FALSE, FALSE, name);
+}
 
 void Determinism_SessionSpeed(bool* paused, int* speed)
 {

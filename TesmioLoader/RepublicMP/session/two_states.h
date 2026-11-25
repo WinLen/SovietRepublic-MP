@@ -112,6 +112,8 @@ bool TwoStates_ApplyLoanCommand(const LsLoanCommand& cmd);
 void TwoStates_GetLoanDebt(int state, double* outRubDebt, double* outUsdDebt, int* outLoanCount = nullptr);
 
 //   - Around simulation step (HookedSimStep .. Determinism_AfterLate)
+void TwoStates_BeforeSubStep(BYTE* world, bool isEarly);
+void TwoStates_AfterSubStep(BYTE* world, bool isEarly);
 void TwoStates_BeforeStep(BYTE* world);
 void TwoStates_AfterStep(BYTE* world);
 
@@ -245,6 +247,7 @@ int    TwoStates_GetUnivResearchIdxForBuilding(const BYTE* world, const BYTE* bu
 float  TwoStates_GetEngineResearchProgress(const BYTE* world, int stateOwner, int techIdx);
 uint8_t TwoStates_GetEngineResearchUnlockByte(const BYTE* world, int stateOwner, unsigned byteIdx);
 void   TwoStates_SetEngineResearchUnlockByteForTest(int stateOwner, unsigned byteIdx, uint8_t val);
+bool   TwoStates_HashEngineResearch(unsigned long long* inOutHash);
 void   TwoStates_UnivResearchPanelForTest(BYTE* world, BYTE* building, int clickTechIdx, float clickRatio);
 void   TwoStates_BldUnivStepForTest(BYTE* world, BYTE* building);
 void   TwoStates_ResearchDailyUpdateForTest(BYTE* world);
@@ -301,9 +304,36 @@ void    TwoStates_SetStateTrackerSliceForTest(int state, bool isOld, const State
 bool    TwoStates_PtrInStdVector(const void* vecHeader, const void* targetPtr);
 size_t  TwoStates_ErasePtrFromStdVector(void* vecHeader, const void* targetPtr);
 
+// VehicleRefuel ABI return-value test seam
+typedef float (__fastcall* TwoStatesVehicleRefuelTestFn)(BYTE* vehicle, float a2, unsigned char a3, uintptr_t a4, uintptr_t a5, uintptr_t a6);
+float   TwoStates_InvokeVehicleRefuelHookForTest(BYTE* vehicle, TwoStatesVehicleRefuelTestFn origFn,
+                                                 float a2, unsigned char a3);
 
+// Phase 1 cache, sub-step, demographics, and econ observability test seams
+uint64_t TwoStates_GetOwnerMapGenForTest();
+uint64_t TwoStates_GetBldPtrCacheRebuildCountForTest();
+bool     TwoStates_IsInSimStepForTest();
+int      TwoStates_LookupBuildingOwnerCachedForTest(const BYTE* bld);
+int      TwoStates_ResolveCitizenOwnerCachedForTest(const BYTE* cit);
+uint64_t TwoStates_GetUiCitizenCacheBuildCountForTest();
+uint64_t TwoStates_GetHistBackfillScanCountForTest();
+void     TwoStates_ComputeDemographicsParityForTest(const BYTE* world, int* outPopS1, int* outPopS2,
+                                                    float* outSatS1, float* outSatS2,
+                                                    bool* outExactMatchBoth);
+void     TwoStates_FlushUnattributedScalarsForTest(const BYTE* world);
+void     TwoStates_NestedVehicleOverrideForTest(BYTE* world, BYTE* outerBld, BYTE* vehMid,
+                                                BYTE* vehInner, BYTE* vehSameOwner);
+uint64_t TwoStates_GetResearchMountGenForTest();
+int      TwoStates_GetResearchMountStateForTest();
+uint64_t TwoStates_GetResearchMountApplyCountForTest();
+int      TwoStates_GetVehLicenseMountStateForTest();
+uint64_t TwoStates_GetVehLicenseMountApplyCountForTest();
+void     TwoStates_MasterSaveForTest(BYTE* world);
 
-
-
-
+typedef void (__fastcall* TwoStatesCitComputeLifespanTestFn)(BYTE* world, BYTE* cit);
+void     TwoStates_SetCitComputeLifespanTestHook(TwoStatesCitComputeLifespanTestFn origFn);
+void     TwoStates_InvokeCitComputeLifespanHookForTest(BYTE* world, BYTE* cit);
+size_t   TwoStates_GetUiSavedLifespanCountForTest();
+size_t   TwoStates_GetUiDirtyLifespanCountForTest();
+uint64_t TwoStates_GetHistSwapGenForTest();
 

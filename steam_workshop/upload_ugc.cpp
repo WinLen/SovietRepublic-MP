@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Rail Construction Office (RCO) & rail construction fixes (H_SiteStop/H_SiteResume UI caller filter, 0x161CB0 triggerImmediateScan, rail auto-chain 0x159F4D, RCO/CO queue reorder 0x7707E0 Lockstep sync, track-builder/site ownership, removed 0x7D8738 flood), client Host-Lost recovery modal, Steam Friends discovery fix, ACK-paced save upload speed meter, Crash A (0x41E9F0) & Crash B (Filling UAF) guards (61/61 test suites)",
+                "v%s (Protocol %d) - Phases 0-4 CPU/FPS/UI/network optimizations (3x FPS, 7x faster TwoStates step, 31x-74x faster TwoStates UI, TCP_NODELAY & 16MB Steam P2P ring buffer, held-frame batching), RCO refuel ABI / TwoStates research & exact-cargo soft-sync desync fixes, MP Plaid speed cap, resized Client Host-Lost modal with reconnect recovery, modular TwoStates & tests (70/70 suites)",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

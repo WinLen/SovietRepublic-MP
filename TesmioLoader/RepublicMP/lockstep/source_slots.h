@@ -37,3 +37,9 @@ void SourceSlots_After(bool simBusy);
 
 // The command (lockstep/commands).
 bool SourceSlots_ApplyCommand(const void* data, size_t size);
+
+struct SourceSlotsPerfStatsForTest {
+    unsigned long long collectCount;
+    size_t listScratchCapacity;
+};
+void SourceSlots_GetStatsForTest(SourceSlotsPerfStatsForTest* out);

@@ -15,6 +15,9 @@
 void Network_Bind(const TsmHost* host);
 bool NetworkInit();
 void Network_SetLoopbackOnlyForTest(bool enabled);
+// Disables Nagle's algorithm (TCP_NODELAY = 1) on real Winsock TCP sockets;
+// safe no-op on INVALID_SOCKET and Steam P2P virtual sockets.
+void NetworkEnableNoDelay(SOCKET sock);
 
 // Normalizes a target address entered by the user or from a host list:
 // trims leading/trailing ASCII whitespace, validates and preserves steam:<id>

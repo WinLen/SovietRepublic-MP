@@ -1969,6 +1969,8 @@ bool NativeMenu_Install(void)
 static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 displaySize)
 {
     static bool s_autoFlagsChecked = false;
+    static bool s_autoHostMode = false;
+    static int  s_autoTargetSpeed = 1;
     static bool s_autoHostPending = false;
     static bool s_autoUnpausePending = false;
     static int  s_autoInGameFrames = 0;
@@ -1980,9 +1982,15 @@ static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 display
         const char* cmdLine = GetCommandLineA();
         if ((GetEnvironmentVariableA("REPUBLICMP_AUTO_HOST", envBuf, sizeof(envBuf)) > 0 && envBuf[0] == '1') ||
             (cmdLine && strstr(cmdLine, "--mp-autohost") != nullptr)) {
+            char speedEnv[32] = {};
+            if (GetEnvironmentVariableA("REPUBLICMP_AUTO_SPEED", speedEnv, sizeof(speedEnv)) > 0 && speedEnv[0] == '2') {
+                s_autoTargetSpeed = 2;
+            }
+            s_autoHostMode = true;
             s_autoHostPending = true;
             s_autoUnpausePending = true;
-            DiagLog_Printf("UI", "Dual-Window Testbed: REPUBLICMP_AUTO_HOST=1 active (will auto-load & host from Main Menu)");
+            DiagLog_Printf("UI", "Dual-Window Testbed: REPUBLICMP_AUTO_HOST=1 active (targetSpeed=%d, will auto-load & host from Main Menu)",
+                           s_autoTargetSpeed);
         }
         if ((GetEnvironmentVariableA("REPUBLICMP_AUTO_JOIN", envBuf, sizeof(envBuf)) > 0 && envBuf[0] != '0') ||
             (cmdLine && strstr(cmdLine, "--mp-autojoin") != nullptr)) {
@@ -1991,15 +1999,21 @@ static void TickTestbedAutomation(bool worldLoaded, int screenId, ImVec2 display
         }
     }
 
-    if (s_autoUnpausePending && worldLoaded && SaveSync_GetState() == SESSION_HOST_IN_GAME) {
-        if (++s_autoInGameFrames >= 30) {
-            s_autoUnpausePending = false;
-            bool paused = false;
-            int speed = 1;
-            Determinism_SessionSpeed(&paused, &speed);
-            if (paused) {
-                DiagLog_Printf("UI", "Dual-Window Testbed: both instances in game -> auto-resuming Lockstep simulation at Speed 1");
-                Determinism_RequestPauseToggle();
+    if (s_autoHostMode) {
+        if (!worldLoaded || SaveSync_GetState() != SESSION_HOST_IN_GAME) {
+            s_autoUnpausePending = true;
+            s_autoInGameFrames = 0;
+        } else if (s_autoUnpausePending) {
+            if (++s_autoInGameFrames >= 30) {
+                s_autoUnpausePending = false;
+                bool paused = false;
+                int speed = 1;
+                Determinism_SessionSpeed(&paused, &speed);
+                if (paused || speed != s_autoTargetSpeed) {
+                    DiagLog_Printf("UI", "Dual-Window Testbed: both instances in game -> auto-resuming Lockstep simulation at Speed %d",
+                                   s_autoTargetSpeed);
+                    Determinism_RequestSpeed(s_autoTargetSpeed);
+                }
             }
         }
     }

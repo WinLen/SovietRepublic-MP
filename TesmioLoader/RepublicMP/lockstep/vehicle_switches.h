@@ -27,3 +27,5 @@ void VehicleSwitches_After(bool simBusy);
 bool VehicleSwitches_ApplyCommand(const void* data, size_t size);
 bool VehicleSwitches_IsListWordForTest(int kind, unsigned offset);
 bool VehicleSwitches_IsNoiseEmptyForTest();
+struct SwitchPerfStatsForTest;
+void VehicleSwitches_GetStatsForTest(SwitchPerfStatsForTest* out);

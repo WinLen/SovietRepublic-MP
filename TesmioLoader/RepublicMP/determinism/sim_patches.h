@@ -72,7 +72,7 @@ int SimPatches_LastPopulation();
 
 // Main thread, at the start of a frame (determinism.cpp's timer Start hook):
 // while the patches are on, waits for the render thread's frame to finish.
-void SimPatches_WaitRender();
+void SimPatches_WaitRender(bool recordTelemetry = true);
 // After loading: retain private vector storage, discard entries from the previous city.
 void SimPatches_ResetSearches();
 
@@ -82,6 +82,8 @@ struct VisibleKept {
     float distance;
 };
 void RestoreVisibleKeptSafe(VisibleKept* kept, size_t keptCount);
+void SimPatches_TestBuildingRenderPassRestore(
+    VisibleKept* kept, size_t keptCount, void (*passBody)(void*), void* ctx, bool* outInPassAfter);
 
 void SimPatches_TestC3dSaveOriginalValues(void* material);
 void SimPatches_TestC3dChangeValuesTo(void* material, const float color[4]);

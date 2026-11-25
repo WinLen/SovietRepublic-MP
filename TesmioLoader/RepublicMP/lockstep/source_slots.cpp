@@ -3,12 +3,14 @@
 // link tool kind 7, read against the disassembly of 1.1.1.9).
 #include "source_slots.h"
 #include "commands.h"
+#include "switch_common.h"
 #include "world_refs.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include <algorithm>
+#include <atomic>
 #include <math.h>
 #include <string.h>
 #include <vector>
@@ -17,10 +19,6 @@
 #define WINDOW_BUILDING 0xD298   // the building of the window the tool serves
 #define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
-#define DOWN_RVA 0xA54E90
-#define PRESS_RVA 0xA54E91
-#define ENTER_RVA 0xA54CAC
-#define KEYPAD_ENTER_RVA 0xA54D2C
 #define SLOTS_OFFSET 0xF78
 #define SLOT_BYTES 0x10
 #define MAX_SLOTS 64
@@ -87,19 +85,43 @@ struct Slots {
     U64 source[MAX_SLOTS];
 };
 
+static std::atomic<unsigned long long> g_collectCount{ 0 };
+static std::atomic<size_t> g_lastListScratchCap{ 0 };
+
 // A building's slot sources (false: unreadable or too many).
 static bool ReadSlots(U64 building, Slots& s)
 {
-    U64 v[2] = {};
+    if (!building) {
+        s.building = 0;
+        s.count = 0;
+        return false;
+    }
     s.building = building;
     s.count = 0;
-    if (!building || !SafeMemcpyPod(v, (const void*)(building + SLOTS_OFFSET), 16)) return false;
-    if (!v[0] && !v[1]) return true;
-    if (!v[0] || v[1] < v[0] || (v[1] - v[0]) % SLOT_BYTES || (v[1] - v[0]) / SLOT_BYTES > MAX_SLOTS) return false;
-    s.count = (unsigned)((v[1] - v[0]) / SLOT_BYTES);
-    for (unsigned i = 0; i < s.count; i++)
-        if (!SafeMemcpyPod(&s.source[i], (const void*)(v[0] + (U64)i * SLOT_BYTES), 8)) return false;
-    return true;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        const U64* v = (const U64*)(building + SLOTS_OFFSET);
+        const U64 vb = v[0];
+        const U64 ve = v[1];
+        if (!vb && !ve) {
+            ok = true;
+        } else if (vb && ve >= vb && ((ve - vb) % SLOT_BYTES) == 0) {
+            const U64 n = (ve - vb) / SLOT_BYTES;
+            if (n <= MAX_SLOTS) {
+                s.count = (unsigned)n;
+                for (unsigned i = 0; i < s.count; ++i) {
+                    s.source[i] = *(const U64*)(vb + (U64)i * SLOT_BYTES);
+                }
+                ok = true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        s.count = 0;
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
 }
 
 static bool WriteSlot(U64 building, unsigned slot, U64 source)
@@ -107,15 +129,6 @@ static bool WriteSlot(U64 building, unsigned slot, U64 source)
     U64 v[2] = {};
     if (!SafeMemcpyPod(v, (const void*)(building + SLOTS_OFFSET), 16) || !v[0] || v[1] < v[0] || slot >= (v[1] - v[0]) / SLOT_BYTES) return false;
     return SafeWritePod((void*)(v[0] + (U64)slot * SLOT_BYTES), source);
-}
-
-static bool GuardedRef(U64 building, RouteRef& r)
-{
-    __try {
-        return Ref_Building(building, r);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
 }
 
 static U64 GuardedAt(const RouteRef& r)
@@ -139,12 +152,12 @@ static void Take(const Slots& before, const char* where)
     const char* why = nullptr;
     for (unsigned i = 0; i < now.count; i++) {
         if (now.source[i] == before.source[i]) continue;
-        if (!why && m.count == 0 && !GuardedRef(before.building, m.building)) why = "the building is not in the world's list";
+        if (!why && m.count == 0 && !SwitchCommon_GuardedRef(false, before.building, m.building)) why = "the building is not in the world's list";
         SlotEntry& e = m.entries[m.count++];
         e.slot = (unsigned char)i;
         e.has = now.source[i] ? 1 : 0;
         e.source = kNoRef;
-        if (!why && now.source[i] && !GuardedRef(now.source[i], e.source)) why = "the source is not in the world's building list";
+        if (!why && now.source[i] && !SwitchCommon_GuardedRef(false, now.source[i], e.source)) why = "the source is not in the world's building list";
         WriteSlot(before.building, i, before.source[i]);
     }
     if (!m.count) return;
@@ -160,8 +173,46 @@ static void Take(const Slots& before, const char* where)
 // The clicking PC: the tool and the windows
 // ---------------------------------------------------------------------------
 
+static void CollectSlotsBatchPod(
+    const U64* buildings, size_t count, U64 winBld, volatile size_t* ioIdx,
+    Slots* outBatch, size_t maxBatch, size_t* outBatchCount)
+{
+    *outBatchCount = 0;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    size_t written = 0;
+    __try {
+        for (; idx < count && written < maxBatch; ++idx) {
+            cur = idx;
+            const U64 b = buildings[idx];
+            if (!b || b == winBld) continue;
+            const U64* v = (const U64*)(b + SLOTS_OFFSET);
+            const U64 vb = v[0];
+            const U64 ve = v[1];
+            if (!vb || ve < vb || ((ve - vb) % SLOT_BYTES) != 0) continue;
+            const U64 n = (ve - vb) / SLOT_BYTES;
+            if (n == 0 || n > MAX_SLOTS) continue;
+            Slots& dst = outBatch[written];
+            dst.building = b;
+            dst.count = (unsigned)n;
+            for (unsigned i = 0; i < dst.count; ++i) {
+                dst.source[i] = *(const U64*)(vb + (U64)i * SLOT_BYTES);
+            }
+            ++written;
+        }
+        *ioIdx = idx;
+        *outBatchCount = written;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *outBatchCount = written;
+    }
+    DiagLog_EndSafeSeh();
+}
+
 static void CollectSlotBuildings(std::vector<Slots>& out)
 {
+    static thread_local std::vector<U64> t_buildingsScratch;
     out.clear();
     U64 winBld = 0;
     if (SafeMemcpyPod(&winBld, World() + WINDOW_BUILDING, 8) && winBld) {
@@ -170,18 +221,25 @@ static void CollectSlotBuildings(std::vector<Slots>& out)
     }
     const unsigned offsets[2] = { BUILDINGS_OFFSET, CONSTRUCTIONS_OFFSET };
     for (int idx = 0; idx < 2; idx++) {
-        U64 v[2] = {};
-        if (!SafeMemcpyPod(v, World() + offsets[idx], 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) % 8 || (v[1] - v[0]) / 8 > MAX_LIST) continue;
-        size_t count = (size_t)((v[1] - v[0]) / 8);
-        if (!count) continue;
-        std::vector<U64> buildings(count);
-        if (!SafeMemcpyPod(buildings.data(), (const void*)v[0], count * 8)) continue;
-        for (U64 b : buildings) {
-            if (!b || b == winBld || out.size() >= MAX_BUILDINGS) continue;
-            Slots s;
-            if (ReadSlots(b, s) && s.count) out.push_back(s);
+        bool wasNonEmpty = false;
+        if (!SwitchCommon_ReadPtrVector(World() + offsets[idx], MAX_LIST, t_buildingsScratch, &wasNonEmpty) ||
+            !wasNonEmpty) {
+            continue;
+        }
+        const size_t count = t_buildingsScratch.size();
+        volatile size_t i = 0;
+        while (i < count && out.size() < MAX_BUILDINGS) {
+            Slots batch[16];
+            size_t batchCount = 0;
+            const size_t avail = (std::min)((size_t)16, (size_t)MAX_BUILDINGS - out.size());
+            CollectSlotsBatchPod(t_buildingsScratch.data(), count, winBld, &i, batch, avail, &batchCount);
+            for (size_t k = 0; k < batchCount; ++k) {
+                out.push_back(batch[k]);
+            }
         }
     }
+    g_collectCount.fetch_add(1ull, std::memory_order_relaxed);
+    g_lastListScratchCap.store(t_buildingsScratch.capacity(), std::memory_order_relaxed);
 }
 
 U64 SourceSlots_AddSourceTool(U64 world, U64 a2)
@@ -198,13 +256,14 @@ U64 SourceSlots_AddSourceTool(U64 world, U64 a2)
 
 U64 SourceSlots_CopySourceTool(U64 world, U64 a2)
 {
+    static thread_local std::vector<Slots> t_copyBeforeList;
     ToolFn tool = g_testToolOverride ? g_testToolOverride : (ToolFn)(g_exeBase + COPY_SOURCE_RVA);
     if (!Commands_TakeLocal() || !SourceSlots_Ready()) return tool(world, a2);
-    std::vector<Slots> beforeList;
-    CollectSlotBuildings(beforeList);
+    CollectSlotBuildings(t_copyBeforeList);
     U64 r = tool(world, a2);
-    for (const Slots& b : beforeList)
+    for (const Slots& b : t_copyBeforeList)
         Take(b, "the copy-source tool");
+    t_copyBeforeList.clear();
     return r;
 }
 
@@ -212,19 +271,11 @@ static std::vector<Slots> g_held;
 static bool g_taken = false;
 static unsigned long long g_epoch = 0;
 
-static bool Clicked()
-{
-    float wheel = 0.0f;
-    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
-           (isfinite(wheel) && wheel != 0.0f);
-}
-
 void SourceSlots_Before(bool simBusy)
 {
     g_taken = false;
     g_held.clear();
-    if (simBusy || !Commands_TakeUi() || !Clicked()) return;
+    if (simBusy || !Commands_TakeUi() || !SwitchCommon_Clicked(g_exeBase)) return;
     CollectSlotBuildings(g_held);
     g_epoch = Commands_ApplyEpoch();
     g_taken = !g_held.empty();
@@ -237,6 +288,13 @@ void SourceSlots_After(bool simBusy)
     if (!simBusy && Commands_TakeUi() && Commands_ApplyEpoch() == g_epoch)
         for (const Slots& s : g_held) Take(s, "a window");
     g_held.clear();
+}
+
+void SourceSlots_GetStatsForTest(SourceSlotsPerfStatsForTest* out)
+{
+    if (!out) return;
+    out->collectCount = g_collectCount.load(std::memory_order_relaxed);
+    out->listScratchCapacity = g_lastListScratchCap.load(std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------

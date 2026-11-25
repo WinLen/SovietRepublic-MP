@@ -9,6 +9,7 @@
 #include "../world_sync/buildings/build_sync.h"
 #include "../ui/sync_block.h"
 #include "../lockstep/commands.h"
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <math.h>
@@ -104,6 +105,7 @@ static int CategoryOf(BYTE* b)
 // Address of the field on this building, or null (no storage slot 0).
 static BYTE* FieldAddress(BYTE* b, const WatchedField& f)
 {
+    if (!b) return nullptr;
     if (f.kind == FIELD_SLOT0) {
         BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
         BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
@@ -131,39 +133,41 @@ static bool ReadField(BYTE* b, const WatchedField& f, unsigned long long* out)
     return ok;
 }
 
+// Storage slot settings of one slot (no SEH; caller must wrap in __try).
+static int ReadSlotEntriesRaw(BYTE* exeBase, BYTE* b, int slot, float* data)
+{
+    BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+    BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
+    if (!slots || (slotsEnd - slots) / STORAGE_SLOT_SIZE <= slot) return -1;
+    BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
+    BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
+    BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
+    if (!e || ee < e) return 0;
+    int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
+    if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
+    BYTE* world = exeBase + WORLD_RVA;
+    BYTE* cbeg = *(BYTE**)(world + 0xC2B0);
+    BYTE* cend = *(BYTE**)(world + 0xC2B8);
+    for (int i = 0; i < n; i++) {
+        BYTE* res = *(BYTE**)(e + i * SLOT_ENTRY_SIZE);
+        float resIdx = -1.0f;
+        if (res && cbeg && cend && res >= cbeg && res < cend && ((res - cbeg) % 0x340) == 0) {
+            resIdx = (float)((res - cbeg) / 0x340);
+        }
+        data[i * 3 + 0] = resIdx;
+        data[i * 3 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
+        data[i * 3 + 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
+    }
+    return n;
+}
+
 // Storage slot settings of one slot: count and (resIndex, share, enabled) triplets.
 static int ReadSlot(BYTE* b, int slot, float* data)
 {
     int ret = -1;
     DiagLog_BeginSafeSeh();
     __try {
-        BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
-        BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
-        if (slots && (slotsEnd - slots) / STORAGE_SLOT_SIZE > slot) {
-            BYTE* s = slots + slot * STORAGE_SLOT_SIZE;
-            BYTE* e = *(BYTE**)(s + SLOT_SETTINGS_OFFSET);
-            BYTE* ee = *(BYTE**)(s + SLOT_SETTINGS_OFFSET + 8);
-            if (e && ee >= e) {
-                int n = (int)((ee - e) / SLOT_ENTRY_SIZE);
-                if (n > SETTINGS_MAX_SLOT_ENTRIES) n = SETTINGS_MAX_SLOT_ENTRIES;
-                BYTE* world = g_exeBase + WORLD_RVA;
-                BYTE* cbeg = *(BYTE**)(world + 0xC2B0);
-                BYTE* cend = *(BYTE**)(world + 0xC2B8);
-                for (int i = 0; i < n; i++) {
-                    BYTE* res = *(BYTE**)(e + i * SLOT_ENTRY_SIZE);
-                    float resIdx = -1.0f;
-                    if (res && cbeg && cend && res >= cbeg && res < cend && ((res - cbeg) % 0x340) == 0) {
-                        resIdx = (float)((res - cbeg) / 0x340);
-                    }
-                    data[i * 3 + 0] = resIdx;
-                    data[i * 3 + 1] = *(float*)(e + i * SLOT_ENTRY_SIZE + 8);
-                    data[i * 3 + 2] = *(float*)(e + i * SLOT_ENTRY_SIZE + 0xC);
-                }
-                ret = n;
-            } else {
-                ret = 0;
-            }
-        }
+        ret = ReadSlotEntriesRaw(g_exeBase, b, slot, data);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         ret = -1;
     }
@@ -197,38 +201,67 @@ static unsigned long long HashSlot(const float* data, int n)
     return h;
 }
 
-// Snapshot of the building list (pointers only valid for this scan).
-static int CopyBuildings(BYTE** out, int max)
+static void ReadBuildingVecBoundsPod(BYTE* exeBase, BYTE** outBeg[2], BYTE** outEnd[2])
 {
-    int n = 0;
-    const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
-    const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
+    static const unsigned int kBeginRvas[2] = { VEC_BUILDINGS_BEGIN_RVA, VEC_CONSTRUCTIONS_BEGIN_RVA };
+    static const unsigned int kEndRvas[2]   = { VEC_BUILDINGS_END_RVA,   VEC_CONSTRUCTIONS_END_RVA };
     for (int v = 0; v < 2; ++v) {
-        BYTE** it = nullptr;
-        BYTE** end = nullptr;
-        DiagLog_BeginSafeSeh();
-        __try {
-            it = *(BYTE***)(g_exeBase + kBeginRvas[v]);
-            end = *(BYTE***)(g_exeBase + kEndRvas[v]);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            it = nullptr;
-            end = nullptr;
-        }
-        DiagLog_EndSafeSeh();
-        if (!it || !end || end < it || (size_t)(end - it) > 200000) continue;
-
-        for (; it < end && n < max; ++it) {
-            BYTE* b = nullptr;
-            DiagLog_BeginSafeSeh();
-            __try {
-                b = *it;
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                b = nullptr;
+        outBeg[v] = nullptr;
+        outEnd[v] = nullptr;
+    }
+    if (!exeBase) return;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (int v = 0; v < 2; ++v) {
+            BYTE** it = *(BYTE***)(exeBase + kBeginRvas[v]);
+            BYTE** end = *(BYTE***)(exeBase + kEndRvas[v]);
+            if (it && end && end >= it && (size_t)(end - it) <= 200000u) {
+                outBeg[v] = it;
+                outEnd[v] = end;
             }
-            DiagLog_EndSafeSeh();
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void CopyValidBuildingPtrsPod(BYTE** it, BYTE** end, BYTE** out, int* ioCount, int maxCount)
+{
+    if (!it || !end || end <= it || !out || !ioCount) return;
+    DiagLog_BeginSafeSeh();
+    int n = *ioCount;
+    __try {
+        for (; it < end && n < maxCount; ++it) {
+            BYTE* b = *it;
             if (b) out[n++] = b;
         }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
+    *ioCount = n;
+    DiagLog_EndSafeSeh();
+}
+
+// Snapshot of the building list (actual-size resize, coalesced SEH).
+static int CopyBuildingsToVector(std::vector<BYTE*>& out)
+{
+    BYTE** begs[2] = { nullptr, nullptr };
+    BYTE** ends[2] = { nullptr, nullptr };
+    ReadBuildingVecBoundsPod(g_exeBase, begs, ends);
+    size_t totalCap = 0;
+    for (int v = 0; v < 2; ++v) {
+        if (begs[v] && ends[v] > begs[v]) {
+            totalCap += (size_t)(ends[v] - begs[v]);
+        }
+    }
+    if (totalCap > 200000u) totalCap = 200000u;
+    out.resize(totalCap);
+    int n = 0;
+    for (int v = 0; v < 2 && n < (int)totalCap; ++v) {
+        if (begs[v] && ends[v] > begs[v]) {
+            CopyValidBuildingPtrsPod(begs[v], ends[v], out.data(), &n, (int)totalCap);
+        }
+    }
+    out.resize((size_t)n);
     return n;
 }
 
@@ -385,26 +418,30 @@ static bool WriteSlot(BYTE* b, int slot, const float* data, int n)
 // TV/Radio Broadcast & Orphanage/Prison Upbringing Composite Settings
 // ---------------------------------------------------------------------------
 
+static BYTE* FindStudioForBuildingRaw(BYTE* exeBase, BYTE* building)
+{
+    if (!exeBase || !building) return nullptr;
+    BYTE* world = exeBase + WORLD_RVA;
+    BYTE** it = *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET);
+    BYTE** end = *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET);
+    if (it && end && end >= it && (size_t)(end - it) <= 50000) {
+        for (; it < end; ++it) {
+            BYTE* studio = *it;
+            if (!studio) continue;
+            BYTE* bld = *(BYTE**)(studio + STUDIO_BUILDING_OFFSET);
+            if (bld == building) return studio;
+        }
+    }
+    return nullptr;
+}
+
 static BYTE* FindStudioForBuilding(BYTE* building)
 {
     if (!building) return nullptr;
     BYTE* studioFound = nullptr;
     DiagLog_BeginSafeSeh();
     __try {
-        BYTE* world = g_exeBase + WORLD_RVA;
-        BYTE** it = *(BYTE***)(world + WORLD_STUDIOS_BEGIN_OFFSET);
-        BYTE** end = *(BYTE***)(world + WORLD_STUDIOS_END_OFFSET);
-        if (it && end && end >= it && (size_t)(end - it) <= 50000) {
-            for (; it < end; ++it) {
-                BYTE* studio = *it;
-                if (!studio) continue;
-                BYTE* bld = *(BYTE**)(studio + STUDIO_BUILDING_OFFSET);
-                if (bld == building) {
-                    studioFound = studio;
-                    break;
-                }
-            }
-        }
+        studioFound = FindStudioForBuildingRaw(g_exeBase, building);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         studioFound = nullptr;
     }
@@ -604,8 +641,7 @@ static bool CountChange(FieldState& st, int field, ULONGLONG now)
 
 static void Scan(bool sendChanges)
 {
-    g_scanList.resize(200000);
-    int n = CopyBuildings(g_scanList.data(), (int)g_scanList.size());
+    int n = CopyBuildingsToVector(g_scanList);
     ULONGLONG now = GetTickCount64();
     bool byPlayer = ClickedRecently(now);
     for (auto& kv : g_states) kv.second.seen = false;
@@ -801,6 +837,7 @@ struct LsBuilding {
     unsigned hasMask;           // bit per field that applies and was readable
     unsigned short pay;         // +608/+609
     unsigned char stopped;      // +879
+    bool hasPayStop;
     int slots;
     int slotCount[MAX_SLOTS];
     size_t slotAt;              // first float of slot 0 in g_lsSlotData
@@ -809,46 +846,167 @@ struct LsBuilding {
 };
 static std::vector<LsBuilding> g_lsBuildings;
 static std::vector<float> g_lsSlotData;
+static std::vector<float> g_lsSlotScratch;
 static std::vector<BYTE*> g_lsList;
 
-static bool ReadConstruction(BYTE* b, unsigned short* pay, unsigned char* stopped)
+static bool ReadLsBuildingIdentityAndPayPod(BYTE* b, LsBuilding* s)
+{
+    bool identityOk = false;
+    __try {
+        s->category = CategoryOf(b);
+        memcpy(s->pos, b + BLD_POS_OFFSET, 12);
+        identityOk = true;
+        s->pay = *(unsigned short*)(b + BLD_PAY_OFFSET);
+        s->stopped = *(b + BLD_STOPPED_OFFSET);
+        s->hasPayStop = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (!identityOk) {
+            return false;
+        }
+        s->pay = 0;
+        s->stopped = 0;
+        s->hasPayStop = false;
+    }
+    return identityOk;
+}
+
+static void ReadLsBuildingFieldsPod(BYTE* b, LsBuilding* s)
+{
+    if (!b || !s) return;
+    int f = 0;
+    while (f < kFieldCount) {
+        volatile int curF = f;
+        __try {
+            for (; f < kFieldCount; ++f) {
+                curF = f;
+                if (!FieldApplies(kFields[f], s->category)) continue;
+                BYTE* p = FieldAddress(b, kFields[f]);
+                if (p) {
+                    s->values[f] = 0;
+                    memcpy(&s->values[f], p, kFields[f].size);
+                    s->hasMask |= (1u << f);
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (curF >= 0 && curF < kFieldCount) {
+                s->hasMask &= ~(1u << curF);
+            }
+            f = curF + 1;
+        }
+    }
+}
+
+static void ReadLsBuildingSlotsPod(
+    BYTE* exeBase, BYTE* b, LsBuilding* s,
+    float* slotBuf, size_t slotBufCapFloats, size_t* outSlotFloats)
+{
+    __try {
+        BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+        BYTE* slotsEnd = *(BYTE**)(b + BLD_STORAGE_OFFSET + 8);
+        if (slots && slotsEnd >= slots) {
+            int sc = (int)((slotsEnd - slots) / STORAGE_SLOT_SIZE);
+            s->slots = sc > MAX_SLOTS ? MAX_SLOTS : sc;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        s->slots = 0;
+        *outSlotFloats = 0;
+        return;
+    }
+
+    size_t writtenFloats = 0;
+    int i = 0;
+    while (i < s->slots) {
+        volatile int curSlot = i;
+        __try {
+            for (; i < s->slots; ++i) {
+                curSlot = i;
+                if (writtenFloats + (size_t)SETTINGS_MAX_SLOT_ENTRIES * 3u > slotBufCapFloats) {
+                    s->slotCount[i] = -1;
+                    continue;
+                }
+                const int n = ReadSlotEntriesRaw(exeBase, b, i, slotBuf + writtenFloats);
+                s->slotCount[i] = n < 0 ? -1 : n;
+                if (n > 0) writtenFloats += (size_t)n * 3u;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            if (curSlot >= 0 && curSlot < MAX_SLOTS) {
+                s->slotCount[curSlot] = -1;
+            }
+            i = curSlot + 1;
+        }
+    }
+    *outSlotFloats = writtenFloats;
+}
+
+static bool ReadLsBuildingCompositePod(BYTE* exeBase, BYTE* b, int category, float outComposite[6])
 {
     bool ok = false;
-    DiagLog_BeginSafeSeh();
-    __try {
-        *pay = *(unsigned short*)(b + BLD_PAY_OFFSET);
-        *stopped = *(b + BLD_STOPPED_OFFSET);
-        ok = true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = false;
+    if (category == 0x4A || category == 0x4C) {
+        __try {
+            memcpy(outComposite, b + BLD_UPBRINGING_SLIDERS_OFFSET, 6 * sizeof(float));
+            ok = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            ok = false;
+        }
+    } else if (category == 0x25) {
+        __try {
+            BYTE* studio = FindStudioForBuildingRaw(exeBase, b);
+            if (studio) {
+                memcpy(outComposite, studio + STUDIO_BROADCAST_SLIDERS_OFFSET, 6 * sizeof(float));
+                ok = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            ok = false;
+        }
     }
-    DiagLog_EndSafeSeh();
     return ok;
+}
+
+static bool ReadLsBuildingPod(
+    BYTE* exeBase, BYTE* b, LsBuilding* s,
+    float* slotBuf, size_t slotBufCapFloats, size_t* outSlotFloats)
+{
+    s->b = b;
+    s->category = -1;
+    memset(s->pos, 0, sizeof(s->pos));
+    s->hasMask = 0;
+    s->pay = 0;
+    s->stopped = 0;
+    s->hasPayStop = false;
+    s->slots = 0;
+    for (int i = 0; i < MAX_SLOTS; ++i) {
+        s->slotCount[i] = -1;
+    }
+    memset(s->composite, 0, sizeof(s->composite));
+    s->hasComposite = false;
+    *outSlotFloats = 0;
+    if (!b || !exeBase) {
+        s->b = nullptr;
+        return false;
+    }
+
+    DiagLog_BeginSafeSeh();
+    if (!ReadLsBuildingIdentityAndPayPod(b, s)) {
+        DiagLog_EndSafeSeh();
+        s->b = nullptr;
+        return false;
+    }
+    ReadLsBuildingFieldsPod(b, s);
+    ReadLsBuildingSlotsPod(exeBase, b, s, slotBuf, slotBufCapFloats, outSlotFloats);
+    s->hasComposite = ReadLsBuildingCompositePod(exeBase, b, s->category, s->composite);
+    DiagLog_EndSafeSeh();
+    return true;
 }
 
 static void ReadLsBuilding(BYTE* b, LsBuilding& s)
 {
-    s.b = b;
-    s.hasMask = 0;
-    s.slots = 0;
-    s.hasComposite = false;
-    memset(s.composite, 0, sizeof(s.composite));
-    if (!ReadIdentity(b, &s.category, s.pos)) return;
-    for (int f = 0; f < kFieldCount; f++)
-        if (FieldApplies(kFields[f], s.category) && ReadField(b, kFields[f], &s.values[f])) s.hasMask |= 1u << f;
-    if (!ReadConstruction(b, &s.pay, &s.stopped)) { s.pay = 0; s.stopped = 0; }
-    s.slots = SlotCount(b);
+    const size_t needFloats = (size_t)MAX_SLOTS * (size_t)SETTINGS_MAX_SLOT_ENTRIES * 3u;
+    if (g_lsSlotScratch.size() < needFloats) g_lsSlotScratch.resize(needFloats);
+    size_t writtenFloats = 0;
     s.slotAt = g_lsSlotData.size();
-    for (int i = 0; i < s.slots; i++) {
-        float data[SETTINGS_MAX_SLOT_ENTRIES * 3];
-        int n = ReadSlot(b, i, data);
-        s.slotCount[i] = n < 0 ? -1 : n;
-        if (n > 0) g_lsSlotData.insert(g_lsSlotData.end(), data, data + n * 3);
-    }
-    if (s.category == 0x4A || s.category == 0x4C) {
-        if (ReadUpbringing(b, s.composite)) s.hasComposite = true;
-    } else if (s.category == 0x25) {
-        if (ReadBroadcast(b, s.composite)) s.hasComposite = true;
+    if (ReadLsBuildingPod(g_exeBase, b, &s, g_lsSlotScratch.data(), g_lsSlotScratch.size(), &writtenFloats) &&
+        writtenFloats > 0) {
+        g_lsSlotData.insert(g_lsSlotData.end(), g_lsSlotScratch.data(), g_lsSlotScratch.data() + writtenFloats);
     }
 }
 
@@ -893,6 +1051,7 @@ void SettingsSync_LockstepReset()
 {
     g_lsBuildings.clear();
     g_lsSlotData.clear();
+    g_lsSlotScratch.clear();
     g_lsList.clear();
     g_states.clear();
     g_pending.clear();
@@ -901,8 +1060,7 @@ void SettingsSync_LockstepReset()
 
 void SettingsSync_LockstepBaseline()
 {
-    g_lsList.resize(200000);
-    int n = CopyBuildings(g_lsList.data(), (int)g_lsList.size());
+    int n = CopyBuildingsToVector(g_lsList);
     g_lsBuildings.resize(n);
     g_lsSlotData.clear();
     for (int i = 0; i < n; i++) ReadLsBuilding(g_lsList[i], g_lsBuildings[i]);
@@ -950,76 +1108,202 @@ static bool CheckControlAllowed(const BYTE* b, const float* pos, bool userIntera
     return false;
 }
 
+struct DetectedBldDiff {
+    int category;
+    float pos[3];
+    unsigned changedFieldMask;
+    unsigned long long newFieldVals[32];
+    bool payChanged;
+    unsigned short newPay;
+    bool stopChanged;
+    unsigned char newStopped;
+    unsigned changedSlotMask;
+    unsigned shapeChangedSlotMask;
+    int slotNewCounts[MAX_SLOTS];
+    size_t slotDataOffsets[MAX_SLOTS];
+    size_t totalSlotFloats;
+    bool compositeChanged;
+    int compositeField;
+    float newComposite[6];
+};
+
+static bool DetectLsBuildingPod(
+    BYTE* exeBase, const LsBuilding* old, const float* oldSlotData, size_t oldSlotDataCount,
+    DetectedBldDiff* diff, float* slotScratch, size_t slotScratchCapFloats)
+{
+    memset(diff, 0, sizeof(*diff));
+    BYTE* b = old->b;
+    if (!b || !exeBase) return false;
+    bool identityMatch = false;
+    bool anyDiff = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        diff->category = CategoryOf(b);
+        memcpy(diff->pos, b + BLD_POS_OFFSET, 12);
+        identityMatch = (diff->category == old->category && memcmp(diff->pos, old->pos, sizeof(diff->pos)) == 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        identityMatch = false;
+    }
+    if (!identityMatch) {
+        DiagLog_EndSafeSeh();
+        return false;
+    }
+
+    if (old->hasPayStop) {
+        __try {
+            const unsigned short pay = *(unsigned short*)(b + BLD_PAY_OFFSET);
+            const unsigned char stopped = *(b + BLD_STOPPED_OFFSET);
+            if (pay != old->pay) {
+                diff->payChanged = true;
+                diff->newPay = pay;
+                anyDiff = true;
+            }
+            if (stopped != old->stopped) {
+                diff->stopChanged = true;
+                diff->newStopped = stopped;
+                anyDiff = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+
+    int f = 0;
+    while (f < kFieldCount) {
+        volatile int curF = f;
+        __try {
+            for (; f < kFieldCount; ++f) {
+                curF = f;
+                if (!(old->hasMask & (1u << f))) continue;
+                BYTE* p = FieldAddress(b, kFields[f]);
+                if (!p) continue;
+                unsigned long long v = 0;
+                memcpy(&v, p, kFields[f].size);
+                if (v != old->values[f]) {
+                    diff->changedFieldMask |= (1u << f);
+                    diff->newFieldVals[f] = v;
+                    anyDiff = true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            f = curF + 1;
+        }
+    }
+
+    volatile size_t slotDataAt = old->slotAt;
+    const int slotLimit = old->slots < MAX_SLOTS ? old->slots : MAX_SLOTS;
+    int sIdx = 0;
+    while (sIdx < slotLimit) {
+        volatile int curSlot = sIdx;
+        __try {
+            for (; sIdx < slotLimit; ++sIdx) {
+                curSlot = sIdx;
+                const int n = old->slotCount[sIdx];
+                if (n < 0) continue;
+                const size_t need = n > 0 ? (size_t)n * 3u : 0u;
+                const size_t at = slotDataAt;
+                if (need > 0 && (!oldSlotData || at + need > oldSlotDataCount)) {
+                    sIdx = slotLimit;
+                    break;
+                }
+                const float* before = need > 0 ? (oldSlotData + at) : nullptr;
+                slotDataAt = at + need;
+                if (diff->totalSlotFloats + (size_t)SETTINGS_MAX_SLOT_ENTRIES * 3u > slotScratchCapFloats) continue;
+                float* tmp = slotScratch + diff->totalSlotFloats;
+                const int nowSlots = ReadSlotEntriesRaw(exeBase, b, sIdx, tmp);
+                if (nowSlots != n) {
+                    if (nowSlots >= 0) {
+                        diff->shapeChangedSlotMask |= (1u << sIdx);
+                        anyDiff = true;
+                    }
+                    continue;
+                }
+                if (n > 0 && before && memcmp(tmp, before, need * sizeof(float)) != 0) {
+                    diff->changedSlotMask |= (1u << sIdx);
+                    diff->slotNewCounts[sIdx] = n;
+                    diff->slotDataOffsets[sIdx] = diff->totalSlotFloats;
+                    diff->totalSlotFloats += need;
+                    anyDiff = true;
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            sIdx = curSlot + 1;
+        }
+    }
+
+    if (old->hasComposite) {
+        float cur[6] = {};
+        if (ReadLsBuildingCompositePod(exeBase, b, old->category, cur) &&
+            memcmp(cur, old->composite, sizeof(cur)) != 0) {
+            diff->compositeField = (old->category == 0x25) ? SETTINGS_FIELD_BROADCAST : SETTINGS_FIELD_UPBRINGING;
+            diff->compositeChanged = true;
+            memcpy(diff->newComposite, cur, sizeof(cur));
+            anyDiff = true;
+        }
+    }
+
+    DiagLog_EndSafeSeh();
+    return anyDiff;
+}
+
 void SettingsSync_LockstepDetect()
 {
     ULONGLONG now = GetTickCount64();
     bool userInteracted = ClickedRecently(now) || Clicked();
+    const size_t needFloats = (size_t)MAX_SLOTS * (size_t)SETTINGS_MAX_SLOT_ENTRIES * 3u;
+    if (g_lsSlotScratch.size() < needFloats) g_lsSlotScratch.resize(needFloats);
+    const size_t oldSlotDataCount = g_lsSlotData.size();
+    const float* oldSlotDataPtr = oldSlotDataCount > 0 ? g_lsSlotData.data() : nullptr;
     for (const LsBuilding& old : g_lsBuildings) {
         if (!old.b) continue;
+        DetectedBldDiff diff;
+        if (!DetectLsBuildingPod(g_exeBase, &old, oldSlotDataPtr, oldSlotDataCount, &diff,
+                                 g_lsSlotScratch.data(), g_lsSlotScratch.size())) {
+            continue;
+        }
         BYTE* b = old.b;
-        int category;
-        float pos[3];
-        // Gone or replaced since the baseline (a command may have demolished it).
-        if (!ReadIdentity(b, &category, pos) || category != old.category || memcmp(pos, old.pos, sizeof(pos)) != 0) continue;
         for (int f = 0; f < kFieldCount; f++) {
-            if (!(old.hasMask & (1u << f))) continue;
-            unsigned long long v;
-            if (!ReadField(b, kFields[f], &v) || v == old.values[f]) continue;
-            if (CheckControlAllowed(b, pos, userInteracted))
-                SubmitSetting(old, f, v, 0, nullptr, 0);
+            if (!(diff.changedFieldMask & (1u << f))) continue;
+            if (CheckControlAllowed(b, diff.pos, userInteracted))
+                SubmitSetting(old, f, diff.newFieldVals[f], 0, nullptr, 0);
             BYTE* p = FieldAddress(b, kFields[f]);
             if (p) RawWrite(p, &old.values[f], kFields[f].size);
         }
-        unsigned short pay;
-        unsigned char stopped;
-        if (ReadConstruction(b, &pay, &stopped)) {
-            if (pay != old.pay) {
-                if (CheckControlAllowed(b, pos, userInteracted))
-                    SubmitSetting(old, SETTINGS_FIELD_PAY, pay, 0, nullptr, 0);
-                RawWrite(b + BLD_PAY_OFFSET, &old.pay, 2);
-            }
-            if (stopped != old.stopped) {
-                if (CheckControlAllowed(b, pos, userInteracted))
-                    SubmitSetting(old, SETTINGS_FIELD_STOP, stopped, 0, nullptr, 0);
-                RawWrite(b + BLD_STOPPED_OFFSET, &old.stopped, 1);
-            }
+        if (diff.payChanged) {
+            if (CheckControlAllowed(b, diff.pos, userInteracted))
+                SubmitSetting(old, SETTINGS_FIELD_PAY, diff.newPay, 0, nullptr, 0);
+            RawWrite(b + BLD_PAY_OFFSET, &old.pay, 2);
+        }
+        if (diff.stopChanged) {
+            if (CheckControlAllowed(b, diff.pos, userInteracted))
+                SubmitSetting(old, SETTINGS_FIELD_STOP, diff.newStopped, 0, nullptr, 0);
+            RawWrite(b + BLD_STOPPED_OFFSET, &old.stopped, 1);
         }
         size_t at = old.slotAt;
-        for (int i = 0; i < old.slots; i++) {
+        const int slotLimit = old.slots < MAX_SLOTS ? old.slots : MAX_SLOTS;
+        for (int i = 0; i < slotLimit; i++) {
             int n = old.slotCount[i];
             if (n < 0) continue;
-            float data[SETTINGS_MAX_SLOT_ENTRIES * 3];
-            int nowSlots = ReadSlot(b, i, data);
-            const float* before = g_lsSlotData.data() + at;
-            at += n > 0 ? n * 3 : 0;
-            if (nowSlots != n || n == 0 || memcmp(data, before, n * 3 * sizeof(float)) == 0) {
-                if (nowSlots != n && nowSlots >= 0)
-                    Logf("republicmp  SETTINGS: storage slot %d changed its resource list locally - not carried", i);
+            const size_t need = n > 0 ? (size_t)n * 3u : 0u;
+            if (need > 0 && (!oldSlotDataPtr || at + need > oldSlotDataCount)) break;
+            const float* before = need > 0 ? (oldSlotDataPtr + at) : nullptr;
+            at += need;
+            if (diff.shapeChangedSlotMask & (1u << i)) {
+                Logf("republicmp  SETTINGS: storage slot %d changed its resource list locally - not carried", i);
                 continue;
             }
-            if (CheckControlAllowed(b, pos, userInteracted))
-                SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, data, n);
-            WriteSlot(b, i, before, n);
+            if (!(diff.changedSlotMask & (1u << i))) continue;
+            const float* newSlotPtr = g_lsSlotScratch.data() + diff.slotDataOffsets[i];
+            if (CheckControlAllowed(b, diff.pos, userInteracted))
+                SubmitSetting(old, SETTINGS_FIELD_SLOT, 0, i, newSlotPtr, n);
+            if (before || n == 0) WriteSlot(b, i, before, n);
         }
-        if (old.hasComposite) {
-            float cur[6];
-            bool ok = false;
-            int field = 0;
-            if (old.category == 0x4A || old.category == 0x4C) {
-                ok = ReadUpbringing(b, cur);
-                field = SETTINGS_FIELD_UPBRINGING;
-            } else if (old.category == 0x25) {
-                ok = ReadBroadcast(b, cur);
-                field = SETTINGS_FIELD_BROADCAST;
-            }
-            if (ok && memcmp(cur, old.composite, sizeof(cur)) != 0) {
-                if (CheckControlAllowed(b, pos, userInteracted))
-                    SubmitSetting(old, field, 0, 0, cur, 6);
-                if (field == SETTINGS_FIELD_UPBRINGING)
-                    WriteUpbringing(b, old.composite);
-                else
-                    WriteBroadcast(b, old.composite);
-            }
+        if (diff.compositeChanged) {
+            if (CheckControlAllowed(b, diff.pos, userInteracted))
+                SubmitSetting(old, diff.compositeField, 0, 0, diff.newComposite, 6);
+            if (diff.compositeField == SETTINGS_FIELD_UPBRINGING)
+                WriteUpbringing(b, old.composite);
+            else
+                WriteBroadcast(b, old.composite);
         }
     }
     CitizenDestinations_LockstepDetect();
@@ -1186,8 +1470,7 @@ static void LogDiffRange(char* line, size_t lineSize, const unsigned char* was, 
 
 static void FieldDiffScan(bool byPlayer)
 {
-    g_diffList.resize(200000);
-    int n = CopyBuildings(g_diffList.data(), (int)g_diffList.size());
+    int n = CopyBuildingsToVector(g_diffList);
     for (auto& kv : g_diff) kv.second.seen = false;
     std::vector<unsigned char> cur(FIELD_DIFF_BYTES);
     for (int i = 0; i < n; i++) {

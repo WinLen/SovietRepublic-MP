@@ -75,6 +75,17 @@ static void NetworkEnableKeepalive(SOCKET sock)
         Logf("republicmp  NETWORK: SIO_KEEPALIVE_VALS failed, WSAGetLastError=%d", WSAGetLastError());
 }
 
+void NetworkEnableNoDelay(SOCKET sock)
+{
+    if (sock == INVALID_SOCKET) return;
+    if (SteamP2P_IsSteamSocket(sock)) return;
+    BOOL noDelay = TRUE;
+    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
+                   reinterpret_cast<const char*>(&noDelay), sizeof(noDelay)) == SOCKET_ERROR) {
+        Logf("republicmp  NETWORK: setsockopt(TCP_NODELAY) failed, WSAGetLastError=%d", WSAGetLastError());
+    }
+}
+
 SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD ioTimeoutMs, volatile bool* cancelFlag)
 {
     SteamP2P_PrepareAccept(port);
@@ -175,6 +186,7 @@ SOCKET NetworkHostAcceptOne(unsigned short port, DWORD acceptTimeoutMs, DWORD io
 
     NetworkSetSocketTimeouts(clientSock, ioTimeoutMs);
     NetworkEnableKeepalive(clientSock);
+    NetworkEnableNoDelay(clientSock);
     return clientSock;
 }
 
@@ -469,6 +481,7 @@ SOCKET NetworkConnect(const char* hostIp, unsigned short port, DWORD connectTime
     Logf("republicmp  NETWORK: connected to %s:%u", connectHost, effectivePort);
     NetworkSetSocketTimeouts(sock, ioTimeoutMs);
     NetworkEnableKeepalive(sock);
+    NetworkEnableNoDelay(sock);
     return sock;
 }
 

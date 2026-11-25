@@ -764,7 +764,8 @@ static void DrawWorkshopDownloadModal(const ImGuiIO& io)
                               IM_COL32(112, 22, 20, 255), headerTitle, subTitle, &winW)) {
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.05f, 0.04f, 0.88f));
-        if (ImGui::BeginChild("##ws_dl_inner", ImVec2(winW - 40.0f, 0.0f), true, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::BeginChild("##ws_dl_inner", ImVec2(winW - 40.0f, 0.0f),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
             if (prog.allCompleted) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.40f, 0.90f, 0.40f, 1.0f));
                 ImGui::TextUnformatted(Tr("✔ ВСЕ МОДЫ УСПЕШНО ЗАГРУЖЕНЫ ИЗ STEAM WORKSHOP!",
@@ -871,14 +872,15 @@ static void DrawClientHostLostModal(const ImGuiIO& io)
     const char* subTitle = Tr("СЕРВЕР ЗАКРЫЛСЯ ИЛИ ОТКЛЮЧИЛСЯ — СИМУЛЯЦИЯ ПРИОСТАНОВЛЕНА",
                               "HOST DISCONNECTED OR CRASHED — SIMULATION HELD ON PAUSE");
 
-    float winW = 740.0f;
-    if (!BeginGosplanModalCard(io, "##republicmp_client_host_lost_card", 740.0f,
+    float winW = 780.0f;
+    if (!BeginGosplanModalCard(io, "##republicmp_client_host_lost_card", 780.0f,
                                IM_COL32(138, 22, 20, 255), headerTitle, subTitle, &winW)) {
         return;
     }
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.05f, 0.04f, 0.90f));
-    if (ImGui::BeginChild("##host_lost_inner", ImVec2(winW - 40.0f, 0.0f), true, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginChild("##host_lost_inner", ImVec2(winW - 40.0f, 0.0f),
+                          ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
         const char* displayHost = info.hostLabel[0] ? info.hostLabel
                                   : (info.hostAddress[0] ? info.hostAddress : Tr("неизвестно", "unknown"));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.85f, 0.38f, 1.0f));
@@ -917,29 +919,27 @@ static void DrawClientHostLostModal(const ImGuiIO& io)
         ImGui::Separator();
         ImGui::Spacing();
 
-        const float innerW = winW - 60.0f;
+        const float availW = ImGui::GetContentRegionAvail().x;
+        const float innerW = (availW > 120.0f) ? availW : (winW - 80.0f);
         const float btnGap = 10.0f;
         const float btnW = (innerW - btnGap * 2.0f) / 3.0f;
 
         PushSovietButtonStyle(true);
-        if (ImGui::Button(Tr("Переподключиться к хосту", "Reconnect to Host"), ImVec2(btnW, 38.0f))) {
-            char reconnectAddr[64] = {};
-            strncpy_s(reconnectAddr, sizeof(reconnectAddr), info.hostAddress, _TRUNCATE);
-            SaveSync_DismissClientHostLost();
-            SaveSync_StartClient(reconnectAddr[0] ? reconnectAddr : nullptr);
+        if (ImGui::Button(Tr("Переподключиться к хосту", "Reconnect to Host"), ImVec2(btnW, 40.0f))) {
+            SaveSync_ReconnectAfterHostLost();
         }
         PopSovietButtonStyle();
 
         ImGui::SameLine(0.0f, btnGap);
         PushSovietButtonStyle(false);
-        if (ImGui::Button(Tr("Выйти в главное меню", "Exit to Main Menu"), ImVec2(btnW, 38.0f))) {
+        if (ImGui::Button(Tr("Выйти в главное меню", "Exit to Main Menu"), ImVec2(btnW, 40.0f))) {
             SaveSync_ExitToMainMenu();
         }
         PopSovietButtonStyle();
 
         ImGui::SameLine(0.0f, btnGap);
         PushSovietButtonStyle(false);
-        if (ImGui::Button(Tr("Продолжить без сети", "Continue Offline"), ImVec2(btnW, 38.0f))) {
+        if (ImGui::Button(Tr("Продолжить без сети", "Continue Offline"), ImVec2(btnW, 40.0f))) {
             SaveSync_DismissClientHostLost();
             EnsureGameUnpaused();
             TwoStates_AddToast(Tr("Вы продолжаете игру локально (оффлайн)", "Continuing offline in singleplayer"), 0);

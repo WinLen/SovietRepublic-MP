@@ -38,6 +38,7 @@ void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, f
 
 // Test helper: builds a wire packet into outBuf (returns true if non-empty).
 bool VehicleSoftSync_BuildPacketForTest(void* outBuf, size_t maxBytes, size_t* outSize, bool immediate);
+bool VehicleSoftSync_BuildExactPacketForTest(void* outBuf, size_t maxBytes, size_t* outSize);
 
 struct VehicleSoftSyncDiagStats {
     unsigned long long batchesSent;

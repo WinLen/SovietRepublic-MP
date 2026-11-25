@@ -14,14 +14,11 @@
 //
 // At speed 2 the main loop multiplies the game timer by (smaller = faster):
 //   0.35  fast (>>)
-//   0.05  "Hyper"  - turbo != 0, or left Ctrl + Numpad1 held
-//   0.01  "Plaid"  - hold flag set, or left Ctrl + Numpad2 held
-// The keys are read straight from the C3D_INPUT key bytes (exe+0xA54B90 +
-// 0x1d / 0x4f / 0x50) every frame, so Hyper/Plaid only ever speed up the
-// machine whose player holds them. Multiplayer: each side sends its current
-// boost (none / Hyper / Plaid) when it changes; a side that is not boosting
-// itself applies the other side's boost - Hyper through turbo (its previous
-// value restored afterwards), Plaid through the hold flag, re-set every frame.
+//   0.05  "Hyper"  - turbo != 0, or left Ctrl + Numpad1 held (max allowed MP speed)
+//   0.01  "Plaid"  - disabled in multiplayer (LCtrl+Numpad2 ignored; [>>>] hold capped at Hyper)
+// Multiplayer: each side sends its current boost (none / Hyper) when it changes;
+// a side that is not boosting itself applies the other side's Hyper boost through
+// turbo (its previous value restored afterwards).
 //
 // Multiplayer: the host owns the speed. The host's speed is sent to the
 // client whenever it changes; a change the client makes is applied locally
@@ -66,7 +63,7 @@ void EnsureGameUnpaused(); // idempotent
 
 // Per-frame (game thread, Present hook, after BuildSync_Tick): detects local
 // speed changes and sends them (host: SET, client: REQUEST), sends the local
-// Hyper/Plaid boost and applies the other side's.
+// Hyper boost and applies the other side's.
 void GameSpeed_SyncTick();
 
 // A speed message from the other side (game thread, from BuildSync_Tick).

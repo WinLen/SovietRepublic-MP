@@ -6,7 +6,6 @@
 #include "../core/safe_mem.h"
 #include <vector>
 #include <new>
-#include <unordered_set>
 #include <unordered_map>
 #include <algorithm>
 #include <string.h>
@@ -36,12 +35,77 @@ static bool Read(const void* at, void* out, size_t n)
     return ok;
 }
 
+static bool IsHeapPtrCandidate(unsigned long long v)
+{
+    return v >= (1ull << 32) && v < 0x800000000000ull && (v & 7) == 0;
+}
+
 static bool HeapPointer(unsigned long long v)
 {
-    if (v < (1ull << 32) || v >= 0x800000000000ull || (v & 7)) return false;
+    if (!IsHeapPtrCandidate(v)) return false;
     unsigned long long probe = 0;
     return Read((const void*)v, &probe, sizeof(probe));
 }
+
+struct FlatPtrSet {
+    std::vector<BYTE*> slots;
+    size_t count = 0;
+
+    void Clear()
+    {
+        slots.clear();
+        count = 0;
+    }
+
+    void Reset(size_t expectedItems = 64)
+    {
+        size_t targetCap = 128;
+        const size_t minCap = (expectedItems < 16) ? 64 : (expectedItems * 2);
+        while (targetCap < minCap && targetCap < (1u << 20)) {
+            targetCap <<= 1;
+        }
+        if (slots.size() < targetCap) {
+            slots.assign(targetCap, nullptr);
+        } else if (!slots.empty()) {
+            memset(slots.data(), 0, slots.size() * sizeof(BYTE*));
+        }
+        count = 0;
+    }
+
+    void Grow()
+    {
+        const size_t newCap = slots.empty() ? 128 : (slots.size() * 2);
+        std::vector<BYTE*> next(newCap, nullptr);
+        const size_t mask = newCap - 1;
+        for (BYTE* cur : slots) {
+            if (!cur) continue;
+            size_t idx = (size_t)(((uintptr_t)cur >> 4) * 11400714819323198485ull) & mask;
+            while (next[idx]) idx = (idx + 1) & mask;
+            next[idx] = cur;
+        }
+        slots.swap(next);
+    }
+
+    bool Insert(BYTE* p)
+    {
+        if (!p) return false;
+        if (slots.empty() || (count + 1) * 2 >= slots.size()) {
+            Grow();
+        }
+        const size_t mask = slots.size() - 1;
+        size_t idx = (size_t)(((uintptr_t)p >> 4) * 11400714819323198485ull) & mask;
+        for (;;) {
+            BYTE* cur = slots[idx];
+            if (cur == p) return false;
+            if (!cur) {
+                slots[idx] = p;
+                count++;
+                return true;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+};
 
 // Each VEHICLE (0x1AD8 bytes) contains 5 primary C3D_NODE transforms (0xBC bytes each)
 // saved by VEHICLE::Save (0x6C6770): +0xD60, +0xE1C, +0xED8, +0xF94, +0x1080, plus an
@@ -64,23 +128,19 @@ static int GetActiveVehicleNodeCount(const BYTE* p)
     return (*(const int32_t*)(p + VEH_SIXTH_NODE_ACTIVE_OFFSET) >= 0) ? 6 : 5;
 }
 
-static int GetVehicleWheelCount(const BYTE* p, BYTE** outBegin)
+// Caller MUST invoke inside an active __try block.
+static int GetVehicleWheelCountUnsafe(const BYTE* p, BYTE** outBegin)
 {
     *outBegin = nullptr;
-    uintptr_t begin = 0, end = 0;
-    if (!Read(p + VEH_WHEELS_BEGIN_OFFSET, &begin, sizeof(begin)) ||
-        !Read(p + VEH_WHEELS_END_OFFSET, &end, sizeof(end))) {
-        return 0;
-    }
+    uintptr_t begin = *(const uintptr_t*)(p + VEH_WHEELS_BEGIN_OFFSET);
+    uintptr_t end   = *(const uintptr_t*)(p + VEH_WHEELS_END_OFFSET);
     if (!begin || end <= begin || (end - begin) % VEH_WHEEL_STRUCT_STRIDE != 0) return 0;
     size_t count = (end - begin) / VEH_WHEEL_STRUCT_STRIDE;
     if (count > 64 || !IsPointerLikeX64((uint64_t)begin)) return 0;
     if (count > (size_t)VEH_MAX_WHEELS) count = (size_t)VEH_MAX_WHEELS;
-    uint64_t probe = 0;
-    if (!Read((const void*)begin, &probe, sizeof(probe)) ||
-        !Read((const void*)(begin + count * VEH_WHEEL_STRUCT_STRIDE - sizeof(probe)), &probe, sizeof(probe))) {
-        return 0;
-    }
+    volatile uint64_t probe = *(const uint64_t*)begin;
+    probe ^= *(const uint64_t*)(begin + count * VEH_WHEEL_STRUCT_STRIDE - sizeof(uint64_t));
+    (void)probe;
     *outBegin = (BYTE*)begin;
     return (int)count;
 }
@@ -116,10 +176,21 @@ struct VehicleInterpRecord {
     float currWheelAngle[VEH_MAX_WHEELS];
 };
 
+struct LiveVehicleVisualBackup {
+    BYTE* vehicle;
+    unsigned id;
+    int nodeCount;
+    float nodes[VEH_MAX_NODES][NODE_SNAPSHOT_FLOATS];
+    float steer;
+    float steerTarget;
+    int wheelCount;
+    float wheelAngles[VEH_MAX_WHEELS];
+};
+
 static std::unordered_map<BYTE*, VehicleInterpRecord> g_vehicleInterp;
 static unsigned long long g_interpTick = 0;
 static HeldFrameDiagStats g_hfDiag = {};
-static std::vector<BYTE*> g_camPrepModified;
+static std::vector<LiveVehicleVisualBackup> g_camPrepModified;
 static BYTE g_savedCamMgr[CAM_MGR_STRUCT_BYTES] = {};
 static BYTE g_savedCameraNode[C3D_NODE_BYTE_SIZE] = {};
 static BYTE* g_savedCamPidPtrs[CAM_MGR_PID_COUNT] = {};
@@ -155,12 +226,41 @@ struct BuildingAnimState {
     float stepPerTick;
     bool hasMeasuredStep;
 };
+struct AnimBldSnapshot {
+    BYTE* b;
+    uint32_t listIndex;
+    float maxFrames;
+    float typeSpeed;
+    float curFrame;
+    float fallbackStep;
+};
+struct AnimBldWrite {
+    BYTE* b;
+    float frame;
+};
 static std::unordered_map<BYTE*, BuildingAnimState> g_buildingAnimState;
+static std::vector<AnimBldSnapshot> g_animReadScratch;
+static std::vector<AnimBldWrite> g_animWriteScratch;
+static std::vector<BYTE*> g_animStillScratch;
+static std::vector<BYTE*> g_tickVehListScratch;
+static std::vector<BYTE*> g_tickFollowRootsScratch;
+static std::vector<BYTE*> g_tickQueueScratch;
+static std::vector<BYTE*> g_tickAttachedScratch;
+static FlatPtrSet g_tickVisitedScratch;
+static void ClearViewCaches();
 
 void HeldFrame_Reset()
 {
     g_vehicleInterp.clear();
     g_buildingAnimState.clear();
+    g_animReadScratch.clear();
+    g_animWriteScratch.clear();
+    g_animStillScratch.clear();
+    g_tickVehListScratch.clear();
+    g_tickFollowRootsScratch.clear();
+    g_tickQueueScratch.clear();
+    g_tickAttachedScratch.clear();
+    g_tickVisitedScratch.Clear();
     g_interpTick = 0;
     memset(&g_hfDiag, 0, sizeof(g_hfDiag));
     g_camPrepModified.clear();
@@ -175,6 +275,7 @@ void HeldFrame_Reset()
     g_savedCamFps = 60.0f;
     g_hasCamSnapshot = false;
     g_hasSavedCameraNode = false;
+    ClearViewCaches();
 }
 
 void HeldFrame_GetDiagStats(HeldFrameDiagStats* out)
@@ -315,7 +416,7 @@ static void InitVehicleInterpRecord(VehicleInterpRecord& rec, const BYTE* p, uns
     rec.currSteer = rec.prevSteer;
     rec.currSteerTarget = isfinite(steerTarget) ? steerTarget : rec.currSteer;
     BYTE* wheelBegin = nullptr;
-    rec.wheelCount = GetVehicleWheelCount(p, &wheelBegin);
+    rec.wheelCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
     for (int w = 0; w < rec.wheelCount; w++) {
         float ang = *(const float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE);
         rec.prevWheelAngle[w] = isfinite(ang) ? ang : 0.0f;
@@ -347,7 +448,7 @@ static void AdvanceVehicleSteerAndWheels(VehicleInterpRecord& rec, BYTE* p)
     }
 
     BYTE* wheelBegin = nullptr;
-    int wCount = GetVehicleWheelCount(p, &wheelBegin);
+    int wCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
     if (wCount != rec.wheelCount) {
         rec.wheelCount = wCount;
         for (int w = 0; w < wCount; w++) {
@@ -360,6 +461,33 @@ static void AdvanceVehicleSteerAndWheels(VehicleInterpRecord& rec, BYTE* p)
             rec.prevWheelAngle[w] = rec.currWheelAngle[w];
             float ang = *(const float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE);
             rec.currWheelAngle[w] = isfinite(ang) ? ang : rec.prevWheelAngle[w];
+        }
+    }
+}
+
+static void RefreshVehicleCurrSnapshot(VehicleInterpRecord& rec, const BYTE* p, int nNodes)
+{
+    for (int k = 0; k < nNodes; k++) {
+        memcpy(rec.currNode[k], p + kVehicleNodeOffsets[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
+    }
+    float steer = *(const float*)(p + VEH_STEER_CURRENT_OFFSET);
+    float steerTarget = *(const float*)(p + VEH_STEER_TARGET_OFFSET);
+    if (isfinite(steer)) rec.currSteer = steer;
+    if (isfinite(steerTarget)) rec.currSteerTarget = steerTarget;
+
+    BYTE* wheelBegin = nullptr;
+    int wCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
+    if (wCount != rec.wheelCount) {
+        rec.wheelCount = wCount;
+        for (int w = 0; w < wCount; w++) {
+            float ang = *(const float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE);
+            rec.prevWheelAngle[w] = isfinite(ang) ? ang : 0.0f;
+            rec.currWheelAngle[w] = rec.prevWheelAngle[w];
+        }
+    } else {
+        for (int w = 0; w < wCount; w++) {
+            float ang = *(const float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE);
+            if (isfinite(ang)) rec.currWheelAngle[w] = ang;
         }
     }
 }
@@ -377,7 +505,14 @@ static void RecordOneVehicleTick(BYTE* p, unsigned long long tick)
         return;
     }
     VehicleInterpRecord& rec = it->second;
-    if (rec.id == id && rec.currTick == tick) return;
+    if (rec.id == id && rec.currTick == tick) {
+        if (rec.nodeCount != nNodes) {
+            InitVehicleInterpRecord(rec, p, id, tick, nNodes);
+            return;
+        }
+        RefreshVehicleCurrSnapshot(rec, p, nNodes);
+        return;
+    }
     if (rec.id != id || rec.currTick + 1 != tick || rec.nodeCount != nNodes) {
         InitVehicleInterpRecord(rec, p, id, tick, nNodes);
         return;
@@ -496,12 +631,12 @@ static void ReadAttachedVehicleVector(const BYTE* veh, unsigned beginOff, std::v
     }
 }
 
-static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unordered_set<BYTE*>& visited)
+static void RecordVehicleGraph(BYTE* start, unsigned long long tick, FlatPtrSet& visited,
+                               std::vector<BYTE*>& queue, std::vector<BYTE*>& attached)
 {
     if (!start || !IsPointerLikeX64((uint64_t)(uintptr_t)start)) return;
-    std::vector<BYTE*> queue;
-    std::vector<BYTE*> attached;
-    if (visited.insert(start).second) queue.push_back(start);
+    queue.clear();
+    if (visited.Insert(start)) queue.push_back(start);
 
     for (size_t qi = 0; qi < queue.size() && qi < 2048; ++qi) {
         BYTE* curr = queue[qi];
@@ -511,7 +646,7 @@ static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unorde
 
         BYTE* link = nullptr;
         if (Read(curr + VEH_LINK_PTR_OFFSET, &link, sizeof(link)) && link &&
-            IsPointerLikeX64((uint64_t)(uintptr_t)link) && visited.insert(link).second) {
+            IsPointerLikeX64((uint64_t)(uintptr_t)link) && visited.Insert(link)) {
             queue.push_back(link);
         }
 
@@ -519,7 +654,7 @@ static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unorde
 
         BYTE* parent = nullptr;
         if (Read(curr + VEH_PARENT_PTR_OFFSET, &parent, sizeof(parent)) && parent &&
-            IsPointerLikeX64((uint64_t)(uintptr_t)parent) && visited.insert(parent).second) {
+            IsPointerLikeX64((uint64_t)(uintptr_t)parent) && visited.Insert(parent)) {
             queue.push_back(parent);
         }
 
@@ -529,7 +664,7 @@ static void RecordVehicleGraph(BYTE* start, unsigned long long tick, std::unorde
             ReadAttachedVehicleVector(curr, off, attached);
             for (BYTE* child : attached) {
                 if (queue.size() >= 2048) break;
-                if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child) && visited.insert(child).second) {
+                if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child) && visited.Insert(child)) {
                     queue.push_back(child);
                 }
             }
@@ -548,12 +683,12 @@ static bool ReadEngineVehicleList(const void* listAt, std::vector<BYTE*>& outLis
     return Read(v[0], outList.data(), count * sizeof(BYTE*));
 }
 
-static void AddVisibleVehicleTarget(BYTE* p, std::unordered_set<BYTE*>& seen, std::vector<BYTE*>& targets)
+static void AddVisibleVehicleTarget(BYTE* p, FlatPtrSet& seen, std::vector<BYTE*>& targets)
 {
     if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) return;
     uint64_t probe = 0;
     if (!Read(p, &probe, sizeof(probe)) || !Read(p + 0x1AD8 - sizeof(probe), &probe, sizeof(probe))) return;
-    if (seen.insert(p).second) targets.push_back(p);
+    if (seen.Insert(p)) targets.push_back(p);
 }
 
 static void CollectFollowCameraVehicles(std::vector<BYTE*>& outVehicles)
@@ -569,7 +704,8 @@ static void CollectFollowCameraVehicles(std::vector<BYTE*>& outVehicles)
     if (!Read(camMgr + CAM_MGR_FOLLOW_ACTIVE_OFF, &followActive, sizeof(followActive)) || !followActive) {
         return;
     }
-    std::unordered_set<BYTE*> seen;
+    FlatPtrSet seen;
+    seen.Reset(16);
     BYTE* rideVeh = nullptr;
     if (Read(camMgr + CAM_MGR_RIDE_VEH_PTR_OFF, &rideVeh, sizeof(rideVeh)) && rideVeh) {
         AddVisibleVehicleTarget(rideVeh, seen, outVehicles);
@@ -595,18 +731,16 @@ static void CollectFollowCameraVehicles(std::vector<BYTE*>& outVehicles)
 void HeldFrame_OnSimTick(unsigned long long tick)
 {
     g_interpTick = tick;
-    std::vector<BYTE*> list;
-    if (!ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), list)) return;
+    if (!ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), g_tickVehListScratch)) return;
 
-    std::unordered_set<BYTE*> visited;
-    for (BYTE* p : list) {
+    g_tickVisitedScratch.Reset(g_tickVehListScratch.size() * 2 + 32);
+    for (BYTE* p : g_tickVehListScratch) {
         if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
-        RecordVehicleGraph(p, tick, visited);
+        RecordVehicleGraph(p, tick, g_tickVisitedScratch, g_tickQueueScratch, g_tickAttachedScratch);
     }
-    std::vector<BYTE*> followRoots;
-    CollectFollowCameraVehicles(followRoots);
-    for (BYTE* p : followRoots) {
-        RecordVehicleGraph(p, tick, visited);
+    CollectFollowCameraVehicles(g_tickFollowRootsScratch);
+    for (BYTE* p : g_tickFollowRootsScratch) {
+        RecordVehicleGraph(p, tick, g_tickVisitedScratch, g_tickQueueScratch, g_tickAttachedScratch);
     }
 
     if ((tick % 600) == 0 && g_vehicleInterp.size() > 8192) {
@@ -625,12 +759,61 @@ static void ApplyWheelAndSteerInterp(BYTE* p, const VehicleInterpRecord& rec, fl
     *(float*)(p + VEH_STEER_TARGET_OFFSET) = steer;
 
     BYTE* wheelBegin = nullptr;
-    int wCount = GetVehicleWheelCount(p, &wheelBegin);
+    int wCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
     if (wCount > rec.wheelCount) wCount = rec.wheelCount;
     for (int w = 0; w < wCount; w++) {
         *(float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE) =
             HeldFrame_LerpAngleRadians(rec.prevWheelAngle[w], rec.currWheelAngle[w], alpha);
     }
+}
+
+static bool ApplySubTickVisualInterpRaw(BYTE* p, VehicleInterpRecord& rec, float alpha, bool decaySmooth)
+{
+    bool moved = false;
+    if (*(unsigned*)(p + 0x04) == rec.id) {
+        if (decaySmooth) {
+            for (int c = 0; c < 3; c++) {
+                rec.smoothOffset[c] *= 0.85f;
+                if (fabsf(rec.smoothOffset[c]) < 1e-4f) rec.smoothOffset[c] = 0.0f;
+            }
+        }
+        const float* cur0 = (const float*)(p + kVehicleNodeOffsets[0] + 0x80);
+        float ex0 = cur0[0] - rec.currNode[0][32];
+        float ey0 = cur0[1] - rec.currNode[0][33];
+        float ez0 = cur0[2] - rec.currNode[0][34];
+        float devSq0 = ex0 * ex0 + ey0 * ey0 + ez0 * ez0;
+        if (devSq0 < 2500.0f && isfinite(devSq0)) {
+            float dx0 = rec.currNode[0][32] - rec.prevNode[0][32];
+            float dy0 = rec.currNode[0][33] - rec.prevNode[0][33];
+            float dz0 = rec.currNode[0][34] - rec.prevNode[0][34];
+            float distSq0 = dx0 * dx0 + dy0 * dy0 + dz0 * dz0;
+            float rdx0 = rec.currNode[0][35] - rec.prevNode[0][35];
+            float rdy0 = rec.currNode[0][36] - rec.prevNode[0][36];
+            float rdz0 = rec.currNode[0][37] - rec.prevNode[0][37];
+            float rotSq0 = rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0;
+            float smoothSq = rec.smoothOffset[0] * rec.smoothOffset[0] +
+                             rec.smoothOffset[1] * rec.smoothOffset[1] +
+                             rec.smoothOffset[2] * rec.smoothOffset[2];
+            if ((distSq0 > 1e-8f || rotSq0 > 1e-8f || smoothSq > 1e-8f) && distSq0 < 400.0f && isfinite(distSq0)) {
+                int nNodes = GetActiveVehicleNodeCount(p);
+                if (nNodes > rec.nodeCount) nNodes = rec.nodeCount;
+                for (int k = 0; k < nNodes; k++) {
+                    float dx = rec.currNode[k][32] - rec.prevNode[k][32];
+                    float dy = rec.currNode[k][33] - rec.prevNode[k][33];
+                    float dz = rec.currNode[k][34] - rec.prevNode[k][34];
+                    float distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq < 400.0f && isfinite(distSq)) {
+                        HeldFrame_InterpolateC3DNode(p + kVehicleNodeOffsets[k], rec.prevNode[k], rec.currNode[k],
+                                                     alpha, rec.smoothOffset);
+                        moved = true;
+                    }
+                }
+            }
+            ApplyWheelAndSteerInterp(p, rec, alpha);
+            moved = true;
+        }
+    }
+    return moved;
 }
 
 static bool ApplySubTickVisualInterp(BYTE* p, float alpha, bool decaySmooth = true)
@@ -645,49 +828,7 @@ static bool ApplySubTickVisualInterp(BYTE* p, float alpha, bool decaySmooth = tr
     bool moved = false;
     DiagLog_BeginSafeSeh();
     __try {
-        if (*(unsigned*)(p + 0x04) == rec.id) {
-            if (decaySmooth) {
-                for (int c = 0; c < 3; c++) {
-                    rec.smoothOffset[c] *= 0.85f;
-                    if (fabsf(rec.smoothOffset[c]) < 1e-4f) rec.smoothOffset[c] = 0.0f;
-                }
-            }
-            const float* cur0 = (const float*)(p + kVehicleNodeOffsets[0] + 0x80);
-            float ex0 = cur0[0] - rec.currNode[0][32];
-            float ey0 = cur0[1] - rec.currNode[0][33];
-            float ez0 = cur0[2] - rec.currNode[0][34];
-            float devSq0 = ex0 * ex0 + ey0 * ey0 + ez0 * ez0;
-            if (devSq0 < 2500.0f && isfinite(devSq0)) {
-                float dx0 = rec.currNode[0][32] - rec.prevNode[0][32];
-                float dy0 = rec.currNode[0][33] - rec.prevNode[0][33];
-                float dz0 = rec.currNode[0][34] - rec.prevNode[0][34];
-                float distSq0 = dx0 * dx0 + dy0 * dy0 + dz0 * dz0;
-                float rdx0 = rec.currNode[0][35] - rec.prevNode[0][35];
-                float rdy0 = rec.currNode[0][36] - rec.prevNode[0][36];
-                float rdz0 = rec.currNode[0][37] - rec.prevNode[0][37];
-                float rotSq0 = rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0;
-                float smoothSq = rec.smoothOffset[0] * rec.smoothOffset[0] +
-                                 rec.smoothOffset[1] * rec.smoothOffset[1] +
-                                 rec.smoothOffset[2] * rec.smoothOffset[2];
-                if ((distSq0 > 1e-8f || rotSq0 > 1e-8f || smoothSq > 1e-8f) && distSq0 < 400.0f && isfinite(distSq0)) {
-                    int nNodes = GetActiveVehicleNodeCount(p);
-                    if (nNodes > rec.nodeCount) nNodes = rec.nodeCount;
-                    for (int k = 0; k < nNodes; k++) {
-                        float dx = rec.currNode[k][32] - rec.prevNode[k][32];
-                        float dy = rec.currNode[k][33] - rec.prevNode[k][33];
-                        float dz = rec.currNode[k][34] - rec.prevNode[k][34];
-                        float distSq = dx * dx + dy * dy + dz * dz;
-                        if (distSq < 400.0f && isfinite(distSq)) {
-                            HeldFrame_InterpolateC3DNode(p + kVehicleNodeOffsets[k], rec.prevNode[k], rec.currNode[k],
-                                                         alpha, rec.smoothOffset);
-                            moved = true;
-                        }
-                    }
-                }
-                ApplyWheelAndSteerInterp(p, rec, alpha);
-                moved = true;
-            }
-        }
+        moved = ApplySubTickVisualInterpRaw(p, rec, alpha, decaySmooth);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         moved = false;
     }
@@ -695,96 +836,477 @@ static bool ApplySubTickVisualInterp(BYTE* p, float alpha, bool decaySmooth = tr
     return moved;
 }
 
-static void RestoreVehicleSnapshotNodes(BYTE* p)
+static void SaveLiveVehicleVisualRaw(BYTE* p, LiveVehicleVisualBackup* out)
 {
-    if (!p) return;
-    auto it = g_vehicleInterp.find(p);
-    if (it == g_vehicleInterp.end()) return;
-    const VehicleInterpRecord& rec = it->second;
+    out->vehicle = p;
+    out->id = *(const unsigned*)(p + 0x04);
+    int nNodes = GetActiveVehicleNodeCount(p);
+    if (nNodes < 0) nNodes = 0;
+    if (nNodes > VEH_MAX_NODES) nNodes = VEH_MAX_NODES;
+    out->nodeCount = nNodes;
+    for (int k = 0; k < nNodes; k++) {
+        memcpy(out->nodes[k], p + kVehicleNodeOffsets[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
+    }
+    out->steer = *(const float*)(p + VEH_STEER_CURRENT_OFFSET);
+    out->steerTarget = *(const float*)(p + VEH_STEER_TARGET_OFFSET);
+    BYTE* wheelBegin = nullptr;
+    int wCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
+    if (wCount > VEH_MAX_WHEELS) wCount = VEH_MAX_WHEELS;
+    out->wheelCount = wCount;
+    for (int w = 0; w < wCount; w++) {
+        out->wheelAngles[w] = *(const float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE);
+    }
+}
+
+static bool SaveLiveVehicleVisual(BYTE* p, LiveVehicleVisualBackup* out)
+{
+    if (!p || !out || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) return false;
+    bool ok = false;
     DiagLog_BeginSafeSeh();
     __try {
-        if (*(const unsigned*)(p + 0x04) == rec.id) {
-            int nNodes = GetActiveVehicleNodeCount(p);
-            if (nNodes > rec.nodeCount) nNodes = rec.nodeCount;
-            for (int k = 0; k < nNodes; k++) {
-                memcpy(p + kVehicleNodeOffsets[k], rec.currNode[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
-            }
-            *(float*)(p + VEH_STEER_CURRENT_OFFSET) = rec.currSteer;
-            *(float*)(p + VEH_STEER_TARGET_OFFSET) = rec.currSteerTarget;
-            BYTE* wheelBegin = nullptr;
-            int wCount = GetVehicleWheelCount(p, &wheelBegin);
-            if (wCount > rec.wheelCount) wCount = rec.wheelCount;
-            for (int w = 0; w < wCount; w++) {
-                *(float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE) = rec.currWheelAngle[w];
-            }
-        }
+        SaveLiveVehicleVisualRaw(p, out);
+        ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static void RestoreLiveVehicleVisualRaw(const LiveVehicleVisualBackup* b)
+{
+    if (!b || !b->vehicle) return;
+    BYTE* p = b->vehicle;
+    if (*(const unsigned*)(p + 0x04) == b->id) {
+        int nNodes = GetActiveVehicleNodeCount(p);
+        if (nNodes > b->nodeCount) nNodes = b->nodeCount;
+        for (int k = 0; k < nNodes; k++) {
+            memcpy(p + kVehicleNodeOffsets[k], b->nodes[k], NODE_SNAPSHOT_FLOATS * sizeof(float));
+        }
+        *(float*)(p + VEH_STEER_CURRENT_OFFSET) = b->steer;
+        *(float*)(p + VEH_STEER_TARGET_OFFSET) = b->steerTarget;
+        BYTE* wheelBegin = nullptr;
+        int wCount = GetVehicleWheelCountUnsafe(p, &wheelBegin);
+        if (wCount > b->wheelCount) wCount = b->wheelCount;
+        for (int w = 0; w < wCount; w++) {
+            *(float*)(wheelBegin + (size_t)w * VEH_WHEEL_STRUCT_STRIDE) = b->wheelAngles[w];
+        }
+    }
+}
+
+static void RestoreLiveVehicleVisualsBatchPod(const LiveVehicleVisualBackup* list, size_t n, volatile size_t* ioIdx)
+{
+    if (!list || n == 0) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            RestoreLiveVehicleVisualRaw(&list[idx]);
+        }
+        *ioIdx = idx;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
     }
     DiagLog_EndSafeSeh();
 }
 
-static void ExpandVehicleTargetGraph(std::unordered_set<BYTE*>& seen, std::vector<BYTE*>& targets)
+static bool ApplyInterpWithBackup(BYTE* p, float alpha, bool decaySmooth,
+                                  std::vector<LiveVehicleVisualBackup>& outModified)
 {
-    const size_t maxTargets = (64ull << 20) / 0x1AD8;
-    std::vector<BYTE*> attached;
-    for (size_t i = 0; i < targets.size() && targets.size() < maxTargets; i++) {
-        BYTE* target = targets[i];
-
-        BYTE* parent = nullptr;
-        if (Read(target + VEH_PARENT_PTR_OFFSET, &parent, sizeof(parent)) && parent &&
-            IsPointerLikeX64((uint64_t)(uintptr_t)parent)) {
-            AddVisibleVehicleTarget(parent, seen, targets);
-        }
-        if (targets.size() >= maxTargets) break;
-
-        BYTE* link = nullptr;
-        if (Read(target + VEH_LINK_PTR_OFFSET, &link, sizeof(link)) && link &&
-            IsPointerLikeX64((uint64_t)(uintptr_t)link)) {
-            AddVisibleVehicleTarget(link, seen, targets);
-        }
-
-        const unsigned kVecOffsets[2] = { VEH_CHILDREN_BEGIN_OFFSET, VEH_CARRIED_BEGIN_OFFSET };
-        for (unsigned off : kVecOffsets) {
-            if (targets.size() >= maxTargets) break;
-            ReadAttachedVehicleVector(target, off, attached);
-            for (BYTE* child : attached) {
-                if (targets.size() >= maxTargets) break;
-                if (child) AddVisibleVehicleTarget(child, seen, targets);
-            }
-        }
+    outModified.emplace_back();
+    if (!SaveLiveVehicleVisual(p, &outModified.back())) {
+        outModified.pop_back();
+        return false;
     }
+    if (!ApplySubTickVisualInterp(p, alpha, decaySmooth)) {
+        outModified.pop_back();
+        return false;
+    }
+    return true;
 }
 
-static void CollectVisibleVehicleGraph(const std::vector<BYTE*>& list, std::vector<BYTE*>& targets)
+static void RestoreAllLiveVehicleVisuals(std::vector<LiveVehicleVisualBackup>& list)
 {
-    targets.clear();
-    std::unordered_set<BYTE*> seen;
-    for (BYTE* p : list) {
-        if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
-        BYTE visible = 0, linked = 0;
-        BYTE* link = nullptr;
-        if (!Read(p + VEH_RENDER_VISIBLE_OFFSET, &visible, sizeof(visible))) continue;
-        if (Read(p + VEH_LINK_PTR_OFFSET, &link, sizeof(link)) && link) {
-            if (IsPointerLikeX64((uint64_t)(uintptr_t)link)) {
-                Read(link + VEH_RENDER_VISIBLE_OFFSET, &linked, sizeof(linked));
+    const size_t n = list.size();
+    volatile size_t idx = 0;
+    while (idx < n) {
+        RestoreLiveVehicleVisualsBatchPod(list.data(), n, &idx);
+    }
+    list.clear();
+}
+
+struct InterpWorkItem {
+    BYTE* p;
+    VehicleInterpRecord* rec;
+};
+
+static size_t SaveAndApplyInterpBatchPod(const InterpWorkItem* items, size_t n, float alpha,
+                                          LiveVehicleVisualBackup* outBackups, volatile size_t* ioIdx,
+                                          size_t* ioBackupCount)
+{
+    if (!items || n == 0 || !outBackups) return 0;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t bCnt = *ioBackupCount;
+    volatile size_t cur = idx;
+    volatile size_t curBCnt = bCnt;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            curBCnt = bCnt;
+            BYTE* p = items[idx].p;
+            SaveLiveVehicleVisualRaw(p, &outBackups[bCnt]);
+            if (ApplySubTickVisualInterpRaw(p, *items[idx].rec, alpha, true)) {
+                bCnt++;
+            }
+        }
+        *ioIdx = idx;
+        *ioBackupCount = bCnt;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioBackupCount = curBCnt;
+    }
+    DiagLog_EndSafeSeh();
+    return *ioBackupCount;
+}
+
+static size_t CollectVehicleGraphStepBatchPod(const BYTE* const* srcList, size_t n,
+                                              BYTE** outCand, size_t maxCand,
+                                              volatile size_t* ioIdx, size_t* ioCandCount)
+{
+    if (!srcList || n == 0 || !outCand || maxCand == 0) return *ioCandCount;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t outN = *ioCandCount;
+    volatile size_t cur = idx;
+    volatile size_t curOut = outN;
+    const unsigned kVecOffsets[2] = { VEH_CHILDREN_BEGIN_OFFSET, VEH_CARRIED_BEGIN_OFFSET };
+    __try {
+        for (; idx < n && outN < maxCand; ++idx) {
+            cur = idx;
+            curOut = outN;
+            const BYTE* target = srcList[idx];
+            if (!target || !IsPointerLikeX64((uint64_t)(uintptr_t)target)) continue;
+            BYTE* parent = *(BYTE* const*)(target + VEH_PARENT_PTR_OFFSET);
+            if (parent && IsPointerLikeX64((uint64_t)(uintptr_t)parent) && outN < maxCand) {
+                outCand[outN++] = parent;
+            }
+            BYTE* link = *(BYTE* const*)(target + VEH_LINK_PTR_OFFSET);
+            if (link && IsPointerLikeX64((uint64_t)(uintptr_t)link) && outN < maxCand) {
+                outCand[outN++] = link;
+            }
+            for (unsigned off : kVecOffsets) {
+                BYTE* const* begin = *(BYTE* const* const*)(target + off);
+                BYTE* const* end   = *(BYTE* const* const*)(target + off + 8);
+                if (begin && end > begin && ((uintptr_t)end - (uintptr_t)begin) % sizeof(BYTE*) == 0 &&
+                    (size_t)(end - begin) <= 1024 && IsPointerLikeX64((uint64_t)(uintptr_t)begin)) {
+                    for (BYTE* const* it = begin; it < end && outN < maxCand; ++it) {
+                        BYTE* child = *it;
+                        if (child && IsPointerLikeX64((uint64_t)(uintptr_t)child)) {
+                            outCand[outN++] = child;
+                        }
+                    }
+                }
+            }
+        }
+        *ioIdx = idx;
+        *ioCandCount = outN;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioCandCount = curOut;
+    }
+    DiagLog_EndSafeSeh();
+    return *ioCandCount;
+}
+
+static size_t CollectVisibleSeedsBatchPod(const BYTE* const* list, size_t n,
+                                          BYTE** outSeeds, size_t maxSeeds,
+                                          volatile size_t* ioIdx, size_t* ioOutCount)
+{
+    if (!list || n == 0 || !outSeeds || maxSeeds == 0) return *ioOutCount;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t outN = *ioOutCount;
+    volatile size_t cur = idx;
+    volatile size_t curOut = outN;
+    __try {
+        for (; idx < n && outN < maxSeeds; ++idx) {
+            cur = idx;
+            curOut = outN;
+            BYTE* p = const_cast<BYTE*>(list[idx]);
+            if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
+            BYTE visible = *(const BYTE*)(p + VEH_RENDER_VISIBLE_OFFSET);
+            BYTE linked = 0;
+            BYTE* link = *(BYTE* const*)(p + VEH_LINK_PTR_OFFSET);
+            if (link && IsPointerLikeX64((uint64_t)(uintptr_t)link)) {
+                linked = *(const BYTE*)(link + VEH_RENDER_VISIBLE_OFFSET);
             } else {
                 link = nullptr;
             }
+            if (visible || linked) {
+                outSeeds[outN++] = p;
+                if (link && outN < maxSeeds) outSeeds[outN++] = link;
+            }
         }
-        if (visible || linked) {
-            AddVisibleVehicleTarget(p, seen, targets);
-            if (link) AddVisibleVehicleTarget(link, seen, targets);
-        }
+        *ioIdx = idx;
+        *ioOutCount = outN;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioOutCount = curOut;
     }
-    std::vector<BYTE*> followRoots;
-    CollectFollowCameraVehicles(followRoots);
-    for (BYTE* p : followRoots) {
-        AddVisibleVehicleTarget(p, seen, targets);
+    DiagLog_EndSafeSeh();
+    return *ioOutCount;
+}
+
+static size_t FilterUniqueValidTargetsBatchPod(const BYTE* const* cand, size_t nCand,
+                                              FlatPtrSet& seen, std::vector<BYTE*>& targets,
+                                              size_t maxTargets, volatile size_t* ioIdx)
+{
+    if (!cand || nCand == 0) return 0;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t added = 0;
+    volatile size_t cur = idx;
+    __try {
+        for (; idx < nCand && targets.size() < maxTargets; ++idx) {
+            cur = idx;
+            BYTE* p = const_cast<BYTE*>(cand[idx]);
+            if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
+            volatile uint64_t probe0 = *(const volatile uint64_t*)p;
+            volatile uint64_t probe1 = *(const volatile uint64_t*)(p + 0x1AD8 - sizeof(uint64_t));
+            (void)probe0;
+            (void)probe1;
+            if (seen.Insert(p)) {
+                targets.push_back(p);
+                added++;
+            }
+        }
+        *ioIdx = idx;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+    }
+    DiagLog_EndSafeSeh();
+    return added;
+}
+
+static void CommitValidCandTargets(const std::vector<BYTE*>& cand, FlatPtrSet& seen,
+                                   std::vector<BYTE*>& targets, size_t maxTargets)
+{
+    volatile size_t idx = 0;
+    const size_t n = cand.size();
+    while (idx < n && targets.size() < maxTargets) {
+        FilterUniqueValidTargetsBatchPod(cand.data(), n, seen, targets, maxTargets, &idx);
+    }
+}
+
+static void ExpandVehicleTargetGraph(FlatPtrSet& seen, std::vector<BYTE*>& targets, std::vector<BYTE*>& candScratch)
+{
+    const size_t maxTargets = (64ull << 20) / 0x1AD8;
+    const size_t maxCand = maxTargets * 8;
+    size_t processed = 0;
+    while (processed < targets.size() && targets.size() < maxTargets) {
+        const size_t waveEnd = targets.size();
+        const size_t waveN = waveEnd - processed;
+        candScratch.resize(std::min(maxCand, waveN * 16 + 64));
+        size_t candCount = 0;
+        volatile size_t idx = 0;
+        while (idx < waveN && candCount < candScratch.size()) {
+            CollectVehicleGraphStepBatchPod(targets.data() + processed, waveN,
+                                            candScratch.data(), candScratch.size(),
+                                            &idx, &candCount);
+        }
+        processed = waveEnd;
+        candScratch.resize(candCount);
+        CommitValidCandTargets(candScratch, seen, targets, maxTargets);
+    }
+}
+
+static void CollectVisibleVehicleGraph(const std::vector<BYTE*>& list, std::vector<BYTE*>& targets,
+                                       FlatPtrSet& seenScratch, std::vector<BYTE*>& followRootsScratch,
+                                       std::vector<BYTE*>& candScratch)
+{
+    targets.clear();
+    const size_t maxTargets = (64ull << 20) / 0x1AD8;
+    seenScratch.Reset(list.size() * 2 + 32);
+
+    candScratch.resize(list.size() * 2 + 64);
+    size_t candCount = 0;
+    volatile size_t idx = 0;
+    while (idx < list.size() && candCount < candScratch.size()) {
+        CollectVisibleSeedsBatchPod(list.data(), list.size(),
+                                    candScratch.data(), candScratch.size(),
+                                    &idx, &candCount);
+    }
+    CollectFollowCameraVehicles(followRootsScratch);
+    for (BYTE* p : followRootsScratch) {
+        if (candCount < candScratch.size()) candScratch[candCount++] = p;
+        else candScratch.push_back(p);
     }
     for (const auto& h : g_deferredPrepHighlights) {
-        AddVisibleVehicleTarget(h.vehicle, seen, targets);
+        if (candCount < candScratch.size()) candScratch[candCount++] = h.vehicle;
+        else candScratch.push_back(h.vehicle);
     }
-    ExpandVehicleTargetGraph(seen, targets);
+    candScratch.resize(candCount);
+    CommitValidCandTargets(candScratch, seenScratch, targets, maxTargets);
+    ExpandVehicleTargetGraph(seenScratch, targets, candScratch);
+}
+
+static void WriteWorkerFlagsBatchPod(const std::pair<BYTE*, BYTE>* flags, size_t n,
+                                     bool clearToZero, volatile size_t* ioIdx)
+{
+    if (!flags || n == 0) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            *(flags[idx].first + VEH_WORKER_SIM_FLAG_OFFSET) = clearToZero ? (BYTE)0 : flags[idx].second;
+        }
+        *ioIdx = idx;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static bool RestoreVehicleCopySeh(BYTE* p, const BYTE* beforeCopy, size_t bytes, BYTE* curBuf, uint64_t* ioRefusals)
+{
+    bool ok = false;
+    bool refused = false;
+    size_t refusalOff = 0;
+    DiagLog_BeginSafeSeh();
+    __try {
+        memcpy(curBuf, p, bytes);
+        if (memcmp(curBuf, beforeCopy, bytes) == 0) {
+            ok = true;
+        } else {
+            ok = true;
+            for (size_t o = 0; o + 8 <= bytes; o += 8) {
+                unsigned long long before = 0, now = 0;
+                memcpy(&before, beforeCopy + o, 8);
+                memcpy(&now, curBuf + o, 8);
+                if (now == before) continue;
+                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) ||
+                               (o >= 0x1318 && o < 0x13D8) || (o >= 0x1480 && o < 0x16F0);
+                if (!inNodes && IsHeapPtrCandidate(before) && IsHeapPtrCandidate(now) &&
+                    HeapPointer(before) && HeapPointer(now)) {
+                    refused = true;
+                    refusalOff = o;
+                    ok = false;
+                    if (ioRefusals) (*ioRefusals)++;
+                } else {
+                    *(unsigned long long*)(p + o) = before;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    if (refused) {
+        Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", refusalOff);
+    }
+    return ok;
+}
+
+static void SnapshotVehicleCopiesBatchPod(BYTE* const* targets, size_t n, size_t bytes,
+                                          BYTE** outValidTargets, BYTE* outCopies,
+                                          volatile size_t* ioIdx, size_t* ioValidCount)
+{
+    if (!targets || n == 0) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t vCnt = *ioValidCount;
+    volatile size_t cur = idx;
+    volatile size_t curV = vCnt;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            curV = vCnt;
+            BYTE* t = targets[idx];
+            memcpy(outCopies + vCnt * bytes, t, bytes);
+            outValidTargets[vCnt++] = t;
+        }
+        *ioIdx = idx;
+        *ioValidCount = vCnt;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioValidCount = curV;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void ReadAndClearWorkerFlagsBatchPod(BYTE* const* ptrs, size_t n,
+                                            std::pair<BYTE*, BYTE>* outFlags,
+                                            volatile size_t* ioIdx, size_t* ioFlagCount)
+{
+    if (!ptrs || n == 0 || !outFlags) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    size_t fCnt = *ioFlagCount;
+    volatile size_t cur = idx;
+    volatile size_t curF = fCnt;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            curF = fCnt;
+            BYTE* p = ptrs[idx];
+            BYTE f = *(p + VEH_WORKER_SIM_FLAG_OFFSET);
+            if (f) {
+                *(p + VEH_WORKER_SIM_FLAG_OFFSET) = 0;
+                outFlags[fCnt++] = { p, f };
+            }
+        }
+        *ioIdx = idx;
+        *ioFlagCount = fCnt;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioFlagCount = curF;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void RestoreVehicleCopiesBatchPod(BYTE* const* targets, const BYTE* beforeCopies,
+                                         size_t n, size_t bytes, BYTE* curBuf,
+                                         volatile size_t* ioIdx, size_t* outHeapCheckIdx,
+                                         bool* outHadFault)
+{
+    if (!targets || !beforeCopies || n == 0 || !curBuf) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            BYTE* p = targets[idx];
+            const BYTE* beforeCopy = beforeCopies + idx * bytes;
+            if (memcmp(p, beforeCopy, bytes) == 0) continue;
+            memcpy(curBuf, p, bytes);
+            for (size_t o = 0; o + 8 <= bytes; o += 8) {
+                unsigned long long before = 0, now = 0;
+                memcpy(&before, beforeCopy + o, 8);
+                memcpy(&now, curBuf + o, 8);
+                if (now == before) continue;
+                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) ||
+                               (o >= 0x1318 && o < 0x13D8) || (o >= 0x1480 && o < 0x16F0);
+                if (!inNodes && IsHeapPtrCandidate(before) && IsHeapPtrCandidate(now)) {
+                    *outHeapCheckIdx = idx;
+                    *ioIdx = idx + 1u;
+                    DiagLog_EndSafeSeh();
+                    return;
+                }
+                *(unsigned long long*)(p + o) = before;
+            }
+        }
+        *ioIdx = idx;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *outHadFault = true;
+        *ioIdx = cur + 1u;
+    }
+    DiagLog_EndSafeSeh();
 }
 
 class VehicleGuard {
@@ -792,105 +1314,125 @@ class VehicleGuard {
     std::vector<BYTE*> targets_;
     std::vector<BYTE> copies_;
     std::vector<std::pair<BYTE*, BYTE>> flags_;
+    std::vector<LiveVehicleVisualBackup> visualBackups_;
+    std::vector<BYTE*> listScratch_;
+    std::vector<BYTE*> followRootsScratch_;
+    std::vector<BYTE*> attachedScratch_;
+    std::vector<BYTE*> validTargetsScratch_;
+    std::vector<BYTE*> flagCandidatesScratch_;
+    std::vector<InterpWorkItem> interpWorkScratch_;
+    std::vector<BYTE>  vehBufScratch_;
+    FlatPtrSet seenScratch_;
+    FlatPtrSet flagSeenScratch_;
 
     void SnapshotCopies()
     {
-        std::vector<BYTE*> validTargets;
-        validTargets.reserve(targets_.size());
-        copies_.clear();
-        copies_.reserve(targets_.size() * Bytes);
-        std::vector<BYTE> vehBuf(Bytes);
-        for (BYTE* target : targets_) {
-            if (Read(target, vehBuf.data(), Bytes)) {
-                validTargets.push_back(target);
-                copies_.insert(copies_.end(), vehBuf.begin(), vehBuf.end());
-            }
+        const size_t n = targets_.size();
+        validTargetsScratch_.resize(n);
+        copies_.resize(n * Bytes);
+        volatile size_t idx = 0;
+        size_t validCount = 0;
+        while (idx < n) {
+            SnapshotVehicleCopiesBatchPod(targets_.data(), n, Bytes,
+                                          validTargetsScratch_.data(), copies_.data(),
+                                          &idx, &validCount);
         }
-        targets_ = std::move(validTargets);
+        validTargetsScratch_.resize(validCount);
+        copies_.resize(validCount * Bytes);
+        targets_.swap(validTargetsScratch_);
     }
 
     void SuppressFlags(const std::vector<BYTE*>& list)
     {
-        std::unordered_set<BYTE*> flagSeen;
-        auto AddFlag = [&](BYTE* p) {
-            if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p) || !flagSeen.insert(p).second) return;
-            BYTE f = 0;
-            if (Read(p + VEH_WORKER_SIM_FLAG_OFFSET, &f, sizeof(f)) && f) {
-                flags_.push_back({ p, f });
+        flagSeenScratch_.Reset(list.size() + targets_.size() + 16);
+        flagCandidatesScratch_.clear();
+        flagCandidatesScratch_.reserve(list.size() + targets_.size());
+        for (BYTE* p : list) {
+            if (p && IsPointerLikeX64((uint64_t)(uintptr_t)p) && flagSeenScratch_.Insert(p)) {
+                flagCandidatesScratch_.push_back(p);
             }
-        };
-        for (BYTE* p : list) AddFlag(p);
-        for (BYTE* p : targets_) AddFlag(p);
-
-        SafeClearWorkerFlags(flags_.data(), flags_.size());
-    }
-
-    static void SafeClearWorkerFlags(const std::pair<BYTE*, BYTE>* flags, size_t count)
-    {
-        if (!flags || count == 0) return;
-        const BYTE zero = 0;
-        for (size_t i = 0; i < count; ++i) {
-            SafeWritePod(flags[i].first + VEH_WORKER_SIM_FLAG_OFFSET, zero);
         }
+        for (BYTE* p : targets_) {
+            if (p && IsPointerLikeX64((uint64_t)(uintptr_t)p) && flagSeenScratch_.Insert(p)) {
+                flagCandidatesScratch_.push_back(p);
+            }
+        }
+        const size_t n = flagCandidatesScratch_.size();
+        flags_.resize(n);
+        volatile size_t idx = 0;
+        size_t flagCount = 0;
+        while (idx < n) {
+            ReadAndClearWorkerFlagsBatchPod(flagCandidatesScratch_.data(), n, flags_.data(), &idx, &flagCount);
+        }
+        flags_.resize(flagCount);
     }
 
-    static void SafeRestoreWorkerFlags(const std::pair<BYTE*, BYTE>* flags, size_t count)
+    static void SafeWriteWorkerFlags(const std::pair<BYTE*, BYTE>* flags, size_t count, bool clearToZero)
     {
-        if (!flags || count == 0) return;
-        for (size_t i = 0; i < count; ++i) {
-            SafeWritePod(flags[i].first + VEH_WORKER_SIM_FLAG_OFFSET, flags[i].second);
+        volatile size_t idx = 0;
+        while (idx < count) {
+            WriteWorkerFlagsBatchPod(flags, count, clearToZero, &idx);
         }
     }
 
 public:
     bool Begin(BYTE* listAt, float alpha)
     {
-        targets_.clear(); flags_.clear();
-        std::vector<BYTE*> list;
-        if (!ReadEngineVehicleList(listAt, list)) return false;
+        targets_.clear(); flags_.clear(); visualBackups_.clear();
+        if (!ReadEngineVehicleList(listAt, listScratch_)) return false;
 
-        CollectVisibleVehicleGraph(list, targets_);
+        CollectVisibleVehicleGraph(listScratch_, targets_, seenScratch_, followRootsScratch_, attachedScratch_);
         SnapshotCopies();
-        SuppressFlags(list);
+        SuppressFlags(listScratch_);
 
         g_hfDiag.lastTargetsCount = (unsigned)targets_.size();
         g_hfDiag.lastAlpha = alpha;
-        unsigned interpCount = 0;
-        if (alpha >= 0.0f && alpha < 0.999f) {
+        size_t interpCount = 0;
+        if (alpha >= 0.0f && alpha < 0.999f && isfinite(alpha)) {
+            const float clampedAlpha = (alpha < 0.0f) ? 0.0f : alpha;
+            interpWorkScratch_.clear();
+            interpWorkScratch_.reserve(targets_.size());
             for (BYTE* p : targets_) {
-                if (ApplySubTickVisualInterp(p, alpha)) interpCount++;
+                if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
+                auto it = g_vehicleInterp.find(p);
+                if (it == g_vehicleInterp.end()) continue;
+                VehicleInterpRecord& rec = it->second;
+                if (rec.currTick != g_interpTick || rec.prevTick + 1 != rec.currTick) continue;
+                interpWorkScratch_.push_back({ p, &rec });
             }
+            const size_t wn = interpWorkScratch_.size();
+            visualBackups_.resize(wn);
+            volatile size_t idx = 0;
+            while (idx < wn) {
+                SaveAndApplyInterpBatchPod(interpWorkScratch_.data(), wn, clampedAlpha,
+                                           visualBackups_.data(), &idx, &interpCount);
+            }
+            visualBackups_.resize(interpCount);
         }
-        g_hfDiag.lastInterpolatedCount = interpCount;
+        g_hfDiag.lastInterpolatedCount = (unsigned)interpCount;
         return true;
     }
 
     bool End()
     {
-        SafeRestoreWorkerFlags(flags_.data(), flags_.size());
+        SafeWriteWorkerFlags(flags_.data(), flags_.size(), false);
         flags_.clear();
+        RestoreAllLiveVehicleVisuals(visualBackups_);
 
+        if (vehBufScratch_.size() < Bytes) vehBufScratch_.resize(Bytes);
         bool ok = true;
-        unsigned long long current[Bytes / 8];
-        for (size_t i = 0; i < targets_.size(); i++) {
-            BYTE* p = targets_[i];
-            RestoreVehicleSnapshotNodes(p);
-            if (!Read(p, current, Bytes)) { ok = false; continue; }
-            for (size_t o = 0; o < Bytes; o += 8) {
-                unsigned long long before, now;
-                memcpy(&before, copies_.data() + i * Bytes + o, 8);
-                now = current[o / 8];
-                if (now == before) continue;
-                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) ||
-                               (o >= 0x1318 && o < 0x13D8) || (o >= 0x1480 && o < 0x16F0);
-                if (!inNodes && HeapPointer(before) && HeapPointer(now)) {
-                    Logf("republicmp  HELD FRAME: vehicle pointer changed at +0x%zX - probe refused", o);
-                    g_hfDiag.restoreRefusals++;
+        const size_t n = targets_.size();
+        volatile size_t idx = 0;
+        while (idx < n) {
+            size_t heapCheckIdx = SIZE_MAX;
+            bool hadFault = false;
+            RestoreVehicleCopiesBatchPod(targets_.data(), copies_.data(), n, Bytes,
+                                         vehBufScratch_.data(), &idx, &heapCheckIdx, &hadFault);
+            if (hadFault) ok = false;
+            if (heapCheckIdx != SIZE_MAX) {
+                if (!RestoreVehicleCopySeh(targets_[heapCheckIdx], copies_.data() + heapCheckIdx * Bytes, Bytes,
+                                           vehBufScratch_.data(), &g_hfDiag.restoreRefusals)) {
                     ok = false;
-                } else {
-                    if (!SafeMemcpyPod(p + o, &before, 8)) {
-                        ok = false;
-                    }
                 }
             }
         }
@@ -960,26 +1502,24 @@ void HeldFrame_SubmitVehicleHighlight(void* vehicle, unsigned char a2, unsigned 
         return;
     }
     float alpha = g_hfDiag.lastAlpha;
-    std::vector<BYTE*> modified;
+    std::vector<LiveVehicleVisualBackup> modified;
     if (alpha >= 0.0f && alpha < 0.999f) {
-        std::vector<BYTE*> targets;
-        std::unordered_set<BYTE*> seen;
-        AddVisibleVehicleTarget((BYTE*)vehicle, seen, targets);
-        ExpandVehicleTargetGraph(seen, targets);
-        modified.reserve(targets.size());
-        for (BYTE* p : targets) {
-            if (ApplySubTickVisualInterp(p, alpha, false)) {
-                modified.push_back(p);
-            }
+        static std::vector<BYTE*> s_hlTargets, s_hlAttached;
+        static FlatPtrSet s_hlSeen;
+        s_hlTargets.clear();
+        s_hlSeen.Reset(16);
+        AddVisibleVehicleTarget((BYTE*)vehicle, s_hlSeen, s_hlTargets);
+        ExpandVehicleTargetGraph(s_hlSeen, s_hlTargets, s_hlAttached);
+        modified.reserve(s_hlTargets.size());
+        for (BYTE* p : s_hlTargets) {
+            ApplyInterpWithBackup(p, alpha, false, modified);
         }
     }
     {
         Determinism_PrivateScope privateRng;
         CallNativeVehicleHighlight(vehicle, a2, a3, colorRgba, flag, isExtraPass);
     }
-    for (BYTE* p : modified) {
-        RestoreVehicleSnapshotNodes(p);
-    }
+    RestoreAllLiveVehicleVisuals(modified);
 }
 
 void HeldFrame_DrawStepVehicles(void* world)
@@ -994,38 +1534,36 @@ void HeldFrame_DrawStepVehicles(void* world)
     HeldFrame_OnSimTick(Determinism_StepCount() + 1);
     float alpha = Determinism_RenderAlpha();
     g_hfDiag.lastAlpha = alpha;
-    std::vector<BYTE*> list;
-    std::vector<BYTE*> modified;
-    if (alpha >= 0.0f && alpha < 0.999f && ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), list)) {
-        std::vector<BYTE*> targets;
-        CollectVisibleVehicleGraph(list, targets);
-        modified.reserve(targets.size());
-        for (BYTE* p : targets) {
-            if (ApplySubTickVisualInterp(p, alpha)) {
-                modified.push_back(p);
-            }
+    static std::vector<BYTE*> s_stepList, s_stepTargets, s_stepFollowRoots, s_stepAttached;
+    static FlatPtrSet s_stepSeen;
+    static std::vector<LiveVehicleVisualBackup> s_stepModified;
+    s_stepModified.clear();
+    if (alpha >= 0.0f && alpha < 0.999f && ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), s_stepList)) {
+        CollectVisibleVehicleGraph(s_stepList, s_stepTargets, s_stepSeen, s_stepFollowRoots, s_stepAttached);
+        s_stepModified.reserve(s_stepTargets.size());
+        for (BYTE* p : s_stepTargets) {
+            ApplyInterpWithBackup(p, alpha, true, s_stepModified);
         }
-        g_hfDiag.lastTargetsCount = (unsigned)targets.size();
-        g_hfDiag.lastInterpolatedCount = (unsigned)modified.size();
+        g_hfDiag.lastTargetsCount = (unsigned)s_stepTargets.size();
+        g_hfDiag.lastInterpolatedCount = (unsigned)s_stepModified.size();
     }
     nativeDraw(world);
     FlushDeferredVehicleHighlights();
-    for (BYTE* p : modified) {
-        RestoreVehicleSnapshotNodes(p);
-    }
+    RestoreAllLiveVehicleVisuals(s_stepModified);
 }
 
 static void CollectFollowCameraSubgraph(std::vector<BYTE*>& targets)
 {
     targets.clear();
-    std::vector<BYTE*> roots;
-    CollectFollowCameraVehicles(roots);
-    if (roots.empty()) return;
-    std::unordered_set<BYTE*> seen;
-    for (BYTE* p : roots) {
-        AddVisibleVehicleTarget(p, seen, targets);
+    static std::vector<BYTE*> s_camRoots, s_camAttached;
+    static FlatPtrSet s_camSeen;
+    CollectFollowCameraVehicles(s_camRoots);
+    if (s_camRoots.empty()) return;
+    s_camSeen.Reset(s_camRoots.size() * 2 + 16);
+    for (BYTE* p : s_camRoots) {
+        AddVisibleVehicleTarget(p, s_camSeen, targets);
     }
-    ExpandVehicleTargetGraph(seen, targets);
+    ExpandVehicleTargetGraph(s_camSeen, targets, s_camAttached);
 }
 
 static void SaveCameraStepState(BYTE* camMgr, float fps)
@@ -1104,19 +1642,14 @@ void HeldFrame_BeginCameraPrepare(float fps)
     if (alpha >= 0.0f && alpha < 0.999f) {
         g_camPrepModified.reserve(targets.size());
         for (BYTE* p : targets) {
-            if (ApplySubTickVisualInterp(p, alpha, false)) {
-                g_camPrepModified.push_back(p);
-            }
+            ApplyInterpWithBackup(p, alpha, false, g_camPrepModified);
         }
     }
 }
 
 void HeldFrame_EndCameraPrepare()
 {
-    for (BYTE* p : g_camPrepModified) {
-        RestoreVehicleSnapshotNodes(p);
-    }
-    g_camPrepModified.clear();
+    RestoreAllLiveVehicleVisuals(g_camPrepModified);
 }
 
 static void SafeCallCameraMgrUpdate(BYTE* camMgr)
@@ -1158,13 +1691,11 @@ void HeldFrame_UpdateCameraAfterSimStep()
     if (!RestoreCameraStepState(camMgr)) return;
 
     float alpha = Determinism_RenderAlpha();
-    std::vector<BYTE*> modified;
+    std::vector<LiveVehicleVisualBackup> modified;
     if (alpha >= 0.0f && alpha < 0.999f) {
         modified.reserve(targets.size());
         for (BYTE* p : targets) {
-            if (ApplySubTickVisualInterp(p, alpha, false)) {
-                modified.push_back(p);
-            }
+            ApplyInterpWithBackup(p, alpha, false, modified);
         }
     }
 
@@ -1183,9 +1714,7 @@ void HeldFrame_UpdateCameraAfterSimStep()
         memcpy(timer, savedTimer, sizeof(savedTimer));
     }
 
-    for (BYTE* p : modified) {
-        RestoreVehicleSnapshotNodes(p);
-    }
+    RestoreAllLiveVehicleVisuals(modified);
 }
 
 bool HeldFrame_RunVehicleGuardForTest(BYTE* listAt, float alpha, void (*modifyFn)(void* ud), void* ud)
@@ -1281,6 +1810,12 @@ static void DrawJunctions()
 #define ENGINE_RVA 0x9941F0       // engine object: +ff8 models, +ee0 map quadtree
 #define FRAGMENT_IMPORT 0x86CFB8  // a model's fragment
 #define GETNODE_IMPORT 0x86C560   // the quadtree's node of a fragment (+25: visible)
+#define AGENTS_ALL 0x126A8
+#define DRAW_AGENTS_RVA 0x83D040
+#define AGENT_NEAR_RVA 0x90AF7C
+#define CAMERA_RVA 0x9E9C90
+#define NODE_POSITION_IMPORT 0x86C7B8   // C3D_NODE::GetPosition
+#define CAMERA_ZDISTANCE_IMPORT 0x86D008 // C3D_CAMERA::GetZDistance
 static int g_doorsChecked = -1;
 
 static size_t Count(const BYTE* vector, size_t elem)
@@ -1289,63 +1824,6 @@ static size_t Count(const BYTE* vector, size_t elem)
     return begin && end > begin && (end - begin) % elem == 0 ? (end - begin) / elem : 0;
 }
 
-static void DrawDoors()
-{
-    // This PC's frame time since the last call (once a frame), at most a quarter second.
-    static LARGE_INTEGER s_last = {};
-    LARGE_INTEGER now, frequency;
-    QueryPerformanceCounter(&now);
-    QueryPerformanceFrequency(&frequency);
-    float seconds = s_last.QuadPart && frequency.QuadPart ? (float)(now.QuadPart - s_last.QuadPart) / frequency.QuadPart : 0.0f;
-    s_last = now;
-    if (seconds < 0.0f) seconds = 0.0f;
-    if (seconds > 0.25f) seconds = 0.25f;
-    if (g_doorsChecked < 0) {
-        static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0xe2, 0xbc, 0x85, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
-        g_doorsChecked = CallTargets(0x13DB61, 0x138B90) && memcmp(g_exeBase + 0x13957F, list, sizeof(list)) == 0 ? 1 : 0;
-        if (!g_doorsChecked) Logf("republicmp  HELD FRAME: Early's door drawing differs - doors drawn on tick frames only");
-    }
-    if (!g_doorsChecked) return;
-    typedef BYTE* (*FragmentFn)(void* models, int model, int variant);
-    typedef BYTE* (*GetNodeFn)(void* tree, int index);
-    FragmentFn fragment = *(FragmentFn*)(g_exeBase + FRAGMENT_IMPORT);
-    GetNodeFn getNode = *(GetNodeFn*)(g_exeBase + GETNODE_IMPORT);
-    DiagLog_BeginSafeSeh();
-    __try {
-        BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
-        BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
-        BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-        for (; engine && it && it < end; ++it) {
-            BYTE* b = *it;
-            BYTE* type = b ? *(BYTE**)(b + 0x318) : nullptr;
-            // As the pass (13db03..13db61): a finished building (+604 1.0, no site +5d0) with doors.
-            if (!type || *(float*)(b + 0x604) != 1.0f || *(void**)(b + 0x5D0)) continue;
-            if (!Count(type + 0xA18, 0x28) && !Count(type + 0xA30, 0x30)) continue;
-            BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
-            BYTE* node = f ? getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
-            if (node && node[0x25]) ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, seconds);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    DiagLog_EndSafeSeh();
-}
-
-// Early submits only the citizens of its every-frame list (world +126c0,
-// 83cea0) for drawing; 832ae0 puts there the agents tied to a building on the
-// camera and nearer than [exe+90af6c] (550 m): with +38 and +40 set, either
-// one (the visibility of +38 with the distance of +40, or both of +40), else
-// +598; never one with +2c set or +10 above 0. Every other agent is updated
-// in three buckets and not drawn. The simulation now sees every building off
-// the camera, so that list stays empty: this PC builds it itself, by the same
-// rules from its own view, and submits it every frame (83cea0 culls it and
-// writes only the frame's render lists; the simulation never sees the list).
-#define AGENTS_ALL 0x126A8
-#define DRAW_AGENTS_RVA 0x83D040
-#define AGENT_NEAR_RVA 0x90AF7C
-#define CAMERA_RVA 0x9E9C90
-#define NODE_POSITION_IMPORT 0x86C7B8   // C3D_NODE::GetPosition
-#define CAMERA_ZDISTANCE_IMPORT 0x86D008 // C3D_CAMERA::GetZDistance
-
 struct ViewBuilding {
     BYTE* building;
     float distance;
@@ -1353,24 +1831,55 @@ struct ViewBuilding {
 static std::vector<ViewBuilding> g_viewBuildings; // sorted by address
 static std::vector<BYTE*> g_nearAgents;
 
-// The buildings this PC sees and their camera distance (as the building pass's visible branch).
-static size_t CollectView(ViewBuilding* out, size_t max)
+static float ComputeDoorFrameSeconds()
 {
+    static LARGE_INTEGER s_last = {};
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    float seconds = s_last.QuadPart && frequency.QuadPart
+        ? (float)(now.QuadPart - s_last.QuadPart) / frequency.QuadPart
+        : 0.0f;
+    s_last = now;
+    if (seconds < 0.0f) seconds = 0.0f;
+    if (seconds > 0.25f) seconds = 0.25f;
+    return seconds;
+}
+
+static void EnsureDoorsChecked()
+{
+    if (g_doorsChecked < 0) {
+        static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0xe2, 0xbc, 0x85, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
+        g_doorsChecked = CallTargets(0x13DB61, 0x138B90) && memcmp(g_exeBase + 0x13957F, list, sizeof(list)) == 0 ? 1 : 0;
+        if (!g_doorsChecked) Logf("republicmp  HELD FRAME: Early's door drawing differs - doors drawn on tick frames only");
+    }
+}
+
+// Single BUILDINGS pass for both DrawDoors (before Filling worker starts) and CollectView.
+static size_t ScanBuildingsForDoorsAndView(bool runDoors, float seconds, ViewBuilding* outView, size_t maxView)
+{
+    if (runDoors) {
+        EnsureDoorsChecked();
+        if (!g_doorsChecked) runDoors = false;
+    }
+    const bool collectView = (outView != nullptr && maxView > 0);
+    if (!runDoors && !collectView) return 0;
+
     typedef BYTE* (*FragmentFn)(void* models, int model, int variant);
     typedef BYTE* (*GetNodeFn)(void* tree, int index);
     typedef void* (*PositionFn)(void* node, float* out);
     typedef float (*ZDistanceFn)(void* camera, float* position);
     FragmentFn fragment = *(FragmentFn*)(g_exeBase + FRAGMENT_IMPORT);
     GetNodeFn getNode = *(GetNodeFn*)(g_exeBase + GETNODE_IMPORT);
-    PositionFn position = *(PositionFn*)(g_exeBase + NODE_POSITION_IMPORT);
-    ZDistanceFn zDistance = *(ZDistanceFn*)(g_exeBase + CAMERA_ZDISTANCE_IMPORT);
+    PositionFn position = collectView ? *(PositionFn*)(g_exeBase + NODE_POSITION_IMPORT) : nullptr;
+    ZDistanceFn zDistance = collectView ? *(ZDistanceFn*)(g_exeBase + CAMERA_ZDISTANCE_IMPORT) : nullptr;
     size_t n = 0;
     DiagLog_BeginSafeSeh();
     __try {
         BYTE* engine = *(BYTE**)(g_exeBase + ENGINE_RVA);
         BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
         BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-        for (; engine && it && it < end && n < max; ++it) {
+        for (; engine && it && it < end; ++it) {
             BYTE* b = *it;
             if (!b) continue;
             BYTE* type = *(BYTE**)(b + 0x318);
@@ -1384,9 +1893,17 @@ static size_t CollectView(ViewBuilding* out, size_t max)
                 visible = render && render[0x178];
             }
             if (!visible) continue;
-            float at[4] = {};
-            position(b + 0x320, at);
-            out[n++] = { b, zDistance(g_exeBase + CAMERA_RVA, at) };
+
+            if (runDoors && type && *(float*)(b + 0x604) == 1.0f && *(void**)(b + 0x5D0) == nullptr) {
+                if (Count(type + 0xA18, 0x28) || Count(type + 0xA30, 0x30)) {
+                    ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, seconds);
+                }
+            }
+            if (collectView && n < maxView) {
+                float at[4] = {};
+                position(b + 0x320, at);
+                outView[n++] = { b, zDistance(g_exeBase + CAMERA_RVA, at) };
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -1490,71 +2007,203 @@ static bool ListSizes(size_t* buildings, size_t* agents)
     return ok;
 }
 
-static void DrawCitizens()
+static void PrepareDoorsAndView(size_t* outAgents, bool* outCanSubmitCitizens)
 {
+    if (outAgents) *outAgents = 0;
+    if (outCanSubmitCitizens) *outCanSubmitCitizens = false;
+    const float seconds = ComputeDoorFrameSeconds();
     size_t buildings = 0, agents = 0;
-    if (!ListSizes(&buildings, &agents)) return;
-    if (!agents || buildings > 1000000 || agents > 10000000) return;
+    const bool haveSizes = ListSizes(&buildings, &agents) && agents > 0 && buildings <= 1000000 && agents <= 10000000;
+    if (!haveSizes || !buildings) {
+        g_viewBuildings.clear();
+        ScanBuildingsForDoorsAndView(true, seconds, nullptr, 0);
+        return;
+    }
+    if (outAgents) *outAgents = agents;
+    if (outCanSubmitCitizens) *outCanSubmitCitizens = true;
     try {
-        g_viewBuildings.resize(buildings);
-        size_t nView = buildings ? CollectView(g_viewBuildings.data(), buildings) : 0;
+        if (g_viewBuildings.size() < buildings) g_viewBuildings.resize(buildings);
+        size_t nView = ScanBuildingsForDoorsAndView(true, seconds, g_viewBuildings.data(), buildings);
         g_viewBuildings.resize(nView);
+    } catch (const std::bad_alloc&) {
+        g_viewBuildings.clear();
+        if (outCanSubmitCitizens) *outCanSubmitCitizens = false;
+    }
+}
+
+static void ClearViewCaches()
+{
+    g_viewBuildings.clear();
+    g_nearAgents.clear();
+    g_keptVisible.clear();
+}
+
+void HeldFrame_GetViewCacheSizesForTest(size_t* outView, size_t* outNear, size_t* outKept)
+{
+    if (outView) *outView = g_viewBuildings.size();
+    if (outNear) *outNear = g_nearAgents.size();
+    if (outKept) *outKept = g_keptVisible.size();
+}
+
+static void SubmitNearCitizensFromView(size_t agents)
+{
+    if (!agents) return;
+    try {
+        const size_t nView = g_viewBuildings.size();
         std::sort(g_viewBuildings.begin(), g_viewBuildings.end(),
                   [](const ViewBuilding& x, const ViewBuilding& y) { return x.building < y.building; });
-        g_nearAgents.resize(agents);
+        if (g_nearAgents.size() < agents) g_nearAgents.resize(agents);
         size_t nNear = CollectNear(g_viewBuildings.data(), nView, g_nearAgents.data(), agents);
-        g_keptVisible.resize(nView);
+        if (g_keptVisible.size() < nView) g_keptVisible.resize(nView);
         if (nNear) Submit(g_nearAgents.data(), nNear, g_viewBuildings.data(), nView, g_keptVisible.data());
     } catch (const std::bad_alloc&) {
     }
 }
 
-static bool ReadBuildingAnimInfo(const BYTE* b, float* outMaxFrames, float* outTypeSpeed)
+static float ComputeFallbackFromFields(float typeSpeed, float effCap, float util, float prod)
 {
-    if (!b) return false;
-    float progress = 0.0f;
-    void* site = nullptr;
-    const BYTE* type = nullptr;
-    const BYTE* mesh = nullptr;
-    if (!Read(b + BLD_PROGRESS_OFFSET, &progress, sizeof(progress)) || progress < 1.0f ||
-        !Read(b + BLD_CONSTRUCTION_SITE_OFFSET, &site, sizeof(site)) || site != nullptr ||
-        !Read(b + BLD_TYPE_OFFSET, &type, sizeof(type)) || !type ||
-        !Read(b + BLD_ANIM_SUBMESH_OFFSET, &mesh, sizeof(mesh)) || !mesh) {
-        return false;
-    }
-    const BYTE* typeMesh = nullptr;
-    float typeSpeed = 0.0f;
-    const BYTE* animCtrl = nullptr;
-    if (!Read(type + BLD_TYPE_ANIM_SUBMESH_OFFSET, &typeMesh, sizeof(typeMesh)) || typeMesh != mesh ||
-        !Read(type + BLD_TYPE_ANIM_SPEED_OFFSET, &typeSpeed, sizeof(typeSpeed)) ||
-        !isfinite(typeSpeed) || typeSpeed <= 0.0f ||
-        !Read(mesh + MESH_ANIM_CTRL_OFFSET, &animCtrl, sizeof(animCtrl)) || !animCtrl) {
-        return false;
-    }
-    int32_t maxFramesInt = 0;
-    if (!Read(animCtrl + ANIM_CTRL_MAX_FRAMES_OFFSET, &maxFramesInt, sizeof(maxFramesInt)) ||
-        maxFramesInt <= 0 || maxFramesInt > 100000) {
-        return false;
-    }
-    *outMaxFrames = (float)maxFramesInt;
-    *outTypeSpeed = typeSpeed;
-    return true;
+    const bool hasEff = isfinite(effCap) && effCap >= 0.0001f;
+    const bool hasUtil = isfinite(util) && util >= 0.0001f;
+    const bool hasProd = isfinite(prod) && prod >= 0.0001f;
+    if (!hasEff && !hasUtil && !hasProd) return 0.0f;
+    const float factor = (hasUtil && util <= 1.0f) ? util : ((hasEff && effCap <= 1.0f) ? effCap : 1.0f);
+    return (typeSpeed * factor) / DETERMINISM_FIXED_FPS;
 }
 
-static float ComputeFallbackAnimStepPerTick(const BYTE* b, float typeSpeed)
+static bool ReadBuildingsBoundsPod(BYTE* exeBase, BYTE*** outIt, BYTE*** outEnd, int* outBucketCounter, bool readBucket)
 {
-    float effCap = 0.0f;
-    float util = 0.0f;
-    float prod = 0.0f;
-    Read(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET, &effCap, sizeof(effCap));
-    Read(b + BLD_UTILIZATION_RATIO_OFFSET, &util, sizeof(util));
-    Read(b + BLD_PRODUCED_OFFSET, &prod, sizeof(prod));
-    bool hasEff = isfinite(effCap) && effCap >= 0.0001f;
-    bool hasUtil = isfinite(util) && util >= 0.0001f;
-    bool hasProd = isfinite(prod) && prod >= 0.0001f;
-    if (!hasEff && !hasUtil && !hasProd) return 0.0f;
-    float factor = (hasUtil && util <= 1.0f) ? util : ((hasEff && effCap <= 1.0f) ? effCap : 1.0f);
-    return (typeSpeed * factor) / DETERMINISM_FIXED_FPS;
+    *outIt = nullptr;
+    *outEnd = nullptr;
+    if (outBucketCounter) *outBucketCounter = 0;
+    if (!exeBase) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE** it = *(BYTE***)(exeBase + BUILDINGS_BEGIN_RVA);
+        BYTE** end = *(BYTE***)(exeBase + BUILDINGS_END_RVA);
+        if (it && end > it && (size_t)(end - it) <= 1000000u) {
+            *outIt = it;
+            *outEnd = end;
+            if (readBucket && outBucketCounter) {
+                *outBucketCounter = *(const int*)(exeBase + BLD_PASS_BUCKET_COUNTER_RVA);
+            }
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static void CollectAnimatedBuildingsBatchPod(
+    BYTE* const* it, size_t count, volatile size_t* ioIdx,
+    AnimBldSnapshot* outBuf, size_t outCap, size_t* ioWritten, bool readFallback)
+{
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    size_t written = *ioWritten;
+    __try {
+        for (; idx < count && written < outCap; ++idx) {
+            cur = idx;
+            BYTE* b = it[idx];
+            if (!b) continue;
+            // Check submesh pointer first so non-animated buildings exit in 1 read.
+            const BYTE* mesh = *(const BYTE* const*)(b + BLD_ANIM_SUBMESH_OFFSET);
+            if (!mesh) continue;
+            const float progress = *(const float*)(b + BLD_PROGRESS_OFFSET);
+            const void* site = *(const void* const*)(b + BLD_CONSTRUCTION_SITE_OFFSET);
+            const BYTE* type = *(const BYTE* const*)(b + BLD_TYPE_OFFSET);
+            if (progress < 1.0f || site != nullptr || !type) continue;
+            const BYTE* typeMesh = *(const BYTE* const*)(type + BLD_TYPE_ANIM_SUBMESH_OFFSET);
+            const float typeSpeed = *(const float*)(type + BLD_TYPE_ANIM_SPEED_OFFSET);
+            const BYTE* animCtrl = *(const BYTE* const*)(mesh + MESH_ANIM_CTRL_OFFSET);
+            if (typeMesh != mesh || !isfinite(typeSpeed) || typeSpeed <= 0.0f || !animCtrl) continue;
+            const int32_t maxFramesInt = *(const int32_t*)(animCtrl + ANIM_CTRL_MAX_FRAMES_OFFSET);
+            if (maxFramesInt <= 0 || maxFramesInt > 100000) continue;
+            AnimBldSnapshot snap = {};
+            snap.b = b;
+            snap.listIndex = (uint32_t)idx;
+            snap.maxFrames = (float)maxFramesInt;
+            snap.typeSpeed = typeSpeed;
+            snap.curFrame = *(const float*)(b + BLD_ANIM_FRAME_OFFSET);
+            if (readFallback) {
+                const float effCap = *(const float*)(b + BLD_EFFECTIVE_CAP_FLOAT_OFFSET);
+                const float util = *(const float*)(b + BLD_UTILIZATION_RATIO_OFFSET);
+                const float prod = *(const float*)(b + BLD_PRODUCED_OFFSET);
+                snap.fallbackStep = ComputeFallbackFromFields(typeSpeed, effCap, util, prod);
+            }
+            outBuf[written++] = snap;
+        }
+        *ioIdx = idx;
+        *ioWritten = written;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioWritten = written;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static void WriteBuildingAnimFramesBatchPod(const AnimBldWrite* writes, size_t n, volatile size_t* ioIdx)
+{
+    if (!writes || n == 0) return;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            *(float*)(writes[idx].b + BLD_ANIM_FRAME_OFFSET) = writes[idx].frame;
+        }
+        *ioIdx = idx;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+    }
+    DiagLog_EndSafeSeh();
+}
+
+static bool CopyBuildingPtrRangePod(BYTE* const* it, size_t count, BYTE** outPtrs)
+{
+    if (!it || !outPtrs || count == 0) return false;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        memcpy(outPtrs, it, count * sizeof(BYTE*));
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static size_t CollectAllAnimatedBuildings(bool readFallback, bool readBucket, BYTE*** outIt, size_t* outCount, int* outBucketCounter)
+{
+    BYTE** it = nullptr;
+    BYTE** end = nullptr;
+    if (!ReadBuildingsBoundsPod(g_exeBase, &it, &end, outBucketCounter, readBucket)) return 0;
+    const size_t count = (size_t)(end - it);
+    if (outIt) *outIt = it;
+    if (outCount) *outCount = count;
+    if (g_animReadScratch.size() < count) g_animReadScratch.resize(count);
+    volatile size_t idx = 0;
+    size_t written = 0;
+    while (idx < count) {
+        CollectAnimatedBuildingsBatchPod(
+            it, count, &idx, g_animReadScratch.data(), count, &written, readFallback);
+    }
+    return written;
+}
+
+static void FlushBuildingAnimWrites()
+{
+    const size_t n = g_animWriteScratch.size();
+    volatile size_t idx = 0;
+    while (idx < n) {
+        WriteBuildingAnimFramesBatchPod(g_animWriteScratch.data(), n, &idx);
+    }
+    g_animWriteScratch.clear();
 }
 
 float HeldFrame_StepBuildingAnimFrame(float currentFrame, float maxFrames, float stepPerTick, float fps, bool paused)
@@ -1579,70 +2228,60 @@ float HeldFrame_StepBuildingAnimFrame(float currentFrame, float maxFrames, float
 void HeldFrame_BeforeEarly()
 {
     if (!g_exeBase || !Determinism_IsActive() || Probe_IsRunning() || Determinism_WorldLoading()) return;
-    BYTE** it = nullptr;
-    BYTE** end = nullptr;
-    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
-        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
-        return;
-    }
-    size_t count = (size_t)(end - it);
-    if (count > 1000000) return;
-    for (size_t i = 0; i < count; ++i) {
-        BYTE* b = nullptr;
-        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
-        float maxFrames = 0.0f, typeSpeed = 0.0f;
-        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
-        float curFrame = 0.0f;
-        Read(b + BLD_ANIM_FRAME_OFFSET, &curFrame, sizeof(curFrame));
-        if (!isfinite(curFrame) || curFrame < 0.0f || curFrame >= maxFrames) {
-            curFrame = (isfinite(curFrame) && curFrame > 0.0f) ? fmodf(curFrame, maxFrames) : 0.0f;
+    const size_t written = CollectAllAnimatedBuildings(false, false, nullptr, nullptr, nullptr);
+    g_animWriteScratch.clear();
+    g_animWriteScratch.reserve(written);
+    for (size_t i = 0; i < written; ++i) {
+        const AnimBldSnapshot& snap = g_animReadScratch[i];
+        float curFrame = snap.curFrame;
+        if (!isfinite(curFrame) || curFrame < 0.0f || curFrame >= snap.maxFrames) {
+            curFrame = (isfinite(curFrame) && curFrame > 0.0f) ? fmodf(curFrame, snap.maxFrames) : 0.0f;
         }
-        BuildingAnimState& st = g_buildingAnimState[b];
+        BuildingAnimState& st = g_buildingAnimState[snap.b];
         st.visualFrame = curFrame;
-        float zero = 0.0f;
-        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, zero);
+        g_animWriteScratch.push_back({ snap.b, 0.0f });
     }
+    FlushBuildingAnimWrites();
 }
 
 static void RestoreBuildingAnimationsAfterEarly()
 {
     if (!g_exeBase || !Determinism_IsActive() || Probe_IsRunning() || Determinism_WorldLoading()) return;
     BYTE** it = nullptr;
-    BYTE** end = nullptr;
-    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
-        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
-        return;
-    }
-    size_t count = (size_t)(end - it);
-    if (count > 1000000) return;
+    size_t count = 0;
     int bucketCounter = 0;
-    Read(g_exeBase + BLD_PASS_BUCKET_COUNTER_RVA, &bucketCounter, sizeof(bucketCounter));
-    int activeBucket = bucketCounter % 3;
-    size_t liveAnimated = 0;
-    for (size_t i = 0; i < count; ++i) {
-        BYTE* b = nullptr;
-        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
-        float maxFrames = 0.0f, typeSpeed = 0.0f;
-        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
-        ++liveAnimated;
-        float delta3 = 0.0f;
-        Read(b + BLD_ANIM_FRAME_OFFSET, &delta3, sizeof(delta3));
-        BuildingAnimState& st = g_buildingAnimState[b];
-        bool inBucket = (((int)i % 3) == activeBucket);
+    const size_t liveAnimated = CollectAllAnimatedBuildings(false, true, &it, &count, &bucketCounter);
+    const int activeBucket = bucketCounter % 3;
+    g_animWriteScratch.clear();
+    g_animWriteScratch.reserve(liveAnimated);
+    for (size_t i = 0; i < liveAnimated; ++i) {
+        const AnimBldSnapshot& snap = g_animReadScratch[i];
+        const float delta3 = snap.curFrame;
+        BuildingAnimState& st = g_buildingAnimState[snap.b];
+        const bool inBucket = (((int)snap.listIndex % 3) == activeBucket);
         if (inBucket || (isfinite(delta3) && delta3 > 0.0f)) {
-            if (isfinite(delta3) && delta3 >= 0.0f && delta3 < maxFrames) {
+            if (isfinite(delta3) && delta3 >= 0.0f && delta3 < snap.maxFrames) {
                 st.stepPerTick = delta3 / 3.0f;
                 st.hasMeasuredStep = true;
             }
         }
-        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, st.visualFrame);
+        g_animWriteScratch.push_back({ snap.b, st.visualFrame });
     }
-    if (g_buildingAnimState.size() > liveAnimated + 64) {
-        std::unordered_set<BYTE*> still(it, end);
-        for (auto mapIt = g_buildingAnimState.begin(); mapIt != g_buildingAnimState.end();) {
-            if (!still.count(mapIt->first)) mapIt = g_buildingAnimState.erase(mapIt);
-            else ++mapIt;
+    FlushBuildingAnimWrites();
+    if (g_buildingAnimState.size() > liveAnimated + 64 && it && count > 0) {
+        g_animStillScratch.resize(count);
+        if (CopyBuildingPtrRangePod(it, count, g_animStillScratch.data())) {
+            std::sort(g_animStillScratch.begin(), g_animStillScratch.end(), std::less<BYTE*>{});
+            for (auto mapIt = g_buildingAnimState.begin(); mapIt != g_buildingAnimState.end();) {
+                if (!std::binary_search(g_animStillScratch.begin(), g_animStillScratch.end(),
+                                        mapIt->first, std::less<BYTE*>{})) {
+                    mapIt = g_buildingAnimState.erase(mapIt);
+                } else {
+                    ++mapIt;
+                }
+            }
         }
+        g_animStillScratch.clear();
     }
 }
 
@@ -1656,40 +2295,32 @@ void HeldFrame_StepBuildingAnimations(float fps)
     Read(g_exeBase + 0x9D4EE0 + 13, &menuByte, sizeof(menuByte));
     if (paused || menuByte != 0 || !isfinite(fps) || fps <= 0.0f) return;
 
-    BYTE** it = nullptr;
-    BYTE** end = nullptr;
-    if (!Read(g_exeBase + BUILDINGS_BEGIN_RVA, &it, sizeof(it)) ||
-        !Read(g_exeBase + BUILDINGS_END_RVA, &end, sizeof(end)) || !it || end <= it) {
-        return;
-    }
-    size_t count = (size_t)(end - it);
-    if (count > 1000000) return;
-    for (size_t i = 0; i < count; ++i) {
-        BYTE* b = nullptr;
-        if (!Read(it + i, &b, sizeof(b)) || !b) continue;
-        float maxFrames = 0.0f, typeSpeed = 0.0f;
-        if (!ReadBuildingAnimInfo(b, &maxFrames, &typeSpeed)) continue;
-        BuildingAnimState& st = g_buildingAnimState[b];
-        float fallbackStep = ComputeFallbackAnimStepPerTick(b, typeSpeed);
+    const size_t written = CollectAllAnimatedBuildings(true, false, nullptr, nullptr, nullptr);
+    g_animWriteScratch.clear();
+    g_animWriteScratch.reserve(written);
+    for (size_t i = 0; i < written; ++i) {
+        const AnimBldSnapshot& snap = g_animReadScratch[i];
+        BuildingAnimState& st = g_buildingAnimState[snap.b];
         float stepPerTick = 0.0f;
-        if (fallbackStep > 0.0f) {
-            stepPerTick = (st.hasMeasuredStep && st.stepPerTick > 0.0f) ? st.stepPerTick : fallbackStep;
+        if (snap.fallbackStep > 0.0f) {
+            stepPerTick = (st.hasMeasuredStep && st.stepPerTick > 0.0f) ? st.stepPerTick : snap.fallbackStep;
         }
         if (stepPerTick <= 0.0f) continue;
-        float curFrame = 0.0f;
-        Read(b + BLD_ANIM_FRAME_OFFSET, &curFrame, sizeof(curFrame));
-        float nextFrame = HeldFrame_StepBuildingAnimFrame(curFrame, maxFrames, stepPerTick, fps, false);
-        SafeWritePod<float>(b + BLD_ANIM_FRAME_OFFSET, nextFrame);
+        const float nextFrame = HeldFrame_StepBuildingAnimFrame(snap.curFrame, snap.maxFrames, stepPerTick, fps, false);
         st.visualFrame = nextFrame;
+        g_animWriteScratch.push_back({ snap.b, nextFrame });
     }
+    FlushBuildingAnimWrites();
 }
 
 void HeldFrame_AfterEarly()
 {
     Determinism_PrivateScope privateRng;
     RestoreBuildingAnimationsAfterEarly();
-    DrawDoors();
-    DrawCitizens();
+    size_t agents = 0;
+    bool canSubmitCitizens = false;
+    PrepareDoorsAndView(&agents, &canSubmitCitizens);
+    if (canSubmitCitizens) SubmitNearCitizensFromView(agents);
 }
 
 // Early (30cb74..30cf4e) normally starts and joins this worker. On a held
@@ -1733,10 +2364,12 @@ bool HeldFrame_Draw(bool entitiesReady)
     }
     // Early queues the junctions and doors before it starts the worker, whose
     // vehicle builders push to the same render lists (+a8, +1f8, +258).
+    size_t heldAgents = 0;
+    bool canSubmitCitizens = false;
     if (entitiesReady) {
         Determinism_PrivateScope privateRng;
         DrawJunctions();
-        DrawDoors();
+        PrepareDoorsAndView(&heldAgents, &canSubmitCitizens);
     }
     BYTE* queue = *(BYTE**)(g_exeBase + 0x9E7710);
     BYTE* paths = *(BYTE**)(g_exeBase + 0x9E2350);
@@ -1752,9 +2385,9 @@ bool HeldFrame_Draw(bool entitiesReady)
         worker[0x59] = 0;
         started = SetEvent(*(HANDLE*)(worker + 0x60)) != FALSE;
     }
-    if (entitiesReady) {
+    if (entitiesReady && canSubmitCitizens) {
         Determinism_PrivateScope privateRng;
-        DrawCitizens();
+        SubmitNearCitizensFromView(heldAgents);
     }
     if (started) {
         auto* lock = (CRITICAL_SECTION*)(worker + 0x70);

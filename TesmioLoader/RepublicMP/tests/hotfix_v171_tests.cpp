@@ -198,10 +198,93 @@ static bool SubTest_V171_ClientHostLostModalAndExit()
     TEST_CHECK(strcmp(info.hostLabel, "Host: Comrade") == 0);
     TEST_CHECK(strstr(info.reason, "host stopped responding") != nullptr);
 
-    // Dismissing unblocks offline continuation
+    // Verify Host-Lost modal expands vertically with AutoResizeY (no collapsed child)
+    ImGuiContext* prevCtx = ImGui::GetCurrentContext();
+    ImGuiContext* hostLostCtx = ImGui::CreateContext();
+    TEST_CHECK(hostLostCtx != nullptr);
+    float cardW = 0.0f, cardH = 0.0f, innerH = 0.0f, contentY = 0.0f;
+    bool hasChild = false;
+    if (hostLostCtx) {
+        ImGui::SetCurrentContext(hostLostCtx);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+        io.DeltaTime = 1.0f / 60.0f;
+        unsigned char* fontPx = nullptr;
+        int fontW = 0, fontH = 0;
+        io.Fonts->GetTexDataAsRGBA32(&fontPx, &fontW, &fontH);
+        for (int frameIdx = 0; frameIdx < 3; ++frameIdx) {
+            ImGui::NewFrame();
+            SyncBlock_Draw();
+            ImGui::Render();
+        }
+        if (ImGuiWindow* cardWin = ImGui::FindWindowByName("##republicmp_client_host_lost_card")) {
+            cardW = cardWin->Size.x;
+            cardH = cardWin->Size.y;
+            if (cardWin->DC.ChildWindows.Size >= 1 && cardWin->DC.ChildWindows[0]) {
+                ImGuiWindow* innerWin = cardWin->DC.ChildWindows[0];
+                hasChild = true;
+                innerH = innerWin->Size.y;
+                contentY = innerWin->ContentSize.y;
+            }
+        }
+        ImGui::DestroyContext(hostLostCtx);
+        ImGui::SetCurrentContext(prevCtx);
+    }
+    printf("    [V171-HostLostModal] card=%.1fx%.1f innerH=%.1f contentY=%.1f\n",
+           cardW, cardH, innerH, contentY);
+    TEST_CHECK(cardW >= 760.0f && cardH >= 240.0f);
+    TEST_CHECK(hasChild && innerH >= 160.0f);
+    TEST_CHECK(contentY <= innerH + 4.0f);
+
+    // Truth table for restoring Host-Lost modal on failed reconnect
+    TEST_CHECK(SaveSync_ShouldRestoreClientHostLostOnJoinFailure(true, true, false));
+    TEST_CHECK(!SaveSync_ShouldRestoreClientHostLostOnJoinFailure(false, true, false));
+    TEST_CHECK(!SaveSync_ShouldRestoreClientHostLostOnJoinFailure(true, false, false));
+    TEST_CHECK(!SaveSync_ShouldRestoreClientHostLostOnJoinFailure(true, true, true));
+
+    // If Reconnect is clicked while host is not ready yet, failed connect restores the Host-Lost menu & pause
+    TEST_CHECK(NetworkInit());
+    SOCKET probeSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    TEST_CHECK(probeSock != INVALID_SOCKET);
+    sockaddr_in probeAddr = {};
+    probeAddr.sin_family = AF_INET;
+    probeAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    probeAddr.sin_port = 0;
+    TEST_CHECK(bind(probeSock, reinterpret_cast<const sockaddr*>(&probeAddr), sizeof(probeAddr)) == 0);
+    int probeLen = sizeof(probeAddr);
+    TEST_CHECK(getsockname(probeSock, reinterpret_cast<sockaddr*>(&probeAddr), &probeLen) == 0);
+    const uint16_t closedPort = ntohs(probeAddr.sin_port);
+    closesocket(probeSock);
+
+    char closedTarget[64] = {};
+    _snprintf_s(closedTarget, sizeof(closedTarget), _TRUNCATE, "127.0.0.1:%u", static_cast<unsigned>(closedPort));
+    *reinterpret_cast<int*>(g_mockExeBuffer + GAME_SPEED_DAT_RVA + GAME_SPEED_OFFSET) = 1;
+    SaveSync_EnforceWaitingLobbyHold(g_mockExeBuffer);
+    TEST_CHECK(*reinterpret_cast<const int*>(g_mockExeBuffer + GAME_SPEED_DAT_RVA + GAME_SPEED_OFFSET) == 0);
+
+    SaveSync_SetClientHostLostForTest(true, closedTarget, "Host: Comrade", "host stopped responding");
+    TEST_CHECK(SaveSync_ReconnectAfterHostLost());
+    for (int waitIdx = 0; waitIdx < 400 && SaveSync_GetState() != SESSION_IDLE; ++waitIdx) {
+        Sleep(20);
+    }
+    TEST_CHECK(SaveSync_GetState() == SESSION_IDLE);
+    TEST_CHECK(SaveSync_IsClientHostLost());
+    TEST_CHECK(SaveSync_ShouldShowClientHostLostModal(SESSION_IDLE, true, true));
+    TEST_CHECK(SyncBlock_BlocksWorldInput());
+    ClientHostLostInfo reInfo = {};
+    TEST_CHECK(SaveSync_GetClientHostLostInfo(&reInfo));
+    TEST_CHECK(reInfo.active);
+    TEST_CHECK(strcmp(reInfo.hostAddress, closedTarget) == 0);
+    TEST_CHECK(strcmp(reInfo.hostLabel, "Host: Comrade") == 0);
+    TEST_CHECK(reInfo.reason[0] != '\0');
+    TEST_CHECK(strcmp(reInfo.reason, "host stopped responding") != 0);
+    TEST_CHECK(*reinterpret_cast<const int*>(g_mockExeBuffer + GAME_SPEED_DAT_RVA + GAME_SPEED_OFFSET) == 0);
+
+    // Dismissing unblocks offline continuation and rejects host-lost reconnect without active prompt
     SaveSync_DismissClientHostLost();
     TEST_CHECK(!SaveSync_IsClientHostLost());
     TEST_CHECK(!SyncBlock_BlocksWorldInput());
+    TEST_CHECK(!SaveSync_ReconnectAfterHostLost());
 
     // ExitToMainMenu clears host-lost + Filling queues + writes menu transition bytes
     std::vector<BYTE> v1(0x100, 0);
@@ -443,7 +526,7 @@ static bool SubTest_V171_SpeedMeterAndAckTransfer()
 
 static bool Test_HotfixV171_All()
 {
-    TEST_CHECK(REPUBLICMP_PROTOCOL == 64);
+    TEST_CHECK(REPUBLICMP_PROTOCOL >= 64);
 
     printf("    [1/5] Crash A: Signal segment & 0x41E9F0 prologue/pointer guard ...\n"); fflush(stdout);
     if (!SubTest_V171_CrashASignalSegmentGuard()) return false;

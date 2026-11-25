@@ -103,3 +103,6 @@ struct CitizenRecord {
 bool StateHash_BuildingRecords(std::vector<BuildingRecord>& out);
 bool StateHash_CitizenRecords(std::vector<CitizenRecord>& out);
 bool StateHash_VehicleRecords(std::vector<VehicleRecord>& out);
+
+// Logs compact per-vehicle / per-building / per-construction breakdown on DESYNC (game thread only).
+void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick);

@@ -95,3 +95,19 @@ void SteamP2P_FrameTick();
 
 // Unregisters Steam P2P callbacks (1202, 1203, 337) during session teardown.
 void SteamP2P_UnregisterCallbacks();
+
+// Queries live P2P session state (connection active, SDR relay flag, send queue bytes).
+void SteamP2P_GetPerfStats(bool* outConnected, bool* outUsingRelay, int32_t* outQueuedBytes);
+
+// Test-only hooks for exercising SteamSocketSlot ring buffer, scratch reuse, and s_dataCv
+// without steam_api64.dll in republicmp_tests.exe.
+SOCKET SteamP2P_CreateTestSocketForTest(uint64_t remoteSteamId, unsigned short port,
+                                        uint32_t connId, DWORD ioTimeoutMs, bool connected);
+void SteamP2P_InjectTestFrameForTest(uint64_t senderSteamId, uint8_t frameType,
+                                     unsigned short port, uint32_t connId,
+                                     const void* payload, uint32_t payloadLen);
+bool SteamP2P_GetSlotBufferStatsForTest(SOCKET s, size_t* outSize, size_t* outCap, size_t* outHead);
+bool SteamP2P_TestScratchAndDispatchForTest(SOCKET s, const void* payload, uint32_t payloadLen,
+                                            uint32_t oversizedMsgSize,
+                                            const void** outSendPtr, size_t* outSendCap,
+                                            const void** outRecvPtr, size_t* outRecvCap);

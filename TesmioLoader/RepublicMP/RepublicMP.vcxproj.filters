@@ -25,6 +25,9 @@
     <Filter Include="session">
       <UniqueIdentifier>{B2C3D4E5-0002-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
     </Filter>
+    <Filter Include="session\two_states">
+      <UniqueIdentifier>{B2C3D4E5-000B-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+    </Filter>
     <Filter Include="determinism">
       <UniqueIdentifier>{B2C3D4E5-0003-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
     </Filter>
@@ -119,6 +122,24 @@
     </ClCompile>
     <ClCompile Include="session\save_sync.cpp">
       <Filter>session</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_core.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_econ.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_sim_hooks.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_research.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_overlay.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_persistence.cpp">
+      <Filter>session\two_states</Filter>
     </ClCompile>
     <ClCompile Include="third_party\miniz\miniz.c">
       <Filter>third_party\miniz</Filter>
@@ -329,6 +350,9 @@
     <ClInclude Include="session\save_sync.h">
       <Filter>session</Filter>
     </ClInclude>
+    <ClInclude Include="session\two_states\two_states_internal.h">
+      <Filter>session\two_states</Filter>
+    </ClInclude>
     <ClInclude Include="third_party\miniz\miniz.h">
       <Filter>third_party\miniz</Filter>
     </ClInclude>
@@ -411,6 +435,9 @@
       <Filter>determinism</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\commands.h">
+      <Filter>lockstep</Filter>
+    </ClInclude>
+    <ClInclude Include="lockstep\switch_common.h">
       <Filter>lockstep</Filter>
     </ClInclude>
     <ClInclude Include="lockstep\purchase.h">

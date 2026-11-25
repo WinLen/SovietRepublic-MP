@@ -167,17 +167,24 @@ inline bool IsPointerLikeX64(uint64_t v)
         return false;
     if (high >= 0x100u)
         return true;
+    const int64_t vqT0 = DiagPerf_Now();
     MEMORY_BASIC_INFORMATION mbi = {};
     if (VirtualQuery((const void*)(uintptr_t)v, &mbi, sizeof(mbi)) != sizeof(mbi) ||
-        mbi.State != MEM_COMMIT)
+        mbi.State != MEM_COMMIT) {
+        DiagPerf_RecordVirtualQuery(DiagPerf_Now() - vqT0);
         return false;
+    }
     const DWORD badProt = PAGE_NOACCESS | PAGE_GUARD;
     const DWORD readProt = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
                            PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    if ((mbi.Protect & badProt) != 0 || (mbi.Protect & readProt) == 0)
+    if ((mbi.Protect & badProt) != 0 || (mbi.Protect & readProt) == 0) {
+        DiagPerf_RecordVirtualQuery(DiagPerf_Now() - vqT0);
         return false;
+    }
     uint64_t probe = 0;
-    return SafeMemcpyPod(&probe, (const void*)(uintptr_t)v, sizeof(probe));
+    const bool ok = SafeMemcpyPod(&probe, (const void*)(uintptr_t)v, sizeof(probe));
+    DiagPerf_RecordVirtualQuery(DiagPerf_Now() - vqT0);
+    return ok;
 }
 
 // Validates a C3D_MATERIAL pointer before SaveOriginalValues/ChangeValuesTo/RestoreOriginalValues.

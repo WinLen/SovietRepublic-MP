@@ -29,10 +29,12 @@ Write-Host "================================================================" -F
 Write-Host " [2/5] Compiling & Running Unit Test Suite (republicmp_tests.exe)" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
-# Remove any stale .obj files left from deleted legacy UI files
+# Remove any stale .obj files left from deleted legacy UI/monolith files
 Remove-Item -Path (Join-Path $repDir "obj\Release\x64\debug_window.obj") -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path $repDir "obj\Release\x64\main_menu.obj") -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $repDir "obj\Release\x64\two_states.obj") -Force -ErrorAction SilentlyContinue
 
+$testsObjDir = Join-Path $buildDir "tests_obj"
 for ($retry = 0; $retry -lt 5; $retry++) {
     try {
         if (Test-Path (Join-Path $buildDir "republicmp_tests.exe")) {
@@ -41,22 +43,38 @@ for ($retry = 0; $retry -lt 5; $retry++) {
         if (Test-Path (Join-Path $buildDir "test_main.obj")) {
             Remove-Item -Path (Join-Path $buildDir "test_main.obj") -Force -ErrorAction Stop
         }
+        if (Test-Path $testsObjDir) {
+            Get-ChildItem -Path $testsObjDir -Filter "*.obj" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction Stop
+        }
         break
     } catch {
         Start-Sleep -Milliseconds 500
     }
 }
+New-Item -ItemType Directory -Path $testsObjDir -Force | Out-Null
 
 $testCompileCmd = @"
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1
 cd /d "$repDir"
-cl /nologo /O2 /MT /W3 /EHsc /std:c++20 /utf-8 ^
+cl /nologo /c /O2 /MT /W3 /EHsc /std:c++20 /utf-8 ^
    /D "NDEBUG" /D "_WINDOWS" /D "_CRT_SECURE_NO_WARNINGS" /D "NOMINMAX" ^
    /I"..\src" /I"third_party\imgui" /I"third_party\imgui\backends" ^
-   /Fo"$buildDir\test_main.obj" /Fe"$buildDir\republicmp_tests.exe" ^
-   tests\test_main.cpp obj\Release\x64\*.obj ^
-   /link /LTCG /SUBSYSTEM:CONSOLE kernel32.lib user32.lib gdi32.lib ws2_32.lib iphlpapi.lib winhttp.lib d3d11.lib dxgi.lib imm32.lib advapi32.lib shell32.lib
+   /Fo"$testsObjDir\\" ^
+   tests\test_harness.cpp ^
+   tests\test_core_determinism.cpp ^
+   tests\test_two_states_econ.cpp ^
+   tests\test_session_saves_settings.cpp ^
+   tests\test_lockstep_world_switches.cpp ^
+   tests\test_vehicles_and_soft_sync.cpp ^
+   tests\test_e2e_tiers_and_stress.cpp ^
+   tests\test_audit_and_rco_bugs.cpp ^
+   tests\test_lan_transport.cpp ^
+   tests\test_main.cpp
+if errorlevel 1 exit /b 1
+link /nologo /LTCG /SUBSYSTEM:CONSOLE /OUT:"$buildDir\republicmp_tests.exe" ^
+   "$testsObjDir\*.obj" "$repDir\obj\Release\x64\*.obj" ^
+   kernel32.lib user32.lib gdi32.lib ws2_32.lib iphlpapi.lib winhttp.lib d3d11.lib dxgi.lib imm32.lib advapi32.lib shell32.lib
 "@
 
 $tempBat = Join-Path $buildDir "compile_tests.bat"
@@ -95,7 +113,12 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    session\game_speed.cpp ^
    session\sync_check.cpp ^
    session\money.cpp ^
-   session\two_states.cpp ^
+   session\two_states\two_states_core.cpp ^
+   session\two_states\two_states_econ.cpp ^
+   session\two_states\two_states_sim_hooks.cpp ^
+   session\two_states\two_states_research.cpp ^
+   session\two_states\two_states_overlay.cpp ^
+   session\two_states\two_states_persistence.cpp ^
    session\mod_sync.cpp ^
    session\updater.cpp ^
    session\settings_sync.cpp ^
@@ -141,6 +164,15 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    ui\debug_log.cpp ^
    ui\sync_block.cpp ^
    ui\ui_common.cpp ^
+   tests\test_harness.cpp ^
+   tests\test_core_determinism.cpp ^
+   tests\test_two_states_econ.cpp ^
+   tests\test_session_saves_settings.cpp ^
+   tests\test_lockstep_world_switches.cpp ^
+   tests\test_vehicles_and_soft_sync.cpp ^
+   tests\test_e2e_tiers_and_stress.cpp ^
+   tests\test_audit_and_rco_bugs.cpp ^
+   tests\test_lan_transport.cpp ^
    tests\test_main.cpp
 "@
 
@@ -155,7 +187,7 @@ if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
     Write-Error "MSVC /analyze failed with exit code $analyzeExit and $($warns.Count) warning(s)"
     exit 1
 }
-Write-Host "[PASS] MSVC /analyze completed cleanly across all 57 compilation units (0 warnings)." -ForegroundColor Green
+Write-Host "[PASS] MSVC /analyze completed cleanly across all 71 compilation units (0 warnings)." -ForegroundColor Green
 
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " [4/5] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
@@ -193,7 +225,12 @@ cd /d "$repDir"
    lockstep\commands.cpp ^
    lockstep\rename.cpp ^
    lockstep\lockstep_net.cpp ^
-   session\two_states.cpp ^
+   session\two_states\two_states_core.cpp ^
+   session\two_states\two_states_econ.cpp ^
+   session\two_states\two_states_sim_hooks.cpp ^
+   session\two_states\two_states_research.cpp ^
+   session\two_states\two_states_overlay.cpp ^
+   session\two_states\two_states_persistence.cpp ^
    session\mod_sync.cpp ^
    session\save_sync.cpp ^
    save\save_zip.cpp ^
@@ -204,6 +241,15 @@ cd /d "$repDir"
    ui\sync_block.cpp ^
    ui\ui_common.cpp ^
    world_sync\networks\road_sync.cpp ^
+   tests\test_harness.cpp ^
+   tests\test_core_determinism.cpp ^
+   tests\test_two_states_econ.cpp ^
+   tests\test_session_saves_settings.cpp ^
+   tests\test_lockstep_world_switches.cpp ^
+   tests\test_vehicles_and_soft_sync.cpp ^
+   tests\test_e2e_tiers_and_stress.cpp ^
+   tests\test_audit_and_rco_bugs.cpp ^
+   tests\test_lan_transport.cpp ^
    tests\test_main.cpp ^
    -- $tidyStd -fms-extensions -fms-compatibility -D_MT -DNDEBUG -D_WINDOWS -D_USRDLL -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -Wno-microsoft-include -Wno-pragma-pack -I..\src -Ithird_party\imgui -Ithird_party\imgui\backends
 "@

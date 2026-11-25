@@ -285,21 +285,56 @@ def extract_functions_from_file(file_path: Path, root_dir: Path) -> List[CppFunc
     return functions
 
 
+IGNORED_TEST_DIRS = {"third_party", "obj", "build", "tests_obj", ".git", ".metrics"}
+
+
+def iter_test_source_files(test_root: Path) -> List[Path]:
+    """Recursively collect .cpp and .h files under test_root, skipping hidden/build/.metrics dirs."""
+    if test_root.is_file():
+        return [test_root] if test_root.suffix in (".cpp", ".h") else []
+    if not test_root.is_dir():
+        return []
+
+    files: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(test_root):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in IGNORED_TEST_DIRS and not d.startswith(".")
+        )
+        for fname in sorted(filenames):
+            if fname.endswith((".cpp", ".h")):
+                files.append(Path(dirpath) / fname)
+    return files
+
+
+def collect_test_identifiers(test_root: Path) -> Set[str]:
+    """Extract all C++ identifiers referenced in test source and header files."""
+    direct_calls: Set[str] = set()
+    for fpath in iter_test_source_files(test_root):
+        try:
+            raw = fpath.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        cleaned = strip_comments_and_strings(raw)
+        direct_calls.update(
+            tm.group(0) for tm in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", cleaned)
+        )
+    return direct_calls
+
+
 def compute_test_reachability(
-    prod_functions: List[CppFunction], test_file: Path
+    prod_functions: List[CppFunction], test_root: Path
 ) -> Dict[Tuple[str, str, int], float]:
     """
-    Computes estimated behavioral coverage for Crapper:
-    - Directly called from tests/test_main.cpp -> 85% coverage (or 75% if high CC).
-    - Transitively called (1–2 hops) from tested functions -> 65% coverage.
-    - Pure/small helper in a tested module -> 50% coverage.
+    Computes estimated behavioral coverage for Crapper across all .cpp/.h files under tests/:
+    - Directly referenced in tests/ -> 85% coverage.
+    - Transitively called (up to 3 hops) from tested functions -> 70% coverage.
+    - Helper in a tested module -> 45% coverage.
     - Untested module -> 0% coverage.
     """
-    if not test_file.exists():
+    direct_calls = collect_test_identifiers(test_root)
+    if not direct_calls:
         return {(f.rel_path, f.name, f.start_line): 0.0 for f in prod_functions}
-
-    test_raw = strip_comments_and_strings(test_file.read_text(encoding="utf-8", errors="ignore"))
-    direct_calls = {tm.group(0) for tm in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", test_raw)}
 
     by_name: Dict[str, List[CppFunction]] = {}
     for f in prod_functions:
@@ -445,7 +480,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root_dir = Path(args.root).resolve()
-    test_file = root_dir / "tests" / "test_main.cpp"
+    tests_dir = root_dir / "tests"
 
     all_functions: List[CppFunction] = []
     all_files_content: Dict[str, str] = {}
@@ -467,7 +502,7 @@ def main() -> int:
                 pass
             all_functions.extend(extract_functions_from_file(fpath, root_dir))
 
-    cov_map = compute_test_reachability(all_functions, test_file)
+    cov_map = compute_test_reachability(all_functions, tests_dir)
     duplicates = find_duplicates(
         all_functions,
         min_lines=args.min_lines,

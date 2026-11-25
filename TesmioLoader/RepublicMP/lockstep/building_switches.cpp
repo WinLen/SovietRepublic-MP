@@ -3,6 +3,7 @@
 // switches (RepublicLAN, read against the disassembly of 1.1.1.9).
 #include "building_switches.h"
 #include "commands.h"
+#include "switch_common.h"
 #include "world_refs.h"
 #include "../session/settings_sync.h"
 #include "../session/save_sync.h"
@@ -12,16 +13,13 @@
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
+#include <algorithm>
 #include <math.h>
 #include <string.h>
 #include <vector>
 
 #define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
-#define DOWN_RVA 0xA54E90
-#define PRESS_RVA 0xA54E91
-#define ENTER_RVA 0xA54CAC
-#define KEYPAD_ENTER_RVA 0xA54D2C
 #define BUILDING_BYTES BUILDING_STRUCT_BYTES
 #define SLOTS_OFFSET BLD_STORAGE_OFFSET
 #define SLOT_BYTES BLD_STORAGE_SLOT_SIZE
@@ -33,7 +31,6 @@
 #define MAX_WORDS 60
 #define NAME_AT 0x114        // a building's name (0x40 characters): text, never heap links
 #define NAME_END (0x114 + 0x80)
-#define SAMPLE_EVERY 16
 
 enum { KIND_BUILDING = 0, KIND_SLOT = 1, KIND_WORLD = 2, KIND_MANUAL_BUY = 3, KIND_UNIV_RESEARCH = 4, KIND_AUTO_BUY = 5 };
 static const char* const kKindText[6] = {
@@ -134,10 +131,15 @@ struct Range {
 };
 
 static std::vector<Range> g_ranges;
+static std::vector<SwitchSpan> g_snapSpans;
+static std::vector<U64> g_listScratch;
 static std::vector<BYTE> g_bytes;
+static std::vector<BYTE> g_cmpScratch;
 static bool g_taken = false, g_click = false;
-static unsigned g_frame = 0;
+static SwitchBackoffState g_backoff = { 0, SWITCH_SAMPLE_EVERY_BASE, 0, { 0, 0, 0, false } };
 static unsigned long long g_epoch = 0;
+static unsigned long long g_snapshotCount = 0;
+static unsigned long long g_mismatchCopyCount = 0;
 static std::vector<bool> g_noiseBuilding, g_noiseSlot[4], g_noiseWorld;
 static int g_noiseLogged = 0, g_heapLogged = 0, g_leftLogged = 0;
 
@@ -150,50 +152,117 @@ static int Category(U64 building)
     return category;
 }
 
-static bool Clicked()
+static void ScanBuildingRangesBatchPod(
+    const U64* list, size_t count, volatile size_t* ioIdx,
+    Range* outRanges, SwitchSpan* outSpans, size_t maxRanges,
+    size_t* ioRangeCount, size_t* ioTotalBytes)
 {
-    float wheel = 0.0f;
-    SafeReadPod((const float*)(g_exeBase + MOUSE_WHEEL_DELTA_RVA), &wheel);
-    return g_exeBase[DOWN_RVA] || g_exeBase[PRESS_RVA] || g_exeBase[ENTER_RVA] || g_exeBase[KEYPAD_ENTER_RVA] ||
-           (isfinite(wheel) && wheel != 0.0f);
-}
-
-static void Add(U64 building, int kind, unsigned base, U64 at, unsigned bytes, unsigned shape)
-{
-    if (!at || !bytes) return;
-    Range r = { building, kind, base, at, bytes, shape, g_bytes.size() };
-    g_bytes.resize(r.copy + bytes);
-    if (Copy(g_bytes.data() + r.copy, (const void*)at, bytes)) g_ranges.push_back(r);
-    else g_bytes.resize(r.copy);
+    const size_t maxPerBld = 1u + (size_t)MAX_SLOTS * 4u;
+    DiagLog_BeginSafeSeh();
+    size_t idx = *ioIdx;
+    volatile size_t cur = idx;
+    size_t rc = *ioRangeCount;
+    size_t tb = *ioTotalBytes;
+    __try {
+        for (; idx < count; ++idx) {
+            cur = idx;
+            if (rc + maxPerBld > maxRanges) break;
+            const U64 b = list[idx];
+            if (!b) continue;
+            outRanges[rc] = { b, KIND_BUILDING, 0, b, BUILDING_BYTES, 0, tb };
+            outSpans[rc] = { (const void*)b, tb, BUILDING_BYTES };
+            ++rc;
+            tb += BUILDING_BYTES;
+            const U64* sv = (const U64*)(b + SLOTS_OFFSET);
+            const U64 sb = sv[0];
+            const U64 se = sv[1];
+            if (!sb || se < sb || ((se - sb) % SLOT_BYTES) != 0) continue;
+            const unsigned slotCount = (unsigned)((se - sb) / SLOT_BYTES);
+            if (slotCount > MAX_SLOTS) continue;
+            for (unsigned s = 0; s < slotCount; ++s) {
+                const U64 slot = sb + (U64)s * SLOT_BYTES;
+                for (int r = 0; r < 4; ++r) {
+                    U64 at = 0;
+                    unsigned elems = 0;
+                    if (r == 0) {
+                        at = slot;
+                        elems = 1;
+                    } else {
+                        const U64* rv = (const U64*)(slot + kRegionAt[r]);
+                        const U64 rb = rv[0];
+                        const U64 re = rv[1];
+                        if (!rb || re < rb || ((re - rb) % kRegionEach[r]) != 0) continue;
+                        const U64 n = (re - rb) / kRegionEach[r];
+                        if (n == 0 || n > MAX_ENTRIES) continue;
+                        at = rb;
+                        elems = (unsigned)n;
+                    }
+                    const unsigned bytes = elems * kRegionEach[r];
+                    if (!at || !bytes) continue;
+                    outRanges[rc] = { b, KIND_SLOT, s * SLOT_STRIDE + (unsigned)r * REGION_STRIDE,
+                                      at, bytes, slotCount * 0x10000u + elems, tb };
+                    outSpans[rc] = { (const void*)at, tb, bytes };
+                    ++rc;
+                    tb += bytes;
+                }
+            }
+        }
+        *ioIdx = idx;
+        *ioRangeCount = rc;
+        *ioTotalBytes = tb;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        *ioRangeCount = rc;
+        *ioTotalBytes = tb;
+    }
+    DiagLog_EndSafeSeh();
 }
 
 static bool TakeSnapshot()
 {
     g_ranges.clear();
+    g_snapSpans.clear();
     g_bytes.clear();
+    size_t rangeCount = 0;
+    size_t totalBytes = 0;
+    const size_t minHeadroom = 1u + (size_t)MAX_SLOTS * 4u;
     const unsigned kOffsets[2] = { BUILDINGS_OFFSET, CONSTRUCTIONS_OFFSET };
     for (unsigned vecOff : kOffsets) {
-        U64 v[2] = {};
-        if (!Copy(v, World() + vecOff, 16) || !v[0] || v[1] < v[0] || (v[1] - v[0]) / 8 > MAX_BUILDINGS) continue;
-        size_t n = (size_t)((v[1] - v[0]) / 8);
-        std::vector<U64> list(n);
-        if (n && !Copy(list.data(), (const void*)v[0], n * 8)) continue;
-        for (U64 b : list) {
-            if (!b) continue;
-            Add(b, KIND_BUILDING, 0, b, BUILDING_BYTES, 0);
-            U64 slots = 0;
-            unsigned count = SlotCount(b, &slots);
-            for (unsigned s = 0; s < count; s++) {
-                U64 slot = slots + (U64)s * SLOT_BYTES;
-                for (int r = 0; r < 4; r++) {
-                    U64 at = 0;
-                    unsigned elems = 0;
-                    if (!Region(slot, r, &at, &elems)) continue;
-                    Add(b, KIND_SLOT, s * SLOT_STRIDE + r * REGION_STRIDE, at, elems * kRegionEach[r], count * 0x10000 + elems);
-                }
+        bool wasNonEmpty = false;
+        if (!SwitchCommon_ReadPtrVector(World() + vecOff, MAX_BUILDINGS, g_listScratch, &wasNonEmpty) ||
+            !wasNonEmpty) {
+            continue;
+        }
+        const size_t n = g_listScratch.size();
+        volatile size_t idx = 0;
+        while (idx < n) {
+            if (g_ranges.size() < rangeCount + minHeadroom) {
+                const size_t rem = n - idx;
+                const size_t want = rangeCount + (std::max)(minHeadroom, rem * 4u);
+                g_ranges.resize(want);
+                g_snapSpans.resize(want);
             }
+            ScanBuildingRangesBatchPod(
+                g_listScratch.data(), n, &idx,
+                g_ranges.data(), g_snapSpans.data(), g_ranges.size(),
+                &rangeCount, &totalBytes);
         }
     }
+    g_ranges.resize(rangeCount);
+    g_snapSpans.resize(rangeCount);
+    if (totalBytes > 0) {
+        g_bytes.resize(totalBytes);
+        SwitchCommon_CopySpanBatchPod(g_snapSpans.data(), rangeCount, g_bytes.data());
+    }
+    size_t writeIdx = 0;
+    for (size_t i = 0; i < rangeCount; ++i) {
+        if (g_snapSpans[i].bytes != 0) {
+            if (writeIdx != i) g_ranges[writeIdx] = g_ranges[i];
+            ++writeIdx;
+        }
+    }
+    g_ranges.resize(writeIdx);
+    ++g_snapshotCount;
     return true;
 }
 
@@ -297,19 +366,6 @@ static unsigned NoiseIndex(const Range& r, unsigned inRange)
     return inRange / 4;
 }
 
-static bool GuardedRef(U64 building, RouteRef& ref)
-{
-    bool ok = false;
-    DiagLog_BeginSafeSeh();
-    __try {
-        ok = Ref_Building(building, ref);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = false;
-    }
-    DiagLog_EndSafeSeh();
-    return ok;
-}
-
 static bool CheckBuildingControlAllowed(U64 building, const char* actionDesc)
 {
     int bldId = 0;
@@ -325,22 +381,67 @@ static void Submit(const SwitchMsg& m)
     Commands_Submit(LS_CMD_BUILDING_SWITCH, &m, sizeof(m));
 }
 
-static void Compare(const Range& r, bool click)
+enum { kRangeScanDone = 0, kRangeScanChanged = 1, kRangeScanFaulted = 2 };
+
+static bool VerifySlotRangeLivePod(const Range& r)
 {
-    // Still the same place and shape (a slot vector may have been reallocated or resized).
-    if (r.kind == KIND_SLOT) {
-        U64 slots = 0;
-        unsigned count = SlotCount(r.building, &slots);
-        unsigned s = r.base / SLOT_STRIDE, region = (r.base % SLOT_STRIDE) / REGION_STRIDE;
-        if (count != r.shape / 0x10000 || s >= count) return;
-        U64 at = 0;
-        unsigned elems = 0;
-        if (!Region(slots + (U64)s * SLOT_BYTES, region, &at, &elems) || at != r.at || elems != (r.shape & 0xFFFF)) return;
+    const U64* sv = (const U64*)(r.building + SLOTS_OFFSET);
+    const U64 sb = sv[0];
+    const U64 se = sv[1];
+    if (!sb || se < sb || ((se - sb) % SLOT_BYTES) != 0) return false;
+    const U64 count = (se - sb) / SLOT_BYTES;
+    const unsigned s = r.base / SLOT_STRIDE;
+    const unsigned region = (r.base % SLOT_STRIDE) / REGION_STRIDE;
+    if (count > MAX_SLOTS || count != r.shape / 0x10000u || s >= count || region > 3u) return false;
+    if (region == 0) {
+        return (sb + (U64)s * SLOT_BYTES) == r.at && (r.shape & 0xFFFFu) == 1u;
     }
-    std::vector<BYTE> cur(r.bytes);
-    if (!Copy(cur.data(), (const void*)r.at, r.bytes)) return;
+    const U64 slot = sb + (U64)s * SLOT_BYTES;
+    const U64* rv = (const U64*)(slot + kRegionAt[region]);
+    const U64 rb = rv[0];
+    const U64 re = rv[1];
+    if (!rb && !re) return r.at == 0 && (r.shape & 0xFFFFu) == 0;
+    if (!rb || re < rb || ((re - rb) % kRegionEach[region]) != 0) return false;
+    const U64 elems = (re - rb) / kRegionEach[region];
+    return elems <= MAX_ENTRIES && rb == r.at && elems == (U64)(r.shape & 0xFFFFu);
+}
+
+static int FindNextChangedRangePod(const Range* ranges, size_t n, size_t* ioIdx, const BYTE* bytesBase)
+{
+    if (!ranges || !ioIdx || !bytesBase) return kRangeScanDone;
+    size_t idx = *ioIdx;
+    if (idx >= n) return kRangeScanDone;
+    int result = kRangeScanDone;
+    volatile size_t cur = idx;
+    DiagLog_BeginSafeSeh();
+    __try {
+        for (; idx < n; ++idx) {
+            cur = idx;
+            const Range& r = ranges[idx];
+            if (r.kind == KIND_SLOT && !VerifySlotRangeLivePod(r)) continue;
+            if (memcmp((const void*)r.at, bytesBase + r.copy, r.bytes) != 0) {
+                *ioIdx = idx;
+                result = kRangeScanChanged;
+                break;
+            }
+        }
+        if (result == kRangeScanDone) {
+            *ioIdx = n;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *ioIdx = cur + 1u;
+        result = kRangeScanFaulted;
+    }
+    DiagLog_EndSafeSeh();
+    return result;
+}
+
+static bool CompareChangedRange(const Range& r, bool click)
+{
+    if (!SwitchCommon_CopyMismatchToScratch((const void*)r.at, r.bytes, g_cmpScratch)) return false;
+    ++g_mismatchCopyCount;
+    const BYTE* cur = g_cmpScratch.data();
     const BYTE* old = g_bytes.data() + r.copy;
-    if (memcmp(cur.data(), old, r.bytes) == 0) return;
     std::vector<bool>& noise = NoiseOf(r);
 
     SwitchMsg m;
@@ -349,8 +450,9 @@ static void Compare(const Range& r, bool click)
     m.kind = r.kind;
     m.shape = r.shape;
     bool haveRef = r.kind == KIND_WORLD;
+    bool anyEmittedOrLearned = false;
     for (unsigned q = 0; q + 4 <= r.bytes; q += 4) {
-        unsigned wa = *(const unsigned*)(old + q), wb = *(const unsigned*)(cur.data() + q);
+        unsigned wa = *(const unsigned*)(old + q), wb = *(const unsigned*)(cur + q);
         if (wa == wb) continue;
         unsigned offset = r.base + q;
         unsigned word = NoiseIndex(r, q);
@@ -366,6 +468,7 @@ static void Compare(const Range& r, bool click)
         if (!click) {
             if (!neverNoise && word < noise.size() && !noise[word]) {
                 noise[word] = true;
+                anyEmittedOrLearned = true;
                 if (g_noiseLogged < 40) {
                     ++g_noiseLogged;
                     Logf("republicmp  SWITCH: the interface changes %s +0x%X without a click - left out", kKindText[r.kind], offset);
@@ -378,34 +481,37 @@ static void Compare(const Range& r, bool click)
         unsigned pair = q & ~7u;
         bool nonPtrPair = IsNonPointerBuildingWord(r.kind, offset);
         if (!nonPtrPair && pair + 8 <= r.bytes &&
-            (PointerLike(*(const U64*)(old + pair)) || PointerLike(*(const U64*)(cur.data() + pair)))) {
+            (PointerLike(*(const U64*)(old + pair)) || PointerLike(*(const U64*)(cur + pair)))) {
             if (g_heapLogged < 20) {
                 ++g_heapLogged;
                 Logf("republicmp  SWITCH: a click changed %s +0x%X to a heap address - not carried", kKindText[r.kind], offset);
             }
-            *(unsigned*)(r.at + q) = wa;
+            SafeWritePod((void*)(r.at + q), wa);
+            anyEmittedOrLearned = true;
             continue;
         }
         if (!haveRef) {
             if (!CheckBuildingControlAllowed(r.building, Tr("изменение настроек чужого здания", "changing foreign building settings"))) {
                 Copy((void*)r.at, old, r.bytes);
-                return;
+                return true;
             }
-            haveRef = GuardedRef(r.building, m.building);
+            haveRef = SwitchCommon_GuardedRef(false, r.building, m.building);
             if (!haveRef) {
                 Logf("republicmp  SWITCH: a click changed a building that is not in the world's list - not carried");
-                return;
+                return anyEmittedOrLearned;
             }
         }
         // Put back at once: the clicking PC's simulation never sees it before the command.
-        *(unsigned*)(r.at + q) = wa;
+        SafeWritePod((void*)(r.at + q), wa);
         m.words[m.count++] = { offset, wa, wb };
+        anyEmittedOrLearned = true;
         if (m.count == MAX_WORDS) {
             Submit(m);
             m.count = 0;
         }
     }
     if (m.count) Submit(m);
+    return anyEmittedOrLearned;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,14 +543,19 @@ void BuildingSwitches_Reset()
     g_authReady = false;
     g_copyWeightsReady = -1;
     g_ranges.clear();
+    g_snapSpans.clear();
+    g_listScratch.clear();
     g_bytes.clear();
+    g_cmpScratch.clear();
     memset(g_sentValid, 0, sizeof(g_sentValid));
     g_noiseBuilding.clear();
     for (int i = 0; i < 4; ++i) g_noiseSlot[i].clear();
     g_noiseWorld.clear();
     g_noiseLogged = g_heapLogged = g_leftLogged = 0;
-    g_frame = 0;
+    SwitchBackoff_Reset(g_backoff);
     g_epoch = 0;
+    g_snapshotCount = 0;
+    g_mismatchCopyCount = 0;
 }
 
 static bool IsOneByteWorldSetting(unsigned at)
@@ -549,10 +660,10 @@ void BuildingSwitches_Before(bool simBusy)
     g_worldFrame = false;
     if (!Commands_Capturing()) g_authReady = false; // the next session takes its own start
     if (!Commands_TakeUi() || simBusy) return;
-    g_click = Clicked();
+    g_click = SwitchCommon_Clicked(g_exeBase);
     g_epoch = Commands_ApplyEpoch();
     g_worldFrame = true;
-    if (!g_click && (++g_frame % SAMPLE_EVERY) != 0) return;
+    if (!SwitchBackoff_ShouldSampleBefore(g_backoff, g_exeBase, g_click)) return;
     g_taken = TakeSnapshot();
 }
 
@@ -565,7 +676,19 @@ void BuildingSwitches_After(bool simBusy)
     if (!g_taken) return;
     g_taken = false;
     if (!same) return;
-    for (const Range& r : g_ranges) Compare(r, g_click);
+    bool anyChange = false;
+    const size_t total = g_ranges.size();
+    size_t idx = 0;
+    while (idx < total) {
+        const int status = FindNextChangedRangePod(g_ranges.data(), total, &idx, g_bytes.data());
+        if (status == kRangeScanDone) break;
+        if (status == kRangeScanFaulted) continue;
+        const size_t changedIdx = idx++;
+        if (CompareChangedRange(g_ranges[changedIdx], g_click)) {
+            anyChange = true;
+        }
+    }
+    SwitchBackoff_RecordAfter(g_backoff, g_exeBase, g_click, anyChange);
 }
 
 // The address of a carried word on this PC (0: not there, or another shape).
@@ -594,7 +717,7 @@ static bool CaptureSliderAction(U64 world, U64 building, int currencyMode, unsig
 {
     if (!world || !building || (currencyMode != 3 && currencyMode != 4)) return false;
     RouteRef ref = kNoRef;
-    if (!GuardedRef(building, ref)) return false;
+    if (!SwitchCommon_GuardedRef(false, building, ref)) return false;
 
     SwitchMsg m = {};
     m.building = ref;
@@ -796,7 +919,7 @@ bool BuildingSwitches_CaptureUnivResearch(unsigned long long building, int owner
 {
     if (!building || (ownerState != 1 && ownerState != 2)) return false;
     RouteRef ref = kNoRef;
-    if (!GuardedRef(building, ref)) return false;
+    if (!SwitchCommon_GuardedRef(false, building, ref)) return false;
 
     SwitchMsg m = {};
     m.building = ref;
@@ -983,7 +1106,7 @@ static void SubmitCopyWeightsMsg(U64 srcBld, U64 dstBld)
     SwitchMsg m = {};
     m.building = kNoRef;
     m.kind = KIND_BUILDING;
-    if (!GuardedRef(dstBld, m.building)) return;
+    if (!SwitchCommon_GuardedRef(false, dstBld, m.building)) return;
     for (unsigned off = BLD_COPY_WEIGHTS_BEGIN_OFFSET;
          off + 4 <= BLD_COPY_WEIGHTS_END_OFFSET && m.count < MAX_WORDS;
          off += 4) {
@@ -1002,9 +1125,9 @@ static void SubmitCopyWeightsMsg(U64 srcBld, U64 dstBld)
 static unsigned long long CallToolWithClearedPress(CopyWeightsToolFn tool, unsigned long long world,
                                                    unsigned long long a2, BYTE origPress)
 {
-    g_exeBase[PRESS_RVA] = 0;
+    g_exeBase[SWITCH_PRESS_RVA] = 0;
     unsigned long long r = tool(world, a2);
-    g_exeBase[PRESS_RVA] = origPress;
+    g_exeBase[SWITCH_PRESS_RVA] = origPress;
     return r;
 }
 
@@ -1015,13 +1138,13 @@ unsigned long long BuildingSwitches_CopyWeightsTool(unsigned long long world, un
                                  ? g_testCopyWeightsOverride
                                  : (CopyWeightsToolFn)(g_exeBase + FN_TOOL_COPY_WEIGHTS_RVA);
     if (IsWaitingLobbyBlockedForTools()) {
-        BYTE origPress = g_exeBase[PRESS_RVA];
+        BYTE origPress = g_exeBase[SWITCH_PRESS_RVA];
         unsigned long long r = CallToolWithClearedPress(tool, world, a2, origPress);
         if (origPress != 0) SaveSync_NotifyWaitingLobbyActionBlocked();
         return r;
     }
     if (!Commands_TakeLocal() || !CopyWeightsReady()) return tool(world, a2);
-    BYTE origPress = g_exeBase[PRESS_RVA];
+    BYTE origPress = g_exeBase[SWITCH_PRESS_RVA];
     if (origPress == 0) return tool(world, a2);
 
     U64 prevHover = 0;
@@ -1061,10 +1184,18 @@ bool BuildingSwitches_IsNoiseEmptyForTest()
     for (int i = 0; i < 4; ++i) {
         if (!g_noiseSlot[i].empty()) return false;
     }
-    return g_noiseLogged == 0 && g_heapLogged == 0 && g_leftLogged == 0 && g_frame == 0 && g_epoch == 0;
+    return g_noiseLogged == 0 && g_heapLogged == 0 && g_leftLogged == 0 &&
+           g_backoff.framesSinceSample == 0 && g_backoff.sampleEvery == SWITCH_SAMPLE_EVERY_BASE &&
+           g_backoff.cleanSamples == 0 && g_epoch == 0;
 }
 
 bool BuildingSwitches_ClickedForTest()
 {
-    return Clicked();
+    return SwitchCommon_Clicked(g_exeBase);
+}
+
+void BuildingSwitches_GetStatsForTest(SwitchPerfStatsForTest* out)
+{
+    SwitchCommon_FillStats(out, g_backoff, g_snapshotCount, g_mismatchCopyCount,
+                           g_listScratch.capacity(), g_cmpScratch.capacity());
 }

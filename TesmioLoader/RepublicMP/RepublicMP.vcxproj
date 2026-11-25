@@ -207,7 +207,12 @@
     <ClCompile Include="determinism\probe_watch.cpp" />
     <ClCompile Include="session\sync_check.cpp" />
     <ClCompile Include="session\money.cpp" />
-    <ClCompile Include="session\two_states.cpp" />
+    <ClCompile Include="session\two_states\two_states_core.cpp" />
+    <ClCompile Include="session\two_states\two_states_econ.cpp" />
+    <ClCompile Include="session\two_states\two_states_sim_hooks.cpp" />
+    <ClCompile Include="session\two_states\two_states_research.cpp" />
+    <ClCompile Include="session\two_states\two_states_overlay.cpp" />
+    <ClCompile Include="session\two_states\two_states_persistence.cpp" />
     <ClCompile Include="session\mod_sync.cpp" />
     <ClCompile Include="session\updater.cpp" />
     <ClCompile Include="session\settings_sync.cpp" />
@@ -264,6 +269,7 @@
     <ClInclude Include="lockstep\line_accept.h" />
     <ClInclude Include="lockstep\vehicle_switches.h" />
     <ClInclude Include="lockstep\building_switches.h" />
+    <ClInclude Include="lockstep\switch_common.h" />
     <ClInclude Include="lockstep\brush_tools.h" />
     <ClInclude Include="lockstep\hover_tools.h" />
     <ClInclude Include="lockstep\junction_accept.h" />
@@ -278,6 +284,7 @@
     <ClInclude Include="session\sync_check.h" />
     <ClInclude Include="session\money.h" />
     <ClInclude Include="session\two_states.h" />
+    <ClInclude Include="session\two_states\two_states_internal.h" />
     <ClInclude Include="session\mod_sync.h" />
     <ClInclude Include="session\updater.h" />
     <ClInclude Include="session\settings_sync.h" />

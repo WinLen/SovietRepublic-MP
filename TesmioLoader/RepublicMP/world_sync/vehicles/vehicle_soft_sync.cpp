@@ -7,8 +7,10 @@
 #include "../../session/two_states.h"
 #include "../../core/engine_rva.h"
 #include "../../core/diag_log.h"
-#include <string.h>
 #include <math.h>
+#include <memory>
+#include <string.h>
+#include <vector>
 
 #define VEH_CUR_BLD_OFFSET 0x4F0
 #ifndef VEH_SPEED_OFFSET
@@ -23,7 +25,8 @@
 #define CARGO_AMOUNT_OFFSET 0x08
 
 #define SOFT_SYNC_BATCH_MAX 20
-#define SOFT_SYNC_BLD_BATCH_MAX 3
+#define SOFT_SYNC_BLD_BATCH_MAX 16
+#define SOFT_SYNC_BLD_NORMAL_MAX 6
 #define SOFT_SYNC_BLD_SLOTS_MAX 16
 #define SOFT_SYNC_BLD_SLOT_ENTRIES_MAX 12
 #define SOFT_SYNC_INTERVAL_TICKS 180 // every 6 seconds of game simulation
@@ -83,11 +86,12 @@ struct VehicleSoftSyncMsg {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch) <= 7900,
+static_assert(sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch) <= LS_MAX_PAYLOAD,
               "SoftSync wire packet must fit in LS_MAX_PAYLOAD");
 
 #define VSS_TREASURY_MAGIC 0x54525359u
 #define VSS_BLD_STORAGE_MAGIC 0x42535447u
+#define VSS_ENTRY_FLAG_EXACT_CARGO 1u
 
 static const unsigned kVehicleNodeOffsets[6] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080, VEH_SIXTH_NODE_OFFSET };
 
@@ -95,7 +99,9 @@ static volatile LONG g_immediateRequested = 0;
 static int g_immediateSweepLeft = 0;
 static size_t g_rollingCursor = 0;
 static size_t g_bldRollingCursor = 0;
+static size_t g_conRollingCursor = 0;
 static unsigned long long g_lastImmediateTick = 0;
+static unsigned g_schedDiffLogs = 0;
 static VehicleSoftSyncDiagStats g_vssDiag = {};
 
 void VehicleSoftSync_Bind(const TsmHost* host)
@@ -109,7 +115,9 @@ void VehicleSoftSync_Reset()
     g_immediateSweepLeft = 0;
     g_rollingCursor = 0;
     g_bldRollingCursor = 0;
+    g_conRollingCursor = 0;
     g_lastImmediateTick = 0;
+    g_schedDiffLogs = 0;
     memset(&g_vssDiag, 0, sizeof(g_vssDiag));
 }
 
@@ -265,7 +273,7 @@ static void WriteVehiclePassengers(BYTE* v, float passengers, float workers, flo
     }
 }
 
-static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
+static bool FillEntrySafe(BYTE* v, int place, bool exactCargo, VehicleSoftSyncEntry& out)
 {
     bool ok = false;
     __try {
@@ -282,6 +290,7 @@ static bool FillEntrySafe(BYTE* v, int place, VehicleSoftSyncEntry& out)
         out.wear[2] = *(float*)(v + VEH_WEAR2_OFFSET);
         memcpy(out.pos, v + VEH_POS_OFFSET, 12);
         ReadVehiclePassengers(v, out.passengers, out.workers, out.students, out.tourists);
+        if (exactCargo) out.flags |= VSS_ENTRY_FLAG_EXACT_CARGO;
 
         BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
         BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
@@ -316,7 +325,7 @@ static bool FillBldEntrySafe(BYTE* b, int place, unsigned char list, VehicleSoft
         if (sBeg && sEnd >= sBeg && (sEnd - sBeg) % BLD_STORAGE_SLOT_SIZE == 0) {
             ns = (size_t)((sEnd - sBeg) / BLD_STORAGE_SLOT_SIZE);
         }
-        if (ns == 0 && produced == 0.0f && progress == 0.0f) return false;
+        if (ns == 0 && produced == 0.0f && progress >= 0.9999f) return false;
         if (ns > SOFT_SYNC_BLD_SLOTS_MAX) ns = SOFT_SYNC_BLD_SLOTS_MAX;
 
         memset(&out, 0, sizeof(out));
@@ -347,46 +356,53 @@ static bool FillBldEntrySafe(BYTE* b, int place, unsigned char list, VehicleSoft
     return ok;
 }
 
-static void CaptureSoftSyncBuildings(const BYTE* w, VehicleSoftSyncBldBatch& bldBatch)
+static size_t ScanSoftSyncBuildingList(BYTE* const* begin, BYTE* const* end, unsigned char listKind,
+                                       size_t& cursor, VehicleSoftSyncBldBatch& bldBatch,
+                                       unsigned maxTotal, size_t maxScanLimit)
+{
+    if (!begin || end <= begin || bldBatch.count >= maxTotal) return 0;
+    size_t total = (size_t)(end - begin);
+    if (total == 0 || total > MAX_BUILDINGS_SCAN) return 0;
+    if (cursor >= total) cursor = 0;
+    size_t startCursor = cursor;
+    size_t scanned = 0;
+    size_t limit = total < maxScanLimit ? total : maxScanLimit;
+    while (scanned < limit && bldBatch.count < maxTotal) {
+        size_t idx = (startCursor + scanned) % total;
+        scanned++;
+        cursor = (idx + 1) % total;
+        BYTE* b = begin[idx];
+        if (!b) continue;
+        if (FillBldEntrySafe(b, (int)idx, listKind, bldBatch.entries[bldBatch.count])) {
+            bldBatch.count++;
+        }
+    }
+    return scanned;
+}
+
+static void CaptureSoftSyncBuildings(const BYTE* w, VehicleSoftSyncBldBatch& bldBatch, bool immediate)
 {
     memset(&bldBatch, 0, sizeof(bldBatch));
     if (!w) return;
 
+    const unsigned maxTotal = immediate ? SOFT_SYNC_BLD_BATCH_MAX : SOFT_SYNC_BLD_NORMAL_MAX;
+    const unsigned conCap = immediate ? 4u : 2u;
+
+    BYTE* const* beginCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET);
+    BYTE* const* endCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET + 8);
+    size_t conScanned = ScanSoftSyncBuildingList(beginCon, endCon, 1, g_conRollingCursor,
+                                                 bldBatch, conCap, MAX_BUILDINGS_SCAN);
+
     BYTE* const* beginBld = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET);
     BYTE* const* endBld = *(BYTE* const* const*)(w + WORLD_BUILDINGS_OFFSET + 8);
-    if (beginBld && endBld > beginBld) {
-        size_t total = (size_t)(endBld - beginBld);
-        if (total > 0 && total <= MAX_BUILDINGS_SCAN) {
-            if (g_bldRollingCursor >= total) g_bldRollingCursor = 0;
-            size_t startCursor = g_bldRollingCursor;
-            size_t scanned = 0;
-            while (scanned < total && bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX) {
-                size_t idx = (startCursor + scanned) % total;
-                scanned++;
-                g_bldRollingCursor = (idx + 1) % total;
-                BYTE* b = beginBld[idx];
-                if (!b) continue;
-                if (FillBldEntrySafe(b, (int)idx, 0, bldBatch.entries[bldBatch.count])) {
-                    bldBatch.count++;
-                }
-            }
-        }
-    }
+    ScanSoftSyncBuildingList(beginBld, endBld, 0, g_bldRollingCursor,
+                             bldBatch, maxTotal, MAX_BUILDINGS_SCAN);
 
-    if (bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX) {
-        BYTE* const* beginCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET);
-        BYTE* const* endCon = *(BYTE* const* const*)(w + WORLD_CONSTRUCTIONS_OFFSET + 8);
-        if (beginCon && endCon > beginCon) {
-            size_t totalCon = (size_t)(endCon - beginCon);
-            if (totalCon > 0 && totalCon <= MAX_BUILDINGS_SCAN) {
-                for (size_t i = 0; i < totalCon && bldBatch.count < SOFT_SYNC_BLD_BATCH_MAX; i++) {
-                    BYTE* c = beginCon[i];
-                    if (!c) continue;
-                    if (FillBldEntrySafe(c, (int)i, 1, bldBatch.entries[bldBatch.count])) {
-                        bldBatch.count++;
-                    }
-                }
-            }
+    if (bldBatch.count < maxTotal && beginCon && endCon > beginCon) {
+        size_t totalCon = (size_t)(endCon - beginCon);
+        if (totalCon > conScanned && totalCon <= MAX_BUILDINGS_SCAN) {
+            ScanSoftSyncBuildingList(beginCon, endCon, 1, g_conRollingCursor,
+                                     bldBatch, maxTotal, totalCon - conScanned);
         }
     }
     if (bldBatch.count > 0) bldBatch.magic = VSS_BLD_STORAGE_MAGIC;
@@ -410,7 +426,7 @@ static void CaptureSoftSyncTreasury(const BYTE* w, VehicleSoftSyncTreasury& tr)
 }
 
 static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
-                       VehicleSoftSyncBldBatch& bldBatch, bool immediate)
+                       VehicleSoftSyncBldBatch& bldBatch, bool immediate, bool exactCargo)
 {
     msg.count = 0;
     memset(&tr, 0, sizeof(tr));
@@ -419,7 +435,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
     __try {
         BYTE* w = g_exeBase + WORLD_RVA;
         CaptureSoftSyncTreasury(w, tr);
-        CaptureSoftSyncBuildings(w, bldBatch);
+        CaptureSoftSyncBuildings(w, bldBatch, immediate);
         BYTE** begin = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
         BYTE** end = *(BYTE***)(w + WORLD_VEHICLES_OFFSET + 8);
         if (begin && end > begin) {
@@ -447,7 +463,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                         }
                     }
                     if (isStationaryParked) continue;
-                    if (FillEntrySafe(v, (int)idx, msg.entries[msg.count])) {
+                    if (FillEntrySafe(v, (int)idx, exactCargo, msg.entries[msg.count])) {
                         msg.count++;
                     }
                 }
@@ -462,7 +478,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                         BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
                         bool isStationaryParked = (speed == 0.0f && effBld != nullptr);
                         if (!isStationaryParked) continue;
-                        if (FillEntrySafe(v, (int)idx, msg.entries[msg.count])) {
+                        if (FillEntrySafe(v, (int)idx, exactCargo, msg.entries[msg.count])) {
                             msg.count++;
                         }
                     }
@@ -496,20 +512,30 @@ static size_t PackSoftSyncWire(const VehicleSoftSyncMsg& msg, const VehicleSoftS
     return wireBytes;
 }
 
-bool VehicleSoftSync_BuildPacketForTest(void* outBuf, size_t maxBytes, size_t* outSize, bool immediate)
+static bool BuildWirePacketForTest(void* outBuf, size_t maxBytes, size_t* outSize, bool immediate, bool exactCargo)
 {
     if (outSize) *outSize = 0;
     if (!outBuf) return false;
     VehicleSoftSyncMsg msg = {};
     VehicleSoftSyncTreasury tr = {};
-    VehicleSoftSyncBldBatch bldBatch = {};
-    if (!BuildBatch(msg, tr, bldBatch, immediate)) return false;
-    BYTE tmpBuf[sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch)];
-    size_t wireBytes = PackSoftSyncWire(msg, tr, bldBatch, tmpBuf);
+    std::unique_ptr<VehicleSoftSyncBldBatch> bldBatch(new VehicleSoftSyncBldBatch());
+    if (!BuildBatch(msg, tr, *bldBatch, immediate, exactCargo)) return false;
+    std::vector<BYTE> wireBuf(sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch));
+    size_t wireBytes = PackSoftSyncWire(msg, tr, *bldBatch, wireBuf.data());
     if (wireBytes == 0 || wireBytes > maxBytes) return false;
-    memcpy(outBuf, tmpBuf, wireBytes);
+    memcpy(outBuf, wireBuf.data(), wireBytes);
     if (outSize) *outSize = wireBytes;
     return true;
+}
+
+bool VehicleSoftSync_BuildPacketForTest(void* outBuf, size_t maxBytes, size_t* outSize, bool immediate)
+{
+    return BuildWirePacketForTest(outBuf, maxBytes, outSize, immediate, false);
+}
+
+bool VehicleSoftSync_BuildExactPacketForTest(void* outBuf, size_t maxBytes, size_t* outSize)
+{
+    return BuildWirePacketForTest(outBuf, maxBytes, outSize, true, true);
 }
 
 void VehicleSoftSync_HostTick(unsigned long long tick)
@@ -534,13 +560,13 @@ void VehicleSoftSync_HostTick(unsigned long long tick)
 
     VehicleSoftSyncMsg msg = {};
     VehicleSoftSyncTreasury tr = {};
-    VehicleSoftSyncBldBatch bldBatch = {};
-    if (!BuildBatch(msg, tr, bldBatch, immediate)) return;
+    std::unique_ptr<VehicleSoftSyncBldBatch> bldBatch(new VehicleSoftSyncBldBatch());
+    if (!BuildBatch(msg, tr, *bldBatch, immediate, immediate)) return;
 
     g_vssDiag.batchesSent++;
-    BYTE wireBuf[sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch)];
-    size_t wireBytes = PackSoftSyncWire(msg, tr, bldBatch, wireBuf);
-    Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, wireBuf, wireBytes);
+    std::vector<BYTE> wireBuf(sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + sizeof(VehicleSoftSyncBldBatch));
+    size_t wireBytes = PackSoftSyncWire(msg, tr, *bldBatch, wireBuf.data());
+    Commands_Submit(LS_CMD_VEHICLE_SOFT_SYNC, wireBuf.data(), wireBytes);
 }
 
 void VehicleSoftSync_RefreshCommandTreasury(void* data, size_t size)
@@ -630,12 +656,15 @@ static bool TryGrowCargoEntryVector(BYTE* slot, BYTE*& sBeg, size_t& localCount,
 }
 
 static void SyncSingleSlotResource(const BYTE* w, BYTE* slot, BYTE*& sBeg, size_t& localCount,
-                                   size_t& capCount, unsigned resHash, float amount, bool& changed)
+                                   size_t& capCount, unsigned resHash, float amount, bool& changed,
+                                   size_t* outMatchedIdx = nullptr)
 {
+    if (outMatchedIdx) *outMatchedIdx = 64;
     if (!isfinite(amount) || !resHash) return;
     for (size_t j = 0; j < localCount && j < 64; j++) {
         BYTE* entry = sBeg + j * CARGO_ENTRY_SIZE;
         if (HashResourceName(*(const char**)entry) == resHash) {
+            if (outMatchedIdx) *outMatchedIdx = j;
             float prev = *(float*)(entry + CARGO_AMOUNT_OFFSET);
             if (fabsf(prev - amount) > 1e-4f) changed = true;
             *(float*)(entry + CARGO_AMOUNT_OFFSET) = amount;
@@ -645,12 +674,14 @@ static void SyncSingleSlotResource(const BYTE* w, BYTE* slot, BYTE*& sBeg, size_
     const char* resPtr = FindResourceByHash(w, resHash);
     if (!resPtr || localCount >= 64) return;
     if ((!sBeg || localCount >= capCount) && !TryGrowCargoEntryVector(slot, sBeg, localCount, capCount)) return;
-    BYTE* entry = sBeg + localCount * CARGO_ENTRY_SIZE;
+    size_t newIdx = localCount;
+    BYTE* entry = sBeg + newIdx * CARGO_ENTRY_SIZE;
     *(const char**)entry = resPtr;
     *(float*)(entry + CARGO_AMOUNT_OFFSET) = amount;
     *(float*)(entry + 0x0C) = 0.0f;
     ++localCount;
     *(BYTE**)(slot + 8) = sBeg + localCount * CARGO_ENTRY_SIZE;
+    if (outMatchedIdx) *outMatchedIdx = newIdx;
     changed = true;
 }
 
@@ -672,8 +703,20 @@ static void SyncBuildingStorageSlot(const BYTE* w, BYTE* slot, unsigned char hos
     if (hostCount > SOFT_SYNC_BLD_SLOT_ENTRIES_MAX) hostCount = SOFT_SYNC_BLD_SLOT_ENTRIES_MAX;
     size_t capCount = sBeg ? (size_t)((sCap - sBeg) / CARGO_ENTRY_SIZE) : 0;
     bool changed = false;
+    bool matched[64] = {};
     for (unsigned char k = 0; k < hostCount; k++) {
-        SyncSingleSlotResource(w, slot, sBeg, localCount, capCount, resHashes[k], amounts[k], changed);
+        size_t matchedIdx = 64;
+        SyncSingleSlotResource(w, slot, sBeg, localCount, capCount, resHashes[k], amounts[k], changed, &matchedIdx);
+        if (matchedIdx < 64) matched[matchedIdx] = true;
+    }
+    if (hostCount < SOFT_SYNC_BLD_SLOT_ENTRIES_MAX && sBeg && localCount <= 64) {
+        for (size_t j = 0; j < localCount; j++) {
+            if (!matched[j]) {
+                float* pAmt = (float*)(sBeg + j * CARGO_ENTRY_SIZE + CARGO_AMOUNT_OFFSET);
+                if (fabsf(*pAmt) > 1e-4f) changed = true;
+                *pAmt = 0.0f;
+            }
+        }
     }
     if (changed) g_vssDiag.bldStorageUpdated++;
 }
@@ -721,29 +764,72 @@ static bool ApplySoftSyncBuildings(BYTE* w, const BYTE* bldPtr, unsigned bldCoun
     return true;
 }
 
-static void SyncVehicleCargo(BYTE* v, const VehicleSoftSyncEntry& e, bool stoppedAtBld)
+static void ZeroVehicleCargoEntryIfNonZero(BYTE* entry)
 {
-    BYTE* cBegin = *(BYTE**)(v + VEH_CARGO_OFFSET);
-    BYTE* cEnd = *(BYTE**)(v + VEH_CARGO_OFFSET + 8);
-    if (!cBegin || cEnd < cBegin || (cEnd - cBegin) % CARGO_ENTRY_SIZE != 0) return;
-    size_t cn = (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE);
-    size_t limit = (cn < (size_t)e.cargoCount) ? cn : (size_t)e.cargoCount;
-    if (limit > SOFT_SYNC_VEH_CARGO_MAX) limit = SOFT_SYNC_VEH_CARGO_MAX;
-    for (size_t k = 0; k < limit; k++) {
-        BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
-        const char* resName = *(const char**)entry;
-        if (HashResourceName(resName) == e.cargoResHash[k] && isfinite(e.cargoAmount[k])) {
+    float* pAmt = (float*)(entry + CARGO_AMOUNT_OFFSET);
+    if (fabsf(*pAmt) > 1e-4f) g_vssDiag.cargoUpdated++;
+    *pAmt = 0.0f;
+}
+
+static void SyncVehicleCargo(const BYTE* w, BYTE* v, const VehicleSoftSyncEntry& e, bool stoppedAtBld)
+{
+    const bool exactCargo = (e.flags & VSS_ENTRY_FLAG_EXACT_CARGO) != 0;
+    BYTE* slotVec = v + VEH_CARGO_OFFSET;
+    BYTE* cBegin = *(BYTE**)slotVec;
+    BYTE* cEnd = *(BYTE**)(slotVec + 8);
+    BYTE* cCap = *(BYTE**)(slotVec + 16);
+    if (cEnd < cBegin || (cBegin && (cEnd - cBegin) % CARGO_ENTRY_SIZE != 0)) return;
+    size_t cn = cBegin ? (size_t)((cEnd - cBegin) / CARGO_ENTRY_SIZE) : 0;
+    size_t capCount = (cBegin && cCap >= cEnd) ? (size_t)((cCap - cBegin) / CARGO_ENTRY_SIZE) : cn;
+    size_t hostCount = (e.cargoCount <= SOFT_SYNC_VEH_CARGO_MAX) ? (size_t)e.cargoCount : SOFT_SYNC_VEH_CARGO_MAX;
+
+    if (hostCount == 0) {
+        if (cn > 0 && cBegin && cn <= 64) {
+            for (size_t j = 0; j < cn; j++) ZeroVehicleCargoEntryIfNonZero(cBegin + j * CARGO_ENTRY_SIZE);
+        }
+        return;
+    }
+
+    bool matched[64] = {};
+    for (size_t k = 0; k < hostCount; k++) {
+        unsigned resHash = e.cargoResHash[k];
+        float amt = e.cargoAmount[k];
+        if (!resHash || !isfinite(amt) || amt < 0.0f) continue;
+
+        size_t foundIdx = 64;
+        if (cBegin && cn <= 64) {
+            for (size_t j = 0; j < cn; j++) {
+                const char* resName = *(const char**)(cBegin + j * CARGO_ENTRY_SIZE);
+                if (HashResourceName(resName) == resHash) {
+                    foundIdx = j;
+                    break;
+                }
+            }
+        }
+
+        if (foundIdx < 64) {
+            matched[foundIdx] = true;
+            BYTE* entry = cBegin + foundIdx * CARGO_ENTRY_SIZE;
             float prevAmt = *(float*)(entry + CARGO_AMOUNT_OFFSET);
-            float diff = fabsf(prevAmt - e.cargoAmount[k]);
-            if (stoppedAtBld && e.cargoAmount[k] > 1e-4f && diff < 2.0f) continue;
+            float diff = fabsf(prevAmt - amt);
+            if (!exactCargo && stoppedAtBld && amt > 1e-4f && diff < 2.0f) continue;
             if (diff > 1e-4f) g_vssDiag.cargoUpdated++;
-            *(float*)(entry + CARGO_AMOUNT_OFFSET) = e.cargoAmount[k];
+            *(float*)(entry + CARGO_AMOUNT_OFFSET) = amt;
+        } else if (amt > 1e-4f && cn < 64) {
+            bool added = false;
+            size_t beforeCn = cn;
+            SyncSingleSlotResource(w, slotVec, cBegin, cn, capCount, resHash, amt, added);
+            if (added) {
+                g_vssDiag.cargoUpdated++;
+                if (beforeCn < 64) matched[beforeCn] = true;
+            }
         }
     }
-    if (stoppedAtBld && cn > (size_t)e.cargoCount && cn <= SOFT_SYNC_VEH_CARGO_MAX) {
-        for (size_t k = (size_t)e.cargoCount; k < cn; k++) {
-            BYTE* entry = cBegin + k * CARGO_ENTRY_SIZE;
-            *(float*)(entry + CARGO_AMOUNT_OFFSET) = 0.0f;
+
+    if ((stoppedAtBld || exactCargo) && cBegin && e.cargoCount <= SOFT_SYNC_VEH_CARGO_MAX &&
+        cn <= SOFT_SYNC_VEH_CARGO_MAX) {
+        for (size_t j = 0; j < cn; j++) {
+            if (!matched[j]) ZeroVehicleCargoEntryIfNonZero(cBegin + j * CARGO_ENTRY_SIZE);
         }
     }
 }
@@ -802,7 +888,7 @@ void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, f
     ApplyVehicleTranslationWithChildren(v, dx, dy, dz, smoothBlend);
 }
 
-static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
+static void SyncSingleVehicleEntry(const BYTE* w, BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
     g_vssDiag.vehiclesSynced++;
     if (isfinite(e.fuel) && e.fuel >= 0.0f) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
@@ -814,11 +900,19 @@ static void SyncSingleVehicleEntry(BYTE* v, const VehicleSoftSyncEntry& e, float
     BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
     int localBldId = effBld ? *(int*)effBld : -1;
     bool stoppedAtBld = (effBld != nullptr || e.currentBldId >= 0);
-    SyncVehicleCargo(v, e, stoppedAtBld);
+    SyncVehicleCargo(w, v, e, stoppedAtBld);
 
     WriteVehiclePassengers(v, e.passengers, e.workers, e.students, e.tourists);
 
-    if (*(int*)(v + VEH_SCHED_IDX_OFFSET) != e.scheduleIdx) return;
+    int localSched = *(int*)(v + VEH_SCHED_IDX_OFFSET);
+    if (localSched != e.scheduleIdx) {
+        if (g_schedDiffLogs < 20) {
+            g_schedDiffLogs++;
+            Logf("republicmp  SOFT_SYNC: schedIdx mismatch on veh=%u place=%d localSched=%d hostSched=%d localBld=%d hostBld=%d",
+                 e.vehicleId, e.place, localSched, e.scheduleIdx, localBldId, e.currentBldId);
+        }
+        return;
+    }
 
     float* pos = (float*)(v + VEH_POS_OFFSET);
     float dx = e.pos[0] - pos[0];
@@ -908,7 +1002,7 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size)
                 for (unsigned i = 0; i < msg->count; i++) {
                     const VehicleSoftSyncEntry& e = msg->entries[i];
                     BYTE* v = FindVehicle(begin, total, e.place, e.vehicleId);
-                    if (v) SyncSingleVehicleEntry(v, e, batchMaxDriftSq);
+                    if (v) SyncSingleVehicleEntry(w, v, e, batchMaxDriftSq);
                 }
                 float maxDriftM = sqrtf(batchMaxDriftSq);
                 g_vssDiag.lastMaxDriftM = maxDriftM;

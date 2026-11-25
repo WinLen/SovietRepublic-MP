@@ -218,6 +218,8 @@ struct ClientHostLostInfo {
 bool SaveSync_IsClientHostLost();
 bool SaveSync_GetClientHostLostInfo(ClientHostLostInfo* out);
 void SaveSync_DismissClientHostLost();
+bool SaveSync_ReconnectAfterHostLost();
+bool SaveSync_ShouldRestoreClientHostLostOnJoinFailure(bool fromHostLost, bool worldLoaded, bool shuttingDown);
 bool SaveSync_ShouldShowClientHostLostModal(int sessionState, bool worldLoaded, bool hostLostFlag);
 bool SaveSync_ExitToMainMenu(unsigned char* exeBase = nullptr);
 void SaveSync_SetClientHostLostForTest(bool active, const char* hostAddr = nullptr,

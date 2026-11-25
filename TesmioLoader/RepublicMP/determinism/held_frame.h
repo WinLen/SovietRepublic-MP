@@ -30,6 +30,7 @@ float HeldFrame_StepBuildingAnimFrame(float currentFrame, float maxFrames, float
 void HeldFrame_StepBuildingAnimations(float fps);
 // Unit test harness for VehicleGuard Begin / End lifecycle
 bool HeldFrame_RunVehicleGuardForTest(BYTE* listAt, float alpha, void (*modifyFn)(void* ud) = nullptr, void* ud = nullptr);
+void HeldFrame_GetViewCacheSizesForTest(size_t* outView, size_t* outNear, size_t* outKept);
 
 struct HeldFrameDiagStats {
     unsigned long long heldFramesDrawn;

@@ -21,6 +21,7 @@
 #include "../session/game_speed.h"
 #include "../session/weather.h"
 #include "../session/money.h"
+#include "../core/diag_log.h"
 #include "../core/engine_rva.h"
 #include <math.h>
 #include <stdio.h>
@@ -134,6 +135,7 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     if (Determinism_WorldLoading()) {
         return g_origPresent(pSwapChain, SyncInterval, Flags);
     }
+    const int64_t hookT0 = DiagPerf_Now();
     SessionPatches_Tick(); // camera/frame-rate patches while connected (see session_patches.h)
     SimPatches_Tick();     // determinism patches back once the probe ends (see sim_patches.h)
     InputBlock_Tick();  // keep the game's mouse-button bytes clear while the join screen is up
@@ -152,8 +154,12 @@ static HRESULT PresentFrame(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
     ImGuiHook_EnsureInit(pSwapChain); // one-time: grabs device/hwnd, sets up ImGui + WndProc hook
     ImGuiHook_NewFrameAndRender();    // draws the overlay on top of the game's own frame
+    DiagPerf_Record(DIAG_PERF_PRESENT_HOOK, DiagPerf_Now() - hookT0);
 
-    return g_origPresent(pSwapChain, SyncInterval, Flags);
+    const int64_t swapT0 = DiagPerf_Now();
+    HRESULT hr = g_origPresent(pSwapChain, SyncInterval, Flags);
+    DiagPerf_Record(DIAG_PERF_PRESENT_SWAP, DiagPerf_Now() - swapT0);
+    return hr;
 }
 
 // Creates a temporary swap chain to read the real Present address from its

@@ -139,6 +139,15 @@ static bool SubTest_M9_4_C2_ResearchSwitchAntiExploit()
     }
 
     // 3. Legitimate completion: step university until tech 0 reaches 1.0f
+    for (int i = 0; i < 4; ++i) {
+        BYTE* it = resBuf.data() + (size_t)i * RESEARCH_ITEM_STRIDE;
+        *(float*)(it + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;
+        *(BYTE**)(it + RESEARCH_ITEM_BLD_PTR_OFFSET)  = nullptr;
+        it[RESEARCH_ITEM_AVAILABLE_OFFSET] = 1;
+        world[WORLD_RESEARCH_UNLOCKS_OFFSET + i] = 0;
+    }
+    TwoStates_ResetResearch();
+    TwoStates_OnWorldLoaded();
     TEST_CHECK(TwoStates_ApplyUnivResearchSelection(world, univWest.data(), 1, 0));
     TEST_CHECK(TwoStates_GetUnivResearchIdxForBuilding(world, univWest.data(), 1) == 0);
 

@@ -50,18 +50,12 @@ static int ReadHold()
     return *(unsigned char*)(g_exeBase + GAME_SPEED_DAT_RVA + GAME_SPEED_HOLD_OFFSET);
 }
 
-static void WriteHold(int hold)
-{
-    *(unsigned char*)(g_exeBase + GAME_SPEED_DAT_RVA + GAME_SPEED_HOLD_OFFSET) = (unsigned char)hold;
-}
-
-// C3D_INPUT key bytes the main loop (FUN_140105a90) reads for Hyper/Plaid.
+// C3D_INPUT key bytes the main loop (FUN_140105a90) reads for Hyper.
 #define INPUT_OBJECT_RVA 0xA54B90
 #define KEY_LCTRL_OFFSET 0x1d
 #define KEY_NUMPAD1_OFFSET 0x4f
-#define KEY_NUMPAD2_OFFSET 0x50
 
-enum SpeedBoost { BOOST_NONE = 0, BOOST_HYPER = 1, BOOST_PLAID = 2 };
+enum SpeedBoost { BOOST_NONE = 0, BOOST_HYPER = 1 };
 
 #define TIME_SYNC_INTERVAL_MS 1000
 #define TIME_SYNC_MIN_ERROR 0.25f   // day-progress units (= 6 game minutes)
@@ -91,7 +85,7 @@ static void MeasureClockRate()
     s_lastProgress = p;
     s_lastMs = now;
 }
-static const char* const kBoostNames[] = { "none", "Hyper", "Plaid" };
+static const char* const kBoostNames[] = { "none", "Hyper" };
 
 // Called every frame by the sync screen - logs only when it changes something.
 void EnsureGamePaused()
@@ -122,23 +116,19 @@ static int g_lastSeenSpeed = -1;   // values at the end of the previous tick
 static int g_lastSeenTurbo = -1;
 static bool g_wasSyncing = false;  // connected and not behind the sync screen last tick
 
-// Hyper/Plaid.
+// Hyper boost (Plaid / LCtrl+Numpad2 disabled; speeds > 3 blocked).
 static int g_localBoost = BOOST_NONE;   // what this player is doing, last sent
 static int g_remoteBoost = BOOST_NONE;  // what the other player is doing
 static int g_appliedBoost = BOOST_NONE; // the remote boost currently forced here
 static int g_turboBeforeHyper = 0;      // restored when a forced Hyper ends
 
-// This player's boost, from the same inputs the main loop uses. The hold flag
-// counts only when it is not ours (forced Plaid).
+// This player's boost from allowed inputs (LCtrl+Numpad1 or UI hold, capped at Hyper).
 static int ReadLocalBoost()
 {
     if (ReadGameSpeed() != 2) return BOOST_NONE;
     const unsigned char* keys = (const unsigned char*)(g_exeBase + INPUT_OBJECT_RVA);
-    if (keys[KEY_LCTRL_OFFSET]) {
-        if (keys[KEY_NUMPAD1_OFFSET]) return BOOST_HYPER;
-        if (keys[KEY_NUMPAD2_OFFSET]) return BOOST_PLAID;
-    }
-    if (g_appliedBoost != BOOST_PLAID && ReadHold()) return BOOST_PLAID;
+    if (keys[KEY_LCTRL_OFFSET] && keys[KEY_NUMPAD1_OFFSET]) return BOOST_HYPER;
+    if (ReadHold()) return BOOST_HYPER;
     return BOOST_NONE;
 }
 
@@ -158,9 +148,6 @@ static void ApplyRemoteBoost(int boost)
         Logf("republicmp  GAME_SPEED: other player's boost %s -> %s", kBoostNames[g_appliedBoost], kBoostNames[boost]);
         g_appliedBoost = boost;
     }
-    // The speed panel clears the hold flag every frame; set it again for the
-    // main loop's next frame.
-    if (g_appliedBoost == BOOST_PLAID) WriteHold(1);
 }
 
 void GameSpeed_SyncTick()
@@ -277,7 +264,7 @@ void GameSpeed_OnRemote(int kind, int speed, int speedSaved, int turbo)
     if (Determinism_IsActive()) return;
     if (SyncBlock_IsActive()) return; // the sync screen owns the pause; the host re-sends after it
     if (kind == BUILD_SYNC_KIND_SPEED_BOOST) {
-        if (speed >= BOOST_NONE && speed <= BOOST_PLAID) {
+        if (speed >= BOOST_NONE && speed <= BOOST_HYPER) {
             if (speed != g_remoteBoost) g_timeSendNow = true;
             g_remoteBoost = speed;
         }

@@ -59,12 +59,14 @@ bool Determinism_Install();
 // (or calling Determinism_Restart) starts a new generator epoch.
 void Determinism_SetActive(bool active, unsigned long long seed);
 void Determinism_SetActiveForTest(bool active);
+void Determinism_SetSessionRunningForTest(bool running);
+void Determinism_SetStepCountForTest(unsigned long long stepCount);
 bool Determinism_IsActive();
 void Determinism_Restart();
 
 // Simulation steps since the layer was last activated (main thread).
 unsigned long long Determinism_StepCount();
-// A lockstep session's pause and tick speed (1 normal, 2 fast, 3 Hyper, 4 Plaid; the host's on the player).
+// A lockstep session's pause and tick speed (1 normal, 2 fast, 3 Hyper; speeds > 3 blocked; the host's on the player).
 void Determinism_SessionSpeed(bool* paused, int* speed);
 // Sub-tick phase [0..1) between simulation ticks for smooth visual interpolation on held frames.
 float Determinism_RenderAlpha();
@@ -128,6 +130,8 @@ void Determinism_EndSession();
 bool Determinism_InStepFrame();
 // F10 queues a toggle; no speed word changes in the middle of a tick.
 bool Determinism_RequestPauseToggle();
+// Queues a speed change (0 = pause, 1 = normal, 2 = fast) via the UI speed channel.
+bool Determinism_RequestSpeed(int speed);
 // Around the interface routine (render thread): it shows the speed the player
 // asked for instead of the 0 the frame keeps outside Early; a key it handled
 // there becomes a request, the word goes back to 0 after it.
@@ -148,3 +152,11 @@ public:
 // Crash B / Exit cleanup: clears the Filling worker's transient pointer queues
 // (0x9E7738, [0x9E7710]+0x60, [0x9E2350]+0x40) on exeBase (or g_exeBase if null).
 void Determinism_ClearFillingWorkQueues(unsigned char* exeBase = nullptr);
+
+// Phase 2C regression test hooks (flat SiteRand table, H_getKeyDown cache, H_setEvent fast-path).
+void Determinism_SetSeedForTest(unsigned long long seed);
+int Determinism_SiteRandForTest(unsigned siteRva);
+void Determinism_GetSiteTableStatsForTest(bool privateTable, unsigned* outFlatCount, size_t* outOverflowCount);
+bool Determinism_IsKeyDownSuppressedForTest(const void* retAddr, bool* outCacheHit = nullptr);
+bool Determinism_SetEventFastPathForTest(HANDLE h, bool* outMatchedFilling, bool* outUsedFastSkip);
+HANDLE Determinism_CreateEventForTest(LPCWSTR name);

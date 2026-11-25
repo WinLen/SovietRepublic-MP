@@ -25,7 +25,8 @@
 #include <intrin.h>
 #include <limits.h>
 #include <vector>
-#include <unordered_set>
+#include <algorithm>
+#include <functional>
 
 #define WORLD_RVA 0x9D4F10
 
@@ -68,6 +69,10 @@ static const DetPatch kPatches[] = {
     { 0x6adbe0, 6, { 0x0f, 0x85, 0x16, 0x01, 0x00, 0x00 }, { 0xe9, 0x17, 0x01, 0x00, 0x00, 0x90 }, "rail vehicle placement (6ad960)" },
     // movzx eax,byte [rbx+13d8] -> xor eax,eax; nop5
     { 0x66e7ec, 7, { 0x0f, 0xb6, 0x83, 0xd8, 0x13, 0x00, 0x00 }, { 0x31, 0xc0, NOP5 }, "vehicle checked flag" },
+    // VehicleUpdate (0x66E2D0): docked rail wagon branch (veh+0x4F0 != 0, type+0x294 == 3)
+    // checked parent->isVisibleOnCamera (+0x13D8) before calling RailVehicleStep (0x6A76C0).
+    // Canonicalize off-camera: je 0x66EAC7 -> jmp 0x66EAC7.
+    { 0x66eab6, 2, { 0x74, 0x0f }, { 0xeb, 0x0f }, "docked rail wagon: camera-visible parent step" },
     // jne (piece on the camera) -> nop
     { 0x548ac6, 2, { 0x75, 0x10 }, { NOP2 }, "road sign zones" },
     // The building pass's visible branch (13ce79..13cec7) stores the camera distance (+115c) and
@@ -112,6 +117,7 @@ static const DetPatch kPatches[] = {
     { 0x832d73, 7, { 0x48, 0x8b, 0x53, 0x38, 0x48, 0x85, 0xd2 }, { 0xe9, 0xe2, 0x00, 0x00, 0x00, NOP2 },
       "agents: every one on the every-frame list" },
     { 0xfa41, 2, { 0x74, 0x5a }, { 0xeb, 0x5a }, "render: debug calendar keys" },
+    { 0x199163, 2, { 0x74, 0x13 }, { 0xeb, 0x13 }, "building consume: LCtrl+Numpad5 debug 5x" },
     // je (no tool) -> jmp: a selected tool otherwise forces traversal from
     // building zero in the forward direction (13cc2f..13cc32), instead of
     // the shared random start/direction. Keep the shared order (by SoylentGreed).
@@ -400,13 +406,46 @@ struct VisibleDistance {
 };
 static std::vector<VisibleDistance> g_visibleDistance;
 static std::vector<VisibleKept> g_visibleKept;
+static thread_local std::vector<BYTE*> g_tlsSortedStill;
+static thread_local std::vector<BYTE*> g_tlsSortedThere;
+static thread_local std::vector<VisibleKept> g_tlsRenderKept;
+static thread_local bool g_tlsInBuildingRenderPass = false;
+
+static bool BuildSortedPtrRange(BYTE** begin, BYTE** end, std::vector<BYTE*>& out)
+{
+    out.clear();
+    if (!begin || !end || end < begin) return false;
+    const size_t count = (size_t)(end - begin);
+    if (count >= 200000u) return false;
+    out.assign(begin, end);
+    std::sort(out.begin(), out.end(), std::less<BYTE*>{});
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return true;
+}
+
+static bool BuildSortedWorldBuildings(std::vector<BYTE*>& out)
+{
+    BYTE** ptrs[2] = { nullptr, nullptr };
+    if (!SafeMemcpyPod(ptrs, g_exeBase + BUILDINGS_BEGIN_RVA, sizeof(ptrs))) {
+        out.clear();
+        return false;
+    }
+    return BuildSortedPtrRange(ptrs[0], ptrs[1], out);
+}
+
+static inline bool ContainsSortedPtr(const std::vector<BYTE*>& sorted, BYTE* ptr)
+{
+    return std::binary_search(sorted.begin(), sorted.end(), ptr, std::less<BYTE*>{});
+}
 
 static bool IsValidVisibleBuilding(BYTE* b)
 {
     if (!IsPointerLikeX64((uintptr_t)b)) return false;
-    uintptr_t connBegin = 0, connEnd = 0;
-    if (!SafeReadPod<uintptr_t>(b + 0xA10, &connBegin) || !SafeReadPod<uintptr_t>(b + 0xA18, &connEnd))
+    uintptr_t conn[2] = { 0, 0 };
+    if (!SafeMemcpyPod(conn, b + 0xA10, sizeof(conn)))
         return false;
+    const uintptr_t connBegin = conn[0];
+    const uintptr_t connEnd = conn[1];
     if (connBegin == 0 && connEnd == 0) return true;
     if (!IsPointerLikeX64(connBegin) || connEnd < connBegin) return false;
     uintptr_t byteSpan = connEnd - connBegin;
@@ -414,18 +453,19 @@ static bool IsValidVisibleBuilding(BYTE* b)
     return true;
 }
 
-static bool PruneVisibleVector(BYTE* vecHeader, const std::unordered_set<BYTE*>& still)
+static bool PruneVisibleVector(BYTE* vecHeader, const std::vector<BYTE*>& sortedStill)
 {
     if (!vecHeader) return false;
-    BYTE** begin = nullptr;
-    BYTE** end = nullptr;
-    if (!SafeReadPod<BYTE**>(vecHeader, &begin) || !SafeReadPod<BYTE**>(vecHeader + 8, &end)) return false;
+    BYTE** ptrs[2] = { nullptr, nullptr };
+    if (!SafeMemcpyPod(ptrs, vecHeader, sizeof(ptrs))) return false;
+    BYTE** begin = ptrs[0];
+    BYTE** end = ptrs[1];
     if (!begin || end <= begin) return false;
     BYTE** writeIt = begin;
     bool pruned = false;
     for (BYTE** readIt = begin; readIt < end; ++readIt) {
         BYTE* b = *readIt;
-        if (b && still.count(b) && IsValidVisibleBuilding(b)) {
+        if (b && ContainsSortedPtr(sortedStill, b) && IsValidVisibleBuilding(b)) {
             *writeIt++ = b;
         } else {
             pruned = true;
@@ -438,16 +478,10 @@ static bool PruneVisibleVector(BYTE* vecHeader, const std::unordered_set<BYTE*>&
 static void SanitizeWorldVisibleVector()
 {
     if (!g_exeBase || Determinism_WorldLoading()) return;
-    BYTE** listed = nullptr;
-    BYTE** listedEnd = nullptr;
-    if (!SafeReadPod<BYTE**>(g_exeBase + BUILDINGS_BEGIN_RVA, &listed) ||
-        !SafeReadPod<BYTE**>(g_exeBase + BUILDINGS_END_RVA, &listedEnd)) {
-        return;
+    if (BuildSortedWorldBuildings(g_tlsSortedStill)) {
+        PruneVisibleVector(g_exeBase + WORLD_RVA + VISIBLE_OFFSET, g_tlsSortedStill);
     }
-    if (listed && listedEnd >= listed && (size_t)(listedEnd - listed) < 200000u) {
-        std::unordered_set<BYTE*> still(listed, listedEnd);
-        PruneVisibleVector(g_exeBase + WORLD_RVA + VISIBLE_OFFSET, still);
-    }
+    g_tlsSortedStill.clear();
 }
 
 bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned __int64 storageBegin,
@@ -525,15 +559,14 @@ static bool VisibleIn()
     memcpy(g_sharedVisible, world + VISIBLE_OFFSET, sizeof(g_sharedVisible));
     memcpy(world + VISIBLE_OFFSET, g_privateVisible, sizeof(g_privateVisible));
     g_visibleKept.clear();
-    BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
-    BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-    std::unordered_set<BYTE*> still(listed, listedEnd);
+    BuildSortedWorldBuildings(g_tlsSortedStill);
     for (const VisibleDistance& d : g_visibleDistance) {
-        if (!still.count(d.building) || !IsValidVisibleBuilding(d.building)) continue;
+        if (!ContainsSortedPtr(g_tlsSortedStill, d.building) || !IsValidVisibleBuilding(d.building)) continue;
         g_visibleKept.push_back({ d.building, d.building[0x115A], *(float*)(d.building + 0x115C) });
         d.building[0x115A] = 1;
         *(float*)(d.building + 0x115C) = d.distance;
     }
+    g_tlsSortedStill.clear();
     g_visibleIn = true;
     return true;
 }
@@ -547,14 +580,12 @@ static void VisibleOut(bool swapped)
     // the phase may empty it, and a building left with this PC's distance
     // made the next tick's Early animate it (16c900 from 13daf9: +0x1344) on
     // this PC only - the probe found it, and the sessions split on it.
-    BYTE** listed = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
-    BYTE** listedEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-    std::unordered_set<BYTE*> still(listed, listedEnd);
+    BuildSortedWorldBuildings(g_tlsSortedStill);
     // What the simulation's own building pass writes with no building on the
     // camera (13ce61/13ce6d; a construction site keeps its distance, 13d963):
     // the same on every PC, whatever this phase or an earlier one left.
     for (const VisibleKept& k : g_visibleKept) {
-        if (!still.count(k.building) || !IsValidVisibleBuilding(k.building)) continue;
+        if (!ContainsSortedPtr(g_tlsSortedStill, k.building) || !IsValidVisibleBuilding(k.building)) continue;
         bool typed = *(void**)(k.building + 0x318) != nullptr;
         k.building[0x115A] = 0;
         *(float*)(k.building + 0x115C) = typed ? 100000.0f : k.distance;
@@ -563,8 +594,9 @@ static void VisibleOut(bool swapped)
     // Prune both the private and shared visible vectors against `still` so a building
     // deleted during Late (e.g. finished demolition site) never remains in world+0x11DC0
     // on subsequent held frames (which skip Early and call 0x2F0F10 -> 0x3C4850 -> 0x3C779F).
-    bool prunedPriv = PruneVisibleVector(world + VISIBLE_OFFSET, still);
-    bool prunedShared = PruneVisibleVector(g_sharedVisible, still);
+    bool prunedPriv = PruneVisibleVector(world + VISIBLE_OFFSET, g_tlsSortedStill);
+    bool prunedShared = PruneVisibleVector(g_sharedVisible, g_tlsSortedStill);
+    g_tlsSortedStill.clear();
     if (prunedPriv || prunedShared) {
         g_visibleFresh = false;
     }
@@ -612,10 +644,12 @@ static void CommandViewOut(bool emptied, BYTE** buildingsBegin, BYTE** buildings
     } else {
         typedef void (*PushFn)(void* vector, void* value);
         PushFn push = (PushFn)(g_exeBase + 0xB0E90);
-        std::unordered_set<BYTE*> still(listed, listedEnd);
-        std::unordered_set<BYTE*> there(begin, end);
+        BuildSortedPtrRange(listed, listedEnd, g_tlsSortedStill);
+        BuildSortedPtrRange(begin, end, g_tlsSortedThere);
         for (BYTE* b : g_commandKept)
-            if (still.count(b) && !there.count(b)) push(world + VISIBLE_OFFSET, &b);
+            if (ContainsSortedPtr(g_tlsSortedStill, b) && !ContainsSortedPtr(g_tlsSortedThere, b)) push(world + VISIBLE_OFFSET, &b);
+        g_tlsSortedStill.clear();
+        g_tlsSortedThere.clear();
     }
     g_commandKept.clear();
 }
@@ -681,18 +715,28 @@ static void HookedLate(__int64 world)
     // so saving during a Lockstep session does not mutate simulation state or RNG.
     bool step = Determinism_IsStepFrame();
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
-    if (step) RecountPopulation(world);
     // The tool stays selected on every frame. A tick's Late runs its handlers
     // through the tool stubs below; a held Late is this PC's own altogether.
     // The render thread has finished here (105eb8). (by SoylentGreed)
     if (step) {
+        const int64_t lateStepModT0 = DiagPerf_Now();
+        RecountPopulation(world);
         bool visible = VisibleIn();
         g_inPhase = true;
+        const int64_t lateT0 = DiagPerf_Now();
         o_late(world);
+        int64_t lateTicks = DiagPerf_Now() - lateT0;
+        if (lateTicks < 0) lateTicks = 0;
+        DiagPerf_Record(DIAG_PERF_LATE, lateTicks);
         g_inPhase = false;
         VisibleOut(visible);
+        const int64_t lateStepTotalTicks = DiagPerf_Now() - lateStepModT0;
+        const int64_t lateStepModTicks = (lateStepTotalTicks > lateTicks) ? (lateStepTotalTicks - lateTicks) : 0;
+        DiagPerf_Record(DIAG_PERF_BEFORE_AFTER_EARLY, lateStepModTicks);
     } else {
+        const int64_t privLateT0 = DiagPerf_Now();
         PrivateLate(world);
+        DiagPerf_Record(DIAG_PERF_PRIVATE_LATE, DiagPerf_Now() - privLateT0);
     }
     *(float*)(world + AUTOSAVE_TIMER_OFFSET) = 0.0f;
     Determinism_AfterLate();
@@ -1130,23 +1174,29 @@ static volatile LONG g_renderWaitTimeouts = 0;
 // SimPatches_WaitRender): the frame loop rescales the game timer there, and
 // the interface on the render thread reads it (PowerTime) for its own
 // countdowns. The wait here then returns at once; it stays for safety.
-void SimPatches_WaitRender()
+void SimPatches_WaitRender(bool recordTelemetry)
 {
     if (!g_on) return;
     BYTE* renderer = *(BYTE**)(g_exeBase + RENDERER_RVA);
     HANDLE finished = renderer ? *(HANDLE*)(renderer + RENDERER_FINISHED) : nullptr;
-    if (finished && WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT) {
+    if (!finished) return;
+    const bool shouldRecord = recordTelemetry && (WaitForSingleObject(finished, 0) == WAIT_TIMEOUT);
+    const int64_t waitT0 = shouldRecord ? DiagPerf_Now() : 0;
+    if (WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT) {
         if (InterlockedIncrement(&g_renderWaitTimeouts) <= 3)
             Logf("republicmp  SIM_PATCHES: render took over %d ms - waiting before the next frame", RENDER_WAIT_MS);
         // A slow/background render must not overlap a deterministic tick.
         // The native wait at 105eb8 is unbounded too. (by SoylentGreed)
         WaitForSingleObject(finished, INFINITE);
     }
+    if (shouldRecord) {
+        DiagPerf_Record(DIAG_PERF_WAIT_RENDER, DiagPerf_Now() - waitT0);
+    }
 }
 
 static void DetFrameLock(LPCRITICAL_SECTION cs)
 {
-    SimPatches_WaitRender();
+    SimPatches_WaitRender(false);
     (*(EnterCsFn*)(g_exeBase + FRAME_LOCK_IMPORT))(cs);
 }
 
@@ -1211,6 +1261,7 @@ static __int64 DetUiRoutine(void* world)
         }
         return original(world);
     }
+    const int64_t uiT0 = DiagPerf_Now();
     BYTE* shared = (BYTE*)world + SEARCH_WORKSPACE_OFFSET;
     BYTE saved[SEARCH_WORKSPACE_SIZE];
     memcpy(saved, shared, sizeof(saved));
@@ -1221,26 +1272,34 @@ static __int64 DetUiRoutine(void* world)
     bool view = !g_inPhase && VisibleIn();
     Determinism_PrivateScope privateRng;
     Determinism_UiSpeedBegin();
+    const int64_t uiSwBeforeT0 = DiagPerf_Now();
     VehicleSwitches_Before(g_inPhase);
     BuildingSwitches_Before(g_inPhase);
     CargoSettings_Before(g_inPhase);
     SourceSlots_Before(g_inPhase);
+    int64_t uiSwBeforeTicks = DiagPerf_Now() - uiSwBeforeT0;
+    if (uiSwBeforeTicks < 0) uiSwBeforeTicks = 0;
     BYTE* uiTimer = g_exeBase + GAME_TIMER_RVA_VIEW;
     float savedUnscaledFps = *(float*)(uiTimer + 4);
     *(float*)(uiTimer + 4) = MeasureClockFps(&g_uiClock);
     __int64 r = original(world);
     *(float*)(uiTimer + 4) = savedUnscaledFps;
     // The cargo settings first: a half they put back is the same again for the switches.
+    const int64_t uiSwAfterT0 = DiagPerf_Now();
     CargoSettings_After(g_inPhase);
     SourceSlots_After(g_inPhase);
     BuildingSwitches_After(g_inPhase);
     VehicleSwitches_After(g_inPhase);
     Commands_GuardSettings();
+    int64_t uiSwAfterTicks = DiagPerf_Now() - uiSwAfterT0;
+    if (uiSwAfterTicks < 0) uiSwAfterTicks = 0;
+    DiagPerf_Record(DIAG_PERF_UI_SWITCHES, uiSwBeforeTicks + uiSwAfterTicks);
     Determinism_UiSpeedEnd();
     VisibleOut(view);
     memcpy(g_privateSearch, shared, sizeof(saved));
     memcpy(shared, saved, sizeof(saved));
     InterlockedIncrement(&g_uiEnclosed);
+    DiagPerf_Record(DIAG_PERF_UI_ROUTINE, DiagPerf_Now() - uiT0);
     return r;
 }
 
@@ -1286,6 +1345,7 @@ static void DetPrepare(__int64 world)
         original(world);
         return;
     }
+    const int64_t prepTotalT0 = DiagPerf_Now();
     BYTE** buildingsBegin = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
     BYTE** buildingsEnd = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
     bool emptied = CommandViewIn();
@@ -1309,14 +1369,22 @@ static void DetPrepare(__int64 world)
     *(int*)(timer + 8) = (int)fps;
     timer[12] = 0;
     HeldFrame_BeginCameraPrepare(fps);
+    int64_t prepNativeTicks = 0;
     {
         Determinism_PrivateScope privateRng;
+        const int64_t prepNativeT0 = DiagPerf_Now();
         original(world);
+        prepNativeTicks = DiagPerf_Now() - prepNativeT0;
+        if (prepNativeTicks < 0) prepNativeTicks = 0;
     }
     HeldFrame_EndCameraPrepare();
     memcpy(timer, tickTimer, sizeof(tickTimer));
     if (scope) Determinism_ToolScopeEnd();
     PrivateViewOut(kept);
+    const int64_t prepTotalTicks = DiagPerf_Now() - prepTotalT0;
+    const int64_t prepModTicks = (prepTotalTicks > prepNativeTicks) ? (prepTotalTicks - prepNativeTicks) : 0;
+    DiagPerf_Record(DIAG_PERF_PREPARE_NATIVE, prepNativeTicks);
+    DiagPerf_Record(DIAG_PERF_PREPARE_MOD, prepModTicks);
 }
 
 // Late runs even at speed 0: 547ef0 clamps road speeds without time passing;
@@ -1602,25 +1670,27 @@ void RestoreVisibleKeptSafe(VisibleKept* kept, size_t keptCount)
 {
     if (!kept || keptCount == 0) return;
     DiagLog_BeginSafeSeh();
-    __try {
-        for (size_t i = 0; i < keptCount; i++) {
-            kept[i].building[0x115A] = kept[i].visible;
-            *(float*)(kept[i].building + 0x115C) = kept[i].distance;
+    size_t i = 0;
+    while (i < keptCount) {
+        volatile size_t cur = i;
+        __try {
+            for (; i < keptCount; i++) {
+                cur = i;
+                if (!kept[i].building) continue;
+                kept[i].building[0x115A] = kept[i].visible;
+                *(float*)(kept[i].building + 0x115C) = kept[i].distance;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            i = cur + 1u;
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     DiagLog_EndSafeSeh();
 }
 
-static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
+static void CollectAndApplyRenderPassVisible(VisibleKept* keptBuf, size_t maxCap, size_t* outKeptCount)
 {
-    if (Determinism_WorldLoading() || !SafeIsWorldLoaded(g_exeBase) || !o_buildingRenderPass) {
-        return o_buildingRenderPass ? o_buildingRenderPass(rcx, rdx, r8, r9) : nullptr;
-    }
-
-    VisibleKept* kept = nullptr;
     size_t keptCount = 0;
-
+    *outKeptCount = 0;
     DiagLog_BeginSafeSeh();
     __try {
         typedef void* (*PositionFn)(void* node, float* out);
@@ -1630,27 +1700,22 @@ static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
         BYTE** it = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
         BYTE** end = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
         if (it && end > it && position && zDistance) {
-            size_t total = (size_t)(end - it);
-            if (total > 0 && total < 100000) {
-                kept = (VisibleKept*)malloc(total * sizeof(VisibleKept));
-                if (kept) {
-                    for (; it < end; ++it) {
-                        BYTE* b = *it;
-                        if (!b) continue;
-                        BYTE* type = *(BYTE**)(b + 0x318);
-                        if (type) {
-                            float at[4] = {};
-                            position(b + 0x320, at);
-                            float dist = zDistance(g_exeBase + CAMERA_RVA, at);
-                            if (dist < 4000.0f && isfinite(dist) && keptCount < total) {
-                                kept[keptCount].building = b;
-                                kept[keptCount].visible = b[0x115A];
-                                kept[keptCount].distance = *(float*)(b + 0x115C);
-                                keptCount++;
-                                b[0x115A] = 1;
-                                *(float*)(b + 0x115C) = dist;
-                            }
-                        }
+            for (; it < end && keptCount < maxCap; ++it) {
+                BYTE* b = *it;
+                if (!b) continue;
+                BYTE* type = *(BYTE**)(b + 0x318);
+                if (type) {
+                    float at[4] = {};
+                    position(b + 0x320, at);
+                    float dist = zDistance(g_exeBase + CAMERA_RVA, at);
+                    if (dist < 4000.0f && isfinite(dist)) {
+                        keptBuf[keptCount].building = b;
+                        keptBuf[keptCount].visible = b[0x115A];
+                        keptBuf[keptCount].distance = *(float*)(b + 0x115C);
+                        keptCount++;
+                        *outKeptCount = keptCount;
+                        b[0x115A] = 1;
+                        *(float*)(b + 0x115C) = dist;
                     }
                 }
             }
@@ -1658,18 +1723,56 @@ static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     DiagLog_EndSafeSeh();
+}
 
+static void* InvokeBuildingRenderPassWithRestore(
+    void* rcx, void* rdx, void* r8, void* r9,
+    VisibleKept* keptBuf, size_t keptCount, bool* inPassFlag)
+{
+    *inPassFlag = true;
     void* res = nullptr;
     __try {
         res = o_buildingRenderPass(rcx, rdx, r8, r9);
+    } __finally {
+        RestoreVisibleKeptSafe(keptBuf, keptCount);
+        *inPassFlag = false;
     }
-    __finally {
-        RestoreVisibleKeptSafe(kept, keptCount);
-        if (kept) {
-            free(kept);
-        }
-    }
+    return res;
+}
 
+void SimPatches_TestBuildingRenderPassRestore(
+    VisibleKept* kept, size_t keptCount, void (*passBody)(void*), void* ctx, bool* outInPassAfter)
+{
+    g_tlsInBuildingRenderPass = true;
+    __try {
+        if (passBody) passBody(ctx);
+    } __finally {
+        RestoreVisibleKeptSafe(kept, keptCount);
+        g_tlsInBuildingRenderPass = false;
+    }
+    if (outInPassAfter) *outInPassAfter = g_tlsInBuildingRenderPass;
+}
+
+static void* HookedBuildingRenderPass(void* rcx, void* rdx, void* r8, void* r9)
+{
+    if (Determinism_WorldLoading() || !SafeIsWorldLoaded(g_exeBase) || !o_buildingRenderPass || g_tlsInBuildingRenderPass) {
+        return o_buildingRenderPass ? o_buildingRenderPass(rcx, rdx, r8, r9) : nullptr;
+    }
+    BYTE** ptrs[2] = { nullptr, nullptr };
+    if (!SafeMemcpyPod(ptrs, g_exeBase + BUILDINGS_BEGIN_RVA, sizeof(ptrs)) || !ptrs[0] || ptrs[1] <= ptrs[0]) {
+        return o_buildingRenderPass(rcx, rdx, r8, r9);
+    }
+    const size_t total = (size_t)(ptrs[1] - ptrs[0]);
+    if (total == 0 || total >= 100000) {
+        return o_buildingRenderPass(rcx, rdx, r8, r9);
+    }
+    g_tlsRenderKept.clear();
+    g_tlsRenderKept.resize(total);
+    size_t keptCount = 0;
+    CollectAndApplyRenderPassVisible(g_tlsRenderKept.data(), total, &keptCount);
+    void* res = InvokeBuildingRenderPassWithRestore(
+        rcx, rdx, r8, r9, g_tlsRenderKept.data(), keptCount, &g_tlsInBuildingRenderPass);
+    g_tlsRenderKept.clear();
     return res;
 }
 

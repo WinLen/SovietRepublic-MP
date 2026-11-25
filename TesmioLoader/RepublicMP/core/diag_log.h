@@ -56,3 +56,54 @@ void Purchase_GetDiagStats(VehicleSyncDiagStats* outStats);
 void Purchase_RecordDiagSale(unsigned cat);
 void Purchase_ResetDiagStatsForTest();
 
+// Lightweight lock-free QPC performance telemetry aggregated per HEARTBT window.
+enum DiagPerfBucket {
+    DIAG_PERF_WAIT_RENDER = 0,
+    DIAG_PERF_EARLY,
+    DIAG_PERF_LATE,
+    DIAG_PERF_HELD,
+    DIAG_PERF_STATE_HASH,
+    DIAG_PERF_TS_STEP,
+    DIAG_PERF_TS_ECON_HOOK,
+    DIAG_PERF_UI_ROUTINE,
+    DIAG_PERF_TS_UI,
+    DIAG_PERF_PRESENT_HOOK,
+    DIAG_PERF_PRESENT_SWAP,
+    DIAG_PERF_VIRTUAL_QUERY,
+    DIAG_PERF_INTERFRAME_GAP,
+    DIAG_PERF_PREPARE_NATIVE,
+    DIAG_PERF_PREPARE_MOD,
+    DIAG_PERF_BEFORE_AFTER_EARLY,
+    DIAG_PERF_PRIVATE_LATE,
+    DIAG_PERF_UI_SWITCHES,
+    DIAG_PERF_MALLOC_ZERO,
+    DIAG_PERF_BUCKET_COUNT
+};
+
+struct DiagPerfBucketReport {
+    int64_t count;
+    double totalMs;
+    double avgMs;
+    double maxMs;
+};
+
+struct DiagPerfSnapshot {
+    DiagPerfBucketReport buckets[DIAG_PERF_BUCKET_COUNT];
+    int64_t mallocCalls;
+    int64_t mallocBytes;
+    double winTimerResMs;
+    bool windowFocused;
+};
+
+int64_t DiagPerf_Now(void);
+void DiagPerf_Record(DiagPerfBucket bucket, int64_t qpcDelta);
+void DiagPerf_RecordBatch(DiagPerfBucket bucket, int64_t count, int64_t totalQpcTicks, int64_t maxQpcTicks);
+void DiagPerf_RecordVirtualQuery(int64_t qpcDelta);
+void DiagPerf_RecordMalloc(size_t bytes);
+void DiagPerf_RecordMallocBatch(int64_t calls, int64_t bytes);
+void DiagPerf_TakeSnapshot(DiagPerfSnapshot* out);
+void DiagLog_FormatPerfMainLine(const DiagPerfSnapshot& ps, char* out, size_t outSize);
+void DiagLog_FormatPerfRndLine(const DiagPerfSnapshot& ps, bool p2pConn, bool p2pRelay, int32_t p2pSendQ,
+                               char* out, size_t outSize);
+double DiagLog_QueryTimerResolutionMs(void);
+

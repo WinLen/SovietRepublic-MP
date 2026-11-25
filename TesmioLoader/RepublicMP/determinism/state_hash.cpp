@@ -4,6 +4,9 @@
 #include "../session/two_states.h"
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
+#include "../core/safe_mem.h"
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #define BLD_INDEX_OFFSET 0x00
@@ -54,20 +57,47 @@ static inline long long Count(BYTE* vec, long long elemSize)
     return n > MAX_OBJECTS ? 0 : n;
 }
 
-// Resource entries {Resource*, amount, x} of one vector: names and amounts.
+static inline unsigned long long Mix64Finalizer(unsigned long long x)
+{
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ull;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebull;
+    return x ^ (x >> 31);
+}
+
+// Resource entries {Resource*, amount, x} of one vector: order-independent,
+// zero-slot-invariant, quantized names and amounts (eliminates -0.0f / 1 ULP noise).
 static void MixEntries(unsigned long long& h, BYTE* vec, double& total)
 {
     long long n = Count(vec, ENTRY_SIZE);
     if (n > MAX_ENTRIES) n = MAX_ENTRIES;
     BYTE* e = *(BYTE**)vec;
-    MixInt(h, (int)n);
+    int activeCount = 0;
+    unsigned long long accSum = 0;
+    unsigned long long accXor = 0;
     for (long long i = 0; i < n; i++, e += ENTRY_SIZE) {
         const char* res = *(const char**)e;
-        if (res) MixName(h, res);
         float amount = *(float*)(e + ENTRY_AMOUNT_OFFSET);
-        MixFloat(h, amount);
+        if (!isfinite(amount)) continue;
         total += amount;
+        if (fabsf(amount) <= 1e-4f) continue;
+        double scaled = (double)amount * 10000.0;
+        if (scaled > 9.0e15) scaled = 9.0e15;
+        else if (scaled < -9.0e15) scaled = -9.0e15;
+        long long qAmt = llround(scaled);
+        if (qAmt == 0) continue;
+        unsigned long long eh = 0xcbf29ce484222325ull;
+        if (res) MixName(eh, res);
+        Mix(eh, &qAmt, sizeof(qAmt));
+        eh = Mix64Finalizer(eh);
+        accSum += eh;
+        accXor ^= eh;
+        ++activeCount;
     }
+    MixInt(h, activeCount);
+    Mix(h, &accSum, sizeof(accSum));
+    Mix(h, &accXor, sizeof(accXor));
 }
 
 static void HashConstructions(BYTE* w, StateSummary* out)
@@ -165,6 +195,9 @@ static void HashLoans(BYTE* w, StateSummary* out)
 
 static void HashResearch(BYTE* w, StateSummary* out)
 {
+    if (TwoStates_HashEngineResearch(&out->hashResearch)) {
+        return;
+    }
     Mix(out->hashResearch, w + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
     long long n = Count(w + WORLD_RESEARCH_VEC_BEGIN_OFFSET, RESEARCH_ITEM_STRIDE);
     if (n < 0) n = 0;
@@ -424,6 +457,175 @@ bool StateHash_CitizenRecords(std::vector<CitizenRecord>& out)
     if (n < 0) return false;
     out.resize((size_t)n);
     return n == 0 || FillCitizens(out.data(), n);
+}
+
+struct DesyncVehInfo {
+    unsigned id;
+    int sched;
+    int curBld;
+    int bayBld;
+    long long cargoCount;
+    unsigned long long cargoHash;
+    double cargoSum;
+    float pos[3];
+    char cargoDetail[128];
+};
+
+struct DesyncBldInfo {
+    int id;
+    float progress;
+    float produced;
+    long long workers;
+    unsigned long long storageHash;
+    double storageSum;
+};
+
+static int SafeReadBldIndexPtr(const BYTE* ptr)
+{
+    return IsPointerLikeX64((uint64_t)(uintptr_t)ptr) ? *(const int*)(ptr + BLD_INDEX_OFFSET) : -1;
+}
+
+static void FormatCargoDetail(BYTE* vec, char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+    long long n = Count(vec, ENTRY_SIZE);
+    if (n <= 0) return;
+    if (n > MAX_ENTRIES) n = MAX_ENTRIES;
+    BYTE* e = *(BYTE**)vec;
+    if (!e) return;
+    size_t pos = 0;
+    int shown = 0;
+    for (long long i = 0; i < n && shown < 6; i++, e += ENTRY_SIZE) {
+        if (pos + 8 >= outSize) break;
+        const char* res = *(const char**)e;
+        float amount = *(float*)(e + ENTRY_AMOUNT_OFFSET);
+        char nameBuf[24] = "?";
+        uintptr_t addr = (uintptr_t)res;
+        if (addr >= 0x10000ull && addr < 0x800000000000ull) {
+            size_t len = 0;
+            while (len < 20 && res[len]) {
+                unsigned char ch = (unsigned char)res[len];
+                nameBuf[len] = (ch >= 0x20u && ch < 0x7Fu) ? (char)ch : '?';
+                ++len;
+            }
+            nameBuf[len] = '\0';
+            if (len == 0) strcpy_s(nameBuf, "?");
+        }
+        float safeAmt = isfinite(amount) ? amount : 0.0f;
+        int written = _snprintf_s(out + pos, outSize - pos, _TRUNCATE, "%s%s=%.3f",
+                                  shown > 0 ? "," : "", nameBuf, safeAmt);
+        if (written <= 0) break;
+        pos += (size_t)written;
+        ++shown;
+    }
+}
+
+static bool ReadDesyncVehRow(BYTE* w, long long idx, DesyncVehInfo* out)
+{
+    memset(out, 0, sizeof(*out));
+    out->curBld = -1;
+    out->bayBld = -1;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE** vl = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
+        BYTE* v = vl ? vl[idx] : nullptr;
+        if (v && IsPointerLikeX64((uint64_t)(uintptr_t)v)) {
+            out->id = *(const unsigned*)(v + VEH_INDEX_OFFSET);
+            out->sched = *(const int*)(v + VEH_SCHED_IDX_OFFSET);
+            out->curBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + 0x4F0));
+            out->bayBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + 0x528));
+            out->cargoCount = Count(v + VEH_CARGO_OFFSET, ENTRY_SIZE);
+            out->cargoHash = 0xcbf29ce484222325ull;
+            MixEntries(out->cargoHash, v + VEH_CARGO_OFFSET, out->cargoSum);
+            memcpy(out->pos, v + VEH_POS_OFFSET, sizeof(out->pos));
+            FormatCargoDetail(v + VEH_CARGO_OFFSET, out->cargoDetail, sizeof(out->cargoDetail));
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool ReadDesyncBldRow(BYTE* w, int listOff, long long idx, DesyncBldInfo* out)
+{
+    memset(out, 0, sizeof(*out));
+    out->id = -1;
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        BYTE** bl = *(BYTE***)(w + listOff);
+        BYTE* b = bl ? bl[idx] : nullptr;
+        if (b && IsPointerLikeX64((uint64_t)(uintptr_t)b)) {
+            out->id = *(const int*)(b + BLD_INDEX_OFFSET);
+            out->progress = *(const float*)(b + BLD_PROGRESS_OFFSET);
+            out->produced = *(const float*)(b + BLD_PRODUCED_OFFSET);
+            out->workers = Count(b + BLD_WORKERS_OFFSET, 8);
+            out->storageHash = 0xcbf29ce484222325ull;
+            BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
+            long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
+            if (ns > 64) ns = 64;
+            for (long long s = 0; s < ns; s++) {
+                MixEntries(out->storageHash, slots + s * BLD_STORAGE_SLOT_SIZE, out->storageSum);
+            }
+            ok = true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static void LogDesyncVehicles(BYTE* w, unsigned long long tick)
+{
+    long long nv = ListCount(WORLD_VEHICLES_OFFSET);
+    if (nv <= 0) return;
+    long long limit = (nv > 256) ? 256 : nv;
+    for (long long i = 0; i < limit; i++) {
+        DesyncVehInfo info = {};
+        if (!ReadDesyncVehRow(w, i, &info)) continue;
+        Logf("republicmp  DESYNC_DUMP[veh] t=%llu i=%lld id=%u sched=%d bld=(%d,%d) cargoN=%lld cargoH=%016llX cargoSum=%.3f pos=(%.2f,%.2f,%.2f) cargo=[%s]",
+             tick, i, info.id, info.sched, info.curBld, info.bayBld, info.cargoCount,
+             info.cargoHash, info.cargoSum, info.pos[0], info.pos[1], info.pos[2], info.cargoDetail);
+    }
+}
+
+static void LogDesyncBuildingsOrConstructions(BYTE* w, int listOff, const char* tag,
+                                              long long cap, bool onlyActive, unsigned long long tick)
+{
+    long long n = ListCount(listOff);
+    if (n <= 0) return;
+    long long limit = (n > cap) ? cap : n;
+    const unsigned long long seed = 0xcbf29ce484222325ull;
+    for (long long i = 0; i < limit; i++) {
+        DesyncBldInfo info = {};
+        if (!ReadDesyncBldRow(w, listOff, i, &info)) continue;
+        if (onlyActive && info.storageHash == seed && info.progress >= 0.9999f && info.produced == 0.0f) {
+            continue;
+        }
+        Logf("republicmp  DESYNC_DUMP[%s] t=%llu i=%lld id=%d prog=%.4f prod=%.2f wrk=%lld storH=%016llX storSum=%.3f",
+             tag, tick, i, info.id, info.progress, info.produced, info.workers,
+             info.storageHash, info.storageSum);
+    }
+}
+
+void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick)
+{
+    if (!g_exeBase || !H || !H->log) return;
+    BYTE* w = g_exeBase + WORLD_RVA;
+    if (!what || strstr(what, "veh") != nullptr) {
+        LogDesyncVehicles(w, tick);
+    }
+    if (what && (strstr(what, "bld") != nullptr || strstr(what, "buildings") != nullptr)) {
+        LogDesyncBuildingsOrConstructions(w, WORLD_BUILDINGS_OFFSET, "bld", 256, true, tick);
+    }
+    if (what && strstr(what, "constructions") != nullptr) {
+        LogDesyncBuildingsOrConstructions(w, WORLD_CONSTRUCTIONS_OFFSET, "con", 128, false, tick);
+    }
 }
 
 unsigned long long StateHash_All(const StateSummary& s)

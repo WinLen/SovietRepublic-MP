@@ -190,6 +190,11 @@ static RawSteamCallback s_cbP2PRequest = {};
 static RawSteamCallback s_cbP2PFail = {};
 static RawSteamCallback s_cbRichPresenceJoin = {};
 
+static INIT_ONCE s_lockOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION s_lock;
+static CONDITION_VARIABLE s_dataCv = CONDITION_VARIABLE_INIT;
+static char s_pendingJoinTarget[64] = "";
+
 static void ResetSteamBindingsLocked()
 {
     if (!s_shuttingDown && s_callbacksRegistered && s_hSteamDll != nullptr &&
@@ -239,21 +244,20 @@ static void ResetSteamBindingsLocked()
     pISteamNetworking_CloseP2PChannelWithUser = nullptr;
     pISteamNetworking_GetP2PSessionState = nullptr;
     pISteamNetworking_AllowP2PPacketRelay = nullptr;
-}
 
-static INIT_ONCE s_lockOnce = INIT_ONCE_STATIC_INIT;
-static CRITICAL_SECTION s_lock;
-static char s_pendingJoinTarget[64] = "";
+    WakeAllConditionVariable(&s_dataCv);
+}
 
 static bool VerifyActiveSteamModuleLocked();
 static bool IsSteamP2PReadyLocked();
 
 static void EnsureLock()
 {
-    InitOnceExecuteOnce(&s_lockOnce, [](PINIT_ONCE, PVOID param, PVOID*) -> BOOL {
-        InitializeCriticalSection((CRITICAL_SECTION*)param);
+    InitOnceExecuteOnce(&s_lockOnce, [](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
+        InitializeCriticalSection(&s_lock);
+        InitializeConditionVariable(&s_dataCv);
         return TRUE;
-    }, &s_lock, nullptr);
+    }, nullptr, nullptr);
 }
 
 static void OnP2PSessionRequest(void* pvParam)
@@ -322,6 +326,7 @@ void SteamP2P_UnregisterCallbacks()
             ResetSteamBindingsLocked();
         }
     }
+    WakeAllConditionVariable(&s_dataCv);
     LeaveCriticalSection(&s_lock);
     if (unregistered) {
         Logf("republicmp  STEAM_P2P: unmounted callbacks 1202, 1203, 337");
@@ -968,21 +973,136 @@ struct PendingSyn {
     ULONGLONG receivedTick;
 };
 
+static constexpr size_t kMaxPendingSyns = 32;
+static constexpr size_t kMaxSlotRecvBufBytes = 16u * 1024u * 1024u;
+static constexpr size_t kRingInitialCap = 4096u;
+static constexpr int kMaxPumpFramesPerCall = 64;
+static constexpr uint32_t kMaxDiscardScratchBytes = 65536u;
+
+struct ByteRingBuffer {
+    std::vector<uint8_t> buf;
+    size_t cap = 0;
+    size_t head = 0;
+    size_t count = 0;
+
+    bool Empty() const { return count == 0; }
+    size_t Size() const { return count; }
+
+    void Clear()
+    {
+        head = 0;
+        count = 0;
+    }
+
+    void Release()
+    {
+        std::vector<uint8_t>().swap(buf);
+        cap = 0;
+        head = 0;
+        count = 0;
+    }
+
+    bool EnsureCapacity(size_t needed)
+    {
+        if (needed > kMaxSlotRecvBufBytes) return false;
+        if (needed <= cap && buf.size() >= cap && cap > 0) return true;
+        size_t newCap = (cap >= kRingInitialCap) ? cap : kRingInitialCap;
+        while (newCap < needed) {
+            if (newCap >= kMaxSlotRecvBufBytes) {
+                newCap = kMaxSlotRecvBufBytes;
+                break;
+            }
+            newCap <<= 1;
+        }
+        if (newCap < needed) return false;
+        std::vector<uint8_t> next(newCap);
+        if (count > 0 && cap > 0 && buf.size() >= cap && head < cap && count <= cap) {
+            const size_t first = std::min(count, cap - head);
+            memcpy(next.data(), buf.data() + head, first);
+            if (count > first) {
+                memcpy(next.data() + first, buf.data(), count - first);
+            }
+        } else {
+            count = 0;
+        }
+        buf.swap(next);
+        cap = newCap;
+        head = 0;
+        return true;
+    }
+
+    bool Push(const uint8_t* src, size_t len)
+    {
+        if (len == 0) return true;
+        if (!src) return false;
+        if (len > kMaxSlotRecvBufBytes || count > kMaxSlotRecvBufBytes - len) {
+            return false;
+        }
+        if (!EnsureCapacity(count + len)) return false;
+        if (cap == 0 || buf.size() < cap) return false;
+        const size_t mask = cap - 1u;
+        const size_t tail = (head + count) & mask;
+        const size_t first = std::min(len, cap - tail);
+        memcpy(buf.data() + tail, src, first);
+        if (len > first) {
+            memcpy(buf.data(), src + first, len - first);
+        }
+        count += len;
+        return true;
+    }
+
+    size_t Peek(uint8_t* dst, size_t maxLen) const
+    {
+        if (!dst || maxLen == 0 || count == 0 || cap == 0 || buf.size() < cap || head >= cap || count > cap) {
+            return 0;
+        }
+        const size_t take = std::min(maxLen, count);
+        const size_t first = std::min(take, cap - head);
+        memcpy(dst, buf.data() + head, first);
+        if (take > first) {
+            memcpy(dst + first, buf.data(), take - first);
+        }
+        return take;
+    }
+
+    void Drain(size_t n)
+    {
+        if (n == 0 || count == 0) return;
+        const size_t drop = std::min(n, count);
+        count -= drop;
+        if (count == 0 || cap == 0) {
+            head = 0;
+        } else {
+            head = (head + drop) & (cap - 1u);
+        }
+    }
+
+    size_t Pop(uint8_t* dst, size_t maxLen)
+    {
+        const size_t take = Peek(dst, maxLen);
+        Drain(take);
+        return take;
+    }
+};
+
 struct SteamSocketSlot {
     bool inUse;
     bool connected;
     bool remoteFin;
     bool localClosed;
+    uint32_t gen;
     uint64_t remoteSteamId;
     unsigned short port;
     uint32_t connId;
     DWORD ioTimeoutMs;
     ULONGLONG lastActivityTick;
-    std::deque<uint8_t> recvBuf;
+    ByteRingBuffer recvBuf;
 };
 
 static SteamSocketSlot s_slots[MAX_STEAM_SOCKETS] = {};
 static std::deque<PendingSyn> s_pendingSyns;
+static std::vector<uint8_t> s_sendScratch;
+static std::vector<uint8_t> s_recvScratch;
 static const int s_activeChannels[] = { 5555, 5556, 5560 };
 
 bool SteamP2P_IsSteamSocket(SOCKET s)
@@ -991,17 +1111,87 @@ bool SteamP2P_IsSteamSocket(SOCKET s)
     return (((uint64_t)s) & STEAM_SOCKET_MASK) == STEAM_SOCKET_TAG;
 }
 
-static int SlotIndexFromSocket(SOCKET s)
+static bool DecodeSteamSocket(SOCKET s, int* outIdx, uint32_t* outGen)
 {
-    if (!SteamP2P_IsSteamSocket(s)) return -1;
-    int idx = (int)(((uint64_t)s) & 0xFFFFULL);
-    if (idx < 0 || idx >= MAX_STEAM_SOCKETS) return -1;
-    return idx;
+    if (!SteamP2P_IsSteamSocket(s)) return false;
+    const uint64_t raw = static_cast<uint64_t>(s);
+    const int idx = static_cast<int>(raw & 0xFFFFULL);
+    const uint32_t gen = static_cast<uint32_t>((raw >> 16) & 0xFFFFFFULL);
+    if (idx < 0 || idx >= MAX_STEAM_SOCKETS || gen == 0u) return false;
+    if (outIdx) *outIdx = idx;
+    if (outGen) *outGen = gen;
+    return true;
 }
 
-static SOCKET MakeSteamSocket(int idx)
+static SOCKET MakeSteamSocket(int idx, uint32_t gen)
 {
-    return (SOCKET)(STEAM_SOCKET_TAG | (uint64_t)(idx & 0xFFFF));
+    return static_cast<SOCKET>(
+        STEAM_SOCKET_TAG |
+        (static_cast<uint64_t>(gen & 0xFFFFFFu) << 16) |
+        static_cast<uint64_t>(idx & 0xFFFF));
+}
+
+static SteamSocketSlot* ResolveSlotLocked(SOCKET s)
+{
+    int idx = -1;
+    uint32_t expectedGen = 0u;
+    if (!DecodeSteamSocket(s, &idx, &expectedGen)) return nullptr;
+    SteamSocketSlot& slot = s_slots[idx];
+    if (!slot.inUse || slot.gen != expectedGen) return nullptr;
+    return &slot;
+}
+
+static int AllocateSteamSlotLocked(uint64_t remoteSteamId, unsigned short port,
+                                   uint32_t connId, DWORD ioTimeoutMs,
+                                   bool connected, bool releaseRecvBuf)
+{
+    for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
+        if (!s_slots[i].inUse) {
+            SteamSocketSlot& slot = s_slots[i];
+            uint32_t nextGen = (slot.gen + 1u) & 0xFFFFFFu;
+            if (nextGen == 0u) nextGen = 1u;
+            slot.gen = nextGen;
+            slot.inUse = true;
+            slot.connected = connected;
+            slot.remoteFin = false;
+            slot.localClosed = false;
+            slot.remoteSteamId = remoteSteamId;
+            slot.port = port;
+            slot.connId = connId;
+            slot.ioTimeoutMs = ioTimeoutMs;
+            slot.lastActivityTick = GetTickCount64();
+            if (releaseRecvBuf) {
+                slot.recvBuf.Release();
+            } else {
+                slot.recvBuf.Clear();
+            }
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool BuildFrameIntoSendScratchLocked(unsigned short port, uint8_t type,
+                                            uint32_t connId, const void* payload,
+                                            uint32_t payloadLen, size_t* outTotalLen)
+{
+    const size_t totalLen = sizeof(P2PFrameHeader) + static_cast<size_t>(payloadLen);
+    if (totalLen > static_cast<size_t>(UINT32_MAX)) return false;
+    if (payloadLen > 0 && !payload) return false;
+    if (s_sendScratch.size() < totalLen) {
+        s_sendScratch.resize(totalLen);
+    }
+    P2PFrameHeader* hdr = reinterpret_cast<P2PFrameHeader*>(s_sendScratch.data());
+    hdr->magic = P2P_FRAME_MAGIC;
+    hdr->type = type;
+    hdr->port = port;
+    hdr->connId = connId;
+    hdr->payloadLen = payloadLen;
+    if (payloadLen > 0) {
+        memcpy(s_sendScratch.data() + sizeof(P2PFrameHeader), payload, payloadLen);
+    }
+    if (outTotalLen) *outTotalLen = totalLen;
+    return true;
 }
 
 static bool SendFrameWithKindLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
@@ -1011,23 +1201,17 @@ static bool SendFrameWithKindLocked(uint64_t remoteSteamId, unsigned short port,
     if (!VerifyActiveSteamModuleLocked() || !pISteamNetworking_SendP2PPacket) {
         return false;
     }
-    std::vector<uint8_t> packet(sizeof(P2PFrameHeader) + payloadLen);
-    P2PFrameHeader* hdr = (P2PFrameHeader*)packet.data();
-    hdr->magic = P2P_FRAME_MAGIC;
-    hdr->type = type;
-    hdr->port = port;
-    hdr->connId = connId;
-    hdr->payloadLen = payloadLen;
-    if (payloadLen > 0 && payload) {
-        memcpy(packet.data() + sizeof(P2PFrameHeader), payload, payloadLen);
+    size_t totalLen = 0;
+    if (!BuildFrameIntoSendScratchLocked(port, type, connId, payload, payloadLen, &totalLen)) {
+        return false;
     }
     return pISteamNetworking_SendP2PPacket(
         s_pSteamNetworking,
         remoteSteamId,
-        packet.data(),
-        (uint32_t)packet.size(),
+        s_sendScratch.data(),
+        static_cast<uint32_t>(totalLen),
         sendType,
-        (int)port);
+        static_cast<int>(port));
 }
 
 static bool SendFrameLocked(uint64_t remoteSteamId, unsigned short port, uint8_t type,
@@ -1041,11 +1225,6 @@ static bool SendUnreliableFrameLocked(uint64_t remoteSteamId, unsigned short por
 {
     return SendFrameWithKindLocked(remoteSteamId, port, type, connId, payload, payloadLen, k_EP2PSendUnreliable);
 }
-
-static constexpr size_t kMaxPendingSyns = 32;
-static constexpr size_t kMaxSlotRecvBufBytes = 16u * 1024u * 1024u;
-static constexpr int kMaxPumpFramesPerCall = 64;
-static constexpr uint32_t kMaxDiscardScratchBytes = 65536u;
 
 static void PruneStalePendingSynsLocked(ULONGLONG now, unsigned short portFilter)
 {
@@ -1101,23 +1280,77 @@ static void HandleSlotFrameLocked(uint64_t sender, const P2PFrameHeader* hdr,
         if (slot.remoteSteamId != sender || slot.port != hdr->port || slot.connId != hdr->connId) continue;
 
         slot.lastActivityTick = now;
+        bool shouldWake = false;
         if (hdr->type == P2P_FRAME_SYN_ACK) {
             slot.connected = true;
+            shouldWake = true;
         } else if (hdr->type == P2P_FRAME_DATA) {
             if (hdr->payloadLen > 0) {
-                if (slot.recvBuf.size() + hdr->payloadLen > kMaxSlotRecvBufBytes) {
+                if (!slot.recvBuf.Push(payload, hdr->payloadLen)) {
                     Logf("republicmp  STEAM_P2P: recvBuf overflow (>%zu bytes) on channel %u, closing slot",
                          kMaxSlotRecvBufBytes, (unsigned)slot.port);
                     slot.remoteFin = true;
-                } else {
-                    slot.recvBuf.insert(slot.recvBuf.end(), payload, payload + hdr->payloadLen);
                 }
+                shouldWake = true;
             }
         } else if (hdr->type == P2P_FRAME_FIN) {
             slot.remoteFin = true;
+            shouldWake = true;
+        }
+        if (shouldWake) {
+            WakeAllConditionVariable(&s_dataCv);
         }
         break;
     }
+}
+
+static uint8_t* AcquireRecvScratchLocked(uint32_t needed)
+{
+    if (needed == 0) return nullptr;
+    if (s_recvScratch.size() < needed) {
+        s_recvScratch.resize(needed);
+    }
+    return s_recvScratch.data();
+}
+
+static bool DispatchDecodedFrameLocked(uint64_t sender, const uint8_t* buf, uint32_t readBytes, ULONGLONG now)
+{
+    if (!buf || readBytes < sizeof(P2PFrameHeader)) return true;
+    const P2PFrameHeader* hdr = reinterpret_cast<const P2PFrameHeader*>(buf);
+    if (hdr->magic != P2P_FRAME_MAGIC) return true;
+    if (static_cast<size_t>(sizeof(P2PFrameHeader)) + static_cast<size_t>(hdr->payloadLen) > static_cast<size_t>(readBytes)) {
+        return true;
+    }
+
+    const uint8_t* payload = buf + sizeof(P2PFrameHeader);
+
+    if (hdr->type == P2P_FRAME_HOST_PING) {
+        uint8_t openByte = s_isHostingOpen ? 1 : 0;
+        SendUnreliableFrameLocked(sender, hdr->port, P2P_FRAME_HOST_PONG, 0, &openByte, 1);
+        return s_available;
+    }
+
+    if (hdr->type == P2P_FRAME_HOST_PONG) {
+        bool isOpen = (hdr->payloadLen >= 1 && payload[0] != 0);
+        FriendHostProbe* fp = FindOrCreateHostProbeLocked(sender);
+        if (fp) {
+            if (!fp->hasPong || fp->isOpen != isOpen) {
+                s_hostProbeDirty = true;
+            }
+            fp->hasPong = true;
+            fp->isOpen = isOpen;
+            fp->lastPongRecvTick = now;
+        }
+        return true;
+    }
+
+    if (hdr->type == P2P_FRAME_SYN) {
+        HandleSynFrameLocked(sender, hdr, now);
+        return s_available;
+    }
+
+    HandleSlotFrameLocked(sender, hdr, payload, now);
+    return true;
 }
 
 static void PumpChannelLocked(int channel)
@@ -1132,54 +1365,25 @@ static void PumpChannelLocked(int channel)
          ++pumped) {
         if (msgSize == 0 || msgSize > (1024u * 1024u)) {
             uint32_t discardCap = (msgSize == 0) ? 1u : std::min<uint32_t>(msgSize, kMaxDiscardScratchBytes);
-            std::vector<uint8_t> discard(discardCap);
+            uint8_t* discard = AcquireRecvScratchLocked(discardCap);
             uint32_t readBytes = 0;
             uint64_t sender = 0;
-            pISteamNetworking_ReadP2PPacket(s_pSteamNetworking, discard.data(), (uint32_t)discard.size(), &readBytes, &sender, channel);
+            if (discard) {
+                pISteamNetworking_ReadP2PPacket(s_pSteamNetworking, discard, discardCap, &readBytes, &sender, channel);
+            }
             break;
         }
-        std::vector<uint8_t> buf(msgSize);
+        uint8_t* buf = AcquireRecvScratchLocked(msgSize);
+        if (!buf) break;
         uint32_t readBytes = 0;
         uint64_t sender = 0;
-        if (!pISteamNetworking_ReadP2PPacket(s_pSteamNetworking, buf.data(), msgSize, &readBytes, &sender, channel)) {
+        if (!pISteamNetworking_ReadP2PPacket(s_pSteamNetworking, buf, msgSize, &readBytes, &sender, channel)) {
             break;
         }
-        if (readBytes < sizeof(P2PFrameHeader)) continue;
-        const P2PFrameHeader* hdr = (const P2PFrameHeader*)buf.data();
-        if (hdr->magic != P2P_FRAME_MAGIC) continue;
-        if (sizeof(P2PFrameHeader) + hdr->payloadLen > readBytes) continue;
-
-        const uint8_t* payload = buf.data() + sizeof(P2PFrameHeader);
-        ULONGLONG now = GetTickCount64();
-
-        if (hdr->type == P2P_FRAME_HOST_PING) {
-            uint8_t openByte = s_isHostingOpen ? 1 : 0;
-            SendUnreliableFrameLocked(sender, hdr->port, P2P_FRAME_HOST_PONG, 0, &openByte, 1);
-            if (!s_available) break;
-            continue;
+        if (readBytes > msgSize) continue;
+        if (!DispatchDecodedFrameLocked(sender, buf, readBytes, GetTickCount64())) {
+            break;
         }
-
-        if (hdr->type == P2P_FRAME_HOST_PONG) {
-            bool isOpen = (hdr->payloadLen >= 1 && payload[0] != 0);
-            FriendHostProbe* fp = FindOrCreateHostProbeLocked(sender);
-            if (fp) {
-                if (!fp->hasPong || fp->isOpen != isOpen) {
-                    s_hostProbeDirty = true;
-                }
-                fp->hasPong = true;
-                fp->isOpen = isOpen;
-                fp->lastPongRecvTick = now;
-            }
-            continue;
-        }
-
-        if (hdr->type == P2P_FRAME_SYN) {
-            HandleSynFrameLocked(sender, hdr, now);
-            if (!s_available) break;
-            continue;
-        }
-
-        HandleSlotFrameLocked(sender, hdr, payload, now);
     }
     PruneStalePendingSynsLocked(GetTickCount64(), 0);
 }
@@ -1288,31 +1492,14 @@ SOCKET SteamP2P_TryAcceptOne(unsigned short port, DWORD ioTimeoutMs)
         PendingSyn syn = *it;
         s_pendingSyns.erase(it);
 
-        int slotIdx = -1;
-        for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
-            if (!s_slots[i].inUse) {
-                slotIdx = i;
-                break;
-            }
-        }
+        const int slotIdx = AllocateSteamSlotLocked(
+            syn.remoteSteamId, port, syn.connId, ioTimeoutMs, true, false);
         if (slotIdx < 0) break;
-
-        SteamSocketSlot& slot = s_slots[slotIdx];
-        slot.inUse = true;
-        slot.connected = true;
-        slot.remoteFin = false;
-        slot.localClosed = false;
-        slot.remoteSteamId = syn.remoteSteamId;
-        slot.port = port;
-        slot.connId = syn.connId;
-        slot.ioTimeoutMs = ioTimeoutMs;
-        slot.lastActivityTick = GetTickCount64();
-        slot.recvBuf.clear();
 
         pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, syn.remoteSteamId);
         SendFrameLocked(syn.remoteSteamId, port, P2P_FRAME_SYN_ACK, syn.connId, nullptr, 0);
 
-        result = MakeSteamSocket(slotIdx);
+        result = MakeSteamSocket(slotIdx, s_slots[slotIdx].gen);
         Logf("republicmp  STEAM_P2P: accepted client SteamID %llu on channel %u (connId=%08X)",
              (unsigned long long)syn.remoteSteamId, (unsigned)port, syn.connId);
         break;
@@ -1334,13 +1521,7 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
         LeaveCriticalSection(&s_lock);
         return INVALID_SOCKET;
     }
-    int slotIdx = -1;
-    for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
-        if (!s_slots[i].inUse) {
-            slotIdx = i;
-            break;
-        }
-    }
+    const int slotIdx = AllocateSteamSlotLocked(remoteSteamId, port, 0u, ioTimeoutMs, false, false);
     if (slotIdx < 0) {
         LeaveCriticalSection(&s_lock);
         Logf("republicmp  STEAM_P2P: no free virtual socket slots");
@@ -1351,16 +1532,8 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
     if (connId == 0) connId = 1;
 
     SteamSocketSlot& slot = s_slots[slotIdx];
-    slot.inUse = true;
-    slot.connected = false;
-    slot.remoteFin = false;
-    slot.localClosed = false;
-    slot.remoteSteamId = remoteSteamId;
-    slot.port = port;
     slot.connId = connId;
-    slot.ioTimeoutMs = ioTimeoutMs;
-    slot.lastActivityTick = GetTickCount64();
-    slot.recvBuf.clear();
+    const SOCKET sock = MakeSteamSocket(slotIdx, slot.gen);
 
     pISteamNetworking_AcceptP2PSessionWithUser(s_pSteamNetworking, remoteSteamId);
     SendFrameLocked(remoteSteamId, port, P2P_FRAME_SYN, connId, nullptr, 0);
@@ -1374,14 +1547,15 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
 
     for (;;) {
         if (cancelFlag && *cancelFlag) {
-            SteamP2P_CloseSocket(MakeSteamSocket(slotIdx));
+            SteamP2P_CloseSocket(sock);
             return INVALID_SOCKET;
         }
 
         EnterCriticalSection(&s_lock);
         PumpChannelLocked((int)port);
-        bool connected = s_slots[slotIdx].connected;
-        bool closed = s_slots[slotIdx].localClosed || s_slots[slotIdx].remoteFin;
+        SteamSocketSlot* activeSlot = ResolveSlotLocked(sock);
+        bool connected = activeSlot ? activeSlot->connected : false;
+        bool closed = !activeSlot || activeSlot->localClosed || activeSlot->remoteFin;
         ULONGLONG now = GetTickCount64();
         if (!connected && !closed && now - lastSynSent >= 400) {
             SendFrameLocked(remoteSteamId, port, P2P_FRAME_SYN, connId, nullptr, 0);
@@ -1392,16 +1566,16 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
         if (connected) {
             Logf("republicmp  STEAM_P2P: connected to SteamID %llu on channel %u",
                  (unsigned long long)remoteSteamId, (unsigned)port);
-            return MakeSteamSocket(slotIdx);
+            return sock;
         }
         if (closed) {
-            SteamP2P_CloseSocket(MakeSteamSocket(slotIdx));
+            SteamP2P_CloseSocket(sock);
             return INVALID_SOCKET;
         }
         if (connectTimeoutMs != 0 && (GetTickCount64() - startTick) >= connectTimeoutMs) {
             Logf("republicmp  STEAM_P2P: TIMEOUT connecting to SteamID %llu on channel %u",
                  (unsigned long long)remoteSteamId, (unsigned)port);
-            SteamP2P_CloseSocket(MakeSteamSocket(slotIdx));
+            SteamP2P_CloseSocket(sock);
             return INVALID_SOCKET;
         }
         Sleep(20);
@@ -1410,8 +1584,8 @@ SOCKET SteamP2P_Connect(uint64_t remoteSteamId, unsigned short port,
 
 bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return false;
+    if (!data && size > 0) return false;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return false;
 
     const uint8_t* bytes = (const uint8_t*)data;
     size_t sent = 0;
@@ -1423,32 +1597,36 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
 
         for (;;) {
             EnterCriticalSection(&s_lock);
-            SteamSocketSlot& slot = s_slots[idx];
-            if (!slot.inUse || slot.localClosed || slot.remoteFin) {
+            SteamSocketSlot* slot = ResolveSlotLocked(s);
+            if (!slot || slot->localClosed || slot->remoteFin) {
                 LeaveCriticalSection(&s_lock);
                 return false;
             }
-            PumpChannelLocked((int)slot.port);
+            unsigned short port = slot->port;
+            PumpChannelLocked((int)port);
+            slot = ResolveSlotLocked(s);
+            if (!slot || slot->localClosed || slot->remoteFin) {
+                LeaveCriticalSection(&s_lock);
+                return false;
+            }
 
             int32_t queuedBytes = 0;
             uint8_t sessionErr = 0;
             if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
                 P2PSessionState_t state = {};
-                if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+                if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot->remoteSteamId, &state)) {
                     queuedBytes = state.m_nBytesQueuedForSend;
                     sessionErr = state.m_eP2PSessionError;
                 }
             }
             if (sessionErr != 0) {
-                unsigned short port = slot.port;
                 LeaveCriticalSection(&s_lock);
                 Logf("republicmp  STEAM_P2P: SendExact aborted, P2P session error=%u on channel %u",
                      (unsigned)sessionErr, (unsigned)port);
                 return false;
             }
             if (queuedBytes <= P2P_SEND_QUEUE_CAP) {
-                bool ok = SendFrameLocked(slot.remoteSteamId, slot.port, P2P_FRAME_DATA, slot.connId, bytes + sent, chunk);
-                unsigned short port = slot.port;
+                bool ok = SendFrameLocked(slot->remoteSteamId, port, P2P_FRAME_DATA, slot->connId, bytes + sent, chunk);
                 LeaveCriticalSection(&s_lock);
                 if (!ok) {
                     Logf("republicmp  STEAM_P2P: SendP2PPacket failed on channel %u (queued=%d, sent=%zu/%zu)",
@@ -1457,7 +1635,6 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
                 }
                 break;
             }
-            unsigned short port = slot.port;
             LeaveCriticalSection(&s_lock);
 
             if (queuedBytes < minQueuedSeen) {
@@ -1477,8 +1654,7 @@ bool SteamP2P_SendExact(SOCKET s, const void* data, size_t size)
 
 bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return false;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return false;
 
     ULONGLONG stallStart = GetTickCount64();
     int32_t minQueuedSeen = INT32_MAX;
@@ -1486,23 +1662,28 @@ bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
 
     for (;;) {
         EnterCriticalSection(&s_lock);
-        SteamSocketSlot& slot = s_slots[idx];
-        if (!slot.inUse || slot.localClosed || slot.remoteFin) {
+        SteamSocketSlot* slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed || slot->remoteFin) {
             LeaveCriticalSection(&s_lock);
             return false;
         }
-        PumpChannelLocked((int)slot.port);
+        unsigned short port = slot->port;
+        PumpChannelLocked((int)port);
+        slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed || slot->remoteFin) {
+            LeaveCriticalSection(&s_lock);
+            return false;
+        }
 
         int32_t queuedBytes = 0;
         uint8_t sessionErr = 0;
         if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
             P2PSessionState_t state = {};
-            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot->remoteSteamId, &state)) {
                 queuedBytes = state.m_nBytesQueuedForSend;
                 sessionErr = state.m_eP2PSessionError;
             }
         }
-        unsigned short port = slot.port;
         LeaveCriticalSection(&s_lock);
 
         if (sessionErr != 0) {
@@ -1526,10 +1707,28 @@ bool SteamP2P_FlushSend(SOCKET s, DWORD timeoutMs)
     }
 }
 
+static bool IsSlotEofLocked(const SteamSocketSlot& slot, ULONGLONG waitStart, bool checkIdleDisconnect)
+{
+    if (slot.remoteFin) return true;
+    const ULONGLONG elapsed = GetTickCount64() - waitStart;
+    if (elapsed > 2500ULL && VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
+        P2PSessionState_t state = {};
+        if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+            if (state.m_eP2PSessionError != 0) {
+                return true;
+            }
+            if (checkIdleDisconnect && !state.m_bConnectionActive && !state.m_bConnecting && elapsed > 10000ULL) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return false;
+    if (!data && size > 0) return false;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return false;
 
     uint8_t* out = (uint8_t*)data;
     size_t received = 0;
@@ -1538,55 +1737,47 @@ bool SteamP2P_RecvExact(SOCKET s, void* data, size_t size)
 
     while (received < size) {
         EnterCriticalSection(&s_lock);
-        SteamSocketSlot& slot = s_slots[idx];
-        if (!slot.inUse || slot.localClosed) {
+        SteamSocketSlot* slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed) {
             LeaveCriticalSection(&s_lock);
             return false;
         }
-        PumpChannelLocked((int)slot.port);
+        PumpChannelLocked((int)slot->port);
+        slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed) {
+            LeaveCriticalSection(&s_lock);
+            return false;
+        }
 
-        size_t avail = slot.recvBuf.size();
+        size_t avail = slot->recvBuf.Size();
         if (avail > 0) {
-            size_t take = std::min(size - received, avail);
-            for (size_t i = 0; i < take; ++i) {
-                out[received + i] = slot.recvBuf.front();
-                slot.recvBuf.pop_front();
-            }
+            size_t take = slot->recvBuf.Pop(out + received, size - received);
             received += take;
             waitStart = GetTickCount64();
             LeaveCriticalSection(&s_lock);
             continue;
         }
 
-        bool eof = slot.remoteFin;
-        if (!eof && (GetTickCount64() - waitStart) > 2500 &&
-            VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
-            P2PSessionState_t state = {};
-            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
-                if (state.m_eP2PSessionError != 0) {
-                    eof = true;
-                } else if (!state.m_bConnectionActive && !state.m_bConnecting && (GetTickCount64() - waitStart) > 10000) {
-                    eof = true;
-                }
-            }
+        bool eof = IsSlotEofLocked(*slot, waitStart, true);
+        DWORD timeoutMs = slot->ioTimeoutMs;
+        if (eof) {
+            LeaveCriticalSection(&s_lock);
+            return false;
         }
-        DWORD timeoutMs = slot.ioTimeoutMs;
-        LeaveCriticalSection(&s_lock);
-
-        if (eof) return false;
         if (timeoutMs != 0 && (GetTickCount64() - waitStart) >= timeoutMs) {
+            LeaveCriticalSection(&s_lock);
             Logf("republicmp  STEAM_P2P: RecvExact timeout after %u ms", timeoutMs);
             return false;
         }
-        Sleep(1);
+        SleepConditionVariableCS(&s_dataCv, &s_lock, 1);
+        LeaveCriticalSection(&s_lock);
     }
     return true;
 }
 
 int SteamP2P_PollReadable(SOCKET s, DWORD timeoutMs, size_t minBytes)
 {
-    const int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return -1;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return -1;
 
     const size_t wantBytes = (minBytes > 0) ? minBytes : 1u;
     const ULONGLONG start = GetTickCount64();
@@ -1594,55 +1785,62 @@ int SteamP2P_PollReadable(SOCKET s, DWORD timeoutMs, size_t minBytes)
 
     for (;;) {
         EnterCriticalSection(&s_lock);
-        SteamSocketSlot& slot = s_slots[idx];
-        if (!slot.inUse || slot.localClosed) {
+        SteamSocketSlot* slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed) {
             LeaveCriticalSection(&s_lock);
             return -1;
         }
-        PumpChannelLocked(static_cast<int>(slot.port));
-        if (slot.recvBuf.size() >= wantBytes) {
+        PumpChannelLocked(static_cast<int>(slot->port));
+        slot = ResolveSlotLocked(s);
+        if (!slot || slot->localClosed) {
+            LeaveCriticalSection(&s_lock);
+            return -1;
+        }
+        if (slot->recvBuf.Size() >= wantBytes) {
             LeaveCriticalSection(&s_lock);
             return 1;
         }
-        bool eof = slot.remoteFin;
-        if (!eof && (GetTickCount64() - start) > 2500ULL &&
-            VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
-            P2PSessionState_t state = {};
-            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
-                if (state.m_eP2PSessionError != 0) {
-                    eof = true;
-                }
-            }
+        if (IsSlotEofLocked(*slot, start, false)) {
+            LeaveCriticalSection(&s_lock);
+            return -1;
         }
+        const ULONGLONG elapsed = GetTickCount64() - start;
+        if (timeoutMs == 0 || elapsed >= timeoutMs) {
+            LeaveCriticalSection(&s_lock);
+            return 0;
+        }
+        const DWORD rem = static_cast<DWORD>(timeoutMs - elapsed);
+        const DWORD waitMs = (rem > 1u) ? 1u : rem;
+        SleepConditionVariableCS(&s_dataCv, &s_lock, waitMs);
         LeaveCriticalSection(&s_lock);
-
-        if (eof) return -1;
-        if (timeoutMs == 0 || (GetTickCount64() - start) >= timeoutMs) return 0;
-        Sleep(1);
     }
 }
 
 bool SteamP2P_PeerGone(SOCKET s)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return true;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return true;
 
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    SteamSocketSlot& slot = s_slots[idx];
-    if (!slot.inUse || slot.localClosed) {
+    SteamSocketSlot* slot = ResolveSlotLocked(s);
+    if (!slot || slot->localClosed) {
         LeaveCriticalSection(&s_lock);
         return true;
     }
-    PumpChannelLocked((int)slot.port);
-    if (!slot.recvBuf.empty()) {
+    PumpChannelLocked((int)slot->port);
+    slot = ResolveSlotLocked(s);
+    if (!slot || slot->localClosed) {
+        LeaveCriticalSection(&s_lock);
+        return true;
+    }
+    if (!slot->recvBuf.Empty()) {
         LeaveCriticalSection(&s_lock);
         return false;
     }
-    bool gone = slot.remoteFin;
+    bool gone = slot->remoteFin;
     if (!gone && VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
         P2PSessionState_t state = {};
-        if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot.remoteSteamId, &state)) {
+        if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, slot->remoteSteamId, &state)) {
             if (state.m_eP2PSessionError != 0) gone = true;
         }
     }
@@ -1652,36 +1850,36 @@ bool SteamP2P_PeerGone(SOCKET s)
 
 void SteamP2P_ShutdownSocket(SOCKET s)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return;
 
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    SteamSocketSlot& slot = s_slots[idx];
-    if (slot.inUse && !slot.localClosed) {
-        SendFrameLocked(slot.remoteSteamId, slot.port, P2P_FRAME_FIN, slot.connId, nullptr, 0);
-        slot.localClosed = true;
+    SteamSocketSlot* slot = ResolveSlotLocked(s);
+    if (slot && !slot->localClosed) {
+        SendFrameLocked(slot->remoteSteamId, slot->port, P2P_FRAME_FIN, slot->connId, nullptr, 0);
+        slot->localClosed = true;
+        WakeAllConditionVariable(&s_dataCv);
     }
     LeaveCriticalSection(&s_lock);
 }
 
 void SteamP2P_CloseSocket(SOCKET s)
 {
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return;
 
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    SteamSocketSlot& slot = s_slots[idx];
-    if (slot.inUse) {
-        if (!slot.localClosed) {
-            SendFrameLocked(slot.remoteSteamId, slot.port, P2P_FRAME_FIN, slot.connId, nullptr, 0);
+    SteamSocketSlot* slot = ResolveSlotLocked(s);
+    if (slot) {
+        if (!slot->localClosed) {
+            SendFrameLocked(slot->remoteSteamId, slot->port, P2P_FRAME_FIN, slot->connId, nullptr, 0);
         }
-        slot.inUse = false;
-        slot.connected = false;
-        slot.localClosed = true;
-        slot.remoteFin = true;
-        slot.recvBuf.clear();
+        slot->inUse = false;
+        slot->connected = false;
+        slot->localClosed = true;
+        slot->remoteFin = true;
+        slot->recvBuf.Release();
+        WakeAllConditionVariable(&s_dataCv);
     }
     LeaveCriticalSection(&s_lock);
 }
@@ -1690,12 +1888,12 @@ void SteamP2P_GetPeerName(SOCKET s, char* out, size_t outSize)
 {
     if (!out || outSize == 0) return;
     out[0] = 0;
-    int idx = SlotIndexFromSocket(s);
-    if (idx < 0) return;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return;
 
     EnsureLock();
     EnterCriticalSection(&s_lock);
-    uint64_t remoteId = s_slots[idx].inUse ? s_slots[idx].remoteSteamId : 0;
+    SteamSocketSlot* slot = ResolveSlotLocked(s);
+    uint64_t remoteId = slot ? slot->remoteSteamId : 0;
     if (!remoteId) {
         LeaveCriticalSection(&s_lock);
         return;
@@ -1710,4 +1908,133 @@ void SteamP2P_GetPeerName(SOCKET s, char* out, size_t outSize)
         _snprintf_s(out, outSize, _TRUNCATE, "steam:%llu", (unsigned long long)remoteId);
     }
     LeaveCriticalSection(&s_lock);
+}
+
+void SteamP2P_GetPerfStats(bool* outConnected, bool* outUsingRelay, int32_t* outQueuedBytes)
+{
+    if (outConnected) *outConnected = false;
+    if (outUsingRelay) *outUsingRelay = false;
+    if (outQueuedBytes) *outQueuedBytes = 0;
+
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    if (VerifyActiveSteamModuleLocked() && IsSteamP2PReadyLocked()) {
+        uint64_t chosenRemoteId = 0;
+        for (int i = 0; i < MAX_STEAM_SOCKETS; ++i) {
+            const SteamSocketSlot& slot = s_slots[i];
+            if (!slot.inUse || slot.localClosed || slot.remoteFin || slot.remoteSteamId == 0) continue;
+            chosenRemoteId = slot.remoteSteamId;
+            if (slot.port == 5560) break;
+        }
+        if (chosenRemoteId != 0) {
+            P2PSessionState_t state = {};
+            if (pISteamNetworking_GetP2PSessionState(s_pSteamNetworking, chosenRemoteId, &state)) {
+                if (outConnected) *outConnected = (state.m_bConnectionActive != 0);
+                if (outUsingRelay) *outUsingRelay = (state.m_bUsingRelay != 0);
+                if (outQueuedBytes) *outQueuedBytes = state.m_nBytesQueuedForSend;
+            }
+        }
+    }
+    LeaveCriticalSection(&s_lock);
+}
+
+SOCKET SteamP2P_CreateTestSocketForTest(uint64_t remoteSteamId, unsigned short port,
+                                        uint32_t connId, DWORD ioTimeoutMs, bool connected)
+{
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    const int slotIdx = AllocateSteamSlotLocked(
+        remoteSteamId, port, connId, ioTimeoutMs, connected, true);
+    if (slotIdx < 0) {
+        LeaveCriticalSection(&s_lock);
+        return INVALID_SOCKET;
+    }
+    SOCKET sock = MakeSteamSocket(slotIdx, s_slots[slotIdx].gen);
+    LeaveCriticalSection(&s_lock);
+    return sock;
+}
+
+void SteamP2P_InjectTestFrameForTest(uint64_t senderSteamId, uint8_t frameType,
+                                     unsigned short port, uint32_t connId,
+                                     const void* payload, uint32_t payloadLen)
+{
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    P2PFrameHeader hdr = {};
+    hdr.magic = P2P_FRAME_MAGIC;
+    hdr.type = frameType;
+    hdr.port = port;
+    hdr.connId = connId;
+    hdr.payloadLen = payloadLen;
+    HandleSlotFrameLocked(senderSteamId, &hdr, static_cast<const uint8_t*>(payload), GetTickCount64());
+    LeaveCriticalSection(&s_lock);
+}
+
+bool SteamP2P_GetSlotBufferStatsForTest(SOCKET s, size_t* outSize, size_t* outCap, size_t* outHead)
+{
+    if (outSize) *outSize = 0;
+    if (outCap) *outCap = 0;
+    if (outHead) *outHead = 0;
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return false;
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    const SteamSocketSlot* slot = ResolveSlotLocked(s);
+    if (!slot) {
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+    if (outSize) *outSize = slot->recvBuf.Size();
+    if (outCap) *outCap = slot->recvBuf.cap;
+    if (outHead) *outHead = slot->recvBuf.head;
+    LeaveCriticalSection(&s_lock);
+    return true;
+}
+
+bool SteamP2P_TestScratchAndDispatchForTest(SOCKET s, const void* payload, uint32_t payloadLen,
+                                            uint32_t oversizedMsgSize,
+                                            const void** outSendPtr, size_t* outSendCap,
+                                            const void** outRecvPtr, size_t* outRecvCap)
+{
+    if (!DecodeSteamSocket(s, nullptr, nullptr)) return false;
+    EnsureLock();
+    EnterCriticalSection(&s_lock);
+    const SteamSocketSlot* slot = ResolveSlotLocked(s);
+    if (!slot || slot->localClosed) {
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+    const uint64_t sender = slot->remoteSteamId;
+    const unsigned short port = slot->port;
+    const uint32_t connId = slot->connId;
+
+    if (oversizedMsgSize > 0) {
+        const uint32_t discardCap = std::min<uint32_t>(oversizedMsgSize, kMaxDiscardScratchBytes);
+        uint8_t* discard = AcquireRecvScratchLocked(discardCap);
+        if (!discard) {
+            LeaveCriticalSection(&s_lock);
+            return false;
+        }
+        discard[0] = 0xAAu;
+    }
+
+    size_t totalLen = 0;
+    if (!BuildFrameIntoSendScratchLocked(port, P2P_FRAME_DATA, connId, payload, payloadLen, &totalLen) ||
+        totalLen > static_cast<size_t>(UINT32_MAX)) {
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+    uint8_t* recvBufPtr = AcquireRecvScratchLocked(static_cast<uint32_t>(totalLen));
+    if (!recvBufPtr) {
+        LeaveCriticalSection(&s_lock);
+        return false;
+    }
+    memcpy(recvBufPtr, s_sendScratch.data(), totalLen);
+    DispatchDecodedFrameLocked(sender, recvBufPtr, static_cast<uint32_t>(totalLen), GetTickCount64());
+
+    if (outSendPtr) *outSendPtr = s_sendScratch.data();
+    if (outSendCap) *outSendCap = s_sendScratch.capacity();
+    if (outRecvPtr) *outRecvPtr = s_recvScratch.data();
+    if (outRecvCap) *outRecvCap = s_recvScratch.capacity();
+    LeaveCriticalSection(&s_lock);
+    return true;
 }

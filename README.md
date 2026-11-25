@@ -1,6 +1,6 @@
 <div align="center">
 
-# ☭ RepublicMP v1.7.0 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
+# ☭ RepublicMP v1.7.2 — Кооперативный мультиплеер для Workers & Resources: Soviet Republic
 ### Co-op Multiplayer Mod for Workers & Resources: Soviet Republic (RU / EN)
 
 ![RepublicMP Cover](steam_workshop/preview.png)
@@ -34,7 +34,7 @@
 - **Суб-тиковая интерполяция транспорта (`60–144+ FPS`):** плавное движение автомобилей, поездов, сцепленных вагонов, вращения и поворота колёс, привязанной камеры следования/вида из кабины и 3D-контуров выделения техники.
 - **Сохранение 3D-камер каждого игрока:** позиция и точка взгляда камеры Хоста и Клиента автоматически сохраняются в кооп-сейвах (`republicmp_coop.ini`) и восстанавливаются при загрузке и ре-синке. При первом запуске новой карты или импортированного сейва камеры аккуратно выставляются в центре карты у границы с видом на свою половину республики.
 - **Изоляция удалённых звуков и уведомлений:** 2D-звуки интерфейса/инструментов партнёра и уведомления с чужой территории заглушены (3D-звуки строительства/сноса партнёра слышны только в радиусе 250 м от вашей камеры).
-- **Поддержка всех скоростей игры:** пауза, обычная (`>`), быстрая (`>>`) и ускоренная (`>>>` / `LCtrl+Numpad 1/2`).
+- **Поддержка всех скоростей игры:** пауза, обычная (`>`), быстрая (`>>`) и ускоренная (`>>>` / `LCtrl+Numpad 1`).
 
 #### 4. Автоматическая синхронизация модов Steam Workshop и проверка DLC
 - **Два режима синхронизации модов (Host-Authoritative):**
@@ -50,7 +50,7 @@
 
 ### 🚀 Правила установки и запуска (RU)
 
-> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.7.0**.
+> **Важно:** У обоих игроков должна быть одинаковая версия игры (`v1.1.1.13`) и мода **RepublicMP v1.7.2**.
 
 #### Способ 1 — Через Steam Workshop (Рекомендуется)
 1. Подпишитесь на мод в **Steam Workshop** (оба игрока).
@@ -98,7 +98,7 @@
 - **Sub-tick Vehicle & Highlight Interpolation (`60–144+ FPS`):** smooth movement for road vehicles, trains, coupled wagons, wheel rotation/steering, attached follow/cabin cameras, and 3D vehicle selection/hover outlines.
 - **Per-Player 3D Camera Persistence:** both Host and Client 3D camera positions and look-at targets are automatically saved in co-op saves (`republicmp_coop.ini`) and restored on load or resync. On first load of a new map or imported save, each player's camera is cleanly framed at the center border looking over their own half of the map.
 - **Remote Sound & Warning Isolation:** your partner's 2D UI clicks and foreign territory notifications are muted on your screen (remote 3D construction/demolition audio plays only within 250 m of your camera).
-- **Full Co-op Game Speed Support:** pause, normal (`>`), fast (`>>`), and ultra-fast (`>>>` / `LCtrl+Numpad 1/2`).
+- **Full Co-op Game Speed Support:** pause, normal (`>`), fast (`>>`), and ultra-fast (`>>>` / `LCtrl+Numpad 1`).
 
 #### 4. Automatic Steam Workshop Mod Sync & DLC Guard
 - **Two Host-Authoritative Mod Sync Modes:**
@@ -114,7 +114,7 @@
 
 ### 🚀 Installation & Launch Rules (EN)
 
-> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.7.0**.
+> **Important:** Both players must have the same game version (`v1.1.1.13`) and **RepublicMP v1.7.2**.
 
 #### Method 1 — Via Steam Workshop (Recommended)
 1. Subscribe to the mod on **Steam Workshop** (both players).

@@ -5,6 +5,7 @@
 #include "../core/diag_log.h"
 #include "../session/two_states.h"
 #include "../determinism/determinism.h"
+#include "../determinism/state_hash.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../transport/network.h"
 #include <deque>
@@ -267,8 +268,7 @@ static DWORD WINAPI RecvThread(LPVOID lpParam)
             Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
             unsigned long long tick = 0;
             if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
-            LockstepNet_SendClientLogs("DESYNC");
-            continue;
+            // Fall through to g_inbox so the game thread logs per-object DESYNC breakdown and uploads Client logs safely.
         }
         if (h.type == LS_BYE) {
             Logf("republicmp  LOCKSTEP: the other player left");
@@ -385,6 +385,7 @@ void LockstepNet_Close()
         NetworkDrainReadable(s);
         NetworkCloseSocket(s);
     }
+    g_isHost = false;
 }
 
 bool LockstepNet_IsConnected() { return g_connected; }
@@ -502,6 +503,7 @@ static void Compare(const LsHash& theirs)
     Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX)",
          a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch,
          b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch);
+    StateHash_LogDesyncBreakdown(what, theirs.tick);
     Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
 }
@@ -579,6 +581,13 @@ void LockstepNet_Poll()
                 g_hostStateKnown = true;
             }
             break;
+        case LS_DESYNC: {
+            unsigned long long tick = 0;
+            sscanf_s(g_desync, "the games differ after tick %llu", &tick);
+            StateHash_LogDesyncBreakdown(g_desync, tick);
+            LockstepNet_SendClientLogs("DESYNC");
+            break;
+        }
         }
     }
 }

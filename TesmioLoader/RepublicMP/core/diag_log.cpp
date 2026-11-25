@@ -19,6 +19,7 @@
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
 #include "../third_party/miniz/miniz.h"
 #include "../ui/lang.h"
+#include "../game/window_focus.h"
 
 #include <windows.h>
 #include <cstdio>
@@ -62,28 +63,151 @@ static void EnsureDiagLock()
     TsmEnsureCriticalSection(&g_diagLockOnce, &g_diagLock);
 }
 
-static void WriteRawLine(const char* category, const char* body)
+struct DiagPerfBucketCounters {
+    volatile LONG64 totalTicks;
+    volatile LONG64 count;
+    volatile LONG64 maxTicks;
+};
+
+static DiagPerfBucketCounters g_perfBuckets[DIAG_PERF_BUCKET_COUNT] = {};
+static volatile LONG64 g_perfMallocCalls = 0;
+static volatile LONG64 g_perfMallocBytes = 0;
+static LARGE_INTEGER g_perfFreq = {};
+
+static double GetPerfFreqHz()
 {
+    if (g_perfFreq.QuadPart <= 0) {
+        QueryPerformanceFrequency(&g_perfFreq);
+    }
+    return g_perfFreq.QuadPart > 0 ? (double)g_perfFreq.QuadPart : 10000000.0;
+}
+
+static void AtomicMax64(volatile LONG64* target, LONG64 val)
+{
+    LONG64 cur = *target;
+    while (val > cur) {
+        LONG64 prev = InterlockedCompareExchange64(target, val, cur);
+        if (prev == cur) break;
+        cur = prev;
+    }
+}
+
+int64_t DiagPerf_Now(void)
+{
+    LARGE_INTEGER li = {};
+    QueryPerformanceCounter(&li);
+    return (int64_t)li.QuadPart;
+}
+
+void DiagPerf_RecordBatch(DiagPerfBucket bucket, int64_t count, int64_t totalQpcTicks, int64_t maxQpcTicks)
+{
+    const int idx = (int)bucket;
+    if (idx < 0 || idx >= DIAG_PERF_BUCKET_COUNT || count <= 0) return;
+    if (totalQpcTicks < 0) totalQpcTicks = 0;
+    if (maxQpcTicks < 0) maxQpcTicks = 0;
+    DiagPerfBucketCounters& b = g_perfBuckets[idx];
+    InterlockedAdd64(&b.totalTicks, (LONG64)totalQpcTicks);
+    InterlockedAdd64(&b.count, (LONG64)count);
+    AtomicMax64(&b.maxTicks, (LONG64)maxQpcTicks);
+}
+
+void DiagPerf_Record(DiagPerfBucket bucket, int64_t qpcDelta)
+{
+    DiagPerf_RecordBatch(bucket, 1, qpcDelta, qpcDelta);
+}
+
+void DiagPerf_RecordVirtualQuery(int64_t qpcDelta)
+{
+    DiagPerf_Record(DIAG_PERF_VIRTUAL_QUERY, qpcDelta);
+}
+
+void DiagPerf_RecordMallocBatch(int64_t calls, int64_t bytes)
+{
+    if (calls > 0) InterlockedAdd64(&g_perfMallocCalls, (LONG64)calls);
+    if (bytes > 0) InterlockedAdd64(&g_perfMallocBytes, (LONG64)bytes);
+}
+
+void DiagPerf_RecordMalloc(size_t bytes)
+{
+    DiagPerf_RecordMallocBatch(1, (int64_t)bytes);
+}
+
+double DiagLog_QueryTimerResolutionMs(void)
+{
+    typedef LONG (NTAPI* NtQueryTimerResolutionFn)(ULONG*, ULONG*, ULONG*);
+    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
+    if (!hNtdll) return 0.0;
+    auto pQuery = reinterpret_cast<NtQueryTimerResolutionFn>(
+        reinterpret_cast<void*>(GetProcAddress(hNtdll, "NtQueryTimerResolution")));
+    if (!pQuery) return 0.0;
+    ULONG minRes = 0, maxRes = 0, curRes = 0;
+    if (pQuery(&minRes, &maxRes, &curRes) != 0) return 0.0;
+    return (double)curRes / 10000.0;
+}
+
+void DiagPerf_TakeSnapshot(DiagPerfSnapshot* out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    const double freq = GetPerfFreqHz();
+    for (int i = 0; i < DIAG_PERF_BUCKET_COUNT; ++i) {
+        LONG64 cnt = InterlockedExchange64(&g_perfBuckets[i].count, 0);
+        LONG64 tot = InterlockedExchange64(&g_perfBuckets[i].totalTicks, 0);
+        LONG64 mx  = InterlockedExchange64(&g_perfBuckets[i].maxTicks, 0);
+        out->buckets[i].count = (int64_t)cnt;
+        out->buckets[i].totalMs = (double)tot * 1000.0 / freq;
+        out->buckets[i].avgMs = (cnt > 0) ? (out->buckets[i].totalMs / (double)cnt) : 0.0;
+        out->buckets[i].maxMs = (double)mx * 1000.0 / freq;
+    }
+    out->mallocCalls = (int64_t)InterlockedExchange64(&g_perfMallocCalls, 0);
+    out->mallocBytes = (int64_t)InterlockedExchange64(&g_perfMallocBytes, 0);
+    out->winTimerResMs = DiagLog_QueryTimerResolutionMs();
+    out->windowFocused = IsGameWindowFocused();
+}
+
+static void WriteRawBlock(const char* data, size_t len, bool flush)
+{
+    if (!data || len == 0) return;
     EnsureDiagLock();
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    DWORD tid = GetCurrentThreadId();
-
-    char line[4600];
-    int n = _snprintf_s(line, sizeof(line), _TRUNCATE,
-                        "[%04d-%02d-%02d %02d:%02d:%02d.%03d] [TID:%05lu] [%-7s] %s\r\n",
-                        st.wYear, st.wMonth, st.wDay,
-                        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                        (unsigned long)tid, category ? category : "INFO", body ? body : "");
-    if (n <= 0) return;
-
     EnterCriticalSection(&g_diagLock);
     if (g_hDiagFile != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
-        WriteFile(g_hDiagFile, line, (DWORD)n, &written, nullptr);
-        FlushFileBuffers(g_hDiagFile);
+        WriteFile(g_hDiagFile, data, (DWORD)len, &written, nullptr);
+        if (flush) FlushFileBuffers(g_hDiagFile);
     }
     LeaveCriticalSection(&g_diagLock);
+}
+
+static void FormatDiagLinePrefixBody(char* out, size_t outSize, const char* category, const char* body)
+{
+    SYSTEMTIME st = {};
+    GetLocalTime(&st);
+    DWORD tid = GetCurrentThreadId();
+    _snprintf_s(out, outSize, _TRUNCATE,
+                "[%04d-%02d-%02d %02d:%02d:%02d.%03d] [TID:%05lu] [%-7s] %s\r\n",
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                (unsigned long)tid, category ? category : "INFO", body ? body : "");
+}
+
+static void WriteRawLine(const char* category, const char* body)
+{
+    char line[4600];
+    FormatDiagLinePrefixBody(line, sizeof(line), category, body);
+    WriteRawBlock(line, strlen(line), true);
+}
+
+static void AppendDiagLine(std::string& batch, const char* category, const char* fmt, ...)
+{
+    char body[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(body, sizeof(body), _TRUNCATE, fmt ? fmt : "", ap);
+    va_end(ap);
+
+    char line[4600];
+    FormatDiagLinePrefixBody(line, sizeof(line), category, body);
+    batch.append(line);
 }
 
 void DiagLog_Printf(const char* category, const char* fmt, ...)
@@ -335,6 +459,33 @@ static const char* SessionStateName(SessionState st)
     }
 }
 
+static void LogGameConfigSummary(void)
+{
+    if (!g_gameDir[0]) return;
+    char cfgPath[MAX_PATH] = {};
+    _snprintf_s(cfgPath, sizeof(cfgPath), _TRUNCATE, "%s\\media_soviet\\config.ini", g_gameDir);
+    FILE* f = nullptr;
+    if (fopen_s(&f, cfgPath, "r") != 0 || !f) {
+        DiagLog_Printf("CONFIG", "config.ini not found (%s) | WinTimer=%.2fms",
+                       cfgPath, DiagLog_QueryTimerResolutionMs());
+        return;
+    }
+    int resX = -1, resY = -1, windowed = -1, vsync = -1, drawDist = -1, citizens = -1;
+    char line[256] = {};
+    while (fgets(line, sizeof(line), f)) {
+        int val = 0;
+        if (sscanf_s(line, "$INT RESOLUTIONX %d", &val) == 1) resX = val;
+        else if (sscanf_s(line, "$INT RESOLUTIONY %d", &val) == 1) resY = val;
+        else if (sscanf_s(line, "$INT WINDOWED %d", &val) == 1) windowed = val;
+        else if (sscanf_s(line, "$INT GRAPHIC_VSYNC %d", &val) == 1) vsync = val;
+        else if (sscanf_s(line, "$INT GRAPHIC_DRAWDISTANCE %d", &val) == 1) drawDist = val;
+        else if (sscanf_s(line, "$INT GRAPHIC_CITIZENS %d", &val) == 1) citizens = val;
+    }
+    fclose(f);
+    DiagLog_Printf("CONFIG", "Res=%dx%d | Windowed=%d | VSync=%d | DrawDist=%d | Citizens=%d | WinTimer=%.2fms",
+                   resX, resY, windowed, vsync, drawDist, citizens, DiagLog_QueryTimerResolutionMs());
+}
+
 void DiagLog_LogStartupSummary(void)
 {
     HMODULE hExe = GetModuleHandleA(nullptr);
@@ -366,6 +517,81 @@ void DiagLog_LogStartupSummary(void)
                    (void*)hDin, (void*)hLdr, (void*)hRmp, rmpPath);
     DiagLog_Printf("MODULES", "RepublicMP CRC32=%08X | LocalVersion=%s",
                    SaveSync_GetLocalDllCrc(), SaveSync_GetLocalVersion());
+    LogGameConfigSummary();
+}
+
+void DiagLog_FormatPerfMainLine(const DiagPerfSnapshot& ps, char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    const auto& wr = ps.buckets[DIAG_PERF_WAIT_RENDER];
+    const auto& ea = ps.buckets[DIAG_PERF_EARLY];
+    const auto& la = ps.buckets[DIAG_PERF_LATE];
+    const auto& he = ps.buckets[DIAG_PERF_HELD];
+    const auto& ha = ps.buckets[DIAG_PERF_STATE_HASH];
+    const auto& ts = ps.buckets[DIAG_PERF_TS_STEP];
+    const auto& th = ps.buckets[DIAG_PERF_TS_ECON_HOOK];
+    const double thAvgUs = (th.count > 0) ? (th.totalMs * 1000.0 / (double)th.count) : 0.0;
+    _snprintf_s(out, outSize, _TRUNCATE,
+                "PerfMain: waitRnd=%.2f/%.2f(n=%lld) early=%.2f/%.2f(n=%lld) late=%.2f/%.2f(n=%lld) held=%.2f/%.2f(n=%lld) hash=%.2f/%.2f(n=%lld) tsStep=%.2f/%.2f(n=%lld) tsHook=%.1fms/%.2fus(n=%lld)",
+                wr.avgMs, wr.maxMs, (long long)wr.count,
+                ea.avgMs, ea.maxMs, (long long)ea.count,
+                la.avgMs, la.maxMs, (long long)la.count,
+                he.avgMs, he.maxMs, (long long)he.count,
+                ha.avgMs, ha.maxMs, (long long)ha.count,
+                ts.avgMs, ts.maxMs, (long long)ts.count,
+                th.totalMs, thAvgUs, (long long)th.count);
+}
+
+void DiagLog_FormatPerfRndLine(const DiagPerfSnapshot& ps, bool p2pConn, bool p2pRelay, int32_t p2pSendQ,
+                               char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    const auto& ui  = ps.buckets[DIAG_PERF_UI_ROUTINE];
+    const auto& tu  = ps.buckets[DIAG_PERF_TS_UI];
+    const auto& ph  = ps.buckets[DIAG_PERF_PRESENT_HOOK];
+    const auto& pw  = ps.buckets[DIAG_PERF_PRESENT_SWAP];
+    const auto& vq  = ps.buckets[DIAG_PERF_VIRTUAL_QUERY];
+    const auto& gap = ps.buckets[DIAG_PERF_INTERFRAME_GAP];
+    const auto& pn  = ps.buckets[DIAG_PERF_PREPARE_NATIVE];
+    const auto& pm  = ps.buckets[DIAG_PERF_PREPARE_MOD];
+    const auto& ba  = ps.buckets[DIAG_PERF_BEFORE_AFTER_EARLY];
+    const auto& pl  = ps.buckets[DIAG_PERF_PRIVATE_LATE];
+    const auto& usw = ps.buckets[DIAG_PERF_UI_SWITCHES];
+    const auto& mz  = ps.buckets[DIAG_PERF_MALLOC_ZERO];
+    const double mallocMb = (double)ps.mallocBytes / (1024.0 * 1024.0);
+    const double mzAvgUs = (mz.count > 0) ? (mz.totalMs * 1000.0 / (double)mz.count) : 0.0;
+    _snprintf_s(out, outSize, _TRUNCATE,
+                "PerfRnd: fg=%d ui=%.2f/%.2f(n=%lld) tsUi=%.2f/%.2f(n=%lld) uiSw=%.2f/%.2f(n=%lld) presHook=%.2f/%.2f(n=%lld) presSwap=%.2f/%.2f(n=%lld) | gap=%.2f/%.2f(n=%lld) prepNat=%.2f/%.2f(n=%lld) prepMod=%.2f/%.2f(n=%lld) baEarly=%.2f/%.2f(n=%lld) privLate=%.2f/%.2f(n=%lld) | VQ=%lld(%.2fms max=%.3f) Malloc=%lld(%.1fMB) mzEst=%.1fms/%.2fus(max=%.3f n=%lld) | WinTimer=%.2fms | P2P(conn=%d relay=%d sendQ=%dB)",
+                ps.windowFocused ? 1 : 0,
+                ui.avgMs, ui.maxMs, (long long)ui.count,
+                tu.avgMs, tu.maxMs, (long long)tu.count,
+                usw.avgMs, usw.maxMs, (long long)usw.count,
+                ph.avgMs, ph.maxMs, (long long)ph.count,
+                pw.avgMs, pw.maxMs, (long long)pw.count,
+                gap.avgMs, gap.maxMs, (long long)gap.count,
+                pn.avgMs, pn.maxMs, (long long)pn.count,
+                pm.avgMs, pm.maxMs, (long long)pm.count,
+                ba.avgMs, ba.maxMs, (long long)ba.count,
+                pl.avgMs, pl.maxMs, (long long)pl.count,
+                (long long)vq.count, vq.totalMs, vq.maxMs,
+                (long long)ps.mallocCalls, mallocMb,
+                mz.totalMs, mzAvgUs, mz.maxMs, (long long)mz.count,
+                ps.winTimerResMs, (int)p2pConn, (int)p2pRelay, (int)p2pSendQ);
+}
+
+static void AppendPerfSnapshotLines(std::string& batch, const char* tag)
+{
+    DiagPerfSnapshot ps = {};
+    DiagPerf_TakeSnapshot(&ps);
+    bool p2pConn = false, p2pRelay = false;
+    int32_t p2pSendQ = 0;
+    SteamP2P_GetPerfStats(&p2pConn, &p2pRelay, &p2pSendQ);
+
+    char lineBuf[2048];
+    DiagLog_FormatPerfMainLine(ps, lineBuf, sizeof(lineBuf));
+    AppendDiagLine(batch, tag, "%s", lineBuf);
+    DiagLog_FormatPerfRndLine(ps, p2pConn, p2pRelay, p2pSendQ, lineBuf, sizeof(lineBuf));
+    AppendDiagLine(batch, tag, "%s", lineBuf);
 }
 
 static void DumpLiveSnapshot(const char* tag)
@@ -377,7 +603,11 @@ static void DumpLiveSnapshot(const char* tag)
     const char* peer = SaveSync_GetPeerIp();
     const char* lastErr = SaveSync_GetLastError();
 
-    DiagLog_Printf(tag, "State=%s | Role=%s | WorldLoaded=%d | Lockstep=%d | Peer='%s' | LastErr='%s'",
+    const bool isHeartbeat = (tag && strcmp(tag, "HEARTBT") == 0);
+    std::string batch;
+    batch.reserve(4096);
+
+    AppendDiagLine(batch, tag, "State=%s | Role=%s | WorldLoaded=%d | Lockstep=%d | Peer='%s' | LastErr='%s'",
                    SessionStateName(st), host ? "HOST" : "CLIENT", (int)world, (int)lockstep,
                    peer ? peer : "", lastErr ? lastErr : "");
 
@@ -386,7 +616,7 @@ static void DumpLiveSnapshot(const char* tag)
     uint64_t mySteamId = SteamP2P_GetLocalSteamId();
     std::string myName = SteamP2P_GetLocalPersonaNameCopy();
     std::string localDisplay = LanDiscovery_GetLocalDisplayName();
-    DiagLog_Printf(tag, "SteamP2P: Available=%d | LocalSteamID=%llu ('%s') | DisplayName='%s'",
+    AppendDiagLine(batch, tag, "SteamP2P: Available=%d | LocalSteamID=%llu ('%s') | DisplayName='%s'",
                    (int)stmAvail, (unsigned long long)mySteamId, myName.c_str(),
                    localDisplay.c_str());
 
@@ -395,14 +625,14 @@ static void DumpLiveSnapshot(const char* tag)
     int westLoans = 0, eastLoans = 0;
     TwoStates_GetLoanDebt(1, &westDebtRub, &westDebtUsd, &westLoans);
     TwoStates_GetLoanDebt(2, &eastDebtRub, &eastDebtUsd, &eastLoans);
-    DiagLog_Printf(tag, "TwoStates: Mode=%d | LocalState=%d | BorderHalf=%.0fm | ExpandBorders=%d | West(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$) | East(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$)",
+    AppendDiagLine(batch, tag, "TwoStates: Mode=%d | LocalState=%d | BorderHalf=%.0fm | ExpandBorders=%d | West(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$) | East(RUB=%.0f, USD=%.0f, Loans=%d:%.0fR/%.0f$)",
                    (int)TwoStates_GetMode(), TwoStates_LocalState(),
                    TwoStates_GetBorderHalfWidth(), (int)TwoStates_GetExpandBorders(),
                    TwoStates_GetRubles(1), TwoStates_GetDollars(1), westLoans, westDebtRub, westDebtUsd,
                    TwoStates_GetRubles(2), TwoStates_GetDollars(2), eastLoans, eastDebtRub, eastDebtUsd);
 
     // ModSync status
-    DiagLog_Printf(tag, "ModSync: PackMode=%d | CatalogMods=%d | ActiveServerMods=%d",
+    AppendDiagLine(batch, tag, "ModSync: PackMode=%d | CatalogMods=%d | ActiveServerMods=%d",
                    (int)ModSync_GetPackMode(), ModSync_GetModCount(),
                    ModSync_GetActiveServerModCount());
 
@@ -412,13 +642,13 @@ static void DumpLiveSnapshot(const char* tag)
     char commonNames[128] = {};
     SaveSync_FormatDlcNames(commonMask, commonNames, sizeof(commonNames));
     uint32_t disabledMask = (hostMask | clientMask) & ~commonMask;
-    DiagLog_Printf(tag, "DlcSync: Host=0x%04X | Client=0x%04X | Common=0x%04X | Disabled=0x%04X | Active='%s'",
+    AppendDiagLine(batch, tag, "DlcSync: Host=0x%04X | Client=0x%04X | Common=0x%04X | Disabled=0x%04X | Active='%s'",
                    hostMask, clientMask, commonMask, disabledMask, commonNames[0] ? commonNames : "None");
 
     // Vehicle Sync telemetry
     VehicleSyncDiagStats vs = {};
     Purchase_GetDiagStats(&vs);
-    DiagLog_Printf(tag, "VehSync: Attempt=%llu | Made=%llu | BlockDlc=%llu | BlockMod=%llu | Remapped=%llu | Fails=%llu | Sold=%llu | [Road=%u Rail=%u Water=%u Air=%u Spec=%u]",
+    AppendDiagLine(batch, tag, "VehSync: Attempt=%llu | Made=%llu | BlockDlc=%llu | BlockMod=%llu | Remapped=%llu | Fails=%llu | Sold=%llu | [Road=%u Rail=%u Water=%u Air=%u Spec=%u]",
                    (unsigned long long)vs.purchasesAttempted, (unsigned long long)vs.purchasesMade,
                    (unsigned long long)vs.purchasesBlockedDlc, (unsigned long long)vs.purchasesBlockedMod,
                    (unsigned long long)vs.scriptNameRemapped, (unsigned long long)vs.scriptNameResolveFails,
@@ -436,7 +666,7 @@ static void DumpLiveSnapshot(const char* tag)
         LockstepFlow fl = LockstepNet_Flow();
         const char* desync = LockstepNet_Desync();
         unsigned long long lastMatched = LockstepNet_LastMatchedTick();
-        DiagLog_Printf(tag, "Lockstep: Tick=%llu | MatchedTick=%llu | Paused=%d | Speed=%d | Ping=%llums(valid=%d) | Behind=%llu | Stalls=%ds | msSinceStall=%llu | Desync='%s'",
+        AppendDiagLine(batch, tag, "Lockstep: Tick=%llu | MatchedTick=%llu | Paused=%d | Speed=%d | Ping=%llums(valid=%d) | Behind=%llu | Stalls=%ds | msSinceStall=%llu | Desync='%s'",
                        tick, lastMatched, (int)paused, speed, rtt, (int)hasRtt,
                        fl.behind, fl.stalls, fl.msSinceStall, desync ? desync : "");
 
@@ -446,14 +676,20 @@ static void DumpLiveSnapshot(const char* tag)
         HeldFrame_GetDiagStats(&hf);
         VehicleSoftSyncDiagStats vss = {};
         VehicleSoftSync_GetDiagStats(&vss);
-        DiagLog_Printf(tag, "HeldFrame: Beats=%llu | Phase=%d(%s) | TickDebt=%.3f | SubTickAlpha=%.3f | Drawn=%llu | TrackedVeh=%u | LastTargets=%u | LastInterp=%u | Fallbacks=%llu | RestoreRefusals=%llu",
+        AppendDiagLine(batch, tag, "HeldFrame: Beats=%llu | Phase=%d(%s) | TickDebt=%.3f | SubTickAlpha=%.3f | Drawn=%llu | TrackedVeh=%u | LastTargets=%u | LastInterp=%u | Fallbacks=%llu | RestoreRefusals=%llu",
                        dinfo.frameBeats, dinfo.framePhase, FramePhaseName(dinfo.framePhase), dinfo.tickDebt, dinfo.subTickAlpha,
                        hf.heldFramesDrawn, hf.trackedVehicles, hf.lastTargetsCount, hf.lastInterpolatedCount,
                        hf.guardFallbacks, hf.restoreRefusals);
-        DiagLog_Printf(tag, "SoftSync: Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | BldStorageFixed=%llu | MaxDrift=%.2fm (AllTime=%.2fm)",
+        AppendDiagLine(batch, tag, "SoftSync: Sent=%llu | Applied=%llu | ImmSweeps=%llu | VehSynced=%llu | Blended=%llu | Snapped=%llu | CargoFixed=%llu | BldStorageFixed=%llu | MaxDrift=%.2fm (AllTime=%.2fm)",
                        vss.batchesSent, vss.batchesApplied, vss.immediateSweeps, vss.vehiclesSynced,
                        vss.posBlended, vss.posSnapped, vss.cargoUpdated, vss.bldStorageUpdated, vss.lastMaxDriftM, vss.allTimeMaxDriftM);
     }
+
+    if (isHeartbeat) {
+        AppendPerfSnapshotLines(batch, tag);
+    }
+
+    WriteRawBlock(batch.data(), batch.size(), !isHeartbeat);
 }
 
 void DiagLog_FrameTick(void)

@@ -54,6 +54,8 @@ bool BuildingSwitches_IsOneByteWorldSettingForTest(unsigned at);
 bool BuildingSwitches_IsLocalPerStateWorldSettingForTest(unsigned at);
 bool BuildingSwitches_IsNoiseEmptyForTest();
 bool BuildingSwitches_ClickedForTest();
+struct SwitchPerfStatsForTest;
+void BuildingSwitches_GetStatsForTest(SwitchPerfStatsForTest* out);
 
 // Tool stub target for building_copyweights (FN_TOOL_COPY_WEIGHTS_RVA) in Late tool dispatch.
 unsigned long long BuildingSwitches_CopyWeightsTool(unsigned long long world, unsigned long long a2);
