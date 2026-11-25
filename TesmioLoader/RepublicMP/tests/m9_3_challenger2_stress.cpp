@@ -103,25 +103,25 @@ static bool SubTest_M9_3_C2_ClientSettingsIsolationAndCameraFixes()
     BuildMode clientBm = { 1, 0, 80, 50 };
     BuildMode_Write(clientBm);
     BYTE* w = g_mockExeBuffer ? (g_mockExeBuffer + WORLD_RVA) : nullptr;
-    if (w) *(w + 0xB08) = 1;
+    if (w) *(w + 0xB30) = 1;
 
     // Simulate pre-resync capture
     BuildMode preResyncBm = BuildMode_Read();
-    BYTE preResyncPop = w ? *(w + 0xB08) : 0;
+    BYTE preResyncPop = w ? *(w + 0xB30) : 0;
     TEST_CHECK(BuildMode_Equal(preResyncBm, clientBm));
     TEST_CHECK(preResyncPop == 1);
 
     // Incoming save load clobbers memory with host's mode & autoPopulate
     BuildMode hostBm = { 0, 1, -200, 10 };
     BuildMode_Write(hostBm);
-    if (w) *(w + 0xB08) = 0;
+    if (w) *(w + 0xB30) = 0;
     TEST_CHECK(BuildMode_Equal(BuildMode_Read(), hostBm));
 
     // Post-load restore on resync
     BuildMode_Write(preResyncBm);
-    if (w) *(w + 0xB08) = preResyncPop;
+    if (w) *(w + 0xB30) = preResyncPop;
     TEST_CHECK(BuildMode_Equal(BuildMode_Read(), clientBm));
-    TEST_CHECK(w && *(w + 0xB08) == 1);
+    TEST_CHECK(w && *(w + 0xB30) == 1);
 
     // Initial join resets to realistic defaults {0,0,0,0}
     BuildMode defBm = { 0, 0, 0, 0 };

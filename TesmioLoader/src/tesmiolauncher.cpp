@@ -150,7 +150,7 @@ struct SupportedGameVersion
 };
 
 static const SupportedGameVersion kSupportedVersions[] = {
-    { { 1, 1, 1, 13 }, 0x6A8D4087u, L"1.1.1.13" },
+    { { 1, 2, 0, 8 }, 0x6B0097B2u, L"1.2.0.8" },
 };
 #define GAME_VER_COUNT (sizeof(kSupportedVersions) / sizeof(kSupportedVersions[0]))
 
@@ -651,18 +651,34 @@ static void ReadGameVersion(const wchar_t* exe, GameVersion* g)
         const unsigned char* w = (lea - text >= 64) ? lea - 64 : text;
         int edx = -1, r8 = -1, r9 = -1, stk = -1;
 
-        for (const unsigned char* p = w; p + 2 < lea; p++)
+        for (const unsigned char* p = w; p + 2 <= lea; p++)
         {
             unsigned imm;
             if (p[0] == 0xBA && p + 5 <= lea && (imm = Rd32(p + 1)) < 256)
                 edx = (int)imm;                                     // mov edx, imm32
+            else if (p[0] == 0x33 && p[1] == 0xD2)
+                edx = 0;                                            // xor edx, edx
             else if (p[0] == 0x41 && p[1] == 0xB8 && p + 6 <= lea && (imm = Rd32(p + 2)) < 256)
                 r8 = (int)imm;                                      // mov r8d, imm32
+            else if (p[0] == 0x45 && p[1] == 0x33 && p[2] == 0xC0 && p + 3 <= lea)
+                r8 = 0;                                             // xor r8d, r8d
             else if (p[0] == 0x41 && p[1] == 0xB9 && p + 6 <= lea && (imm = Rd32(p + 2)) < 256)
                 r9 = (int)imm;                                      // mov r9d, imm32
-            else if (p[0] == 0x44 && p[1] == 0x8B && p[2] == 0xC2)
+            else if (p[0] == 0x45 && p[1] == 0x33 && p[2] == 0xC9 && p + 3 <= lea)
+                r9 = 0;                                             // xor r9d, r9d
+            else if (p[0] == 0x41 && p[1] == 0x8D && p[2] == 0x51 && p + 4 <= lea && r9 >= 0)
+            {
+                int v = r9 + (int)(signed char)p[3];                // lea edx, [r9+disp8]
+                if (v >= 0 && v < 256) edx = v;
+            }
+            else if (p[0] == 0x45 && p[1] == 0x8D && p[2] == 0x41 && p + 4 <= lea && r9 >= 0)
+            {
+                int v = r9 + (int)(signed char)p[3];                // lea r8d, [r9+disp8]
+                if (v >= 0 && v < 256) r8 = v;
+            }
+            else if (p[0] == 0x44 && p[1] == 0x8B && p[2] == 0xC2 && p + 3 <= lea)
                 r8 = edx;                                           // mov r8d, edx
-            else if (p[0] == 0x44 && p[1] == 0x8B && p[2] == 0xCA)
+            else if (p[0] == 0x44 && p[1] == 0x8B && p[2] == 0xCA && p + 3 <= lea)
                 r9 = edx;                                           // mov r9d, edx
             else if (p[0] == 0xC7 && p[1] == 0x44 && p[2] == 0x24 && p + 8 <= lea &&
                      (imm = Rd32(p + 4)) < 256)

@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Phases 0-4 CPU/FPS/UI/network optimizations (3x FPS, 7x faster TwoStates step, 31x-74x faster TwoStates UI, TCP_NODELAY & 16MB Steam P2P ring buffer, held-frame batching), RCO refuel ABI / TwoStates research & exact-cargo soft-sync desync fixes, MP Plaid speed cap, resized Client Host-Lost modal with reconnect recovery, modular TwoStates & tests (70/70 suites)",
+                "v%s (Protocol %d) - Full port to Workers & Resources v1.2.0.8 (PE 0x6B0097B2, Build 26869140): updated all RVAs, struct strides/offsets (VEHICLE 0x1C30, VehicleType 0xA0C8, Resource 0x380, ResearchItem 0x138, BLD_TYPE 0x368/0x738/0xAF8), inline hooks & tesmiolauncher version check; Space Program DLC (dlc5) metadata & DLC guard; 70/70 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

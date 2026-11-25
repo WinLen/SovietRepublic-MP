@@ -14,8 +14,8 @@
 #include <string.h>
 #include <vector>
 
-#define VEHICLES_OFFSET 0x12810
-#define VEHICLE_BYTES 0x1AD8
+#define VEHICLES_OFFSET 0x128C0
+#define VEHICLE_BYTES 0x1C30
 #define STOPS_LIST 0x638         // stop records, 0x198 each
 #define STOP_BYTES 0x198
 #define CARGO_LIST 0x3B8         // cargo records, 0x10 each
@@ -211,14 +211,15 @@ static bool ListWord(int kind, unsigned offset)
                (offset >= 0x5D8 && offset < 0x5F4) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
-               (offset >= 0x680 && offset < 0x1700) ||
-               (offset >= 0x1708 && offset < 0x1710) ||
-               (offset >= 0x1720 && offset < 0x1768) ||
-               (offset >= 0x17E8 && offset < 0x17F0) ||
-               (offset >= 0x1950 && offset < 0x1A10) ||
-               (offset >= 0x1A54 && offset < 0x1A5C) ||
-               (offset >= 0x1A7C && offset < 0x1A84) ||
-               (offset >= 0x1AD0 && offset < 0x1AD8);
+               (offset >= 0x680 && offset < 0x1740) ||
+               (offset >= 0x1748 && offset < 0x1750) ||
+               (offset >= 0x17B8 && offset < 0x1800) ||
+               (offset >= 0x1880 && offset < 0x1888) ||
+               (offset >= 0x19E8 && offset < 0x1AA8) ||
+               (offset >= 0x1B18 && offset < 0x1B50) ||
+               (offset >= 0x1BAC && offset < 0x1BB4) ||
+               (offset >= 0x1BD4 && offset < 0x1BE0) ||
+               (offset >= 0x1C28 && offset < 0x1C30);
     }
     if (kind == KIND_CARGO) return (offset % CARGO_BYTES) < 0x0Cu; // Resource* (+0x00) and dynamic amountTons (+0x08); only filterFlag (+0x0C) is a UI switch
     if (kind != KIND_STOP || offset >= 2 * HALF_BYTES) return false;

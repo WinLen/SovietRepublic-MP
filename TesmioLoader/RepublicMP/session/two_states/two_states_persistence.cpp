@@ -7,8 +7,8 @@ void TwoStates_BindPersistence(const TsmHost* host) { if (host) TsmBind(host); }
 // Module-Private Persistence State & MasterSave Hook Contract
 // ---------------------------------------------------------------------------
 
-#define RVA_MASTER_SAVE             0x42CC00
-#define RVA_MASTER_SAVE_AUTOSAVE_JE 0x42CC69
+#define RVA_MASTER_SAVE             0x450CA0
+#define RVA_MASTER_SAVE_AUTOSAVE_JE 0x450D31
 
 static volatile bool g_sendClientLogs = true;
 static volatile bool g_importingSpSave = false;
@@ -2141,9 +2141,9 @@ static void SnapshotOneVehicleBeforeSave(BYTE* v)
     if (!v) return;
     VehSaveSnapshot s;
     s.veh   = v;
-    s.f17E8 = *(unsigned long long*)(v + 0x17E8);
-    s.f1A54 = *(unsigned long long*)(v + 0x1A54);
-    s.f1A7C = *(unsigned long long*)(v + 0x1A7C);
+    s.f17E8 = *(unsigned long long*)(v + 0x1880);
+    s.f1A54 = *(unsigned long long*)(v + 0x1BAC);
+    s.f1A7C = *(unsigned long long*)(v + 0x1BD4);
     g_vehSaveSnaps.push_back(s);
 }
 
@@ -2180,9 +2180,9 @@ static void RestoreVehiclesAfterSave()
     __try {
         for (size_t i = 0; i < g_vehSaveSnaps.size(); ++i) {
             const VehSaveSnapshot& s = g_vehSaveSnaps[i];
-            *(unsigned long long*)(s.veh + 0x17E8) = s.f17E8;
-            *(unsigned long long*)(s.veh + 0x1A54) = s.f1A54;
-            *(unsigned long long*)(s.veh + 0x1A7C) = s.f1A7C;
+            *(unsigned long long*)(s.veh + 0x1880) = s.f17E8;
+            *(unsigned long long*)(s.veh + 0x1BAC) = s.f1A54;
+            *(unsigned long long*)(s.veh + 0x1BD4) = s.f1A7C;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -2219,7 +2219,7 @@ static void __fastcall H_MasterSave(BYTE* world)
     DiagLog_BeginSafeSeh();
     __try {
         if (world) {
-            memcpy(searchPoolBackup, world + 0x14478, sizeof(searchPoolBackup));
+            memcpy(searchPoolBackup, world + 0x14528, sizeof(searchPoolBackup));
             searchPoolSaved = true;
             strncpy_s(saveRel, (const char*)(world + SAVE_NAME_FIELD_OFFSET), _TRUNCATE);
             bool isManualIntoStaging = (strstr(saveRel, "mp_syncsave_") != nullptr) &&
@@ -2231,8 +2231,8 @@ static void __fastcall H_MasterSave(BYTE* world)
                 // lost to staging cleanup and always appear in "Continue Co-op" / auto-host.
                 strncpy_s((char*)(world + SAVE_NAME_FIELD_OFFSET), SAVE_NAME_FIELD_MAX_LEN, "save/coop_last_session", _TRUNCATE);
                 strncpy_s(saveRel, "save/coop_last_session", _TRUNCATE);
-                prevFc90 = *(BYTE*)(world + 0xFC90);
-                *(BYTE*)(world + 0xFC90) = 1;
+                prevFc90 = *(BYTE*)(world + 0xFD28);
+                *(BYTE*)(world + 0xFD28) = 1;
                 fc90Patched = true;
             }
             if (saveRel[0] && BuildFullSaveDir(saveRel, fullSaveDir, sizeof(fullSaveDir))) {
@@ -2240,8 +2240,8 @@ static void __fastcall H_MasterSave(BYTE* world)
                 char scriptPath[MAX_PATH] = {};
                 _snprintf_s(scriptPath, sizeof(scriptPath), _TRUNCATE, "%s\\script.ini", fullSaveDir);
                 if (!fc90Patched && GetFileAttributesA(scriptPath) == INVALID_FILE_ATTRIBUTES) {
-                    prevFc90 = *(BYTE*)(world + 0xFC90);
-                    *(BYTE*)(world + 0xFC90) = 1; // force C3D_TERRAIN::Save to write script.ini & terrain files
+                    prevFc90 = *(BYTE*)(world + 0xFD28);
+                    *(BYTE*)(world + 0xFD28) = 1; // force C3D_TERRAIN::Save to write script.ini & terrain files
                     fc90Patched = true;
                 }
             }
@@ -2289,14 +2289,14 @@ static void __fastcall H_MasterSave(BYTE* world)
     DiagLog_BeginSafeSeh();
     __try {
         if (searchPoolSaved && world) {
-            memcpy(world + 0x14478, searchPoolBackup, sizeof(searchPoolBackup));
+            memcpy(world + 0x14528, searchPoolBackup, sizeof(searchPoolBackup));
         }
         if (autosaveJePatched && autosaveJeAddr) {
             *autosaveJeAddr = prevAutosaveJe;
             VirtualProtect(autosaveJeAddr, 2, oldProt, &oldProt);
         }
         if (fc90Patched && world) {
-            *(BYTE*)(world + 0xFC90) = prevFc90;
+            *(BYTE*)(world + 0xFD28) = prevFc90;
         }
         if (moneySwapped) {
             *WorldRubles()  = prevRub;

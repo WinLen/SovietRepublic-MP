@@ -121,6 +121,7 @@ extern int g_failedAssertions;
 // ---------------------------------------------------------------------------
 
 inline constexpr size_t MOCK_EXE_SIZE = 0x1000000; // 16 MB covers all RVAs in SOVIET64.exe
+inline constexpr size_t VEHICLE_STRUCT_BYTES = 0x1C30; // sizeof(VEHICLE) in v1.2.0.8
 extern BYTE* g_mockExeBuffer;
 extern char g_mockBaseDir[MAX_PATH];
 extern TsmHost g_mockHost;

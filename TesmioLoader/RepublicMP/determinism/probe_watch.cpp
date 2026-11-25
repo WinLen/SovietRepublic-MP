@@ -4,8 +4,8 @@
 #include <tlhelp32.h>
 #include <string.h>
 
-#define WORLD_RVA 0x9D4F10
-#define CITIZEN_LIST_OFFSET 0x126A8
+#define WORLD_RVA 0xA1EF20
+#define CITIZEN_LIST_OFFSET 0x12758
 #define CIT_POS_OFFSET 0x620
 
 // What to watch: the citizen nearest to a spot (the one standing there now),
@@ -16,7 +16,7 @@
 // both runs watch the same citizens. Off by default; set the spot to the
 // place to examine.
 #define WATCH_ON 0
-// Instead of a citizen: the republic's balances (world +0x588 rubles, +0x580
+// Instead of a citizen: the republic's balances (world +0x5B0 rubles, +0x5A8
 // dollars), for the whole run - who changes the money, and where the runs
 // part. Off by default.
 #define WATCH_MONEY 0
@@ -205,8 +205,8 @@ static void Watch(int run, BYTE* citizen, LONG place)
     if (WATCH_MONEY && citizen) {
         // rubles and dollars, 8 bytes each (len 10)
         BYTE* world = g_exeBase + WORLD_RVA;
-        g_addresses[0] = world + 0x588;
-        g_addresses[1] = world + 0x580;
+        g_addresses[0] = world + 0x5B0;
+        g_addresses[1] = world + 0x5A8;
         g_addresses[2] = g_addresses[3] = nullptr;
         dr7 = (1ull << 0) | (0x9ull << 16) | (1ull << 2) | (0x9ull << 20);
     }
@@ -248,7 +248,7 @@ static void LogHit(int run, LONG i)
     const Hit& h = g_hits[run][i];
     float f;
     memcpy(&f, &h.value, 4);
-    unsigned offset = WATCH_MONEY ? (h.target ? 0x580 : 0x588) : kOffsets[h.target];
+    unsigned offset = WATCH_MONEY ? (h.target ? 0x5A8 : 0x5B0) : kOffsets[h.target];
     Logf("republicmp  PROBE WATCH:   run %d #%ld step %u citizen #%u +0x%X = %08x (%.9g) at %X <- %X <- %X <- %X <- %X%s",
          run + 1, i, h.step, h.citizen, offset, h.value, f, h.rip, h.callers[0], h.callers[1],
          h.callers[2], h.callers[3], h.mainThread ? "" : " (other thread)");

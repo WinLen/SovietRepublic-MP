@@ -906,7 +906,8 @@ void SaveSync_FormatDlcNames(uint32_t mask, char* out, size_t outSize)
         { 1u << 0, "Help for Ukraine", "dlc1" },
         { 1u << 1, "Biomes", "dlc2" },
         { 1u << 2, "Early Start", "dlc3" },
-        { 1u << 3, "World Maps", "dlc4" }
+        { 1u << 3, "World Maps", "dlc4" },
+        { 1u << 4, "Space Program", "dlc5" }
     };
     bool first = true;
     for (size_t i = 0; i < sizeof(kDlcs) / sizeof(kDlcs[0]); ++i) {
@@ -917,7 +918,7 @@ void SaveSync_FormatDlcNames(uint32_t mask, char* out, size_t outSize)
             first = false;
         }
     }
-    for (int d = 5; d <= 16; ++d) {
+    for (int d = 6; d <= 16; ++d) {
         uint32_t b = (1u << (d - 1));
         if (mask & b) {
             char item[32];
@@ -1045,11 +1046,11 @@ bool SaveSync_CheckVehicleDlcAllowed(const void* vehicleTypePtr)
         }
     }
 
-    // 2. Check coupled trailers / wagons in type + 0x7C08
+    // 2. Check coupled trailers / wagons in type + 0x7C58
     BYTE* v = nullptr;
     BYTE* e = nullptr;
-    if (SafeReadPod((const char*)vehicleTypePtr + 0x7C08, &v) &&
-        SafeReadPod((const char*)vehicleTypePtr + 0x7C10, &e) &&
+    if (SafeReadPod((const char*)vehicleTypePtr + 0x7C58, &v) &&
+        SafeReadPod((const char*)vehicleTypePtr + 0x7C60, &e) &&
         v && e > v && (e - v) % 0x110 == 0)
     {
         constexpr unsigned kMaxTrailersChecked = 64;
@@ -1964,7 +1965,7 @@ static bool ClientPrepareAndLoadWorld(SOCKET sock, const SessionHello& theirs, c
         TwoStates_CapturePreResyncCamera();
         preResyncBuildMode = BuildMode_Read();
         BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
-        if (w) preResyncAutoPopulate = *(w + 0xB08);
+        if (w) preResyncAutoPopulate = *(w + 0xB30);
     }
 
     const char* logReason = rejoin ? "RESYNC" : (DiagLog_HasPrevCrashOrDesyncLog() ? "PREV_CRASH" : "CLIENT_JOIN");
@@ -1992,7 +1993,7 @@ static bool ClientPrepareAndLoadWorld(SOCKET sock, const SessionHello& theirs, c
         BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
         if (rejoin) {
             BuildMode_Write(preResyncBuildMode);
-            if (w) *(w + 0xB08) = preResyncAutoPopulate;
+            if (w) *(w + 0xB30) = preResyncAutoPopulate;
             Logf("republicmp  CLIENT_SETTINGS: restored client BuildMode & autoPopulate after resync");
         } else {
             BuildMode defMode = { 0, 0, 0, 0 };
@@ -2195,7 +2196,7 @@ static DWORD WINAPI ClientSessionThread(LPVOID)
 // The world's road network (world+0xf7a0): made with every world, an empty
 // map too; deleted and zeroed when the world is torn down (0x9952C,
 // 0x29564E) - back in the main menu, or while another save loads.
-#define WORLD_ROAD_NETWORK_RVA 0x9E46B0
+#define WORLD_ROAD_NETWORK_RVA 0xA2E758
 // Out of the world this long in a session ends it (a load's teardown is
 // shorter, and joins/re-syncs are not checked at all).
 #define OUT_OF_WORLD_GRACE_MS 1500
@@ -2628,9 +2629,9 @@ void SaveSync_EnforceWaitingLobbyHold(unsigned char* exeBase)
     }
     SafeWritePod<int>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_TURBO_OFFSET, 0);
     SafeWritePod<unsigned char>(base + GAME_SPEED_DAT_RVA + GAME_SPEED_HOLD_OFFSET, 0);
-    SafeWritePod<unsigned char>(base + 0x9D4EE0 + 12, 1);
-    SafeWritePod<unsigned char>(base + 0xA54E90, 0);
-    SafeWritePod<unsigned char>(base + 0xA54E91, 0);
+    SafeWritePod<unsigned char>(base + 0xA1EEF0 + 12, 1);
+    SafeWritePod<unsigned char>(base + 0xA9EF50, 0);
+    SafeWritePod<unsigned char>(base + 0xA9EF51, 0);
 
     // 2. Deselect any active building/terrain/demolish/road tool and cancel active drag
     uintptr_t activeTool = 0;

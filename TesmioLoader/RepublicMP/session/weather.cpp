@@ -6,19 +6,19 @@
 #include "../ui/sync_block.h"
 #include <math.h>
 
-#define WORLD_RVA 0x9D4F10
-#define W_SNOWING 0xE28
-#define W_SNOW_TIMER 0xE2C
-#define W_TEMPERATURE 0xE30
-#define W_TEMPERATURE_TARGET 0xE34
-#define W_TEMPERATURE_TIMER 0xE38
-#define W_WIND 0xE60
-#define W_WIND_TARGET 0xE64
-#define W_WIND_TIMER 0xE68
-#define W_SKY 0xE70
-#define W_WETNESS 0xE78
-#define W_DAY_START_RESET 0x598      // zeroed by FUN_140333bd0 before a sky switch
-#define SET_SKY_RVA 0x333FA0         // FUN_140334020(_, type, -1, blend)
+#define WORLD_RVA 0xA1EF20
+#define W_SNOWING 0xE50
+#define W_SNOW_TIMER 0xE54
+#define W_TEMPERATURE 0xE58
+#define W_TEMPERATURE_TARGET 0xE5C
+#define W_TEMPERATURE_TIMER 0xE60
+#define W_WIND 0xE90
+#define W_WIND_TARGET 0xE94
+#define W_WIND_TIMER 0xE98
+#define W_SKY 0xEA0
+#define W_WETNESS 0xEA8
+#define W_DAY_START_RESET 0x5C0      // zeroed by FUN_140333bd0 before a sky switch
+#define SET_SKY_RVA 0x3529A0         // FUN_140334020(_, type, -1, blend)
 #define SKY_BLEND 0.001f             // DAT_140909afc, the blend FUN_140333bd0 uses
 
 void Weather_Bind(const TsmHost* host)

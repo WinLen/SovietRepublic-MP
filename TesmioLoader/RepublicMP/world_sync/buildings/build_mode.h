@@ -28,11 +28,11 @@
 
 #include "tesmio_plugin.h"
 
-#define BUILD_MODE_THIS_RVA 0x9D4F10
-#define BUILD_MODE_RUB_OFFSET 0xaf8
-#define BUILD_MODE_USD_OFFSET 0xafc
-#define BUILD_MODE_B00_OFFSET 0xb00
-#define BUILD_MODE_B04_OFFSET 0xb04
+#define BUILD_MODE_THIS_RVA 0xA1EF20
+#define BUILD_MODE_RUB_OFFSET 0xb20
+#define BUILD_MODE_USD_OFFSET 0xb24
+#define BUILD_MODE_B00_OFFSET 0xb28
+#define BUILD_MODE_B04_OFFSET 0xb2c
 
 // Wire form (part of the build and road sync messages).
 struct BuildMode {

@@ -126,9 +126,9 @@ static bool SubTest_M3_Challenger2_CivicInstitutionsSegregation()
 
     // Building types
     std::vector<BYTE> typeCourt(0x400, 0), typePrison(0x400, 0), typeOrph(0x400, 0);
-    typeCourt[0x360] = 0x4B;
-    typePrison[0x360] = 0x4C;
-    typeOrph[0x360]   = 0x4A;
+    typeCourt[BLD_TYPE_CAT_OFF] = 0x4B;
+    typePrison[BLD_TYPE_CAT_OFF] = 0x4C;
+    typeOrph[BLD_TYPE_CAT_OFF]   = 0x4A;
 
     auto SetupBld = [](std::vector<BYTE>& bld, int id, float x, std::vector<BYTE>& type) {
         *(int*)bld.data() = id;
@@ -262,9 +262,9 @@ static bool SubTest_M3_Challenger2_CivicStatsAndTourism()
     std::vector<BYTE> court1(BUILDING_STRUCT_BYTES, 0), court2(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> prison1(BUILDING_STRUCT_BYTES, 0), orph1(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> typeCourt(0x400, 0), typePrison(0x400, 0), typeOrph(0x400, 0);
-    typeCourt[0x360] = 0x4B;
-    typePrison[0x360] = 0x4C;
-    typeOrph[0x360]   = 0x4A;
+    typeCourt[BLD_TYPE_CAT_OFF] = 0x4B;
+    typePrison[BLD_TYPE_CAT_OFF] = 0x4C;
+    typeOrph[BLD_TYPE_CAT_OFF]   = 0x4A;
 
     *(int*)court1.data() = 101;
     *(float*)(court1.data() + OBJ_POS_OFFSET) = -300.0f;

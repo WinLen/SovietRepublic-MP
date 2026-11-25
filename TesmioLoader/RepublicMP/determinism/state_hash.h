@@ -8,20 +8,20 @@
 //  - determinism probe (determinism/determinism): the exact hashes of two runs from
 //    the same save are compared step by step.
 //
-// Everything is read off the world object (thisPtr = exe+0x9D4F10); the
+// Everything is read off the world object (thisPtr = exe+0xA1EF20); the
 // containers are std::vector<T*> (begin, end):
 //
-//   world+0x11B08  buildings (exe+0x9E6A18). Building: +0x00 int index,
+//   world+0x11BB0  buildings (exe+0xA30AD0). Building: +0x00 int index,
 //                  +0x604 float construction progress, +0x970 vector of
 //                  0xE0-byte storage slots (slot +0x00 vector of 16-byte
 //                  entries {Resource* +0, float amount +8, float +0xC}),
 //                  +0xBC0 vector<Worker*> assigned citizens, +0xDE4 float
 //                  produced in the current window.
-//   world+0x12810  vehicles (exe+0x9E7720). Vehicle: +0x04 int index,
+//   world+0x128C0  vehicles (exe+0xA317E0). Vehicle: +0x04 int index,
 //                  +0x3B8 cargo vector (same 16-byte entries),
 //                  +0x698 int current schedule stop index,
-//                  +0xDE0 position (main C3D_NODE +0xD60, position +0x80).
-//   world+0x126A8  citizens (exe+0x9E75B8). Worker: +0x20 home Building*,
+//                  +0xE18 position (main C3D_NODE +0xD98, position +0x80).
+//   world+0x12758  citizens (exe+0xA31678). Worker: +0x20 home Building*,
 //                  +0xD4 float age, +0x620 position (C3D_NODE +0x5A0).
 //
 // Found through the save/load routines (FUN_14042cc70 / FUN_140430fc0) and
@@ -78,7 +78,7 @@ unsigned long long StateHash_All(const StateSummary& s);
 #define RECORD_SLOTS 8
 struct BuildingRecord {
     int index;              // +0x00
-    int category;           // type +0x360 (-1: no type)
+    int category;           // type +0x368 (-1: no type)
     float pos[3];           // +0x3a0
     float progress;         // +0x604
     float produced;         // +0xde4
@@ -90,7 +90,7 @@ struct BuildingRecord {
 };
 struct VehicleRecord {
     int index;              // +0x04
-    float pos[3];           // +0xde0
+    float pos[3];           // +0xe18
     unsigned long long cargo; // hash of the cargo entries
 };
 struct CitizenRecord {

@@ -82,7 +82,7 @@ struct M2LoopbackEnvGuard {
         SaveSync_SetTcpPortForTest(0);
         SteamP2P_SetPendingJoinForTest(nullptr);
         if (g_mockExeBuffer) {
-            *(int64_t*)(g_mockExeBuffer + 0x9E46B0) = 0;
+            *(int64_t*)(g_mockExeBuffer + 0xA2E758) = 0;
             *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
             memset(g_mockExeBuffer + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET, 0, SAVE_NAME_FIELD_MAX_LEN);
             *(BYTE**)(g_mockExeBuffer + WORKSHOP_MGR_PTR_RVA) = nullptr;
@@ -876,7 +876,7 @@ static bool SubTest_M2_F8_SessionLifecycleAndIdentity(M2LoopbackEnvGuard& guard)
     TEST_CHECK(!dispName.empty());
 
     // Put mock world into loaded state with a save map name
-    *(int64_t*)(g_mockExeBuffer + 0x9E46B0) = 0x1000LL;
+    *(int64_t*)(g_mockExeBuffer + 0xA2E758) = 0x1000LL;
     *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     strncpy_s((char*)(g_mockExeBuffer + WORLD_THIS_RVA + SAVE_NAME_FIELD_OFFSET), 64, "save/DonbasCoop", _TRUNCATE);
     TEST_CHECK(SaveSync_IsWorldLoaded());

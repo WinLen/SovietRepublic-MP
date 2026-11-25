@@ -14,12 +14,12 @@
 #include "../core/engine_rva.h"
 
 // Load side (plain globals).
-#define RETURN_MENU_DAT_RVA   0x995289  // cleared together with the trigger
+#define RETURN_MENU_DAT_RVA   0x9DDC74  // cleared together with the trigger
 #define SAVE_NAME_MAX_LEN     120
 #define SAVE_FOLDER_PREFIX    "save\\"
 
 // Save side (fields of the world object at WORLD_THIS_RVA).
-#define SAVE_DELAY_COUNTER_OFFSET   0x14D38   // float: frames to wait - forced to 0
+#define SAVE_DELAY_COUNTER_OFFSET   0x14DE8   // float: frames to wait - forced to 0
 #define SAVE_NAME_FIELD_PREFIX      "save/"
 
 void SaveLoad_Bind(const TsmHost* host);

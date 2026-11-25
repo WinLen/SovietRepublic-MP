@@ -168,8 +168,8 @@ bool Test_WaitingLobbyAndActionLock()
     TEST_CHECK(!SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_IN_GAME, true, false));
     TEST_CHECK(SaveSync_ShouldBlockWorldEdits((int)SESSION_CLIENT_IN_GAME, true, true));
 
-    // Mark mock world as loaded (WORLD_ROAD_NETWORK_RVA = 0x9E46B0 != 0 and LOAD_TRIGGER_DAT_RVA == 0)
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    // Mark mock world as loaded (WORLD_ROAD_NETWORK_RVA = 0xA2E758 != 0 and LOAD_TRIGGER_DAT_RVA == 0)
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     TEST_CHECK(SaveSync_IsWorldLoaded());
 
@@ -192,27 +192,27 @@ bool Test_WaitingLobbyAndActionLock()
 
     // 3. SaveSync_EnforceWaitingLobbyHold enforces pause (speed=0, timer+12=1), preserves saved speed (+0x5A8), and clears active tool & drag
     SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
-    *(int*)(world + 0x5A4) = 2;                               // GAME_SPEED_OFFSET
-    *(int*)(world + 0x5A8) = 0;                               // GAME_SPEED_SAVED_OFFSET
-    *(int*)(world + 0x5AC) = 1;                               // GAME_SPEED_TURBO_OFFSET
-    *(unsigned char*)(world + 0x5A2) = 1;                     // GAME_SPEED_HOLD_OFFSET
-    *(unsigned char*)(g_mockExeBuffer + 0x9D4EE0 + 12) = 0;   // timer paused byte (0 = running)
+    *(int*)(world + 0x5CC) = 2;                               // GAME_SPEED_OFFSET
+    *(int*)(world + 0x5D0) = 0;                               // GAME_SPEED_SAVED_OFFSET
+    *(int*)(world + 0x5D4) = 1;                               // GAME_SPEED_TURBO_OFFSET
+    *(unsigned char*)(world + 0x5CA) = 1;                     // GAME_SPEED_HOLD_OFFSET
+    *(unsigned char*)(g_mockExeBuffer + 0xA1EEF0 + 12) = 0;   // timer paused byte (0 = running)
     *(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = (void*)0x12345678ULL;
-    *(unsigned char*)(world + 0xD2AC) = 1;                    // TOOL_DRAG_ACTIVE_OFFSET
-    *(unsigned char*)(g_mockExeBuffer + 0xA54E90) = 1;        // LMB_HELD_RVA
-    *(unsigned char*)(g_mockExeBuffer + 0xA54E91) = 1;        // LMB_JUST_PRESSED_RVA
+    *(unsigned char*)(world + 0xD344) = 1;                    // TOOL_DRAG_ACTIVE_OFFSET
+    *(unsigned char*)(g_mockExeBuffer + 0xA9EF50) = 1;        // LMB_HELD_RVA
+    *(unsigned char*)(g_mockExeBuffer + 0xA9EF51) = 1;        // LMB_JUST_PRESSED_RVA
 
     SaveSync_EnforceWaitingLobbyHold();
 
-    TEST_CHECK(*(int*)(world + 0x5A4) == 0);
-    TEST_CHECK(*(int*)(world + 0x5A8) == 2); // saved speed preserved
-    TEST_CHECK(*(int*)(world + 0x5AC) == 0);
-    TEST_CHECK(*(unsigned char*)(world + 0x5A2) == 0);
-    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0x9D4EE0 + 12) == 1);
+    TEST_CHECK(*(int*)(world + 0x5CC) == 0);
+    TEST_CHECK(*(int*)(world + 0x5D0) == 2); // saved speed preserved
+    TEST_CHECK(*(int*)(world + 0x5D4) == 0);
+    TEST_CHECK(*(unsigned char*)(world + 0x5CA) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA1EEF0 + 12) == 1);
     TEST_CHECK(*(void**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == nullptr);
-    TEST_CHECK(*(unsigned char*)(world + 0xD2AC) == 0);
-    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA54E90) == 0);
-    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA54E91) == 0);
+    TEST_CHECK(*(unsigned char*)(world + 0xD344) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA9EF50) == 0);
+    TEST_CHECK(*(unsigned char*)(g_mockExeBuffer + 0xA9EF51) == 0);
 
     // 4. Map Inspection Mode ([Tab]) and automatic exit when partner begins joining
     SyncBlock_SetActive(false, nullptr);
@@ -311,7 +311,7 @@ bool Test_WaitingLobbyAndActionLock()
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     SyncBlock_SetActive(false, nullptr);
     TwoStates_OnSessionEnded();
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
     return true;
 }
 
@@ -550,9 +550,9 @@ bool Test_RemoteSoundAndWarningIsolation()
 static bool SubTest_SettingsSync_OwnsBuildingWord()
 {
     std::vector<BYTE> typeOrph(0x400, 0), typeSite(0x400, 0), typePoll(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
-    *(int*)(typeSite.data() + 0x360) = 0x01;
-    *(int*)(typePoll.data() + 0x360) = 0x24;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
+    *(int*)(typeSite.data() + BLD_TYPE_CAT_OFF) = 0x01;
+    *(int*)(typePoll.data() + BLD_TYPE_CAT_OFF) = 0x24;
 
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldSite(BUILDING_STRUCT_BYTES, 0), bldPoll(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
@@ -577,7 +577,7 @@ static bool SubTest_SettingsSync_UpbringingComposite()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeOrph(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
     float posOrph[3] = { 100.0f, 20.0f, 200.0f };
@@ -612,7 +612,7 @@ static bool SubTest_SettingsSync_BroadcastComposite()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
-    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25;
     std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
     float posMedia[3] = { 300.0f, 10.0f, 400.0f };
@@ -651,7 +651,7 @@ static bool SubTest_SettingsSync_CompositeSanitizationAndClamping()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeOrph(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
     float posOrph[3] = { 100.0f, 20.0f, 200.0f };
@@ -727,9 +727,9 @@ static bool SubTest_SettingsSync_ScalarAlertsAndLoyalty()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeOrph(0x400, 0), typeSite(0x400, 0), typePoll(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
-    *(int*)(typeSite.data() + 0x360) = 0x01;
-    *(int*)(typePoll.data() + 0x360) = 0x24;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
+    *(int*)(typeSite.data() + BLD_TYPE_CAT_OFF) = 0x01;
+    *(int*)(typePoll.data() + BLD_TYPE_CAT_OFF) = 0x24;
 
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldSite(BUILDING_STRUCT_BYTES, 0), bldPoll(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
@@ -861,7 +861,7 @@ static bool SubTest_SettingsSync_EdgeCases()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
-    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25;
     std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
     float posMedia[3] = { 300.0f, 10.0f, 400.0f };
@@ -898,7 +898,7 @@ static bool SubTest_SettingsSync_LoyaltySerializationAndBoundaries()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeBld(0x400, 0);
-    *(int*)(typeBld.data() + 0x360) = 0x4A;
+    *(int*)(typeBld.data() + BLD_TYPE_CAT_OFF) = 0x4A;
     std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bld.data() + BLD_TYPE_OFFSET) = typeBld.data();
     float pos[3] = { 250.0f, 15.0f, 350.0f };
@@ -1066,8 +1066,8 @@ static bool SubTest_SettingsSync_LoyaltySerializationAndBoundaries()
     // 6. Pollution alert threshold & water quality float clamping & negative-zero checks
     std::vector<BYTE> pollBld(BUILDING_STRUCT_BYTES, 0), waterBld(BUILDING_STRUCT_BYTES, 0);
     std::vector<BYTE> typePoll(0x400, 0), typeWater(0x400, 0);
-    *(int*)(typePoll.data() + 0x360) = 0x24;
-    *(int*)(typeWater.data() + 0x360) = 0x61;
+    *(int*)(typePoll.data() + BLD_TYPE_CAT_OFF) = 0x24;
+    *(int*)(typeWater.data() + BLD_TYPE_CAT_OFF) = 0x61;
     *(BYTE**)(pollBld.data() + BLD_TYPE_OFFSET) = typePoll.data();
     *(BYTE**)(waterBld.data() + BLD_TYPE_OFFSET) = typeWater.data();
     float pollPos[3] = { 400.0f, 10.0f, 400.0f };
@@ -1220,9 +1220,9 @@ static bool SubTest_Gen6_FloatFuzzingUpbringingAndBroadcast()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeOrph(0x400, 0), typePrison(0x400, 0), typeMedia(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
-    *(int*)(typePrison.data() + 0x360) = 0x4C;
-    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
+    *(int*)(typePrison.data() + BLD_TYPE_CAT_OFF) = 0x4C;
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25;
 
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0), bldPrison(BUILDING_STRUCT_BYTES, 0), bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
@@ -1352,7 +1352,7 @@ static bool SubTest_Gen6_MalformedPacketPayloads()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeOrph(0x400, 0);
-    *(int*)(typeOrph.data() + 0x360) = 0x4A;
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A;
     std::vector<BYTE> bldOrph(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldOrph.data() + BLD_TYPE_OFFSET) = typeOrph.data();
     float posOrph[3] = { 100.0f, 20.0f, 200.0f };
@@ -1419,9 +1419,9 @@ static bool SubTest_Gen6_CheckboxBoundariesAndAdjacentIntegrity()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeSite(0x400, 0), typePoll(0x400, 0), typeOrph(0x400, 0);
-    *(int*)(typeSite.data() + 0x360) = 0x01; // Construction site
-    *(int*)(typePoll.data() + 0x360) = 0x24; // Water treatment
-    *(int*)(typeOrph.data() + 0x360) = 0x4A; // Orphanage
+    *(int*)(typeSite.data() + BLD_TYPE_CAT_OFF) = 0x01; // Construction site
+    *(int*)(typePoll.data() + BLD_TYPE_CAT_OFF) = 0x24; // Water treatment
+    *(int*)(typeOrph.data() + BLD_TYPE_CAT_OFF) = 0x4A; // Orphanage
 
     std::vector<BYTE> bldSite(BUILDING_STRUCT_BYTES, 0xCC);
     std::vector<BYTE> bldPoll(BUILDING_STRUCT_BYTES, 0xCC);
@@ -1552,7 +1552,7 @@ static bool SubTest_Gen6_StudioLookupResilienceAndCorruptedPointers()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
-    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25;
     std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
     float posMedia[3] = { 500.0f, 10.0f, 600.0f };
@@ -1612,8 +1612,8 @@ static bool SubTest_Gen6_CategoryMismatchAndInjection()
 {
     ResetMockWorldMemory();
     std::vector<BYTE> typeHosp(0x400, 0), typeMedia(0x400, 0);
-    *(int*)(typeHosp.data() + 0x360) = 0x1C; // Hospital
-    *(int*)(typeMedia.data() + 0x360) = 0x25; // TV/Radio
+    *(int*)(typeHosp.data() + BLD_TYPE_CAT_OFF) = 0x1C; // Hospital
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25; // TV/Radio
     std::vector<BYTE> bldHosp(BUILDING_STRUCT_BYTES, 0), bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldHosp.data() + BLD_TYPE_OFFSET) = typeHosp.data();
     *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
@@ -1665,7 +1665,7 @@ static bool SubTest_Gen6_RapidPacketBurst()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     std::vector<BYTE> typeMedia(0x400, 0);
-    *(int*)(typeMedia.data() + 0x360) = 0x25;
+    *(int*)(typeMedia.data() + BLD_TYPE_CAT_OFF) = 0x25;
     std::vector<BYTE> bldMedia(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldMedia.data() + BLD_TYPE_OFFSET) = typeMedia.data();
     float posMedia[3] = { 600.0f, 10.0f, 700.0f };

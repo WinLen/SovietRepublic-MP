@@ -141,9 +141,9 @@ static bool SubTest_M3_Challenger1_ZeroFacilityEdgeCases()
     // Scenario: State 1 has ZERO courthouses, ZERO prisons, and ZERO orphanages.
     // State 2 has 3 courthouses, 2 prisons, and 2 orphanages.
     std::vector<BYTE> courtType(0x400, 0), prisonType(0x400, 0), orphType(0x400, 0);
-    courtType[0x360] = 0x4B;
-    prisonType[0x360] = 0x4C;
-    orphType[0x360]   = 0x4A;
+    courtType[BLD_TYPE_CAT_OFF] = 0x4B;
+    prisonType[BLD_TYPE_CAT_OFF] = 0x4C;
+    orphType[BLD_TYPE_CAT_OFF]   = 0x4A;
 
     std::vector<BYTE> s2Courts[3];
     std::vector<BYTE> s2Prisons[2];
@@ -209,7 +209,7 @@ static bool SubTest_M3_Challenger1_ZeroFacilityEdgeCases()
             for (BYTE** it = curB; it < curE; ++it) {
                 const BYTE* bld = *it;
                 const BYTE* type = *(const BYTE* const*)(bld + 0x318);
-                if (type && *(const BYTE*)(type + 0x360) == 0x4B) {
+                if (type && *(const BYTE*)(type + BLD_TYPE_CAT_OFF) == 0x4B) {
                     assignedCourt = (BYTE*)bld;
                     break;
                 }
@@ -236,7 +236,7 @@ static bool SubTest_M3_Challenger1_ZeroFacilityEdgeCases()
             for (BYTE** it = curB; it < curE; ++it) {
                 const BYTE* bld = *it;
                 const BYTE* type = *(const BYTE* const*)(bld + 0x318);
-                if (type && *(const BYTE*)(type + 0x360) == 0x4C) {
+                if (type && *(const BYTE*)(type + BLD_TYPE_CAT_OFF) == 0x4C) {
                     assignedPrison = (BYTE*)bld;
                     break;
                 }
@@ -258,7 +258,7 @@ static bool SubTest_M3_Challenger1_ZeroFacilityEdgeCases()
             for (BYTE** it = curB; it < curE; ++it) {
                 const BYTE* bld = *it;
                 const BYTE* type = *(const BYTE* const*)(bld + 0x318);
-                if (type && *(const BYTE*)(type + 0x360) == 0x4A) {
+                if (type && *(const BYTE*)(type + BLD_TYPE_CAT_OFF) == 0x4A) {
                     assignedOrph = (BYTE*)bld;
                     break;
                 }
@@ -278,9 +278,9 @@ static bool SubTest_M3_Challenger1_ZeroFacilityEdgeCases()
         int courtFound = 0, prisonFound = 0, orphFound = 0;
         for (BYTE** it = curB; it < curE; ++it) {
             const BYTE* type = *(const BYTE* const*)(*it + 0x318);
-            if (type[0x360] == 0x4B) courtFound++;
-            if (type[0x360] == 0x4C) prisonFound++;
-            if (type[0x360] == 0x4A) orphFound++;
+            if (type[BLD_TYPE_CAT_OFF] == 0x4B) courtFound++;
+            if (type[BLD_TYPE_CAT_OFF] == 0x4C) prisonFound++;
+            if (type[BLD_TYPE_CAT_OFF] == 0x4A) orphFound++;
         }
         TEST_CHECK(courtFound == 3);
         TEST_CHECK(prisonFound == 2);
@@ -381,9 +381,9 @@ static bool SubTest_M3_Challenger1_CivicMetricsAndTourism()
 
     // Setup 1 Courthouse (caseload = 25), 1 Prison (50 inmates), 1 Orphanage (10 orphans) for State 1
     std::vector<BYTE> courtType(0x400, 0), prisonType(0x400, 0), orphType(0x400, 0);
-    courtType[0x360] = 0x4B;
-    prisonType[0x360] = 0x4C;
-    orphType[0x360]   = 0x4A;
+    courtType[BLD_TYPE_CAT_OFF] = 0x4B;
+    prisonType[BLD_TYPE_CAT_OFF] = 0x4C;
+    orphType[BLD_TYPE_CAT_OFF]   = 0x4A;
 
     std::vector<BYTE> court1(BUILDING_STRUCT_BYTES, 0);
     *(int*)court1.data() = 11;

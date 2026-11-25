@@ -38,18 +38,18 @@
 
 #include "tesmio_plugin.h"
 
-#define GAME_SPEED_DAT_RVA 0x9D4F10
-#define GAME_SPEED_OFFSET       0x5a4
-#define GAME_SPEED_SAVED_OFFSET 0x5a8
-#define GAME_SPEED_TURBO_OFFSET 0x5ac // int: extra-fast on top of speed 2 (see below)
-#define GAME_SPEED_HOLD_OFFSET  0x5a2 // byte: fast-forward while a button is held
+#define GAME_SPEED_DAT_RVA 0xA1EF20
+#define GAME_SPEED_OFFSET       0x5cc
+#define GAME_SPEED_SAVED_OFFSET 0x5d0
+#define GAME_SPEED_TURBO_OFFSET 0x5d4 // int: extra-fast on top of speed 2 (see below)
+#define GAME_SPEED_HOLD_OFFSET  0x5ca // byte: fast-forward while a button is held
 
 // Game clock (same object). FUN_140334780 adds the timer's PowerTime to the
 // day progress every tick; past GAME_DAY_LENGTH it resets it to 0, runs the
 // daily logic and increments the day; at day 365 the year rolls.
-#define GAME_DAY_OFFSET          0x590 // int: day of the year
-#define GAME_YEAR_OFFSET         0x594 // int: year
-#define GAME_DAY_PROGRESS_OFFSET 0x59c // float: 0..60 through the day (2.5 = one hour)
+#define GAME_DAY_OFFSET          0x5b8 // int: day of the year
+#define GAME_YEAR_OFFSET         0x5bc // int: year
+#define GAME_DAY_PROGRESS_OFFSET 0x5c4 // float: 0..60 through the day (2.5 = one hour)
 #define GAME_DAY_LENGTH          60.0f
 
 void GameSpeed_Bind(const TsmHost* host);

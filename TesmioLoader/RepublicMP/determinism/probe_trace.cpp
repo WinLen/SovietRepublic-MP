@@ -6,16 +6,16 @@
 #include <unordered_set>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
+#define WORLD_RVA 0xA1EF20
 
 #define BLD_STORAGE_OFFSET 0x970
 #define BLD_TYPE_OFFSET 0x318
 #define BLD_POS_OFFSET 0x3A0
-#define TYPE_CATEGORY_OFFSET 0x360
+#define TYPE_CATEGORY_OFFSET 0x368
 #define CIT_AGE_OFFSET 0xD4
 #define CIT_POS_OFFSET 0x620
 #define VEH_ID_OFFSET 0x4
-#define VEH_POS_OFFSET 0xDE0
+#define VEH_POS_OFFSET 0xE18
 #define SLOT_SIZE 0xE0
 #define ENTRY_SIZE 0x10
 
@@ -49,8 +49,8 @@
 // place in the citizen list, word 4 + 1 + 512 + place) which list it is on and
 // where: tag | list << 24 | position, 0x8FFFFFFF on none.
 #define AGENT_LISTS 4
-#define AGENT_LIST_OFFSET 0x126C0  // then +0x126D8, +0x126F0, +0x12708 (stride 0x18)
-#define AGENT_BUCKET_COUNTER_RVA 0x9963F0
+#define AGENT_LIST_OFFSET 0x12770  // then +0x12788, +0x127A0, +0x127B8 (stride 0x18)
+#define AGENT_BUCKET_COUNTER_RVA 0x9E0400
 #define AGENT_MEMBERS 512
 #define AGENT_CITIZENS 8192
 #define AGENTS_SIZE ((AGENT_LISTS + 1 + AGENT_MEMBERS + AGENT_CITIZENS) * 4)
@@ -75,17 +75,17 @@ static const Mask kBuildingMasks[] = {
 };
 static const Mask kVehicleMasks[] = {
     { 0x8, 0x20 },    // model name buffer
-    { 0xED8, 0xBC },  // render transform
-    { 0x115C, 4 },    // interpolant of the render pass
-    { 0x13D4, 4 },    // animation start
-    { 0x13D8, 2 },    // visible now / last frame
-    { 0x13DC, 0xC },  // camera distances: +13dc (GetZDistance at 66e2cb for every vehicle; its readers
+    { 0xF10, 0xBC },  // render transform
+    { 0x1194, 4 },    // interpolant of the render pass
+    { 0x1414, 4 },    // animation start
+    { 0x1418, 2 },    // visible now / last frame
+    { 0x141C, 0xC },  // camera distances: +141c (GetZDistance for every vehicle; its readers
                       // store only sound, effects and the model LOD - SoylentGreed's camera-dependence.md),
-                      // +13e0, +13e4 (moved with the camera when the player built during a probe)
-    { 0x142C, 4 },  { 0x1468, 4 }, { 0x153C, 4 }, { 0x16FC, 4 }, { 0x1768, 4 }, { 0x1A18, 4 }, // render words
-    { 0x1878, 8 },    // sound object
-    { 0x18A4, 0x1C }, // sound levels the sound code (6a36f0, 6a480c, 6a7520) derives from the camera distance
-    { 0x1958, 4 },    // sound volume
+                      // +1420, +1424 (moved with the camera when the player built during a probe)
+    { 0x146C, 4 },  { 0x14A8, 4 }, { 0x157C, 4 }, { 0x173C, 4 }, { 0x1800, 4 }, { 0x1AB0, 4 }, // render words
+    { 0x1910, 8 },    // sound object
+    { 0x193C, 0x1C }, // sound levels the sound code derives from the camera distance
+    { 0x19F0, 4 },    // sound volume
 };
 
 // C3DDLL64 Start (fd3e0) writes the QPC start at +10; Stop (fd440)
@@ -95,18 +95,15 @@ static const Mask kVehicleMasks[] = {
 static const Mask kTimerMasks[] = { { 0x10, 0x18 }, { 0x28, 4 } };
 
 static const Mask kWorldMasks[] = {
-    { 0xF60, 0x18 }, // mouse ray and cursor point
+    { 0xF90, 0x18 }, // mouse ray and cursor point
     // Clocks the game advances on every rendered frame, paused or not, so
     // their value follows the frame count, not the ticks: the ticker text
-    // scroll +117b8 (Late 30d344, PowerTime ignoring the pause; read only by
-    // the string copy at 332eb8), the shader time +13010 (30d372; read by
-    // the effect constants at 588991), the interface statistics refresh
-    // +c6c8..+c6dc (counted down by the interface at 31ad2c every 3 s of
-    // real time) and an interface window clock +d224 (4c4c62).
-    { 0x117B8, 4 },
-    { 0x13010, 4 },
-    { 0xC6C8, 0x18 },
-    { 0xD224, 4 },
+    // scroll +11850, the shader time +130c0, the interface statistics refresh
+    // +c760..+c778 and an interface window clock +d2bc.
+    { 0x11850, 4 },
+    { 0x130C0, 4 },
+    { 0xC760, 0x18 },
+    { 0xD2BC, 4 },
 };
 
 // A list kind is a world vector of object pointers; a single kind is one
@@ -124,18 +121,18 @@ struct Kind {
     bool lists; // the citizen-pointer vectors inside each object of the list (see CopyLists)
 };
 static const Kind kKinds[] = {
-    { "vehicle", 0x12810, 0x1AD8, kVehicleMasks, (int)(sizeof(kVehicleMasks) / sizeof(Mask)), false, false, 0 },
-    { "building", 0x11B08, 0x1420, kBuildingMasks, (int)(sizeof(kBuildingMasks) / sizeof(Mask)), true, false, 0 },
-    { "citizen", 0x126A8, 0x750, nullptr, 0, false, false, 0 },
-    { "world", 0, 0x14800, kWorldMasks, (int)(sizeof(kWorldMasks) / sizeof(Mask)), false, true, WORLD_RVA },
-    { "timer", 0, 0x30, kTimerMasks, (int)(sizeof(kTimerMasks) / sizeof(Mask)), false, true, 0x9D4EE0 }, // C3D_TIMER the frame loop scales (PowerTime)
-    // Synthetic (no rva): how 832ae0 split the citizens this step - see CopyAgents.
+    { "vehicle", 0x128C0, 0x1C30, kVehicleMasks, (int)(sizeof(kVehicleMasks) / sizeof(Mask)), false, false, 0 },
+    { "building", 0x11BB0, 0x1420, kBuildingMasks, (int)(sizeof(kBuildingMasks) / sizeof(Mask)), true, false, 0 },
+    { "citizen", 0x12758, 0x750, nullptr, 0, false, false, 0 },
+    { "world", 0, 0x14900, kWorldMasks, (int)(sizeof(kWorldMasks) / sizeof(Mask)), false, true, WORLD_RVA },
+    { "timer", 0, 0x30, kTimerMasks, (int)(sizeof(kTimerMasks) / sizeof(Mask)), false, true, 0xA1EEF0 }, // C3D_TIMER the frame loop scales (PowerTime)
+    // Synthetic (no rva): how split the citizens this step - see CopyAgents.
     { "agents", 0, AGENTS_SIZE, nullptr, 0, false, true, 0 },
     // The order of the citizens in every vector of citizen pointers inside a
     // building or a vehicle: a container kept in pointer order would order
     // them differently in each run (each load lays the heap out anew).
-    { "building lists", 0x11B08, 0x1420, nullptr, 0, false, false, 0, true },
-    { "vehicle lists", 0x12810, 0x1AD8, nullptr, 0, false, false, 0, true },
+    { "building lists", 0x11BB0, 0x1420, nullptr, 0, false, false, 0, true },
+    { "vehicle lists", 0x128C0, 0x1C30, nullptr, 0, false, false, 0, true },
 };
 #define KIND_CITIZEN 2
 #define KIND_WORLD 3
@@ -237,7 +234,7 @@ static void CopyAgents(Blob& b)
     unsigned* w = (unsigned*)b.data();
     BYTE** citizens = nullptr;
     long long nc = 0;
-    if (!ReadList(0x126A8, &citizens, &nc)) return;
+    if (!ReadList(0x12758, &citizens, &nc)) return;
     std::unordered_map<BYTE*, unsigned> place;
     place.reserve((size_t)nc * 2);
     for (long long i = 0; i < nc; i++) place[citizens[i]] = (unsigned)i;
@@ -271,7 +268,7 @@ static void MapCitizens()
     g_citizenPlace.clear();
     BYTE** list = nullptr;
     long long n = 0;
-    if (!ReadList(0x126A8, &list, &n)) return;
+    if (!ReadList(0x12758, &list, &n)) return;
     g_citizenPlace.reserve((size_t)n * 2);
     for (long long i = 0; i < n; i++) g_citizenPlace[list[i]] = (unsigned)i;
 }

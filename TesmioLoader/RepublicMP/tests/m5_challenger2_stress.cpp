@@ -380,9 +380,9 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
     wcscpy_s((wchar_t*)(city2.data() + 0x10), 32, L"Sevastopol");
 
     std::vector<BYTE*> cityVec = { city0.data(), city1.data(), city2.data() };
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
 
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 3) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 3) return false;
 
     // 1. Initial valid deletion of City 1 ("Stalingrad")
     TestRenameMsg mDelete1 = {};
@@ -394,10 +394,10 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
     if (!Rename_ApplyCommand(&mDelete1, sizeof(mDelete1))) return false;
 
     // Check count decreased to 2
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 2) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 2) return false;
 
     // Vector elements shifted: index 0 = Leningrad, index 1 = Sevastopol
-    BYTE** remaining = *(BYTE***)(world + 0x10348);
+    BYTE** remaining = *(BYTE***)(world + 0x103E0);
     if (!remaining || !remaining[0] || !remaining[1]) return false;
     if (wcscmp((const wchar_t*)(remaining[0] + 0x10), L"Leningrad") != 0) return false;
     if (wcscmp((const wchar_t*)(remaining[1] + 0x10), L"Sevastopol") != 0) return false;
@@ -409,7 +409,7 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
     if (secondDeleteResult) return false; // MUST FAIL gracefully
 
     // Verify vector count DID NOT change
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 2) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 2) return false;
     if (wcscmp((const wchar_t*)(remaining[1] + 0x10), L"Sevastopol") != 0) return false;
 
     // 3. ADVERSARIAL CHALLENGE: Double-deletion on a single-city world
@@ -420,8 +420,8 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
     wcscpy_s((wchar_t*)(singleCity.data() + 0x10), 32, L"Moscow");
 
     std::vector<BYTE*> singleVec = { singleCity.data() };
-    WriteMockVectorHeader(world + 0x10348, singleVec);
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 1) return false;
+    WriteMockVectorHeader(world + 0x103E0, singleVec);
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 1) return false;
 
     TestRenameMsg mSingle = {};
     mSingle.magic = M5_MAGIC;
@@ -431,11 +431,11 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
 
     // First deletion succeeds -> count 0
     if (!Rename_ApplyCommand(&mSingle, sizeof(mSingle))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     // Second deletion of already deleted city on 0-city world: MUST return false safely
     if (Rename_ApplyCommand(&mSingle, sizeof(mSingle))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     // 4. Payload Fuzzing: Bad magic, truncated size, out-of-bounds index
     TestRenameMsg mFuzz = mDelete1;
@@ -449,7 +449,7 @@ static bool SubTest_M5_C2_R6_CityDeletionLockstepSafety()
     if (Rename_ApplyCommand(&mFuzz, 16)) return false; // truncated payload
 
     cityVec.clear();
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
     return true;
 }
 
@@ -685,8 +685,8 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
 
     // 1. Empty city vector: deletion attempts must safely fail without crash
     std::vector<BYTE*> emptyVec;
-    WriteMockVectorHeader(world + 0x10348, emptyVec);
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    WriteMockVectorHeader(world + 0x103E0, emptyVec);
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     TestRenameMsg mEmpty = {};
     mEmpty.magic = M5_MAGIC;
@@ -702,7 +702,7 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
     mEmpty.index = 9999;
     if (Rename_ApplyDeleteCommand(&mEmpty, sizeof(mEmpty))) return false;
 
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     // 2. Populate 2 cities: valid indices are 0 and 1
     std::vector<BYTE> cityA(128, 0);
@@ -718,8 +718,8 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
     wcscpy_s((wchar_t*)(cityB.data() + 0x10), 32, L"Minsk");
 
     std::vector<BYTE*> twoVec = { cityA.data(), cityB.data() };
-    WriteMockVectorHeader(world + 0x10348, twoVec);
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 2) return false;
+    WriteMockVectorHeader(world + 0x103E0, twoVec);
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 2) return false;
 
     // Out-of-bounds boundary: index = 2 (off-by-one, count is 2)
     TestRenameMsg mOob = {};
@@ -736,7 +736,7 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
     if (Rename_ApplyDeleteCommand(&mOob, sizeof(mOob))) return false;
 
     // Vector must remain 2 intact cities
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 2) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 2) return false;
 
     // 3. Double-deletion idempotency at index 0
     TestRenameMsg mDelKiev = {};
@@ -747,17 +747,17 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
 
     // First deletion of city 0 ("Kiev") succeeds
     if (!Rename_ApplyDeleteCommand(&mDelKiev, sizeof(mDelKiev))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 1) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 1) return false;
 
     // Remaining city at index 0 is now Minsk
-    BYTE** rem = *(BYTE***)(world + 0x10348);
+    BYTE** rem = *(BYTE***)(world + 0x103E0);
     if (!rem || !rem[0]) return false;
     if (wcscmp((const wchar_t*)(rem[0] + 0x10), L"Minsk") != 0) return false;
 
     // Replay receives duplicate delete command for city 0 with Kiev check hash
     // MUST FAIL because index 0 holds Minsk!
     if (Rename_ApplyDeleteCommand(&mDelKiev, sizeof(mDelKiev))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 1) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 1) return false;
     if (wcscmp((const wchar_t*)(rem[0] + 0x10), L"Minsk") != 0) return false;
 
     // Delete Minsk at index 0
@@ -768,14 +768,14 @@ static bool SubTest_M5_C2_R6_OutOfBoundsAndEmptyVectorDeletion()
     mDelMinsk.check = M5_CityCheck(cityB.data());
 
     if (!Rename_ApplyDeleteCommand(&mDelMinsk, sizeof(mDelMinsk))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     // Delete Minsk AGAIN on empty vector -> must fail safely
     if (Rename_ApplyDeleteCommand(&mDelMinsk, sizeof(mDelMinsk))) return false;
-    if (SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) != 0) return false;
+    if (SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) != 0) return false;
 
     twoVec.clear();
-    WriteMockVectorHeader(world + 0x10348, twoVec);
+    WriteMockVectorHeader(world + 0x103E0, twoVec);
     return true;
 }
 

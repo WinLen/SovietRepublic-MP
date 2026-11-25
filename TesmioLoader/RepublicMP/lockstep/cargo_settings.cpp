@@ -13,19 +13,19 @@
 #include <string.h>
 #include <vector>
 
-#define WINDOWS_RVA 0x9E19D0     // the open windows
+#define WINDOWS_RVA 0xA2BA78     // the open windows
 #define WINDOW_OBJECT 0x240
 #define WINDOW_KIND 0x248
 #define WINDOW_PARENT 0x5C8      // a selection window's parent window
 #define VEHICLE_WINDOW 1
 #define PICKER_WINDOW 0xD
-#define DOWN_RVA 0xA54E90
-#define PRESS_RVA 0xA54E91
-#define ENTER_RVA 0xA54CAC
-#define KEYPAD_ENTER_RVA 0xA54D2C
-#define VEHICLES_OFFSET 0x12810
-#define BUILDINGS_OFFSET 0x11B08
-#define LINES_OFFSET 0x12800
+#define DOWN_RVA 0xA9EF50
+#define PRESS_RVA 0xA9EF51
+#define ENTER_RVA 0xA9ED6C
+#define KEYPAD_ENTER_RVA 0xA9EDEC
+#define VEHICLES_OFFSET 0x128C0
+#define BUILDINGS_OFFSET 0x11BB0
+#define LINES_OFFSET 0x128B0
 #define VEHICLE_LINE 0x650
 #define STOPS_LIST 0x638         // a vehicle's stop records, 0x198 each
 #define LINKS_LIST 0xD38         // a building's links (pointers), link +10 its record
@@ -35,10 +35,10 @@
 #define RECORD_BYTES 0x198
 #define HALF_BYTES 0xC8
 #define HALVES 2
-#define RESOURCES 0xC2B0
-#define RESOURCE_STRIDE 0x340
-#define TYPES 0x12840
-#define TYPE_STRIDE 0x9F08
+#define RESOURCES 0xC348
+#define RESOURCE_STRIDE 0x380
+#define TYPES 0x128F0
+#define TYPE_STRIDE 0xA0C8
 #ifndef MAX_OBJECTS
 #define MAX_OBJECTS CARGO_SETTINGS_MAX_OBJECTS
 #endif           // per kind
@@ -46,11 +46,11 @@
 #define MAX_LIST 1000000
 #define MAX_RECORDS 256
 #define MAX_ELEMENTS 4096
-#define DESTROY_RVA 0x1513F0
-#define COPY_RVA 0x204E70
-#define REFRESH_RVA 0x499720
-#define ADD_STATION_RVA 0x2B6EB0
-#define ADD_STATION_DIST_RVA 0x2B7830
+#define DESTROY_RVA 0x124D80
+#define COPY_RVA 0x21FCF0
+#define REFRESH_RVA 0x4BF930
+#define ADD_STATION_RVA 0x2D3580
+#define ADD_STATION_DIST_RVA 0x2D3F00
 #define MAGIC 0x32534743
 
 
@@ -490,7 +490,7 @@ static void EnsurePartnerBackRef(U64 object, U64 targetBld)
     if (!object || !targetBld || g_exeBase[RVA_VEC_PTR_PUSH_BACK] == 0) return;
     __try {
         U64 bldType = *(U64*)(object + 0x318);
-        int subType = bldType ? *(int*)(bldType + 0x360) : 0;
+        int subType = bldType ? *(int*)(bldType + 0x368) : 0;
         U64 vecAddr = targetBld + (subType == 0x2D ? 0xD78u : 0xD90u);
         U64 b = *(U64*)vecAddr, e = *(U64*)(vecAddr + 8);
         for (U64 p = b; p && p + 8 <= e; p += 8) {
@@ -607,7 +607,7 @@ static void RevertLocalAddedLink(U64 world, U64 bld, U64 targetBld, unsigned lin
 static U64 RunAddStationTool(U64 world, unsigned nativeRva)
 {
     U64 bld = 0;
-    ReadQ(world + 0xD298, bld);
+    ReadQ(world + 0xD330, bld);
     unsigned beforeCount = RecordCount(KIND_LINK, bld);
     U64 res = ((U64(*)(U64))(g_exeBase + nativeRva))(world);
     unsigned afterCount = RecordCount(KIND_LINK, bld);

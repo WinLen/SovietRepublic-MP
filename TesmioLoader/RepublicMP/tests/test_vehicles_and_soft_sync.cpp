@@ -41,6 +41,7 @@ static bool SubTest_DlcTokenExtractionAndMasks()
     TEST_CHECK(SaveSync_GetDlcMask("dlc2") == 0x02);
     TEST_CHECK(SaveSync_GetDlcMask("dlc3") == 0x04);
     TEST_CHECK(SaveSync_GetDlcMask("dlc2,dlc3") == 0x06);
+    TEST_CHECK(SaveSync_GetDlcMask("dlc5") == 0x10);
     TEST_CHECK(SaveSync_GetDlcMask("dlc_unknown") == 0x00);
     TEST_CHECK(SaveSync_GetDlcMask(nullptr) == 0x00);
 
@@ -52,6 +53,10 @@ static bool SubTest_DlcTokenExtractionAndMasks()
     SaveSync_FormatDlcNames(0x06, namesBuf, sizeof(namesBuf));
     TEST_CHECK(strstr(namesBuf, "Biomes") != nullptr && strstr(namesBuf, "Early Start") != nullptr);
 
+    SaveSync_FormatDlcNames(0x10, namesBuf, sizeof(namesBuf));
+    TEST_CHECK(strstr(namesBuf, "Space Program") != nullptr && strstr(namesBuf, "dlc5") != nullptr);
+    SaveSync_FormatDlcNames(0x20, namesBuf, sizeof(namesBuf));
+    TEST_CHECK(strstr(namesBuf, "DLC 6") != nullptr && strstr(namesBuf, "dlc6") != nullptr);
     SaveSync_FormatDlcNames(0x00, namesBuf, sizeof(namesBuf));
     TEST_CHECK(_stricmp(namesBuf, "none") == 0);
 
@@ -64,7 +69,7 @@ static bool SubTest_VehicleDlcSessionValidation()
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     SaveSync_SetTestDlcLists("dlc2", ""); // host has dlc2, client has none
 
-    std::vector<BYTE> vehType(0xA000, 0);
+    std::vector<BYTE> vehType(WORLD_VEHICLE_TYPE_STRIDE, 0);
     char dlcPath[64] = "dlc3/vehicles/steam_p36.ini";
     strncpy_s((char*)vehType.data() + 0x200, 64, dlcPath, _TRUNCATE);
 
@@ -94,7 +99,12 @@ static bool SubTest_VehicleDlcSessionValidation()
     TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
     TEST_CHECK(ModSync_CheckVehicleTypeAllowed(vehType.data()));
 
-    // 2d. Workshop mod vehicle -> ALLOWED by DLC check (falls through to workshop check)
+    // 2d. Space Program DLC (dlc5) -> blocked unless both sides own dlc5
+    strncpy_s((char*)vehType.data() + 0x200, 64, "media_soviet/dlc5/vehicles/rocket_carrier.ini", _TRUNCATE);
+    TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    SaveSync_SetTestDlcLists("dlc2,dlc3,dlc5", "dlc2,dlc5");
+    TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
+    // 2e. Workshop mod vehicle -> ALLOWED by DLC check (falls through to workshop check)
     strncpy_s((char*)vehType.data() + 0x200, 64, "media_soviet/workshop/12345/truck.ini", _TRUNCATE);
     TEST_CHECK(SaveSync_CheckVehicleDlcAllowed(vehType.data()));
 
@@ -110,10 +120,10 @@ static bool SubTest_TrailerDlcValidation()
     SaveSync_SetTestDlcLists("dlc2,dlc3", "dlc2"); // dlc3 is unshared
 
     // Lead vehicle is vanilla (no DLC requirement)
-    std::vector<BYTE> leadType(0xA000, 0);
+    std::vector<BYTE> leadType(WORLD_VEHICLE_TYPE_STRIDE, 0);
     strncpy_s((char*)leadType.data() + 0x200, 64, "media_soviet/vehicles/train_loco.ini", _TRUNCATE);
 
-    // Coupled trailer array at leadType + 0x7C08
+    // Coupled trailer array at leadType + 0x7C58
     // Vector of elements with stride 0x110. Pointer to trailer VehicleType is at offset +0x100 within each record.
     const unsigned kNumTrailers = 2;
     std::vector<BYTE> trailerRecords(0x110 * kNumTrailers, 0);
@@ -127,8 +137,8 @@ static bool SubTest_TrailerDlcValidation()
     *(BYTE**)(trailerRecords.data() + 0 * 0x110 + 0x100) = tr0Type.data();
     *(BYTE**)(trailerRecords.data() + 1 * 0x110 + 0x100) = tr1Type.data();
 
-    *(BYTE**)(leadType.data() + 0x7C08) = trailerRecords.data();
-    *(BYTE**)(leadType.data() + 0x7C10) = trailerRecords.data() + trailerRecords.size();
+    *(BYTE**)(leadType.data() + 0x7C58) = trailerRecords.data();
+    *(BYTE**)(leadType.data() + 0x7C60) = trailerRecords.data() + trailerRecords.size();
 
     // Must block because trailer 1 requires unshared dlc3
     TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(leadType.data()));
@@ -149,8 +159,8 @@ static bool SubTest_TrailerDlcValidation()
 
     // Trailer 17 (index 16) requires unshared DLC (dlc3)
     strncpy_s((char*)trailerTypes20[16].data() + 0x200, 64, "dlc3/vehicles/wagon_special.ini", _TRUNCATE);
-    *(BYTE**)(leadType.data() + 0x7C08) = trailerRecords20.data();
-    *(BYTE**)(leadType.data() + 0x7C10) = trailerRecords20.data() + trailerRecords20.size();
+    *(BYTE**)(leadType.data() + 0x7C58) = trailerRecords20.data();
+    *(BYTE**)(leadType.data() + 0x7C60) = trailerRecords20.data() + trailerRecords20.size();
 
     // Must block because trailer 17 (index 16) requires unshared dlc3 (verifies cap > 16)
     TEST_CHECK(!SaveSync_CheckVehicleDlcAllowed(leadType.data()));
@@ -171,7 +181,7 @@ static bool SubTest_ScriptNameResolutionWithShiftedIndices()
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    // Create 4 vehicle types, each of size WORLD_VEHICLE_TYPE_STRIDE (0x9F08)
+    // Create 4 vehicle types, each of size WORLD_VEHICLE_TYPE_STRIDE (0xA0C8)
     const size_t kTypeCount = 4;
     const size_t kStride = WORLD_VEHICLE_TYPE_STRIDE;
     std::vector<BYTE> typePool(kStride * kTypeCount, 0);
@@ -186,7 +196,7 @@ static bool SubTest_ScriptNameResolutionWithShiftedIndices()
     strncpy_s((char*)t2 + 0x200, 64, "media_soviet/vehicles/truck_tatra.ini", _TRUNCATE);
     strncpy_s((char*)t3 + 0x200, 64, "dlc2\\vehicles\\loader_win.ini", _TRUNCATE);
 
-    // Setup vehicle types vector at world + WORLD_VEHICLE_TYPES_OFFSET (0x12840)
+    // Setup vehicle types vector at world + WORLD_VEHICLE_TYPES_OFFSET (0x128F0)
     *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET)     = typePool.data();
     *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = typePool.data() + typePool.size();
 
@@ -321,15 +331,15 @@ static bool SubTest_StoppedTrainAndWagonEffectiveBld()
     std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
     *(int*)bld.data() = 64;
 
-    std::vector<BYTE> truck(0x1B00, 0);
+    std::vector<BYTE> truck(VEHICLE_STRUCT_BYTES, 0);
     *(BYTE**)(truck.data() + VEH_CUR_BLD_OFFSET) = bld.data();
     TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(truck.data()) == bld.data());
 
-    std::vector<BYTE> loco(0x1B00, 0);
+    std::vector<BYTE> loco(VEHICLE_STRUCT_BYTES, 0);
     *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = bld.data();
     TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(loco.data()) == bld.data());
 
-    std::vector<BYTE> wagon(0x1B00, 0);
+    std::vector<BYTE> wagon(VEHICLE_STRUCT_BYTES, 0);
     *(BYTE**)(wagon.data() + VEH_LINK_PTR_OFFSET) = loco.data();
     TEST_CHECK(VehicleSoftSync_ResolveEffectiveBld(wagon.data()) == bld.data());
 
@@ -420,13 +430,13 @@ static bool SubTest_BuildingStorageAndWagonLoadingSoftSync()
     *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = bldList + 1;
 
     // 3. Setup stopped locomotive #32 + coupled wagon #34 at Bld [64], plus moving truck #38
-    std::vector<BYTE> loco(0x1B00, 0), wagon(0x1B00, 0), truck(0x1B00, 0);
+    std::vector<BYTE> loco(VEHICLE_STRUCT_BYTES, 0), wagon(VEHICLE_STRUCT_BYTES, 0), truck(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(loco.data() + VEH_ID_OFFSET) = 32;
     *(BYTE**)(loco.data() + VEH_STOPPED_BLD_OFFSET) = bld64.data();
     *(unsigned*)(wagon.data() + VEH_ID_OFFSET) = 34;
     *(BYTE**)(wagon.data() + VEH_LINK_PTR_OFFSET) = loco.data();
     *(unsigned*)(truck.data() + VEH_ID_OFFSET) = 38;
-    *(float*)(truck.data() + 0xD24) = 42.0f; // moving
+    *(float*)(truck.data() + 0xD44) = 42.0f; // moving
 
     std::vector<BYTE> wagonCargo(0x10, 0);
     *(const char**)wagonCargo.data() = resSteel;
@@ -490,10 +500,10 @@ static bool SubTest_VehicleWindowScheduleAndLaunchCommands()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // 1. AddBorderStopForTest on Airplane (cat == 8):
-    std::vector<BYTE> planeType(0x400, 0), plane(0x1B00, 0), borderBld(0x400, 0);
+    std::vector<BYTE> planeType(0x400, 0), plane(VEHICLE_STRUCT_BYTES, 0), borderBld(0x400, 0);
     *(int*)(planeType.data() + VEH_TYPE_CATEGORY_OFFSET) = 8; // AIRPLANE
     *(BYTE**)(plane.data() + VEH_TYPE_PTR_OFFSET) = planeType.data();
-    *(int*)(plane.data() + 0x1794) = 1;
+    *(int*)(plane.data() + 0x182C) = 1;
 
     std::vector<BYTE> stopRecs(VEH_STOP_RECORD_STRIDE * 2, 0xFF);
     // First stop (nStops == 1): aircraft first stop must set load=0, unload=0
@@ -516,17 +526,17 @@ static bool SubTest_VehicleWindowScheduleAndLaunchCommands()
     TEST_CHECK(stopRecs[VEH_STOP_RECORD_STRIDE + VEH_STOP_HALF_STRIDE] == 1);
 
     // 2. DeleteStopForTest + ChangeCurrentStopForTest on Train (cat == 4):
-    std::vector<BYTE> trainType(0x400, 0), train(0x1B00, 0), stationA(0x100, 0), stationB(0x100, 0);
+    std::vector<BYTE> trainType(0x400, 0), train(VEHICLE_STRUCT_BYTES, 0), stationA(0x100, 0), stationB(0x100, 0);
     *(int*)(trainType.data() + VEH_TYPE_CATEGORY_OFFSET) = 4; // RAIL_LOCOMOTIVE
     *(BYTE**)(train.data() + VEH_TYPE_PTR_OFFSET) = trainType.data();
     BYTE* stopBlds[2] = { stationA.data(), stationB.data() };
     *(BYTE***)(train.data() + VEH_STOP_BLD_PTR_VEC_OFF)     = stopBlds;
     *(BYTE***)(train.data() + VEH_STOP_BLD_PTR_VEC_OFF + 8) = stopBlds + 2;
 
-    // In depot (+0x528 == 0 && +0x530 == 0): ChangeCurrentStop updates +0x698, +0xD3A, +0xD3B
+    // In depot (+0x528 == 0 && +0x530 == 0): ChangeCurrentStop updates +0x698, +0xD78, +0xD79
     GameCalls_ChangeCurrentStopForTest((unsigned long long)train.data(), 1);
     TEST_CHECK(*(int*)(train.data() + VEH_SCHED_IDX_OFFSET) == 1);
-    TEST_CHECK(train[0xD3A] == 1 && train[0xD3B] == 1);
+    TEST_CHECK(train[0xD78] == 1 && train[0xD79] == 1);
 
     // Out of depot (+0x530 == stationA): ChangeCurrentStop updates +0x610 to stationB
     *(BYTE**)(train.data() + VEH_STOPPED_BLD_OFFSET) = stationA.data();
@@ -534,20 +544,20 @@ static bool SubTest_VehicleWindowScheduleAndLaunchCommands()
     TEST_CHECK(*(BYTE**)(train.data() + VEH_TARGET_STOP_BLD_OFF) == stationB.data());
 
     // DeleteStopForTest on stop 0 (stationA): clears +0x530 since it matched stationA
-    train[0xD3A] = 0;
+    train[0xD78] = 0;
     GameCalls_DeleteStopForTest((unsigned long long)world, (unsigned long long)train.data(), 0);
-    TEST_CHECK(train[0xD3A] == 1);
+    TEST_CHECK(train[0xD78] == 1);
     TEST_CHECK(*(BYTE**)(train.data() + VEH_STOPPED_BLD_OFFSET) == nullptr);
 
     // 3. ReleaseVehicleForTest on Ship (cat == 7) and Cableway (cat == 6):
-    std::vector<BYTE> shipType(0x400, 0), ship(0x1B00, 0), dock(0x100, 0);
+    std::vector<BYTE> shipType(0x400, 0), ship(VEHICLE_STRUCT_BYTES, 0), dock(0x100, 0);
     *(int*)(shipType.data() + VEH_TYPE_CATEGORY_OFFSET) = 7; // SHIP in 0x7DA236
     *(BYTE**)(ship.data() + VEH_TYPE_PTR_OFFSET) = shipType.data();
     *(BYTE**)(ship.data() + VEH_CUR_BLD_OFFSET) = dock.data();
     GameCalls_ReleaseVehicleForTest((unsigned long long)ship.data());
     TEST_CHECK(*(BYTE**)(ship.data() + VEH_CUR_BLD_OFFSET) == nullptr);
 
-    std::vector<BYTE> cableType(0x400, 0), cableVeh(0x1B00, 0);
+    std::vector<BYTE> cableType(0x400, 0), cableVeh(VEHICLE_STRUCT_BYTES, 0);
     *(int*)(cableType.data() + VEH_TYPE_CATEGORY_OFFSET) = 6; // CABLEWAY in 0x7DA236
     *(BYTE**)(cableVeh.data() + VEH_TYPE_PTR_OFFSET) = cableType.data();
     GameCalls_ReleaseVehicleForTest((unsigned long long)cableVeh.data());
@@ -677,9 +687,9 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
         strcpy_s((char*)wr, 32, kWasteNames[i]);
         *(BYTE**)(world + 0xC3C8 + (size_t)i * 8u) = wr;
     }
-    std::vector<BYTE> skdTruck(0x1B00, 0);
+    std::vector<BYTE> skdTruck(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(skdTruck.data() + VEH_ID_OFFSET) = 121;
-    *(float*)(skdTruck.data() + 0xD24) = 25.0f; // moving
+    *(float*)(skdTruck.data() + 0xD44) = 25.0f; // moving
     std::vector<BYTE> skdCargo(0x10 * 9, 0);
     for (int i = 0; i < 9; ++i) {
         BYTE* ce = skdCargo.data() + (size_t)i * 0x10;
@@ -692,7 +702,7 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
     *(BYTE***)(world + WORLD_VEHICLES_OFFSET)     = skdList;
     *(BYTE***)(world + WORLD_VEHICLES_OFFSET + 8) = skdList + 1;
 
-    // Also populate slot 0 on bld88 with heap-allocated waste_toxic (entry 0) to verify FindResourceByHash via 0xC2C8..0xC430
+    // Also populate slot 0 on bld88 with heap-allocated waste_toxic (entry 0) to verify FindResourceByHash via 0xC360..0xC4C8
     *(const char**)(entriesBuf.data() + 0 * 0x10) = (const char*)(wasteResPool.data() + 7 * WORLD_RESOURCE_STRIDE);
     *(float*)(entriesBuf.data() + 0 * 0x10 + 0x08) = 3.25f;
     *(BYTE**)(slotBuf.data() + 0x08) = entriesBuf.data() + 0x10;
@@ -716,14 +726,14 @@ static bool SubTest_MultiResourceStorageSoftSyncAndManualBuy()
 static bool SubTest_CoopGameSpeedAndTimerScaling()
 {
     ResetMockWorldMemory();
-    *(float*)(g_mockExeBuffer + 0x909D6C) = 0.35f; // FAST_FACTOR_RVA (2x)
-    *(float*)(g_mockExeBuffer + 0x909C1C) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
-    *(float*)(g_mockExeBuffer + 0x909B98) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
-    *(uint8_t*)(g_mockExeBuffer + 0x9D4EE0 + 13) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 0;
+    *(float*)(g_mockExeBuffer + 0x95123C) = 0.35f; // FAST_FACTOR_RVA (2x)
+    *(float*)(g_mockExeBuffer + 0x9510D0) = 0.05f; // HYPER_FACTOR_RVA (LCtrl+Numpad1)
+    *(float*)(g_mockExeBuffer + 0x951048) = 0.01f; // PLAID_FACTOR_RVA (LCtrl+Numpad2 / [>>>] held)
+    *(uint8_t*)(g_mockExeBuffer + 0xA1EEF0 + 13) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA1EF20 + 0x5CA) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x1D) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x4F) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x50) = 0;
 
     // 1. Activate determinism and run initial Prepare: buttons armed, speed 1 (30.0f)
     Determinism_SetActiveForTest(true);
@@ -732,12 +742,12 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
     int speed = 0;
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 1);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 30.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 30.0f, 1e-4f);
 
     // 2. Click UI Speed 2 ([>>]) and verify a second UI frame before Prepare does not clobber it
     Determinism_UiSpeedBegin();
-    *(int*)(g_mockExeBuffer + 0x9D54B4) = 2;
-    *(int*)(g_mockExeBuffer + 0x9D54BC) = 0;
+    *(int*)(g_mockExeBuffer + 0xA1F4EC) = 2;
+    *(int*)(g_mockExeBuffer + 0xA1F4F4) = 0;
     Determinism_UiSpeedEnd();
 
     Determinism_UiSpeedBegin();
@@ -746,72 +756,72 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 2);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 10.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 10.5f, 1e-4f);
 
-    // 3. Hold 4th UI speed button ([>>>]) across two UI frames without touching 0x9D54BC:
+    // 3. Hold 4th UI speed button ([>>>]) across two UI frames without touching 0xA1F4F4:
     //    must never spam-toggle pause, and must cap at Hyper (speed 3 -> 30.0f * 0.05f = 1.5f), NOT Plaid (4)
     for (int f = 0; f < 2; ++f) {
         Determinism_UiSpeedBegin();
-        *(int*)(g_mockExeBuffer + 0x9D54B4) = 2;
-        *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 1;
+        *(int*)(g_mockExeBuffer + 0xA1F4EC) = 2;
+        *(uint8_t*)(g_mockExeBuffer + 0xA1EF20 + 0x5CA) = 1;
         Determinism_UiSpeedEnd();
     }
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 3);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 1.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 1.5f, 1e-4f);
 
     // 4. Release [>>>], switch to Speed 1 ([>]), and hold LCtrl + Numpad2:
     //    LCtrl + Numpad2 must be completely blocked (stays Speed 1 = 30.0f)
-    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA1EF20 + 0x5CA) = 0;
     Determinism_UiSpeedBegin();
-    *(int*)(g_mockExeBuffer + 0x9D54B4) = 1;
-    *(int*)(g_mockExeBuffer + 0x9D54BC) = 0;
+    *(int*)(g_mockExeBuffer + 0xA1F4EC) = 1;
+    *(int*)(g_mockExeBuffer + 0xA1F4F4) = 0;
     Determinism_UiSpeedEnd();
 
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 1; // LCtrl
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 1; // Numpad2
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x1D) = 1; // LCtrl
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x50) = 1; // Numpad2
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 1);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 30.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 30.0f, 1e-4f);
 
     // 4b. With Speed 2 ([>>]) active, LCtrl + Numpad2 still stays Speed 2 (10.5f)
     TEST_CHECK(Determinism_RequestSpeed(2));
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 2);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 10.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 10.5f, 1e-4f);
 
     // 4c. Holding LCtrl + Numpad1 + Numpad2 simultaneously caps at Hyper (speed 3 = 1.5f)
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 1; // Numpad1
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x4F) = 1; // Numpad1
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 3);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 1.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 1.5f, 1e-4f);
 
     // 4d. Switch to Speed 1 ([>]) and hold only LCtrl + Numpad1 -> still Speed 3 (1.5f)
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x50) = 0;
     Determinism_UiSpeedBegin();
-    *(int*)(g_mockExeBuffer + 0x9D54B4) = 1;
-    *(int*)(g_mockExeBuffer + 0x9D54BC) = 0;
+    *(int*)(g_mockExeBuffer + 0xA1F4EC) = 1;
+    *(int*)(g_mockExeBuffer + 0xA1F4F4) = 0;
     Determinism_UiSpeedEnd();
 
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 3);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 1.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 1.5f, 1e-4f);
 
-    // 5. GameSpeed_OnRemote while Determinism_IsActive() must not overwrite 0x9D54BC (kSpeedSentinel)
-    int sentinelBefore = *(int*)(g_mockExeBuffer + 0x9D54BC);
+    // 5. GameSpeed_OnRemote while Determinism_IsActive() must not overwrite 0xA1F4F4 (kSpeedSentinel)
+    int sentinelBefore = *(int*)(g_mockExeBuffer + 0xA1F4F4);
     GameSpeed_OnRemote(0, 1, 1, 0);
-    TEST_CHECK(*(int*)(g_mockExeBuffer + 0x9D54BC) == sentinelBefore);
+    TEST_CHECK(*(int*)(g_mockExeBuffer + 0xA1F4F4) == sentinelBefore);
 
     // 6. Verify Determinism_RequestSpeed (0/1/2) after clearing boost keys
-    *(uint8_t*)(g_mockExeBuffer + 0x9D4F10 + 0x5A2) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x1D) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x4F) = 0;
-    *(uint8_t*)(g_mockExeBuffer + 0xA54B90 + 0x50) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA1EF20 + 0x5CA) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x1D) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x4F) = 0;
+    *(uint8_t*)(g_mockExeBuffer + 0xA9EC50 + 0x50) = 0;
     TEST_CHECK(!Determinism_RequestSpeed(-1));
     TEST_CHECK(!Determinism_RequestSpeed(3));
 
@@ -824,13 +834,13 @@ static bool SubTest_CoopGameSpeedAndTimerScaling()
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 2);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 10.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 10.5f, 1e-4f);
 
     TEST_CHECK(Determinism_RequestSpeed(1));
     Determinism_BeforePrepare();
     Determinism_SessionSpeed(&paused, &speed);
     TEST_CHECK(!paused && speed == 1);
-    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0x9D4EE0), 30.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + 0xA1EEF0), 30.0f, 1e-4f);
 
     // 7. Clean up
     Determinism_SetActiveForTest(false);
@@ -985,10 +995,10 @@ static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
 
     // 2. Verify towed child trailer (+0x3A0..+0x3A8) is translated together with parent vehicle during SoftSync
     HeldFrame_Reset();
-    std::vector<BYTE> parentTruck(0x1AD8, 0), childTrailer(0x1AD8, 0);
+    std::vector<BYTE> parentTruck(VEHICLE_STRUCT_BYTES, 0), childTrailer(VEHICLE_STRUCT_BYTES, 0);
     *(int32_t*)(parentTruck.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
     *(int32_t*)(childTrailer.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
-    const unsigned nodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+    const unsigned nodeOffsets[5] = { 0xD98, 0xE54, 0xF10, 0xFCC, 0x10B8 };
     for (int k = 0; k < 5; ++k) {
         float* np = (float*)(parentTruck.data() + nodeOffsets[k]);
         float* nc = (float*)(childTrailer.data() + nodeOffsets[k]);
@@ -1003,11 +1013,11 @@ static bool SubTest_BuildingCountLimitPerStateAndTrailerSoftSync()
     *(BYTE**)(childTrailer.data() + VEH_PARENT_PTR_OFFSET)     = parentTruck.data();
 
     VehicleSoftSync_TranslateWithChildrenForTest(parentTruck.data(), 5.0f, 1.5f, -3.0f, true);
-    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xD60 + 0x80), 105.0f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xED8 + 0x84),  11.5f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x80), 95.0f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x84), 11.5f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD60 + 0x88), 197.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xD98 + 0x80), 105.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(parentTruck.data() + 0xF10 + 0x84),  11.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD98 + 0x80), 95.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD98 + 0x84), 11.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(childTrailer.data() + 0xD98 + 0x88), 197.0f, 1e-4f);
     return true;
 }
 
@@ -1032,14 +1042,14 @@ bool Test_VehicleCargoAndScheduleSync()
 #define IMPORT_GET_SOUND_RVA    0x86CD18
 #endif
 #ifndef SOUND_ENGINE_PTR_RVA
-#define SOUND_ENGINE_PTR_RVA    0x9E4C18
+#define SOUND_ENGINE_PTR_RVA    0xA2ECC0
 #endif
 #ifndef SOUND_MGR_RVA
-#define SOUND_MGR_RVA           0x9E4C20
+#define SOUND_MGR_RVA           0xA2ECC8
 #endif
 #ifndef M4_BUILDINGS_BEGIN_RVA
-#define M4_BUILDINGS_BEGIN_RVA  0x9E6A18
-#define M4_BUILDINGS_END_RVA    0x9E6A20
+#define M4_BUILDINGS_BEGIN_RVA  0xA30AD0
+#define M4_BUILDINGS_END_RVA    0xA30AD8
 #endif
 
 // 1. R10: Vehicle SoftSync, Smoothing, EMA Decay & Passengers
@@ -1050,7 +1060,7 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     // Bus setup with negative base coordinates
-    std::vector<BYTE> bus(0x1B00, 0);
+    std::vector<BYTE> bus(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 777;
     *(float*)(bus.data() + VEH_POS_OFFSET)     = -1000.0f;
     *(float*)(bus.data() + VEH_POS_OFFSET + 4) = -500.0f;
@@ -1165,7 +1175,7 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
     TEST_CHECK(VehicleSoftSync_ApplyCommand(pkt.data(), sz));
 
     // 6. Vehicle with active road segment (+0x528) or waypoint queue (+0x738..+0x740) ->
-    //    must NOT yank C3D_NODE (+0xD60) off the road spline into fields, while still syncing passengers
+    //    must NOT yank C3D_NODE (+0xD98) off the road spline into fields, while still syncing passengers
     *(BYTE**)(bus.data() + 0x458) = (BYTE*)passVector.data();
     *(BYTE**)(bus.data() + 0x460) = (BYTE*)(passVector.data() + passVector.size());
     *(void**)(bus.data() + 0x528) = (void*)0x140001000ULL;
@@ -1239,8 +1249,8 @@ static bool SubTest_Stress_M4_R10_VehicleSmoothingAndPassengers()
 
     std::vector<BYTE> airType(0x400, 0);
     *(int32_t*)(airType.data() + VEH_TYPE_CATEGORY_OFFSET) = 8; // aircraft
-    std::vector<BYTE> departedPlane(0x1B00, 0);
-    std::vector<BYTE> arrivingPlane(0x1B00, 0);
+    std::vector<BYTE> departedPlane(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> arrivingPlane(VEHICLE_STRUCT_BYTES, 0);
     *(BYTE**)(departedPlane.data() + VEH_TYPE_PTR_OFFSET) = airType.data();
     *(BYTE**)(arrivingPlane.data() + VEH_TYPE_PTR_OFFSET) = airType.data();
     *(BYTE**)(departedPlane.data() + 0x390) = departedPlane.data();
@@ -1638,7 +1648,7 @@ static bool SubTest_T63_VehicleRefuelFloatAbiAndEcon()
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> train(0x1B00, 0);
+    std::vector<BYTE> train(VEHICLE_STRUCT_BYTES, 0);
     *(int*)(train.data() + VEH_ID_OFFSET) = 999;
     *(float*)(train.data() + VEH_POS_OFFSET) = 800.0f; // State 2 (East of 250m border)
 
@@ -1674,13 +1684,13 @@ static bool SubTest_T63_VehicleRefuelFloatAbiAndEcon()
 static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
 {
     HeldFrame_Reset();
-    std::vector<BYTE> loco(0x1AD8, 0);
+    std::vector<BYTE> loco(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(loco.data() + 0x04) = 401;
     *(int32_t*)(loco.data() + VEH_SIXTH_NODE_ACTIVE_OFFSET) = -1;
     loco[VEH_RENDER_VISIBLE_OFFSET] = 1;
     loco[VEH_WORKER_SIM_FLAG_OFFSET] = 1;
 
-    const unsigned kNodeOffsets[5] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080 };
+    const unsigned kNodeOffsets[5] = { 0xD98, 0xE54, 0xF10, 0xFCC, 0x10B8 };
     auto setAllNodesX = [&](float x) {
         for (unsigned off : kNodeOffsets) {
             float* n = (float*)(loco.data() + off);
@@ -1695,8 +1705,8 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     *(float*)(loco.data() + VEH_STEER_CURRENT_OFFSET) = 0.10f;
     *(float*)(loco.data() + VEH_STEER_TARGET_OFFSET) = 0.50f;
     std::vector<BYTE*> vehList = { loco.data() };
-    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = vehList.data();
-    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = vehList.data() + 1;
+    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = vehList.data();
+    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = vehList.data() + 1;
 
     HeldFrame_OnSimTick(10);
 
@@ -1716,11 +1726,11 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     } gctx = { loco.data(), 0.0f };
     auto guardCb = [](void* ud) {
         auto* c = (GuardCtx*)ud;
-        c->xDuring = *(const float*)(c->veh + 0xD60 + 0x80);
+        c->xDuring = *(const float*)(c->veh + 0xD98 + 0x80);
     };
-    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0x9E7720, 0.5f, guardCb, &gctx));
+    TEST_CHECK(HeldFrame_RunVehicleGuardForTest(g_mockExeBuffer + 0xA317E0, 0.5f, guardCb, &gctx));
     TEST_CHECK_NEAR(gctx.xDuring, 104.0f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD60 + 0x80), 108.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 108.0f, 1e-4f);
 
     struct HlCtx {
         BYTE* veh;
@@ -1729,7 +1739,7 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     } hlCtx = { loco.data(), 0.0f, 0 };
     auto hlCb = [](BYTE* /*v*/, bool /*extra*/, void* ud) {
         auto* c = (HlCtx*)ud;
-        c->xDuring = *(const float*)(c->veh + 0xD60 + 0x80);
+        c->xDuring = *(const float*)(c->veh + 0xD98 + 0x80);
         c->calls++;
     };
     const float hlColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -1737,17 +1747,17 @@ static bool SubTest_T63_HeldFrameSameTickRefreshAndLiveRestore()
     HeldFrame_SubmitVehicleHighlight(loco.data(), 0, 1, hlColor, 0, false);
     TEST_CHECK(hlCtx.calls == 1);
     TEST_CHECK_NEAR(hlCtx.xDuring, 104.0f, 1e-4f);
-    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD60 + 0x80), 108.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 108.0f, 1e-4f);
 
     // Live nudge to 109.5 without another OnSimTick must restore exact live 109.5, not stale rec.currNode
     setAllNodesX(109.5f);
     HeldFrame_SubmitVehicleHighlight(loco.data(), 0, 1, hlColor, 0, false);
     HeldFrame_SetHighlightCaptureForTest(nullptr, nullptr);
     TEST_CHECK(hlCtx.calls == 2);
-    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD60 + 0x80), 109.5f, 1e-4f);
+    TEST_CHECK_NEAR(*(const float*)(loco.data() + 0xD98 + 0x80), 109.5f, 1e-4f);
 
-    *(BYTE***)(g_mockExeBuffer + 0x9E7720) = nullptr;
-    *(BYTE***)(g_mockExeBuffer + 0x9E7728) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0xA317E0) = nullptr;
+    *(BYTE***)(g_mockExeBuffer + 0xA317E8) = nullptr;
     HeldFrame_Reset();
     return true;
 }
@@ -1775,7 +1785,7 @@ static bool SubTest_T63_SoftSyncExactCargoAndDesyncDump()
     *(float*)(bld.data() + BLD_PROGRESS_OFFSET) = 1.0f;
     *(float*)(bld.data() + BLD_PRODUCED_OFFSET) = 3.5f;
 
-    std::vector<BYTE> loco(0x1B00, 0);
+    std::vector<BYTE> loco(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(loco.data() + VEH_ID_OFFSET) = 88;
     *(BYTE**)(loco.data() + 0x528) = conBld.data();
 
@@ -1889,7 +1899,7 @@ static bool SubTest_T63_OrderIndependentHashAndFastBldSoftSync()
     *(BYTE***)(world + WORLD_BUILDINGS_OFFSET)     = b0List;
     *(BYTE***)(world + WORLD_BUILDINGS_OFFSET + 8) = b0List + 1;
 
-    std::vector<BYTE> veh(0x1B00, 0);
+    std::vector<BYTE> veh(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(veh.data() + VEH_ID_OFFSET) = 123;
     *(BYTE**)(veh.data() + VEH_CARGO_OFFSET)     = (BYTE*)vCargoHost.data();
     *(BYTE**)(veh.data() + VEH_CARGO_OFFSET + 8) = (BYTE*)(vCargoHost.data() + vCargoHost.size());

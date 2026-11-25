@@ -51,7 +51,7 @@ static int ReadHold()
 }
 
 // C3D_INPUT key bytes the main loop (FUN_140105a90) reads for Hyper.
-#define INPUT_OBJECT_RVA 0xA54B90
+#define INPUT_OBJECT_RVA 0xA9EC50
 #define KEY_LCTRL_OFFSET 0x1d
 #define KEY_NUMPAD1_OFFSET 0x4f
 

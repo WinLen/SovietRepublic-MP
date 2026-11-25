@@ -25,8 +25,8 @@
 #define M4_C2_VEH_FUEL_OFFSET 0x5F0
 #endif
 #ifndef M4_C2_BUILDINGS_BEGIN_RVA
-#define M4_C2_BUILDINGS_BEGIN_RVA 0x9E6A18
-#define M4_C2_BUILDINGS_END_RVA   0x9E6A20
+#define M4_C2_BUILDINGS_BEGIN_RVA 0xA30AD0
+#define M4_C2_BUILDINGS_END_RVA   0xA30AD8
 #endif
 #ifndef BLD_INDEX_OFFSET
 #define BLD_INDEX_OFFSET 0x00
@@ -336,14 +336,14 @@ static bool SubTest_M4_Challenger2_VehicleSmoothingAndHardSnapExtreme()
     VehicleSoftSync_Reset();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> truck(0x1B00, 0);
+    std::vector<BYTE> truck(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(truck.data() + VEH_ID_OFFSET) = 777;
     *(float*)(truck.data() + M4_C2_VEH_FUEL_OFFSET) = 50.0f;
     *(int*)(truck.data() + VEH_SCHED_IDX_OFFSET) = 1;
     *(float*)(truck.data() + VEH_POS_OFFSET)     = 100.0f;
     *(float*)(truck.data() + VEH_POS_OFFSET + 4) = 10.0f;
     *(float*)(truck.data() + VEH_POS_OFFSET + 8) = 200.0f;
-    *(float*)(truck.data() + 0xD24) = 25.0f; // speed > 0 so truck is captured in packet
+    *(float*)(truck.data() + 0xD44) = 25.0f; // speed > 0 so truck is captured in packet
 
     BYTE* vehList[1] = { truck.data() };
     *(BYTE***)(world + WORLD_VEHICLES_OFFSET)     = vehList;
@@ -660,20 +660,20 @@ static bool SubTest_M4_Challenger2_SoftSyncWireInvariance()
     VehicleSoftSync_Reset();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> truck1(0x1B00, 0), truck2(0x1B00, 0);
+    std::vector<BYTE> truck1(VEHICLE_STRUCT_BYTES, 0), truck2(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(truck1.data() + VEH_ID_OFFSET) = 101;
     *(float*)(truck1.data() + M4_C2_VEH_FUEL_OFFSET) = 50.0f;
     *(float*)(truck1.data() + VEH_POS_OFFSET) = 100.0f;
     *(float*)(truck1.data() + VEH_POS_OFFSET + 4) = 10.0f;
     *(float*)(truck1.data() + VEH_POS_OFFSET + 8) = 200.0f;
-    *(float*)(truck1.data() + 0xD24) = 30.0f;
+    *(float*)(truck1.data() + 0xD44) = 30.0f;
 
     *(unsigned*)(truck2.data() + VEH_ID_OFFSET) = 102;
     *(float*)(truck2.data() + M4_C2_VEH_FUEL_OFFSET) = 40.0f;
     *(float*)(truck2.data() + VEH_POS_OFFSET) = 300.0f;
     *(float*)(truck2.data() + VEH_POS_OFFSET + 4) = 10.0f;
     *(float*)(truck2.data() + VEH_POS_OFFSET + 8) = 400.0f;
-    *(float*)(truck2.data() + 0xD24) = 25.0f;
+    *(float*)(truck2.data() + 0xD44) = 25.0f;
 
     BYTE* vehList[2] = { truck1.data(), truck2.data() };
     *(BYTE***)(world + WORLD_VEHICLES_OFFSET)     = vehList;

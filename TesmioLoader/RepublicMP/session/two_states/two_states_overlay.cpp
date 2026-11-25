@@ -330,7 +330,7 @@ bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
             *(float*)(camMgr + CAM_MGR_TRANS_DUR_OFFSET) = 0.0f;
         }
 
-        // 3. Engine view matrix updates (0x86C4E0 / 0x86C4D0)
+        // 3. Engine view matrix updates (0x8B1538 / 0x8B1528)
         typedef void (__fastcall* CalcViewFn)(void* cam, void* m1, void* m2);
         typedef void (__fastcall* CalcFinalFn)(void* cam);
 
@@ -341,10 +341,10 @@ bool TwoStates_ApplyCameraView(const float pos[3], const float lookAt[3])
             fnFinal = (CalcFinalFn)GetProcAddress(g_engine, "?CalculateFinal@C3D_CAMERA@@QEAAXXZ");
         }
         if (!fnView && g_exeBase) {
-            fnView = *(CalcViewFn*)(g_exeBase + 0x86C4E0);
+            fnView = *(CalcViewFn*)(g_exeBase + 0x8B1538);
         }
         if (!fnFinal && g_exeBase) {
-            fnFinal = *(CalcFinalFn*)(g_exeBase + 0x86C4D0);
+            fnFinal = *(CalcFinalFn*)(g_exeBase + 0x8B1528);
         }
         if (fnView && IsPointerLikeX64(reinterpret_cast<uint64_t>(fnView))) {
             fnView(cam, nullptr, nullptr);
@@ -966,10 +966,10 @@ static bool IsMinimapMouseInputAllowed(const BYTE* mm)
 {
     if (!g_exeBase || !mm) return false;
     if (mm[0x5C] != 0 || mm[0x69] != 0) return false;
-    if (*(BYTE*)(g_exeBase + 0x9D5ED3) != 0) return false;
-    const BYTE* pMgr = *(const BYTE* const*)(g_exeBase + 0x9E2358);
+    if (*(BYTE*)(g_exeBase + 0xA1FF13) != 0) return false;
+    const BYTE* pMgr = *(const BYTE* const*)(g_exeBase + 0xA2C400);
     if (IsPointerLikeX64((uintptr_t)pMgr) && pMgr[0x160] != 0) return false;
-    if (*(BYTE*)(g_exeBase + 0x9D5ED0) != 0 && *(BYTE*)(g_exeBase + 0x9D5ECA) == 0) return false;
+    if (*(BYTE*)(g_exeBase + 0xA1FF10) != 0 && *(BYTE*)(g_exeBase + 0xA1FF0A) == 0) return false;
     return true;
 }
 

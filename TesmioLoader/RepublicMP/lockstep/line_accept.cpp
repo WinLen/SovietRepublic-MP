@@ -9,9 +9,9 @@
 #include <string.h>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
-#define LINES_OFFSET 0x12800
-#define LINE_WINDOWS_RVA 0x9E19D0
+#define WORLD_RVA 0xA1EF20
+#define LINES_OFFSET 0x128B0
+#define LINE_WINDOWS_RVA 0xA2BA78
 #define WINDOW_LINE 0x240
 #define WINDOW_COPY 0x270
 #define LINE_BYTES 0x290
@@ -26,10 +26,10 @@
 #define HALF_BYTES 0xC8
 #define HALF_PAIRS 0x8
 #define RECORD_NODE 0x190
-#define BORDER_SOVIET 0x11B00
-#define BORDER_WESTERN 0x11AF8
-#define CACHE_BEGIN 0xC6B0
-#define CACHE_END 0xC6B8
+#define BORDER_SOVIET 0x11B98
+#define BORDER_WESTERN 0x11B90
+#define CACHE_BEGIN 0xC748
+#define CACHE_END 0xC750
 #define MAX_ELEMENTS 4096
 #define MAX_STOPS 1024
 #define MAGIC 0x31414E4C
@@ -37,11 +37,11 @@
 static const unsigned kHalfInts[2] = { 0x38, 0x50 };
 static const unsigned kHalfPtrs[4] = { 0x68, 0x80, 0x98, 0xB0 };
 
-#define COPY_RVA 0x4957C0
-#define MERGE_RVA 0x494530
-#define DIRTY_RVA 0x22A650
-#define VEHICLES_RVA 0x4975E0
-#define NAME_RVA 0x499590
+#define COPY_RVA 0x4BB9D0
+#define MERGE_RVA 0x4BA740
+#define DIRTY_RVA 0x245880
+#define VEHICLES_RVA 0x4BD7F0
+#define NAME_RVA 0x4BF7A0
 
 static const TsmRoutineSig kRoutines[] = {
     { COPY_RVA, { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x11, 0x05, 0x00, 0x00, 0x48, 0x8b, 0xc4, 0x44, 0x88, 0x48, 0x20 }, 16 },

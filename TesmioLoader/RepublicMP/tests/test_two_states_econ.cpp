@@ -149,9 +149,9 @@ bool Test_TwoStates_ZonesAndEconomy()
     *(int*)(world + WORLD_UNLIMITED_MONEY_OFFSET) = 0;
 
     // Planned road segment ownership & per-republic separation for "Build planned" / "Cancel all planned"
-    WriteAbsJmp12(g_mockExeBuffer + 0x525870, (void*)&MockPlanStartFn);
-    WriteAbsJmp12(g_mockExeBuffer + 0x543450, (void*)&MockCancelSegFn);
-    g_mockExeBuffer[0x4FADE0] = 0xC3;
+    WriteAbsJmp12(g_mockExeBuffer + 0x54BC30, (void*)&MockPlanStartFn);
+    WriteAbsJmp12(g_mockExeBuffer + 0x5696A0, (void*)&MockCancelSegFn);
+    g_mockExeBuffer[0x521160] = 0xC3;
 
     auto makeNode = [](float x, float y, float z) {
         std::vector<BYTE> n(0x40, 0);
@@ -188,7 +188,7 @@ bool Test_TwoStates_ZonesAndEconomy()
     std::vector<BYTE> roadMgr(0x800, 0);
     std::vector<BYTE*> roadSegs = { segHost.data(), segClient.data(), segBorder.data() };
     WriteMockVectorHeader(roadMgr.data() + 0x2B0, roadSegs);
-    *(__int64*)(g_mockExeBuffer + UNIVERSAL_THIS_RVA + 0xF7A0) = (__int64)roadMgr.data();
+    *(__int64*)(g_mockExeBuffer + UNIVERSAL_THIS_RVA + 0xF838) = (__int64)roadMgr.data();
 
     // Host (State 1) presses "Build planned": only segHost starts; segClient and segBorder stay planned
     RoadSyncPlanStartMsg msgStart = {};
@@ -334,13 +334,13 @@ bool Test_TwoStates_SaveMetaAndScriptIniSafety()
     TEST_CHECK(TwoStates_GetBuildingOwner(777, -500.0f, 0.0f) == 2);
 
     // Ending a session while the world remains loaded must NOT double treasuries on subsequent PrepareHostSave/save
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // WORLD_ROAD_NETWORK_RVA != 0 (world loaded)
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // WORLD_ROAD_NETWORK_RVA != 0 (world loaded)
     TwoStates_OnSessionEnded();
     double prepRub[2] = {}, prepUsd[2] = {};
     TwoStates_PrepareHostSave(false, prepRub, prepUsd);
     TEST_CHECK_NEAR(prepRub[0], 1234567.89, 1e-2);
     TEST_CHECK_NEAR(prepRub[1], 987654.32, 1e-2);
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
 
     // Staging save promotion: a newer mp_syncsave_* folder with header.bin, stats.ini, and republicmp_coop.ini
     // must be promoted to coop_last_session so user saves into mp_syncsave_* are never lost.
@@ -390,7 +390,7 @@ static bool TestLoans_MaxAvailableBorrow()
     double initUsd[2] = { 500000.0,  500000.0 };
     TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
 
-    // Work resource multipliers at world + 0xC2C8 -> +0x58 (USD = 1.5), +0x5C (RUB = 2.0)
+    // Work resource multipliers at world + 0xC360 -> +0x58 (USD = 1.5), +0x5C (RUB = 2.0)
     std::vector<BYTE> workRes(0x80, 0);
     *(float*)(workRes.data() + 0x58) = 1.5f;
     *(float*)(workRes.data() + 0x5C) = 2.0f;
@@ -522,7 +522,7 @@ static bool TestLoans_LockstepBorrowAndRepay()
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // world loaded
 
     double initRub[2] = { 1000000.0, 500000.0 };
     double initUsd[2] = { 300000.0,  200000.0 };
@@ -635,7 +635,7 @@ static bool TestLoans_LockstepBorrowAndRepay()
     Commands_SetSession(COMMANDS_OFF);
     SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
     TwoStates_OnSessionEnded();
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
     return true;
 }
 
@@ -856,7 +856,7 @@ static bool TestEconStats_PeriodRolloverAndSaveMetaPersistence()
     *(BYTE**)(world + WORLD_RESOURCES_OFFSET + 0x10) = resTable.data() + resTable.size();
     uintptr_t resFood = (uintptr_t)(resTable.data() + 2 * WORLD_RESOURCE_STRIDE);
 
-    // Special heap-allocated resource pointer at world + WORLD_ELENERGY_RES_PTR_OFF (0xC3B8)
+    // Special heap-allocated resource pointer at world + WORLD_ELENERGY_RES_PTR_OFF (0xC450)
     std::vector<BYTE> elEnergyHostHeap(WORLD_RESOURCE_STRIDE, 0);
     std::vector<BYTE> elEnergyClientHeap(WORLD_RESOURCE_STRIDE, 0);
     *(uintptr_t*)(world + WORLD_ELENERGY_RES_PTR_OFF) = (uintptr_t)elEnergyHostHeap.data();
@@ -1526,8 +1526,8 @@ static bool TestEconStats_VehicleSaleAbiAndRenameAndCarDealerSwitches()
     *(float*)(cityObj.data() + 8)  = 42.5f;   // Local terrain Y = 42.5f
     *(float*)(cityObj.data() + 12) = 200.0f;
     BYTE* cityPtrs[1] = { cityObj.data() };
-    *(BYTE***)(world + 0x10348 + 0x00) = cityPtrs;
-    *(BYTE***)(world + 0x10348 + 0x08) = cityPtrs + 1;
+    *(BYTE***)(world + 0x103E0 + 0x00) = cityPtrs;
+    *(BYTE***)(world + 0x103E0 + 0x08) = cityPtrs + 1;
 
     #pragma pack(push, 1)
     struct LocalRenameMsg {
@@ -1893,9 +1893,9 @@ static bool TestEconStats_CustomsTouristSpawnAndVehicleTouristOwner()
     // Create a Soviet Beyond-the-Borders / Customs House (category 0x14, subtype 0 = Soviet)
     // Even if placed at X = -800 (airspace border point on West side), ResolveCustomsTourismOwner
     // must attribute it to State 2 because only State 2 has unlocked Soviet tourism visa (unlock[12] != 0)!
-    std::vector<BYTE> bldTypeSovietBorder(0x600, 0);
-    *(uint8_t*)(bldTypeSovietBorder.data() + 0x360) = 0x14; // Beyond the Borders (Air/Sea)
-    *(uint8_t*)(bldTypeSovietBorder.data() + 0x528) = 0;    // 0 = Soviet border
+    std::vector<BYTE> bldTypeSovietBorder(0xC00, 0);
+    *(uint8_t*)(bldTypeSovietBorder.data() + BLD_TYPE_CAT_OFF) = 0x14; // Beyond the Borders (Air/Sea)
+    *(uint8_t*)(bldTypeSovietBorder.data() + BLD_TYPE_CUSTOMS_SUBTYPE_OFF) = 0;    // 0 = Soviet border
 
     std::vector<BYTE> customsEast(0x1420, 0);
     *(BYTE**)(customsEast.data() + 0x318) = bldTypeSovietBorder.data();
@@ -1986,7 +1986,7 @@ static bool TestSingleplayer_InitialDormancy()
 static bool TestSingleplayer_OverlayZeroDrawCalls()
 {
     ResetMockWorldMemory();
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // mock world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // mock world loaded
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
     TEST_CHECK(SaveSync_IsWorldLoaded());
 
@@ -2071,7 +2071,7 @@ static bool TestSingleplayer_SessionTransitionReset()
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1; // world loaded
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1; // world loaded
     *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     // 1. Setup co-op Two States session with distinct balances and ownership
@@ -2268,7 +2268,7 @@ bool Test_CameraPersistenceAndFraming()
     *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = nullptr;
 
     // 4. Pending Camera Restore: re-apply client target over first 10 frames against engine overwrite, then unlock
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 1;
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 1;
     *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     const float clientSavedTargetPos[3]  = { 4500.0f, 220.0f, -3200.0f };
@@ -2407,7 +2407,7 @@ bool Test_CameraPersistenceAndFraming()
     TwoStates_GetCursorWorldPos(&curWx, &curWy, &curWz);
     TEST_CHECK(DiagLog_GetSafeSehDepthForTest() == initialSehDepth);
 
-    *(__int64*)(g_mockExeBuffer + 0x9E46B0) = 0;
+    *(__int64*)(g_mockExeBuffer + 0xA2E758) = 0;
     std::filesystem::remove_all(camSaveDir, ec);
     return true;
 }
@@ -2464,9 +2464,9 @@ bool Test_TwoStatesResearchDesyncFixes()
     };
     resetWorldResearchToState1();
 
-    std::vector<BYTE> bldTypeUsd(0x600, 0);
-    *(uint8_t*)(bldTypeUsd.data() + 0x360) = 0x14;
-    *(uint8_t*)(bldTypeUsd.data() + 0x528) = 1; // 1 = USD customs -> visa unlock idx 11
+    std::vector<BYTE> bldTypeUsd(0xC00, 0);
+    *(uint8_t*)(bldTypeUsd.data() + BLD_TYPE_CAT_OFF) = 0x14;
+    *(uint8_t*)(bldTypeUsd.data() + BLD_TYPE_CUSTOMS_SUBTYPE_OFF) = 1; // 1 = USD customs -> visa unlock idx 11
 
     std::vector<BYTE> univWest(0x1420, 0), univEast(0x1420, 0), customsUsdEast(0x1420, 0);
     *(int*)univWest.data() = 501;
@@ -2732,14 +2732,14 @@ bool TestPerf_SinglePassDemographicsAndUiCacheParity()
     *(BYTE**)(world + WORLD_RESEARCH_VEC_END_OFFSET + 8) = resBuf.data() + resBuf.size();
 
     // Setup buildings: West home, East home, East dorm, East prison, under-construction West bld
-    std::vector<BYTE> btypeHome(0xA00, 0), btypeDorm(0xA00, 0), btypePrison(0xA00, 0);
-    *(int32_t*)(btypeHome.data() + 0x360) = 2;
-    *(int32_t*)(btypeHome.data() + 0x364) = 0;
-    *(int32_t*)(btypeDorm.data() + 0x360) = 2;
-    *(int32_t*)(btypeDorm.data() + 0x364) = 1;
-    *(BYTE*)(btypeDorm.data() + 0x8E8) = 1;
-    *(int32_t*)(btypePrison.data() + 0x360) = 0x4C;
-    *(BYTE*)(btypePrison.data() + 0x8E8) = 1;
+    std::vector<BYTE> btypeHome(0xC00, 0), btypeDorm(0xC00, 0), btypePrison(0xC00, 0);
+    *(int32_t*)(btypeHome.data() + BLD_TYPE_CAT_OFF) = 2;
+    *(int32_t*)(btypeHome.data() + 0x36C) = 0;
+    *(int32_t*)(btypeDorm.data() + BLD_TYPE_CAT_OFF) = 2;
+    *(int32_t*)(btypeDorm.data() + 0x36C) = 1;
+    *(BYTE*)(btypeDorm.data() + BLD_TYPE_IS_DORM_OFF) = 1;
+    *(int32_t*)(btypePrison.data() + BLD_TYPE_CAT_OFF) = 0x4C;
+    *(BYTE*)(btypePrison.data() + BLD_TYPE_IS_DORM_OFF) = 1;
 
     std::vector<BYTE> homeW(0x1420, 0), homeE(0x1420, 0), dormE(0x1420, 0), prisonE(0x1420, 0), conW(0x1420, 0);
     *(int*)homeW.data() = 1; *(float*)(homeW.data() + OBJ_POS_OFFSET) = -800.0f; *(BYTE**)(homeW.data() + 0x318) = btypeHome.data();
@@ -2922,7 +2922,7 @@ bool TestPerf_InPlaceEconAttributionAndNestedVehicleOverride()
     std::vector<BYTE*> bldVec = { bldW.data(), bldE.data() };
     WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
 
-    std::vector<BYTE> vehW(0x1B00, 0), vehE(0x1B00, 0), vehW2(0x1B00, 0);
+    std::vector<BYTE> vehW(VEHICLE_STRUCT_BYTES, 0), vehE(VEHICLE_STRUCT_BYTES, 0), vehW2(VEHICLE_STRUCT_BYTES, 0);
     *(int*)(vehW.data() + VEH_ID_OFFSET) = 1; *(BYTE**)(vehW.data() + VEH_HOME_OFFSET) = bldW.data();
     *(int*)(vehE.data() + VEH_ID_OFFSET) = 2; *(BYTE**)(vehE.data() + VEH_HOME_OFFSET) = bldE.data();
     *(int*)(vehW2.data() + VEH_ID_OFFSET) = 3; *(BYTE**)(vehW2.data() + VEH_HOME_OFFSET) = bldW.data();

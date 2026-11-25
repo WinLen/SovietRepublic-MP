@@ -29,19 +29,19 @@
 
 #pragma intrinsic(_ReturnAddress)
 
-#define GAME_TIMER_RVA 0x9D4EE0
-#define FAST_FACTOR_RVA 0x909D6C
+#define GAME_TIMER_RVA 0xA1EEF0
+#define FAST_FACTOR_RVA 0x95123C
 // The main loop's speed-2/3 factor (105d66): Hyper (left Ctrl + Numpad1, or turbo).
 // Speed 4 (Plaid / LCtrl+Numpad2) is disabled in multiplayer to keep simulation drift-free.
-#define HYPER_FACTOR_RVA 0x909C1C   // 0.05
+#define HYPER_FACTOR_RVA 0x9510D0   // 0.05
 #define DETERMINISM_MAX_TICK_SPEED 3
 #define DETERMINISM_MAX_BOOST 1
-#define KEYS_RVA 0xA54B90           // C3D_INPUT key bytes
+#define KEYS_RVA 0xA9EC50           // C3D_INPUT key bytes
 #define KEY_LCTRL 0x1D
 #define KEY_NUMPAD1 0x4F
-#define FAST_HELD_RVA (0x9D4F10 + 0x5A2) // the speed panel's fast button held
-#define SIM_STEP_RVA 0x30C710   // FUN_14030c790(world): one simulation step
-#define LOAD_WORLD_RVA 0x430F50 // FUN_140430fc0(): loads the save named in the load globals
+#define FAST_HELD_RVA (0xA1EF20 + 0x5CA) // the speed panel's fast button held
+#define SIM_STEP_RVA 0x32AC70   // FUN_14032ac70(world): one simulation step
+#define LOAD_WORLD_RVA 0x455050 // FUN_140455050(): loads the save named in the load globals
 
 #define DLL_C3D "C3DDLL64.dll"
 #define DLL_CRT_UTILITY "api-ms-win-crt-utility-l1-1-0.dll"
@@ -60,7 +60,7 @@ static const unsigned char kSimStepExpect[20] = {
 // push rbp / push r12..r15 / lea rbp,[rsp-0C800h]
 static const unsigned char kLoadWorldExpect[18] = {
     0x40, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
-    0x48, 0x8D, 0xAC, 0x24, 0x00, 0x38, 0xFF, 0xFF,
+    0x48, 0x8D, 0xAC, 0x24, 0xF0, 0x33, 0xFF, 0xFF,
 };
 
 void Determinism_Bind(const TsmHost* host)
@@ -99,10 +99,10 @@ static void LedgerDraw(unsigned site, int value, bool worker);
 // shift nothing else, and the probe leaves them out of its counts.
 // (by SoylentGreed)
 static const unsigned kPresentationSites[] = {
-    0x6A3D15, 0x6A4D23, 0x6A5304, 0x6AADDB, // vehicle sounds
-    0x699C57, 0x6A7826,                     // electric wire sparks
-    0x66DB03, 0x66FD80, 0x670240,           // vehicle animation starts
-    0x13D748, 0x13D7DE,                     // ambient sounds
+    0x6D72B5, 0x6D82C3, 0x6D88A4, 0x6DE7AB, // vehicle sounds
+    0x6CD0E8, 0x6DADB4,                     // electric wire sparks
+    0x69E57C, 0x6A0A26, 0x6A0EF0,           // vehicle animation starts
+    0x1561F8, 0x15628E,                     // ambient sounds
 };
 static bool IsPresentationSite(unsigned site)
 {
@@ -330,8 +330,8 @@ static DWORD ExeFunctionRva(void* addr)
 // FUN_140139a70 decides from a held key and the real FPS whether all objects
 // update this step or a third of them with a tripled step; FUN_140699420
 // also reads a key. Under the layer both see "not pressed".
-#define KEY_SIM_FUNC1_RVA 0x139A70
-#define KEY_SIM_FUNC2_RVA 0x6995C0
+#define KEY_SIM_FUNC1_RVA 0x152520
+#define KEY_SIM_FUNC2_RVA 0x6CCA50
 
 typedef bool (*GetKeyDownFn)(void* input, int key);
 static GetKeyDownFn o_getKeyDown;
@@ -924,15 +924,15 @@ static void SetProbeStatus(const char* fmt, ...)
 // updates one of three agent buckets per frame by exe+0x9963f0 (30cd1e..).
 // Two loads of the same save (two PCs) then step different buildings and
 // agents from the first frame. A probe run starts both at 0.
-static const unsigned int kFrameCounters[] = { 0x9962A8, 0x9963F0 };
+static const unsigned int kFrameCounters[] = { 0x9E03B8, 0x9E0400 };
 
 // The exe's writable section (.data), compared between the two runs right
 // after the load: whatever differs there is state the save does not restore.
-#define DATA_RVA 0x992000
-#define DATA_SIZE 0xC4718
+#define DATA_RVA 0x9DC000
+#define DATA_SIZE 0xC47E8
 #define DATA_DIFF_LINES 150
 #define DATA_DIFF_LINES_REST 40
-#define WORLD_RVA_PROBE 0x9D4F10
+#define WORLD_RVA_PROBE 0xA1EF20
 #define WORLD_SIZE_PROBE 0x15000 // up to +0x14d38 and a little beyond
 static std::vector<BYTE> g_dataSnapshot;
 
@@ -1007,7 +1007,7 @@ static void CompareData()
 // entries), and the chooser (420350) picks from the results. A load does not
 // empty them, so the first choice after it saw what the earlier game last
 // searched. Each probe run starts with them empty (capacity kept).
-#define SEARCH_POOL_OFFSET 0x14478
+#define SEARCH_POOL_OFFSET 0x14528
 static void EmptySearchPool()
 {
     BYTE* pool = g_exeBase + WORLD_RVA_PROBE + SEARCH_POOL_OFFSET;
@@ -1255,7 +1255,7 @@ static void TakeSpeedInput()
 {
     bool wasPaused = g_paused;
     int wasSpeed = g_requestedSpeed;
-    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    int* speed = (int*)(g_exeBase + 0xA1F4EC);
     if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_IsWorldLoaded())) {
         g_paused = true;
         InterlockedExchange(&g_pauseRequests, 0);
@@ -1307,7 +1307,7 @@ void Determinism_UiSpeedBegin()
 {
     TwoStates_UiBegin();
     if (!g_active || !g_buttonsArmed) return;
-    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    int* speed = (int*)(g_exeBase + 0xA1F4EC);
     int shownSpeed = (g_tickSpeed > 2) ? 2 : g_requestedSpeed;
     g_uiShown = g_paused ? 0 : shownSpeed;
     *speed = g_uiShown;
@@ -1319,7 +1319,7 @@ void Determinism_UiSpeedEnd()
 {
     TwoStates_UiEnd();
     if (!g_active || !g_buttonsArmed) return;
-    int* speed = (int*)(g_exeBase + 0x9D54B4);
+    int* speed = (int*)(g_exeBase + 0xA1F4EC);
     bool fastHeld = g_exeBase[FAST_HELD_RVA] != 0;
     LONG wasFastHeld = InterlockedExchange(&g_uiFastHeld, fastHeld ? 1 : 0);
     if (!g_menuFrames) {
@@ -1387,11 +1387,11 @@ static void RecordMoneyTick()
     MoneyTick t = {};
     t.tick = g_stepCount;
     __try {
-        BYTE* world = g_exeBase + 0x9D4F10;
-        t.usd = *(double*)(world + 0x580);
-        t.rub = *(double*)(world + 0x588);
-        BYTE** it = *(BYTE***)(g_exeBase + 0x9E6A18);
-        BYTE** end = *(BYTE***)(g_exeBase + 0x9E6A20);
+        BYTE* world = g_exeBase + 0xA1EF20;
+        t.usd = *(double*)(world + 0x5A8);
+        t.rub = *(double*)(world + 0x5B0);
+        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD0);
+        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AD8);
         for (; it && it < end; ++it) {
             if (!*it) continue;
             float p = *(float*)(*it + 0x604);
@@ -1433,9 +1433,9 @@ static void LogSessionProgress(const StateSummary& s)
     double progress = 0;
     int sites = 0, paid = 0, stopped = 0, free = 0;
     __try {
-        free = *(int*)(g_exeBase + 0x9D4F10 + 0x578); // != 0: nothing is ever charged (session/money.h)
-        BYTE** it = *(BYTE***)(g_exeBase + 0x9E6A18);
-        BYTE** end = *(BYTE***)(g_exeBase + 0x9E6A20);
+        free = *(int*)(g_exeBase + 0xA1EF20 + 0x5A0); // != 0: nothing is ever charged (session/money.h)
+        BYTE** it = *(BYTE***)(g_exeBase + 0xA30AD0);
+        BYTE** end = *(BYTE***)(g_exeBase + 0xA30AD8);
         for (; it && it < end; ++it) {
             BYTE* bld = *it;
             if (!bld) continue;
@@ -1499,7 +1499,7 @@ static void ProbeAdmission(BYTE* timer)
     bool running = !g_probeBusy || GetProbeState() == PROBE_RUNNING;
     // Tool hold (by SoylentGreed): tools act only on held frames, so while
     // one is selected and actions become commands, no tick is admitted.
-    bool toolHold = Commands_Capturing() && *(__int64*)(g_exeBase + 0x9D4F10 + 0xD428) != 0;
+    bool toolHold = Commands_Capturing() && *(__int64*)(g_exeBase + 0xA1EF20 + 0xD4C0) != 0;
     bool paused = g_paused || timer[13] != 0 || toolHold;
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -1698,7 +1698,7 @@ static void HookedSimStep(__int64 world)
     if (afterEarlyTicks < 0) afterEarlyTicks = 0;
     DiagPerf_Record(DIAG_PERF_BEFORE_AFTER_EARLY, beforeEarlyTicks + afterEarlyTicks);
     WriteGameSpeed(0);
-    *(int*)(g_exeBase + 0x9D54BC) = kSpeedSentinel;
+    *(int*)(g_exeBase + 0xA1F4F4) = kSpeedSentinel;
     memcpy(g_tickTimer, g_exeBase + GAME_TIMER_RVA, sizeof(g_tickTimer));
     g_frameEarly = g_haveStep = true;
     g_framePhase = 4;
@@ -1724,7 +1724,7 @@ void Determinism_BeforeLate()
     if (g_frameStep && g_frameEarly) {
         WriteGameSpeed(GameSpeedOf(g_tickSpeed));
         const int64_t tsBeforeLateT0 = DiagPerf_Now();
-        TwoStates_BeforeSubStep(g_exeBase + 0x9D4F10, false);
+        TwoStates_BeforeSubStep(g_exeBase + 0xA1EF20, false);
         DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsBeforeLateT0);
     }
 }
@@ -1736,12 +1736,12 @@ void Determinism_AfterLate()
     g_inEarly = false;
     if (g_frameStep && g_frameEarly) {
         // A speed the Late body changed itself stays as input for the next frame.
-        int* speed = (int*)(g_exeBase + 0x9D54B4);
+        int* speed = (int*)(g_exeBase + 0xA1F4EC);
         if (*speed == GameSpeedOf(g_tickSpeed)) WriteGameSpeed(0);
         ++g_stepCount;
         HeldFrame_OnSimTick(g_stepCount);
         const int64_t tsAfterLateT0 = DiagPerf_Now();
-        TwoStates_AfterSubStep(g_exeBase + 0x9D4F10, false);
+        TwoStates_AfterSubStep(g_exeBase + 0xA1EF20, false);
         DiagPerf_Record(DIAG_PERF_TS_STEP, DiagPerf_Now() - tsAfterLateT0);
         for (int i = 0; i < g_stepObserverCount; i++) g_stepObservers[i]();
         if (g_sessionRunning) {
@@ -1889,8 +1889,8 @@ void Determinism_SetActive(bool active, unsigned long long seed)
     if (active) ResetFrames();
     else if (g_active) {
         WriteGameSpeed(0);
-        *(int*)(g_exeBase + 0x9D54B8) = g_requestedSpeed;
-        *(int*)(g_exeBase + 0x9D54BC) = 0;
+        *(int*)(g_exeBase + 0xA1F4F0) = g_requestedSpeed;
+        *(int*)(g_exeBase + 0xA1F4F4) = 0;
         g_buttonsArmed = false;
     }
     g_active = active;
@@ -1903,8 +1903,8 @@ void Determinism_SetActiveForTest(bool active)
         ResetFrames();
         g_tickDebt = 16.0;
     } else {
-        *(int*)(g_exeBase + 0x9D54B4) = 0;
-        *(int*)(g_exeBase + 0x9D54BC) = 0;
+        *(int*)(g_exeBase + 0xA1F4EC) = 0;
+        *(int*)(g_exeBase + 0xA1F4F4) = 0;
         g_buttonsArmed = false;
     }
     g_active = active;
@@ -2111,7 +2111,7 @@ static void CheckHang(unsigned long long& lastBeat, ULONGLONG& beatAt, bool& rep
     Logf("republicmp  PROBE HANG: no frame for %llu ms - phase %ld, tick %llu, step %d, paused %d, holds %u, fault %d, timer %02x %02x",
          now - beatAt, g_framePhase, g_runStep, g_frameStep, g_paused, g_holdsLeft, g_frameFault, timer[12], timer[13]);
     LogThreadStack("main", g_simThread);
-    BYTE* worker = *(BYTE**)(g_exeBase + 0x995290);
+    BYTE* worker = *(BYTE**)(g_exeBase + 0x9DDC80);
     if (worker) {
         Logf("republicmp  PROBE HANG: worker stop %d done %d", worker[0x28], worker[0x59]);
         LogThreadStack("worker", *(DWORD*)(worker + 0xC8));
@@ -2145,7 +2145,7 @@ static DWORD WINAPI ProbeThread(LPVOID)
 
         // world+0xC turns on a pass sorted by distance to the local camera
         // (FUN_1400f7930 from FUN_140139a70) - worth knowing if runs differ.
-        Logf("republicmp  PROBE: world+0xC = %d", (int)*(BYTE*)(g_exeBase + 0x9D4F10 + 0xC));
+        Logf("republicmp  PROBE: world+0xC = %d", (int)*(BYTE*)(g_exeBase + 0xA1EF20 + 0xC));
         ResetDetail();
         ProbeTrace_SetDisk(g_probeFuzz);
         Determinism_SetActive(true, PROBE_SEED);

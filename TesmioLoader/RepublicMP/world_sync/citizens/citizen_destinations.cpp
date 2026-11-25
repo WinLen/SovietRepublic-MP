@@ -17,10 +17,10 @@ const char* kNames[] = {"workers", "students", "passengers", "tourists"};
 constexpr int kStride = 7;
 constexpr int kMax = CITIZEN_DESTINATIONS_MAX;
 constexpr uint32_t kFormat = 0x44535431;
-constexpr uintptr_t kWorld = 0x9D4F10;
+constexpr uintptr_t kWorld = 0xA1EF20;
 constexpr uintptr_t kBuildingsBegin = VEC_BUILDINGS_BEGIN_RVA, kBuildingsEnd = VEC_BUILDINGS_END_RVA;
 constexpr uintptr_t kConstructionsBegin = VEC_CONSTRUCTIONS_BEGIN_RVA, kConstructionsEnd = VEC_CONSTRUCTIONS_END_RVA;
-constexpr uintptr_t kAdd = 0x1D42B0, kRemove = 0x1D43C0;
+constexpr uintptr_t kAdd = 0x1EED60, kRemove = 0x1EEE70;
 
 struct Entry { float share; unsigned char flags[4]; BYTE* target; };
 struct Vector { Entry* begin; Entry* end; Entry* capacity; };
@@ -107,7 +107,7 @@ bool ReadWire(BYTE* source, int group, SettingWire* out) {
         uint32_t type = TypeHash(source);
         if (!type) return false;
         out->field = CITIZEN_DESTINATIONS_FIELD;
-        out->category = *(int*)(*(BYTE**)(source + 0x318) + 0x360);
+        out->category = *(int*)(*(BYTE**)(source + 0x318) + 0x368);
         memcpy(out->pos, source + 0x350, 12);
         for (int i = 0; i < 3; ++i) if (!isfinite(out->pos[i])) return false;
         out->slot = group;
@@ -129,7 +129,7 @@ bool ReadWire(BYTE* source, int group, SettingWire* out) {
             if (!typePtr || !targetType) return false;
             memcpy(data, e->target + 0x350, 12);
             for (int j = 0; j < 3; ++j) if (!isfinite(data[j])) return false;
-            StoreBits(&data[3], *(uint32_t*)(typePtr + 0x360));
+            StoreBits(&data[3], *(uint32_t*)(typePtr + 0x368));
             StoreBits(&data[4], targetType);
         }
         // Some intermediate slider states need another scan before sending.
@@ -157,7 +157,7 @@ BYTE* Resolve(const float* pos, int category, uint32_t type, bool* ambiguous) {
         for (BYTE** it = begin; it < end; ++it) {
             BYTE* b = *it;
             if (!b || !*(BYTE**)(b + 0x318)) continue;
-            if (*(int*)(*(BYTE**)(b + 0x318) + 0x360) != category || TypeHash(b) != type) continue;
+            if (*(int*)(*(BYTE**)(b + 0x318) + 0x368) != category || TypeHash(b) != type) continue;
             float* p = (float*)(b + 0x350);
             if (!isfinite(p[0]) || !isfinite(p[1]) || !isfinite(p[2]) ||
                 fabsf(p[0] - pos[0]) > 0.5f || fabsf(p[1] - pos[1]) > 1.0f || fabsf(p[2] - pos[2]) > 0.5f) continue;
@@ -437,7 +437,7 @@ void CitizenDestinations_Scan(BYTE** buildings, int count, bool sendChanges, boo
 // The renderer lock ([exe+0x995268]+0x80): the main thread holds it through
 // Early, where citizens read these lists, and the game's window edits them
 // under it too. A list is only rebuilt while holding it.
-#define RENDERER_RVA 0x995268
+#define RENDERER_RVA 0x9E03A0
 #define RENDERER_LOCK_OFFSET 0x80
 #define RENDERER_LOCK_WAIT_MS 50
 

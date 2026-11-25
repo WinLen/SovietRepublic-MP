@@ -224,7 +224,7 @@ static bool SubTest_M6_C1_R13_BrushRateLimitingAndFixedTimestep()
     fflush(stdout);
 
     // Host timer offset in mock exe
-    BYTE* timerAddr = g_mockExeBuffer + 0x9D4EE0;
+    BYTE* timerAddr = g_mockExeBuffer + 0xA1EEF0;
     // Set host timer to a variable 120 Hz non-normalized timestep (0.008333f)
     *(float*)timerAddr = 0.008333f;
 

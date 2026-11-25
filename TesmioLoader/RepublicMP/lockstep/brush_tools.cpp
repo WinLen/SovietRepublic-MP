@@ -12,34 +12,34 @@
 
 typedef unsigned __int64 U64;
 
-#define WORLD_RVA 0x9D4F10
-#define TIMER_RVA 0x9D4EE0      // the game timer the tools' PowerTime reads (16 bytes)
-#define DOWN_RVA 0xA54E90
-#define PRESS_RVA 0xA54E91
-#define INPUT_RVA 0xA54B90      // C3D_INPUT
-#define SELECTED_OFFSET 0xD428
-#define MENU_OFFSET 0xD280      // the build menu's records: begin, end
+#define WORLD_RVA 0xA1EF20
+#define TIMER_RVA 0xA1EEF0      // the game timer the tools' PowerTime reads (16 bytes)
+#define DOWN_RVA 0xA9EF50
+#define PRESS_RVA 0xA9EF51
+#define INPUT_RVA 0xA9EC50      // C3D_INPUT
+#define SELECTED_OFFSET 0xD4C0
+#define MENU_OFFSET 0xD318      // the build menu's records: begin, end
 #define MENU_STRIDE 0x2D0       // name at +0
 #define NAME_BYTES 32
-static const unsigned kMenus[3] = { 0xFBC, 0xFBE, 0xFC3 };
+static const unsigned kMenus[3] = { 0xFEC, 0xFEE, 0xFF3 };
 
 // World words of a sample and of the tool's state.
-#define CURSOR_OFFSET 0xF6C
-#define BRUSH_OFFSET 0xF98
-#define HELD_OFFSET 0xD2BC
-#define COST_OFFSET 0xD370
-#define SETTING374_OFFSET 0xD374
-#define SETTING338_OFFSET 0xD338
-#define TARGET_OFFSET 0xD458    // the level height
-#define TIMERS_OFFSET 0xD45C    // ten sound timers
-#define TREE_OFFSET 0x11758     // the tree tool's accumulator
+#define CURSOR_OFFSET 0xF9C
+#define BRUSH_OFFSET 0xFC8
+#define HELD_OFFSET 0xD354
+#define COST_OFFSET 0xD408
+#define SETTING374_OFFSET 0xD40C
+#define SETTING338_OFFSET 0xD3D0
+#define TARGET_OFFSET 0xD4F0    // the level height
+#define TIMERS_OFFSET 0xD4F4    // ten sound timers
+#define TREE_OFFSET 0x117F0     // the tree tool's accumulator
 
 #define KINDS 4
 #define TREE_KIND 3
-static const unsigned kRoutines[KINDS] = { 0x3A89B0, 0x3ADEC0, 0x3CCCB0, 0x2F9440 };
+static const unsigned kRoutines[KINDS] = { 0x3C7820, 0x3CCD30, 0x3EBB20, 0x317810 };
 static const unsigned char kEntries[KINDS][16] = {
     { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xd8 },
-    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x50, 0x80, 0xb9, 0xbc, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
+    { 0x40, 0x53, 0x48, 0x83, 0xec, 0x50, 0x80, 0xb9, 0xec, 0x0f, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9 },
     { 0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0x58 },
     { 0x48, 0x8b, 0xc4, 0x55, 0x53, 0x56, 0x57, 0x41, 0x56, 0x48, 0x8d, 0xa8, 0xd8, 0xfe, 0xff, 0xff },
 };
@@ -49,14 +49,14 @@ static const char* const kKindText[KINDS] = { "terrain", "tree demolition", "top
 struct InputSite {
     unsigned site, getter;
 };
-static const InputSite kInputSites[3] = { { 0x3AA790, 0 }, { 0x3AA998, 1 }, { 0x3AA9E9, 1 } };
-static const unsigned kInputSlots[2] = { 0x86C8B0, 0x86C8B8 };
+static const InputSite kInputSites[3] = { { 0x3C9600, 0 }, { 0x3C9808, 1 }, { 0x3C9859, 1 } };
+static const unsigned kInputSlots[2] = { 0x8B1950, 0x8B1958 };
 
 // 3a8a70's, 2bade0's and 4fcaf0's construction ledger rows (call 2fdb00, 5 bytes): the stroke's
 // cost in dollars (world +11330) and in rubles (+11360), written when it pays.
-#define LEDGER_RVA 0x2FDA80
-#define RESOURCE_BY_NAME_RVA 0x2AA7B0 // (world, name) -> resource definition
-static const unsigned kLedgerCalls[6] = { 0x3AAB0D, 0x3AAC23, 0x2CB7D4, 0x2CB8C2, 0x5171D4, 0x5172D1 };
+#define LEDGER_RVA 0x31BE50
+#define RESOURCE_BY_NAME_RVA 0x2C6230 // (world, name) -> resource definition
+static const unsigned kLedgerCalls[6] = { 0x3C997D, 0x3C9A93, 0x2E8274, 0x2E8362, 0x53D554, 0x53D651 };
 
 #pragma pack(push, 1)
 struct BrushState {
@@ -79,7 +79,7 @@ struct BrushMsg {
 };
 // A construction ledger row the stroke wrote on its own PC (see RelayLedger).
 struct LedgerMsg {
-    unsigned ledger;          // world offset: 0x11330 dollars, 0x11360 rubles
+    unsigned ledger;          // world offset: 0x113C8 dollars, 0x113F8 rubles
     char resource[64];        // the row's resource definition, by name
     float value8;             // the row's floats
     unsigned valueC;
@@ -148,7 +148,7 @@ static U64 RelayLedger(U64 world, U64 row, U64 ledger, float a4, U64 a5, float a
     __try {
         m.ledger = (unsigned)(ledger - world);
         U64 resource = *(U64*)row;
-        if ((m.ledger != 0x11330 && m.ledger != 0x11360) || !resource) return original(world, row, ledger, a4, a5, a6, a7);
+        if ((m.ledger != 0x113C8 && m.ledger != 0x113F8) || !resource) return original(world, row, ledger, a4, a5, a6, a7);
         strncpy_s(m.resource, (const char*)resource, _TRUNCATE);
         m.value8 = *(float*)(row + 8);
         m.valueC = *(unsigned*)(row + 12);
@@ -169,7 +169,7 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     LedgerMsg m;
     memcpy(&m, data, sizeof(m));
     m.resource[sizeof(m.resource) - 1] = 0;
-    if (m.ledger != 0x11330 && m.ledger != 0x11360) return false;
+    if (m.ledger != 0x113C8 && m.ledger != 0x113F8) return false;
     U64 world = (U64)World();
     __try {
         U64 resource = ((ResourceByNameFn)(g_exeBase + RESOURCE_BY_NAME_RVA))(world, m.resource);
@@ -189,10 +189,10 @@ bool BrushTools_ApplyLedger(const void* data, size_t size)
     return true;
 }
 
-#define CLEAR_TREES_RVA 0x3AE060
-#define PAINT_GROUND_RVA 0x40E9E0
-#define DEMOLISH_TREES_SITE_RVA 0x3ADDF6
-#define DEMOLISH_PAINT_SITE_RVA 0x3ADE52
+#define CLEAR_TREES_RVA 0x3CCED0
+#define PAINT_GROUND_RVA 0x432800
+#define DEMOLISH_TREES_SITE_RVA 0x3CCC66
+#define DEMOLISH_PAINT_SITE_RVA 0x3CCCC2
 #define KIND_DEMOLISH_GROUND 4
 
 typedef void (*ClearTreesFn)(U64 world, const float* pos, float radius, unsigned char a4, unsigned char a5);
@@ -437,7 +437,7 @@ static bool Sample(int kind, U64 world, int mode, BrushMsg& m, BYTE down, BYTE p
         m.record = RecordPlace(*(U64*)(w + SELECTED_OFFSET), m.name);
         if (m.record < 0) return false;
         ReadSample(w, m.sample);
-        m.sample.pad[0] = (unsigned char)(1u | (*(int*)(w + 0xAF8) != 0 ? 2u : 0u) | (*(int*)(w + 0xAFC) != 0 ? 4u : 0u));
+        m.sample.pad[0] = (unsigned char)(1u | (*(int*)(w + 0xB20) != 0 ? 2u : 0u) | (*(int*)(w + 0xB24) != 0 ? 4u : 0u));
         void* input = g_exeBase + INPUT_RVA;
         if (kind == 0) {
             m.sample.pressOff = g_getters[0] && g_getters[0](input) ? 1 : 0;
@@ -569,14 +569,14 @@ static bool Replay(const BrushMsg& m, U64 record, BrushState& state)
     BrushSample own;
     ReadSample(w, own);
     U64 ownTool = *(U64*)(w + SELECTED_OFFSET);
-    int ownRub = *(int*)(w + 0xAF8), ownUsd = *(int*)(w + 0xAFC);
+    int ownRub = *(int*)(w + 0xB20), ownUsd = *(int*)(w + 0xB24);
     BYTE ownDown = g_exeBase[DOWN_RVA], ownPress = g_exeBase[PRESS_RVA];
     bool ok = true;
     __try {
         *(U64*)(w + SELECTED_OFFSET) = record;
         if ((m.sample.pad[0] & 1u) != 0) {
-            *(int*)(w + 0xAF8) = (m.sample.pad[0] & 2u) ? 1 : 0;
-            *(int*)(w + 0xAFC) = (m.sample.pad[0] & 4u) ? 1 : 0;
+            *(int*)(w + 0xB20) = (m.sample.pad[0] & 2u) ? 1 : 0;
+            *(int*)(w + 0xB24) = (m.sample.pad[0] & 4u) ? 1 : 0;
         }
         WriteSample(w, m.sample, state);
         g_exeBase[DOWN_RVA] = 1;
@@ -594,8 +594,8 @@ static bool Replay(const BrushMsg& m, U64 record, BrushState& state)
     }
     g_exeBase[DOWN_RVA] = ownDown;
     g_exeBase[PRESS_RVA] = ownPress;
-    *(int*)(w + 0xAF8) = ownRub;
-    *(int*)(w + 0xAFC) = ownUsd;
+    *(int*)(w + 0xB20) = ownRub;
+    *(int*)(w + 0xB24) = ownUsd;
     *(U64*)(w + SELECTED_OFFSET) = ownTool;
     WriteSample(w, own, own.state);
     return ok;
@@ -611,7 +611,7 @@ bool BrushTools_ApplyCommand(const void* data, size_t size)
         U64 world = (U64)World();
         __try {
             ((ClearTreesFn)(g_exeBase + CLEAR_TREES_RVA))(world, m.sample.cursor, m.sample.brush, 1, 0);
-            U64 tp = *(U64*)(world + 0xF570);
+            U64 tp = *(U64*)(world + 0xF608);
             if (tp) ((PaintGroundFn)(g_exeBase + PAINT_GROUND_RVA))(tp, 0, m.sample.cursor, 3.0f, 0.0f, 0);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             return false;

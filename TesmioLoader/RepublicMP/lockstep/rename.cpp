@@ -15,12 +15,12 @@
 
 typedef unsigned __int64 U64;
 
-#define CITY_LIST 0x10348
+#define CITY_LIST 0x103E0
 #define CITY_NAME 0x10
 #define CITY_POSITION 4
 #define CITY_CHARS 0x20
 #define MAX_CITIES 4096
-#define ROAD_NETWORK 0xF7A0
+#define ROAD_NETWORK 0xF838
 #define NETWORK_NODES 0x298
 #define JUNCTION_OF_NODE 0xC0
 #define JUNCTION_NODES 0x88
@@ -354,7 +354,7 @@ static void RefreshOpenWindowsAfterRename(U64 world, U64 target)
 {
     U64 begin = 0;
     unsigned count = 0;
-    if (!List(world + 0xCAC0, 256, begin, count)) return;
+    if (!List(world + 0xCB58, 256, begin, count)) return;
     for (unsigned i = 0; i < count; i++) {
         U64 win = Q(begin + (U64)i * 8);
         if (!win) continue;

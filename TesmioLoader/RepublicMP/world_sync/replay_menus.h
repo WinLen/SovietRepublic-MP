@@ -16,10 +16,10 @@
 
 #include "tesmio_plugin.h"
 
-#define REPLAY_UI_WORLD_RVA 0x9D4F10
+#define REPLAY_UI_WORLD_RVA 0xA1EF20
 #define REPLAY_UI_FLAG_COUNT 3
 
-static const unsigned int kReplayUiFlagOffsets[REPLAY_UI_FLAG_COUNT] = { 0xfbc, 0xfbe, 0xfc3 };
+static const unsigned int kReplayUiFlagOffsets[REPLAY_UI_FLAG_COUNT] = { 0xfec, 0xfee, 0xff3 };
 
 class ReplayUiScope {
 public:

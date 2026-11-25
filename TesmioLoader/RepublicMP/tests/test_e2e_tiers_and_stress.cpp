@@ -8,8 +8,8 @@
 // E2E Test Suite: Tiers 1-4 Covering Requirements R1 through R18
 // ---------------------------------------------------------------------------
 
-static double* TestWorldRubles() { return (double*)(g_mockExeBuffer + WORLD_RVA + 0x588); }
-static double* TestWorldDollars() { return (double*)(g_mockExeBuffer + WORLD_RVA + 0x580); }
+static double* TestWorldRubles() { return (double*)(g_mockExeBuffer + WORLD_RVA + 0x5B0); }
+static double* TestWorldDollars() { return (double*)(g_mockExeBuffer + WORLD_RVA + 0x5A8); }
 
 static void E2eInitTwoStates(double r1, double r2, double u1, double u2)
 {
@@ -31,7 +31,7 @@ static bool SubTest_T1_R1_LinearBuildingContinuity()
 
     // Set up road manager at 0xF7A0
     std::vector<BYTE> roadMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF7A0) = roadMgr.data();
+    *(BYTE**)(world + 0xF838) = roadMgr.data();
 
     // 1. Local player has active drag: TOOL_DRAG_ACTIVE_OFFSET = 1
     *(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
@@ -53,13 +53,13 @@ static bool SubTest_T1_R1_LinearBuildingContinuity()
     *(const RoadSyncPoint**)(roadMgr.data() + 0x418) = localRoutePts + 3;
     *(const RoadSyncPoint**)(roadMgr.data() + 0x420) = localRoutePts + 3;
 
-    g_mockExeBuffer[0x3D0030] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x4FCA80] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3EEEA0] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x522E00] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x53ED90] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x238460] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x568C10] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
 
     // Remote road segment command arrives while local player is dragging.
     // RoadSync_ApplyCommandSegment executes ApplySegmentImplInner which resets
@@ -108,7 +108,7 @@ static bool SubTest_T1_R1_LinearBuildingContinuity()
     RoadSync_CancelLocalDrag();
     TEST_CHECK(*(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) == 0);
 
-    *(BYTE**)(world + 0xF7A0) = nullptr;
+    *(BYTE**)(world + 0xF838) = nullptr;
     return true;
 }
 
@@ -308,7 +308,7 @@ static bool SubTest_T1_R6_CityNameSyncAndDeletion()
     wcscpy_s((wchar_t*)(city1.data() + 0x10), 32, L"CityEast");
 
     std::vector<BYTE*> cityVec = { city0.data(), city1.data() };
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
 
     // 1. Host renames City 0 to "Novograd"
     TestRenameMsg mHost = {};
@@ -347,10 +347,10 @@ static bool SubTest_T1_R6_CityNameSyncAndDeletion()
     for (size_t b = 0; b < 12; ++b) { hDel0 ^= city0.data()[4 + b]; hDel0 *= 16777619u; }
     del0.check = hDel0 | 1u;
     TEST_CHECK(Rename_ApplyDeleteCommand(&del0, sizeof(del0)));
-    TEST_CHECK(SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) == 1);
+    TEST_CHECK(SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) == 1);
 
     // 4. Remaining city is Krasnogorsk at index 0 after compaction
-    BYTE* remainingCity = **(BYTE***)(world + 0x10348);
+    BYTE* remainingCity = **(BYTE***)(world + 0x103E0);
     TEST_CHECK(wcscmp((const wchar_t*)(remainingCity + 0x10), L"Krasnogorsk") == 0);
 
     // 5. Delete final city -> vector becomes empty
@@ -362,7 +362,7 @@ static bool SubTest_T1_R6_CityNameSyncAndDeletion()
     for (size_t b = 0; b < 12; ++b) { hDel1 ^= city1.data()[4 + b]; hDel1 *= 16777619u; }
     del1.check = hDel1 | 1u;
     TEST_CHECK(Rename_ApplyDeleteCommand(&del1, sizeof(del1)));
-    TEST_CHECK(SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) == 0);
+    TEST_CHECK(SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) == 0);
 
     return true;
 }
@@ -511,9 +511,9 @@ static bool SubTest_T1_R10_VehicleSmoothingAndPassengers()
     VehicleSoftSync_Reset();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> bus(0x1B00, 0);
+    std::vector<BYTE> bus(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 501;
-    *(float*)(bus.data() + 0xD24) = 15.0f;
+    *(float*)(bus.data() + 0xD44) = 15.0f;
     *(int*)(bus.data() + 0x458) = 45;
     *(float*)(bus.data() + OBJ_POS_OFFSET) = 100.0f;
     *(float*)(bus.data() + OBJ_POS_OFFSET + 8) = 100.0f;
@@ -674,10 +674,10 @@ static bool SubTest_T1_R13_StabilityAndCrashPrevention()
 
     // 3. Normalized timer delta & brush state tracking (Root Cause #3)
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    *(float*)(world + 0xF6C) = 100.0f; // cursorX
-    *(float*)(world + 0xF74) = 200.0f; // cursorZ
-    *(float*)(world + 0xF98) = 15.0f;  // brush
-    *(float*)(g_mockExeBuffer + 0x9D4EE0) = 0.00833f; // non-normalized host dt
+    *(float*)(world + 0xF9C) = 100.0f; // cursorX
+    *(float*)(world + 0xFA4) = 200.0f; // cursorZ
+    *(float*)(world + 0xFC8) = 15.0f;  // brush
+    *(float*)(g_mockExeBuffer + 0xA1EEF0) = 0.00833f; // non-normalized host dt
 
     // Brush state when inactive
     TEST_CHECK(BrushTools_IsActive() == false);
@@ -763,8 +763,8 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF7A0) = roadMgr.data();
-    *(BYTE**)(world + 0xF968) = pedMgr.data();
+    *(BYTE**)(world + 0xF838) = roadMgr.data();
+    *(BYTE**)(world + 0xFA00) = pedMgr.data();
 
     std::vector<BYTE> node0(0xE8, 0);
     std::vector<BYTE> node1(0xE8, 0);
@@ -803,11 +803,11 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
     *(const __int64**)(pedMgr.data() + 0x2B0) = pedSegList.data();
     *(const __int64**)(pedMgr.data() + 0x2B8) = pedSegList.data() + pedSegList.size();
 
-    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x53ED90] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x238460] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x568C10] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
 
     std::vector<BYTE> dragNodeStart(0xE8, 0);
     std::vector<BYTE> dragNodeEnd(0xE8, 0);
@@ -879,8 +879,8 @@ static bool SubTest_T1_R16_RoadUpgradeWithFootpaths()
     TEST_CHECK(*(int*)(roadMgr.data() + 0x394) == 1);
 
     // 6. Cleanup mock pointers
-    *(BYTE**)(world + 0xF7A0) = nullptr;
-    *(BYTE**)(world + 0xF968) = nullptr;
+    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xFA00) = nullptr;
     return true;
 }
 
@@ -1257,7 +1257,7 @@ static bool SubTest_T2_R6_CityNameSyncAndDeletion_Boundaries()
     *(float*)(city.data() + 12) = 100.0f;
     wcscpy_s((wchar_t*)(city.data() + 0x10), 32, L"Initial");
     std::vector<BYTE*> cityVec = { city.data() };
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
 
     // 1. Cyrillic UTF-8 wide characters preserved
     TestRenameMsg m = {};
@@ -1279,8 +1279,8 @@ static bool SubTest_T2_R6_CityNameSyncAndDeletion_Boundaries()
 
     // 3. Deleting last city leaves list empty
     cityVec.clear();
-    WriteMockVectorHeader(world + 0x10348, cityVec);
-    TEST_CHECK(SafeCountStdVector(world + 0x10348, sizeof(BYTE*), 100) == 0);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
+    TEST_CHECK(SafeCountStdVector(world + 0x103E0, sizeof(BYTE*), 100) == 0);
 
     // 4. Deleting non-existent city index safely ignored
     m.index = 999;
@@ -1289,7 +1289,7 @@ static bool SubTest_T2_R6_CityNameSyncAndDeletion_Boundaries()
 
     // 5. Maximum allowable name length (31 chars)
     cityVec.push_back(city.data());
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
     m.index = 0;
     wchar_t maxName[32] = {};
     for (int i = 0; i < 31; ++i) maxName[i] = L'X';
@@ -1299,7 +1299,7 @@ static bool SubTest_T2_R6_CityNameSyncAndDeletion_Boundaries()
     TEST_CHECK(wcslen((const wchar_t*)(city.data() + 0x10)) == 31);
 
     cityVec.clear();
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
     return true;
 }
 
@@ -1437,7 +1437,7 @@ static bool SubTest_T2_R10_VehicleSmoothingAndPassengers_Boundaries()
     VehicleSoftSync_Reset();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> bus(0x1B00, 0);
+    std::vector<BYTE> bus(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 601;
 
     // 1. 0 passengers on empty vehicle
@@ -1458,7 +1458,7 @@ static bool SubTest_T2_R10_VehicleSmoothingAndPassengers_Boundaries()
     TEST_CHECK(*(BYTE**)(bus.data() + VEH_STOPPED_BLD_OFFSET) != nullptr);
 
     // 5. Coupled multi-wagon train sums passengers
-    std::vector<BYTE> wagon(0x1B00, 0);
+    std::vector<BYTE> wagon(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(wagon.data() + VEH_ID_OFFSET) = 602;
     *(int*)(wagon.data() + 0x458) = 50;
     int totalPassengers = *(int*)(bus.data() + 0x458) + *(int*)(wagon.data() + 0x458);
@@ -1881,7 +1881,7 @@ static bool SubTest_T3_Cross_3_CityOperationsWithResearch()
     *(float*)(city.data() + 12) = 100.0f;
     wcscpy_s((wchar_t*)(city.data() + 0x10), 32, L"Universitetsk");
     std::vector<BYTE*> cityVec = { city.data() };
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
 
     // Concurrent research on Tech #6 active while city exists
     int activeTech[3] = { 0, 6, 6 };
@@ -1905,7 +1905,7 @@ static bool SubTest_T3_Cross_3_CityOperationsWithResearch()
     TEST_CHECK(activeTech[1] == 6 && activeTech[2] == 6);
 
     cityVec.clear();
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
     return true;
 }
 
@@ -1969,7 +1969,7 @@ static bool SubTest_T3_Cross_6_VehicleSmoothingWithPurchaseAudio()
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     // Delivered bus moves with 35 passengers
-    std::vector<BYTE> bus(0x1B00, 0);
+    std::vector<BYTE> bus(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 701;
     *(int*)(bus.data() + 0x458) = 35;
     TEST_CHECK(*(int*)(bus.data() + 0x458) == 35);
@@ -2022,7 +2022,7 @@ static bool SubTest_T3_Cross_9_StabilityTeardownWithLinearDrag()
 
     *(char*)(world + TOOL_DRAG_ACTIVE_OFFSET) = 1;
     for (int i = 0; i < 20; ++i) {
-        *(int*)(world + 0xF60) = i;
+        *(int*)(world + 0xF90) = i;
     }
     TEST_CHECK(*(char*)(world + TOOL_DRAG_ACTIVE_OFFSET) == 1);
 
@@ -2144,12 +2144,12 @@ static bool SubTest_T4_Scenario_2_SaveReloadAndExpansion()
     *(float*)(city.data() + 12) = 200.0f;
     wcscpy_s((wchar_t*)(city.data() + 0x10), 32, L"Sovietsk");
     std::vector<BYTE*> cityVec = { city.data() };
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
 
     // Persist and reload
     TEST_CHECK(TwoStates_WriteSaveMetaToDir(saveDir));
     cityVec.clear();
-    WriteMockVectorHeader(world + 0x10348, cityVec);
+    WriteMockVectorHeader(world + 0x103E0, cityVec);
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
     TEST_CHECK(TwoStates_ReadSaveMetaFromDir(saveDir, true));
@@ -2256,12 +2256,12 @@ static bool SubTest_Stress_M1_DragContinuityHighFrequency()
 {
     printf("      DragContinuity: ResetMockWorldMemory...\n"); fflush(stdout);
     ResetMockWorldMemory();
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret stub
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret stub
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF7A0) = roadMgr.data(); // ROAD manager
-    *(BYTE**)(world + 0xF968) = pedMgr.data();  // PEDESTRIAN manager
+    *(BYTE**)(world + 0xF838) = roadMgr.data(); // ROAD manager
+    *(BYTE**)(world + 0xFA00) = pedMgr.data();  // PEDESTRIAN manager
 
     printf("      DragContinuity: TwoStates_OnSessionJoined...\n"); fflush(stdout);
     double initRub[2] = { 500000.0, 500000.0 };
@@ -2332,8 +2332,8 @@ static bool SubTest_Stress_M1_ComplexRoadUpgradeWithFootpaths()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
     std::vector<BYTE> pedMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF7A0) = roadMgr.data();
-    *(BYTE**)(world + 0xF968) = pedMgr.data();
+    *(BYTE**)(world + 0xF838) = roadMgr.data();
+    *(BYTE**)(world + 0xFA00) = pedMgr.data();
 
     std::vector<BYTE> node0(0xE8, 0);
     std::vector<BYTE> node1(0xE8, 0);
@@ -2361,12 +2361,12 @@ static bool SubTest_Stress_M1_ComplexRoadUpgradeWithFootpaths()
     *(const __int64**)(roadMgr.data() + 0x2B0) = segList.data(); // MGR_SEGMENTS_BEGIN_OFFSET
     *(const __int64**)(roadMgr.data() + 0x2B8) = segList.data() + segList.size(); // MGR_SEGMENTS_END_OFFSET
 
-    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x53ED90] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x238460] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x568C10] = 0xC3; // MANAGER_RESET_RVA ret
 
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
 
     std::vector<BYTE> dragNodeStart(0xE8, 0);
     std::vector<BYTE> dragNodeEnd(0xE8, 0);
@@ -2408,12 +2408,12 @@ static bool SubTest_Stress_M1_ComplexRoadUpgradeWithFootpaths()
     TEST_CHECK(*(long long*)(pedMgr.data() + 0x360) == 0);
 
     // Null pedMgr safety check
-    *(BYTE**)(world + 0xF968) = nullptr;
+    *(BYTE**)(world + 0xFA00) = nullptr;
     bool okNullPed = RoadSync_ApplyCommandUpgrade(msg);
     TEST_CHECK(okNullPed);
 
-    *(BYTE**)(world + 0xF7A0) = nullptr;
-    *(BYTE**)(world + 0xF968) = nullptr;
+    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xFA00) = nullptr;
     return true;
 }
 

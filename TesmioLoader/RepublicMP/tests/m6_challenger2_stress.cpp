@@ -7,7 +7,7 @@
 //   3. Material pointer fuzzing: boundary pointers (just outside heap range, boundary between 551 and 552 bytes, count 1025).
 //   4. Intercepted C3D detour boundary stress under fuzzed materials and floating-point edge cases.
 //   5. Brush stroke continuity and recovery: sequence number jumps, stroke breaks, extreme coordinates, and ledger safety.
-//   6. Widget method 98 (0x6563 / 0x657A) null guard and Safe SEH concurrency under stress.
+//   6. Widget method 98 (0x6A70 / 0x6A87) null guard and Safe SEH concurrency under stress.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -481,11 +481,11 @@ static bool SubTest_M6_C2_BrushStrokeContinuityAndRecovery()
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false;
 
     // Valid ledger offset with empty / unknown resource
-    lm.ledger = 0x11330; // dollars
+    lm.ledger = 0x113C8; // dollars
     strncpy_s(lm.resource, "UNKNOWN_RESOURCE_XYZ", _TRUNCATE);
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false; // not present in world
 
-    lm.ledger = 0x11360; // rubles
+    lm.ledger = 0x113F8; // rubles
     if (BrushTools_ApplyLedger(&lm, sizeof(lm))) return false;
 
     return true;
@@ -534,7 +534,7 @@ static bool SubTest_M6_C2_WidgetMethod98AndSafeSehStress()
                 std::this_thread::yield();
             }
             for (int it = 0; it < kIterations; ++it) {
-                // RVA 0x6563 null widget method 98 guard
+                // RVA 0x6A70 null widget method 98 guard
                 SessionPatches_TestSafeInvokeWidgetMethod98(nullptr);
 
                 // SEH probe on invalid addresses

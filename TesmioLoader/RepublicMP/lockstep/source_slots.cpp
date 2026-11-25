@@ -15,8 +15,8 @@
 #include <string.h>
 #include <vector>
 
-#define WORLD_RVA 0x9D4F10
-#define WINDOW_BUILDING 0xD298   // the building of the window the tool serves
+#define WORLD_RVA 0xA1EF20
+#define WINDOW_BUILDING 0xD330   // the building of the window the tool serves
 #define BUILDINGS_OFFSET WORLD_BUILDINGS_OFFSET
 #define CONSTRUCTIONS_OFFSET WORLD_CONSTRUCTIONS_OFFSET
 #define SLOTS_OFFSET 0xF78
@@ -26,14 +26,14 @@
 #define MAX_BUILDINGS SOURCE_SLOTS_MAX_BUILDINGS
 #endif
 #define MAX_LIST 1000000
-#define ADD_SOURCE_RVA 0x1D5120
-#define COPY_SOURCE_RVA 0x1D67A0
+#define ADD_SOURCE_RVA 0x1EFBD0
+#define COPY_SOURCE_RVA 0x1F1250
 #define MAGIC 0x31535253
 
 static const unsigned char kToolEntry[16] = { 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x48, 0x08, 0x55,
                                               0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41 };
 static const unsigned char kCopyToolEntry[16] = { 0x4c, 0x8b, 0xdc, 0x53, 0x48, 0x81, 0xec, 0xc0,
-                                                  0x00, 0x00, 0x00, 0x80, 0xb9, 0xbc, 0x0f, 0x00 };
+                                                  0x00, 0x00, 0x00, 0x80, 0xb9, 0xec, 0x0f, 0x00 };
 static int g_ready = -1;
 typedef U64 (*ToolFn)(U64 world, U64 a2);
 static ToolFn g_testToolOverride = nullptr;

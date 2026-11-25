@@ -81,7 +81,7 @@ static void MockCommit_Iter2(__int64 manager, int a, int b, int c, int d, int e,
 {
     (void)a; (void)b; (void)c; (void)d; (void)e; (void)f;
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
-    __int64 pedMgr = *(__int64*)(world + 0xF968);
+    __int64 pedMgr = *(__int64*)(world + 0xFA00);
     if (pedMgr) {
         s_lastSegSeenInCommit = *(long long*)(pedMgr + MGR_ROAD_LINK_OFFSET);
         s_lastAnchorSeenInCommit = *(long long*)(pedMgr + MGR_ROAD_LINK_EXTRA_OFFSET);
@@ -181,17 +181,17 @@ static bool Adversarial_R1_RouteBufferStress()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
     std::vector<BYTE> roadMgr(0x1000, 0);
-    *(BYTE**)(world + 0xF7A0) = roadMgr.data();
+    *(BYTE**)(world + 0xF838) = roadMgr.data();
 
-    g_mockExeBuffer[0x3D0030] = 0xC3; // wrapper ret
-    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x4FCA80] = 0xC3; // FCAF0_RVA ret
-    g_mockExeBuffer[0x518A10] = 0xC3; // COMMIT_RVA ret
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x3EEEA0] = 0xC3; // wrapper ret
+    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x522E00] = 0xC3; // FCAF0_RVA ret
+    g_mockExeBuffer[0x53ED90] = 0xC3; // COMMIT_RVA ret
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
 
     // Install real vector assign and manager reset trampolines
-    WriteJumpTrampoline(g_mockExeBuffer + 0x21D230, (void*)MockVecAssign_Iter2);
-    WriteJumpTrampoline(g_mockExeBuffer + 0x5429C0, (void*)MockManagerReset_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x238460, (void*)MockVecAssign_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x568C10, (void*)MockManagerReset_Iter2);
 
     // 1. Test 0 points (empty drag route)
     printf("      [R1 Stress] Testing N = 0 route points ...\n"); fflush(stdout);
@@ -229,7 +229,7 @@ static bool Adversarial_R1_RouteBufferStress()
     // Drag remains active, no crash or heap corruption occurred
     TEST_CHECK(*(unsigned char*)(world + TOOL_DRAG_ACTIVE_OFFSET) == 1);
 
-    *(BYTE**)(world + 0xF7A0) = nullptr;
+    *(BYTE**)(world + 0xF838) = nullptr;
     return true;
 }
 
@@ -321,16 +321,16 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
     PedMgrFixture fix;
-    *(BYTE**)(world + 0xF7A0) = fix.roadMgr.data();
-    *(BYTE**)(world + 0xF968) = fix.pedMgr.data();
+    *(BYTE**)(world + 0xF838) = fix.roadMgr.data();
+    *(BYTE**)(world + 0xFA00) = fix.pedMgr.data();
 
-    g_mockExeBuffer[0x4FBFD0] = 0xC3; // FC040_RVA ret
-    g_mockExeBuffer[0x21D230] = 0xC3; // VEC_ASSIGN_RVA ret
-    g_mockExeBuffer[0x5429C0] = 0xC3; // MANAGER_RESET_RVA ret
-    g_mockExeBuffer[0x542890] = 0xC3; // queueDeleteMesh ret
+    g_mockExeBuffer[0x522350] = 0xC3; // FC040_RVA ret
+    g_mockExeBuffer[0x238460] = 0xC3; // VEC_ASSIGN_RVA ret
+    g_mockExeBuffer[0x568C10] = 0xC3; // MANAGER_RESET_RVA ret
+    g_mockExeBuffer[0x568AE0] = 0xC3; // queueDeleteMesh ret
 
     // Install mock commit trampoline
-    WriteJumpTrampoline(g_mockExeBuffer + 0x518A10, (void*)MockCommit_Iter2);
+    WriteJumpTrampoline(g_mockExeBuffer + 0x53ED90, (void*)MockCommit_Iter2);
 
     s_mockCommitThrowsSEH = false;
 
@@ -438,8 +438,8 @@ static bool Adversarial_R16_FootpathUpgradeStress()
     TEST_CHECK(*(long long*)(fix.pedMgr.data() + 0x370) == 0);
 
     s_mockCommitThrowsSEH = false;
-    *(BYTE**)(world + 0xF7A0) = nullptr;
-    *(BYTE**)(world + 0xF968) = nullptr;
+    *(BYTE**)(world + 0xF838) = nullptr;
+    *(BYTE**)(world + 0xFA00) = nullptr;
     return true;
 }
 

@@ -25,10 +25,10 @@
 #include <intrin.h>
 #pragma intrinsic(_AddressOfReturnAddress)
 
-#define SEND_TO_DEPOT 0x3FBD00
-#define LINES_OFFSET 0x12800
-#define DELETE_CLEANUP 0x496250
-#define DRAG_RVA 0x996D98        // the depot window's dragged vehicle (interface state)
+#define SEND_TO_DEPOT 0x41EE40
+#define LINES_OFFSET 0x128B0
+#define DELETE_CLEANUP 0x4BC460
+#define DRAG_RVA 0x9E0DA8        // the depot window's dragged vehicle (interface state)
 #define MAX_ARGS 7
 
 // Argument kinds: x ignored (0), W the world, M the pointer world+worldPointer
@@ -95,106 +95,106 @@ enum {
 
 // Appended only: a command names its site by index.
 static const GameCallSite kSites[] = {
-    { 0x7AA3C1, 0x497AA0, "line window: copy schedule to vehicle", "MOObo", 0x12800, 0, false },
-    { 0x7AA3D5, 0x3BB270, "line window: refresh vehicle after schedule copy", "WO", 0, 0, false },
-    { 0x7AA509, 0x1AAAC0, "line window: replace vehicle", "WoOb", 0, 0, false },
-    { 0x7AAB29, 0x3BB270, "line window: refresh vehicle", "WO", 0, 0, false },
-    { 0x7D9AF9, 0x6BF370, "vehicle window: rebuild route after assignment", "Vbbb", 0, 0, false, CALL_PRESENTATION },
-    { 0x7D9DF1, 0x6BF370, "vehicle window: rebuild route after assignment (second)", "Vbbb", 0, 0, false, CALL_PRESENTATION },
-    { 0x7DA491, 0x6C5460, "vehicle window: release vehicle", "V", 0, 0, false, CALL_RELEASE_VEHICLE },
-    { 0x7DA49C, 0x3BB270, "vehicle window: refresh vehicle", "WO", 0, 0, false },
-    { 0x7DA322, 0x6B7810, "vehicle window: toggle vehicle state", "V", 0, 0, false },
-    { 0x7DA4E1, 0x6B7810, "vehicle window: toggle vehicle state (second)", "V", 0, 0, false },
-    { 0x7D740E, 0x3FBD00, "vehicle window: send to depot (keyboard)", "WVbbbb", 0, 0, false },
-    { 0x7DA2B9, 0x3FBD00, "vehicle window: send to depot", "WVbbbb", 0, 0, false },
-    { 0x7E761B, 0x497AA0, "vehicle window: clear the vehicle's line", "MoVbo", 0x12800, 0, false },
-    { 0x7E7623, 0x67CCE0, "vehicle window: refresh the vehicle after clearing its line", "V", 0, 0, false },
-    { 0x7DA2C6, 0x3FB820, "vehicle window: send back to workplace", "xV", 0, 1, true },
-    { 0x7DA8AB, 0x671150, "vehicle window: next color/skin", "VI", 0, 0, false },
-    { 0x7D52C8, 0x3BB270, "line window: launch vehicle", "WO", 0, 0, false },
-    { 0x7DA36B, 0x614840, "vehicle window: locomotive back to auto-replacement", "MV", 0xD440, 0, false },
-    { 0x7D3B47, 0x491540, "line window: clear line data", "L", 0, 0, false },
-    { 0x358FB7, 0x496D70, "lines list: create new line", "MI", 0x12800, 0, false },
-    { 0x701F1E, 0x3FBD00, "building window: call all vehicles home (each vehicle)", "WVbbbb", 0, 0, false },
-    { 0x743D43, 0x1EA120, "building window: try sending all vehicles with cargo", "WO", 0, 0, false },
-    { 0x747DC9, 0x1EA220, "building window (second): try sending all vehicles with cargo", "WO", 0, 0, false },
+    { 0x7E7D11, 0x4BDCB0, "line window: copy schedule to vehicle", "MOObo", 0x128B0, 0, false },
+    { 0x7E7D25, 0x3DA0E0, "line window: refresh vehicle after schedule copy", "WO", 0, 0, false },
+    { 0x7E7E59, 0x1C38E0, "line window: replace vehicle", "WoOb", 0, 0, false },
+    { 0x7E8479, 0x3DA0E0, "line window: refresh vehicle", "WO", 0, 0, false },
+    { 0x81837A, 0x6F2EB0, "vehicle window: rebuild route after assignment", "Vbbb", 0, 0, false, CALL_PRESENTATION },
+    { 0x81866C, 0x6F2EB0, "vehicle window: rebuild route after assignment (second)", "Vbbb", 0, 0, false, CALL_PRESENTATION },
+    { 0x818CBE, 0x6F8FB0, "vehicle window: release vehicle", "V", 0, 0, false, CALL_RELEASE_VEHICLE },
+    { 0x818CC9, 0x3DA0E0, "vehicle window: refresh vehicle", "WO", 0, 0, false },
+    { 0x818B5F, 0x6EB350, "vehicle window: toggle vehicle state", "V", 0, 0, false },
+    { 0x818D43, 0x6EB350, "vehicle window: toggle vehicle state (second)", "V", 0, 0, false },
+    { 0x8157B6, 0x41EE40, "vehicle window: send to depot (keyboard)", "WVbbbb", 0, 0, false },
+    { 0x818AFB, 0x41EE40, "vehicle window: send to depot", "WVbbbb", 0, 0, false },
+    { 0x826F3A, 0x4BDCB0, "vehicle window: clear the vehicle's line", "MoVbo", 0x128B0, 0, false },
+    { 0x826F42, 0x6AEE60, "vehicle window: refresh the vehicle after clearing its line", "V", 0, 0, false },
+    { 0x818B08, 0x41E960, "vehicle window: send back to workplace", "xV", 0, 1, true },
+    { 0x81921B, 0x6A1E10, "vehicle window: next color/skin", "VI", 0, 0, false },
+    { 0x8132D8, 0x3DA0E0, "line window: launch vehicle", "WO", 0, 0, false },
+    { 0x818BA5, 0x63C0E0, "vehicle window: locomotive back to auto-replacement", "MV", 0xD4D8, 0, false },
+    { 0x811B47, 0x4B7750, "line window: clear line data", "L", 0, 0, false },
+    { 0x377AA7, 0x4BCF80, "lines list: create new line", "MI", 0x128B0, 0, false },
+    { 0x737BBE, 0x41EE40, "building window: call all vehicles home (each vehicle)", "WVbbbb", 0, 0, false },
+    { 0x77B593, 0x204EA0, "building window: try sending all vehicles with cargo", "WO", 0, 0, false },
+    { 0x77F619, 0x204FA0, "building window (second): try sending all vehicles with cargo", "WO", 0, 0, false },
     // 6bf1d0 rebuilds the cargo summary (vehicle +458/+470, the window's "Carried" list) from the
     // train's cargo; it writes nothing else, and the simulation's readers rebuild it first.
-    { 0x7D723A, 0x6BF370, "vehicle window: cargo summary for display", "Vbbb", 0, 0, false, CALL_LOCAL },
-    { 0x7E9EE6, 0x6BF370, "vehicle window: cargo summary for the schedule list", "Vbbb", 0, 0, false, CALL_LOCAL },
-    { 0x7D1F60, 0x4957C0, "line window: accept changes", "xLxx", 0, 0, false, CALL_LINE_ACCEPT },
-    { 0x7D1F6B, 0x494530, "line window: accept (merge equal lines)", "ML", 0x12800, 0, false, CALL_PRESENTATION },
-    { 0x7D1FEE, 0x22A650, "line window: accept (mark the line changed)", "Lx", 0, 0, false, CALL_ACCEPT_MEASURES },
-    { 0x7D1FFD, 0x4975E0, "line window: accept (vehicles take the stops)", "ML", 0x12800, 0, false, CALL_PRESENTATION },
-    { 0x7D200B, 0x499590, "line window: accept (name a private line)", "xL", 0, 0, false, CALL_PRESENTATION },
-    { 0x359231, 0x499590, "lines list: delete line", "xL", 0, 0, false, CALL_DELETE_LINE },
-    { 0x35923F, 0x496250, "lines list: delete line (cleanup)", "Mb", 0x12800, 0, false, CALL_PRESENTATION },
+    { 0x8155DB, 0x6F2EB0, "vehicle window: cargo summary for display", "Vbbb", 0, 0, false, CALL_LOCAL },
+    { 0x8297B3, 0x6F2EB0, "vehicle window: cargo summary for the schedule list", "Vbbb", 0, 0, false, CALL_LOCAL },
+    { 0x80FF60, 0x4BB9D0, "line window: accept changes", "xLxx", 0, 0, false, CALL_LINE_ACCEPT },
+    { 0x80FF6B, 0x4BA740, "line window: accept (merge equal lines)", "ML", 0x128B0, 0, false, CALL_PRESENTATION },
+    { 0x80FFEE, 0x245880, "line window: accept (mark the line changed)", "Lx", 0, 0, false, CALL_ACCEPT_MEASURES },
+    { 0x80FFFD, 0x4BD7F0, "line window: accept (vehicles take the stops)", "ML", 0x128B0, 0, false, CALL_PRESENTATION },
+    { 0x81000B, 0x4BF7A0, "line window: accept (name a private line)", "xL", 0, 0, false, CALL_PRESENTATION },
+    { 0x377D21, 0x4BF7A0, "lines list: delete line", "xL", 0, 0, false, CALL_DELETE_LINE },
+    { 0x377D2F, 0x4BC460, "lines list: delete line (cleanup)", "Mb", 0x128B0, 0, false, CALL_PRESENTATION },
     // A late-phase tool (main thread): building_addfield adds the picked field to the farm +d298.
-    { 0x1D8754, 0x162120, "field tool: add a field to a farm", "WBOF", 0, 0, false },
+    { 0x1F3204, 0x17ABC0, "field tool: add a field to a farm", "WBOF", 0, 0, false },
     // The junction window's Accept block (7595bb..7595f9): the copy into the junction is carried,
     // the rest of the block is made by the command on every PC.
-    { 0x759762, 0x224280, "junction window: accept (reset the junction)", "x", 0, 0, false, CALL_PRESENTATION },
-    { 0x75976D, 0x2264B0, "junction window: accept (copy into the junction)", "xx", 0, 0, false, CALL_JUNCTION_ACCEPT },
-    { 0x759785, 0x22A650, "junction window: accept (mark the junction changed)", "xx", 0, 0, false, CALL_PRESENTATION },
-    { 0x75978C, 0x0F98D0, "junction window: accept (take the junction off the list)", "xx", 0, 0, false, CALL_PRESENTATION },
+    { 0x796592, 0x23F4B0, "junction window: accept (reset the junction)", "x", 0, 0, false, CALL_PRESENTATION },
+    { 0x79659D, 0x2416E0, "junction window: accept (copy into the junction)", "xx", 0, 0, false, CALL_JUNCTION_ACCEPT },
+    { 0x7965B5, 0x245880, "junction window: accept (mark the junction changed)", "xx", 0, 0, false, CALL_PRESENTATION },
+    { 0x7965BC, 0x1114C0, "junction window: accept (take the junction off the list)", "xx", 0, 0, false, CALL_PRESENTATION },
     // The game menu's settings page: "Save settings", closing the window and the "Change settings?"
     // popup apply the page's copy of the game rules with 337170(world).
-    { 0x33A54F, 0x3370F0, "settings page: save settings", "W", 0, 0, false, CALL_GAME_RULES },
-    { 0x33708F, 0x3370F0, "settings page: close", "W", 0, 0, false, CALL_GAME_RULES },
-    { 0x7FEBDF, 0x3370F0, "settings popup: change settings", "W", 0, 0, false, CALL_GAME_RULES },
+    { 0x358F8F, 0x355B20, "settings page: save settings", "W", 0, 0, false, CALL_GAME_RULES },
+    { 0x355ABF, 0x355B20, "settings page: close", "W", 0, 0, false, CALL_GAME_RULES },
+    { 0x83EFDF, 0x355B20, "settings popup: change settings", "W", 0, 0, false, CALL_GAME_RULES },
     // Selling a vehicle: the confirm window's Yes (7f2d50) and the building windows' "sell all
     // vehicles" prompts call 3dee50(world, vehicle, 1, 0, 0, 0, 0.0f), which queues the sale.
-    { 0x7F3420, 0x3DED90, "sell a vehicle", "WObbbbF", 0, 0, false },
-    { 0x7F3EF0, 0x3DED90, "sell vehicles of a building", "WObbbbF", 0, 0, false },
-    { 0x7F3FEE, 0x3DED90, "sell a listed vehicle", "WObbbbF", 0, 0, false },
+    { 0x832D00, 0x3FDEC0, "sell a vehicle", "WObbbbF", 0, 0, false },
+    { 0x8337D0, 0x3FDEC0, "sell vehicles of a building", "WObbbbF", 0, 0, false },
+    { 0x8338CE, 0x3FDEC0, "sell a listed vehicle", "WObbbbF", 0, 0, false },
     // Links and office assignments the building windows remove or make: lists of
     // the buildings (+f98/+fb0, the assigned building's +888), heap only.
-    { 0x74499F, 0x1C7E00, "building window: remove the building from its partner's list", "xOO", 0, 0, false },
-    { 0x7449AA, 0x162B60, "building window: remove link record by index", "xOI", 0, 0, false },
-    { 0x748D69, 0x1C7E00, "building window (second): remove the building from its partner's list", "xOO", 0, 0, false },
-    { 0x748D77, 0x162B60, "building window (second): remove link record by index", "xOI", 0, 0, false },
-    { 0x74BD69, 0x162B60, "station window: remove link record by index", "xOI", 0, 0, false },
-    { 0x76773A, 0x1C7E00, "link list window: remove the building from its partner's list", "xOO", 0, 0, false },
-    { 0x76774A, 0x162BF0, "link list window: remove the link record to a partner", "xOO", 0, 0, false },
-    { 0x76785E, 0x162380, "link list window: unassign building from office", "WOO", 0, 0, false },
-    { 0x76F93A, 0x162380, "office window: unassign building from office", "WOO", 0, 0, false },
-    { 0x7707B5, 0x162380, "office list: unassign building from office", "WOO", 0, 0, false },
-    { 0x7452E9, 0x162A50, "clear all links (confirmation)", "xO", 0, 0, false },
-    { 0x7146EA, 0x161CB0, "assign construction office", "WOOFbb", 0, 0, false },
-    { 0x71476F, 0x162380, "unassign construction office", "WOO", 0, 0, false },
-    { 0x717EEA, 0x161CB0, "assign construction office (second window)", "WOOFbb", 0, 0, false },
-    { 0x717F70, 0x162380, "unassign construction office (second window)", "WOO", 0, 0, false },
+    { 0x77C1EF, 0x1E2220, "building window: remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x77C1FA, 0x17B600, "building window: remove link record by index", "xOI", 0, 0, false },
+    { 0x7805C6, 0x1E2220, "building window (second): remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x7805D4, 0x17B600, "building window (second): remove link record by index", "xOI", 0, 0, false },
+    { 0x7835C9, 0x17B600, "station window: remove link record by index", "xOI", 0, 0, false },
+    { 0x7A46AA, 0x1E2220, "link list window: remove the building from its partner's list", "xOO", 0, 0, false },
+    { 0x7A46BA, 0x17B690, "link list window: remove the link record to a partner", "xOO", 0, 0, false },
+    { 0x7A47CE, 0x17AE20, "link list window: unassign building from office", "WOO", 0, 0, false },
+    { 0x7AC8CA, 0x17AE20, "office window: unassign building from office", "WOO", 0, 0, false },
+    { 0x7AD745, 0x17AE20, "office list: unassign building from office", "WOO", 0, 0, false },
+    { 0x77CB39, 0x17B4F0, "clear all links (confirmation)", "xO", 0, 0, false },
+    { 0x74A54A, 0x17A750, "assign construction office", "WOOFbb", 0, 0, false },
+    { 0x74A5CF, 0x17AE20, "unassign construction office", "WOO", 0, 0, false },
+    { 0x74DD4A, 0x17A750, "assign construction office (second window)", "WOOFbb", 0, 0, false },
+    { 0x74DDD0, 0x17AE20, "unassign construction office (second window)", "WOO", 0, 0, false },
     // The depot window composes trains by drag and drop: 3fdef0(world, vehicle) takes the dragged
     // vehicle off its head, 3fd5d0(world, head, vehicle, index, 1, 0, &result) couples it at the
     // index (-1 the end; the result only picks the window's message), 3fe520(-, head) moves the
     // dragged vehicle and its wagons onto the head. With the vehicle window's replace or line copy
     // tool selected, its rows act like the line window's.
-    { 0x7C7BA8, 0x3FDE30, "depot window: uncouple the dragged vehicle (train drop)", "WV", 0, 0, false },
-    { 0x7C7BB5, 0x3FE460, "depot window: attach the dragged train to the vehicle", "VV", 0, 0, false, CALL_DRAG },
-    { 0x7C8027, 0x3FDE30, "depot window: uncouple the dragged vehicle (row drop)", "WV", 0, 0, false, CALL_DEPOT_ROW_UNCOUPLE },
-    { 0x7C8078, 0x3FD510, "depot window: couple the dragged vehicle at the row", "WVVIbbx", 0, 0, false, CALL_DEPOT_ROW_COUPLE },
-    { 0x7C8E50, 0x3FDE30, "depot window: uncouple the dragged vehicle (end drop)", "WV", 0, 0, false },
-    { 0x7C8E87, 0x3FD510, "depot window: couple the dragged vehicle at the end", "WVVIbbx", 0, 0, false },
-    { 0x7C8394, 0x1AB290, "depot window: replace tool (prepare the replaced vehicle)", "WV", 0, 0, false },
-    { 0x7C83A5, 0x1AAAC0, "depot window: replace tool (replace by the row's vehicle)", "WoOb", 0, 0, false },
-    { 0x7C85F8, 0x497AA0, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x12800, 0, false },
-    { 0x7C860C, 0x3BB270, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
-    { 0x801A70, 0x5290, "rename window: write the name", "xxx", 0, 0, false, CALL_RENAME },
-    { 0x6FEFBE, 0x3FFA10, "building window: invite Third World immigrants (USD)", "WxxB", 0, 0x1CE, false, CALL_INVITE_CITIZENS },
-    { 0x6FF4BA, 0x3FFA10, "building window: invite Soviet immigrants (tutorial)", "WxxB", 1, 0x187, false, CALL_INVITE_CITIZENS },
-    { 0x6FF6CD, 0x3FFA10, "building window: invite Soviet immigrants (RUB)", "WxxB", 2, 0x1A2, false, CALL_INVITE_CITIZENS },
-    { 0x6FFBEE, 0x3FFA10, "building window: invite educated Soviet experts (RUB)", "WxxB", 3, 0x1FA, false, CALL_INVITE_CITIZENS },
-    { 0x1DAA52, 0x161CB0, "demolition tool: assign office to network building", "WOOFbb", 0, 0, false },
-    { 0x1DAA69, 0x1A0510, "demolition tool: set priority on network building", "WOb", 0, 0, false },
-    { 0x1DAFFD, 0x161CB0, "demolition tool: assign office to building", "WOOFbb", 0, 0, false },
-    { 0x1DB021, 0x1A0510, "demolition tool: set priority on building", "WOb", 0, 0, false },
-    { 0x770464, 0x1A0510, "office window: toggle building priority", "WOb", 0, 0, false },
-    { 0x77DD57, 0x1A0510, "building window: toggle construction/demolition priority", "WOb", 0, 0, false },
-    { 0x7D9A87, RVA_VEH_ADD_STOP, "vehicle window: add Soviet border stop", "VMIx", WORLD_SOVIET_BORDER_BLD_OFF, 0x1F4, false, CALL_ADD_BORDER_STOP },
-    { 0x7D9D7F, RVA_VEH_ADD_STOP, "vehicle window: add Western border stop", "VMIx", WORLD_WESTERN_BORDER_BLD_OFF, 0x1FC, false, CALL_ADD_BORDER_STOP },
-    { 0x7DA0CE, RVA_VEH_DEL_STOP, "vehicle window: delete stop", "VIx", 0, 0x65, false, CALL_DELETE_STOP },
-    { 0x7DA228, RVA_HELI_REROUTE, "vehicle window: change current stop", "VI", 0, 0, false, CALL_CHANGE_STOP },
-    { 0x7DA919, RVA_VEH_INVERT_STOPS, "vehicle window: invert stop order", "V", 0, 0, false },
+    { 0x805C28, 0x420FD0, "depot window: uncouple the dragged vehicle (train drop)", "WV", 0, 0, false },
+    { 0x805C35, 0x421600, "depot window: attach the dragged train to the vehicle", "VV", 0, 0, false, CALL_DRAG },
+    { 0x8060A7, 0x420FD0, "depot window: uncouple the dragged vehicle (row drop)", "WV", 0, 0, false, CALL_DEPOT_ROW_UNCOUPLE },
+    { 0x8060F8, 0x4206B0, "depot window: couple the dragged vehicle at the row", "WVVIbbx", 0, 0, false, CALL_DEPOT_ROW_COUPLE },
+    { 0x806ED0, 0x420FD0, "depot window: uncouple the dragged vehicle (end drop)", "WV", 0, 0, false },
+    { 0x806F07, 0x4206B0, "depot window: couple the dragged vehicle at the end", "WVVIbbx", 0, 0, false },
+    { 0x806414, 0x1C40B0, "depot window: replace tool (prepare the replaced vehicle)", "WV", 0, 0, false },
+    { 0x806425, 0x1C38E0, "depot window: replace tool (replace by the row's vehicle)", "WoOb", 0, 0, false },
+    { 0x806678, 0x4BDCB0, "depot window: line copy tool (put the row's vehicle on the line)", "MLVbo", 0x128B0, 0, false },
+    { 0x80668C, 0x3DA0E0, "depot window: line copy tool (refresh the vehicle)", "WO", 0, 0, false },
+    { 0x841E70, 0x52D0, "rename window: write the name", "xxx", 0, 0, false, CALL_RENAME },
+    { 0x734C6E, 0x422BB0, "building window: invite Third World immigrants (USD)", "WxxB", 0, 0x1CE, false, CALL_INVITE_CITIZENS },
+    { 0x73516A, 0x422BB0, "building window: invite Soviet immigrants (tutorial)", "WxxB", 1, 0x187, false, CALL_INVITE_CITIZENS },
+    { 0x73537D, 0x422BB0, "building window: invite Soviet immigrants (RUB)", "WxxB", 2, 0x1A2, false, CALL_INVITE_CITIZENS },
+    { 0x73589E, 0x422BB0, "building window: invite educated Soviet experts (RUB)", "WxxB", 3, 0x1FA, false, CALL_INVITE_CITIZENS },
+    { 0x1F5502, 0x17A750, "demolition tool: assign office to network building", "WOOFbb", 0, 0, false },
+    { 0x1F5519, 0x1B9310, "demolition tool: set priority on network building", "WOb", 0, 0, false },
+    { 0x1F5AAD, 0x17A750, "demolition tool: assign office to building", "WOOFbb", 0, 0, false },
+    { 0x1F5AD1, 0x1B9310, "demolition tool: set priority on building", "WOb", 0, 0, false },
+    { 0x7AD3F4, 0x1B9310, "office window: toggle building priority", "WOb", 0, 0, false },
+    { 0x7BACE7, 0x1B9310, "building window: toggle construction/demolition priority", "WOb", 0, 0, false },
+    { 0x81830A, RVA_VEH_ADD_STOP, "vehicle window: add Soviet border stop", "VMIx", WORLD_SOVIET_BORDER_BLD_OFF, 0x1EF, false, CALL_ADD_BORDER_STOP },
+    { 0x8185FC, RVA_VEH_ADD_STOP, "vehicle window: add Western border stop", "VMIx", WORLD_WESTERN_BORDER_BLD_OFF, 0x1ED, false, CALL_ADD_BORDER_STOP },
+    { 0x81892D, RVA_VEH_DEL_STOP, "vehicle window: delete stop", "VIx", 0, 0x50, false, CALL_DELETE_STOP },
+    { 0x818A6C, RVA_HELI_REROUTE, "vehicle window: change current stop", "VI", 0, 0, false, CALL_CHANGE_STOP },
+    { 0x819287, RVA_VEH_INVERT_STOPS, "vehicle window: invert stop order", "V", 0, 0, false },
     { SITE_BLD_MANUAL_BUY_RES_RVA, BLD_MANUAL_BUY_RES_RVA, "building window: manual buy resources", "WBI", 0, 0, false, CALL_MANUAL_BUY_RES },
     { SITE_COPY_OFFICE_ASSIGN_NET_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "copy office tool: assign office to network building", "WOOFbb", 0, 0, false },
     { SITE_COPY_OFFICE_ASSIGN_BLD_RVA, RVA_ASSIGN_CONSTRUCTION_OFFICE, "copy office tool: assign office to building", "WOOFbb", 0, 0, false },
@@ -423,7 +423,7 @@ static void AddBorderStopNow(U64 world, U64 vehicle, U64 borderBld, int insertId
     if (nStops > 0) {
         U64 vType = Q(vehicle + VEH_TYPE_PTR_OFFSET);
         int cat = vType ? *(const int*)(vType + VEH_TYPE_CATEGORY_OFFSET) : 0;
-        if (*(const int*)(vehicle + 0x1794) == 1 && vType != 0 && nStops == 1 &&
+        if (*(const int*)(vehicle + 0x182C) == 1 && vType != 0 && nStops == 1 &&
             (cat == 6 || cat == 8 || cat == 10)) {
             U64 stopRec = sBeg + (U64)(nStops - 1) * VEH_STOP_RECORD_STRIDE;
             *(BYTE*)(stopRec + 0x00) = 0;
@@ -464,7 +464,7 @@ static void DeleteStopNow(U64 world, U64 vehicle, int stopIdx)
         typedef void (*LinesNotifyVehFn)(U64 mgr, U64 veh);
         ((LinesNotifyVehFn)notifyCode)(linesMgr, vehicle);
     }
-    *(BYTE*)(vehicle + 0xD3A) = 1;
+    *(BYTE*)(vehicle + 0xD78) = 1;
     if (Q(vehicle + VEH_STOPPED_BLD_OFFSET) == stopBld && *(const BYTE*)(vehicle + VEH_CUSTOM_LINE_FLAG_OFF) == 0) {
         *(U64*)(vehicle + VEH_STOPPED_BLD_OFFSET) = 0;
     }
@@ -481,10 +481,10 @@ static void ChangeCurrentStopNow(U64 vehicle, int stopIdx)
                     (cat != 10 || Q(vehicle + 0xC80) == 0));
     if (inDepot) {
         *(int*)(vehicle + VEH_SCHED_IDX_OFFSET) = stopIdx;
-        *(BYTE*)(vehicle + 0xD3A) = 1;
+        *(BYTE*)(vehicle + 0xD78) = 1;
         *(float*)(vehicle + 0x66C) = -1.0f;
         *(BYTE*)(vehicle + 0x668) = 1;
-        if (cat == 4) *(BYTE*)(vehicle + 0xD3B) = 1;
+        if (cat == 4) *(BYTE*)(vehicle + 0xD79) = 1;
     } else {
         *(U64*)(vehicle + VEH_TARGET_STOP_BLD_OFF) = Q(sBeg + (U64)stopIdx * 8);
         *(float*)(vehicle + 0x66C) = -1.0f;
@@ -753,8 +753,8 @@ void GameCalls_RecoverOrphanedCarrierMechanismsForTest(unsigned long long vehicl
 
 static bool IsCarrierRecoverySite(unsigned site, unsigned target, const char* schema)
 {
-    if (target == SEND_TO_DEPOT || target == 0x3FB820) return true;
-    return target == 0x497AA0 && site == 0x7E761B && schema && schema[2] == 'V';
+    if (target == SEND_TO_DEPOT || target == 0x41E960) return true;
+    return target == 0x4BDCB0 && site == 0x826f3a && schema && schema[2] == 'V';
 }
 
 bool GameCalls_ShouldRecoverCarrierForSiteForTest(unsigned callAt, unsigned target, const char* schema)
@@ -765,8 +765,8 @@ bool GameCalls_ShouldRecoverCarrierForSiteForTest(unsigned callAt, unsigned targ
 static U64 ExtractCarrierRecoveryVehicle(const GameCallSite& s, const U64* a)
 {
     if (!IsCarrierRecoverySite(s.site, s.target, s.schema)) return 0;
-    if (s.target == SEND_TO_DEPOT || s.target == 0x3FB820) return a[1];
-    if (s.target == 0x497AA0) return a[2];
+    if (s.target == SEND_TO_DEPOT || s.target == 0x41E960) return a[1];
+    if (s.target == 0x4BDCB0) return a[2];
     return 0;
 }
 
@@ -1214,7 +1214,7 @@ static U64 ResolveDoResultTargetBuilding(U64 res)
     if (!IsPointerLikeX64(res) ||
         !SafeReadPod((const U64*)(res + 0x40), &pathBld) || !IsPointerLikeX64(pathBld) ||
         !SafeReadPod((const U64*)(pathBld + BLD_TYPE_OFFSET), &bldType) || !IsPointerLikeX64(bldType) ||
-        !SafeReadPod((const int32_t*)(bldType + 0x360), &bldCat) || bldCat == 0x2D) {
+        !SafeReadPod((const int32_t*)(bldType + 0x368), &bldCat) || bldCat == 0x2D) {
         return 0;
     }
     U64 nodesVec[2] = {};

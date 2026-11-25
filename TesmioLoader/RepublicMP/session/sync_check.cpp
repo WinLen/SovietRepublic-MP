@@ -131,9 +131,9 @@ static void Compare(const SyncCheckWire& h, const SyncCheckWire& c)
 static bool ReadHourKey(long long* out)
 {
     __try {
-        BYTE* w = g_exeBase + 0x9D4F10;
-        int day = *(int*)(w + 0x590), year = *(int*)(w + 0x594);
-        int hour = (int)(*(float*)(w + 0x59c) / HOUR_LENGTH);
+        BYTE* w = g_exeBase + 0xA1EF20;
+        int day = *(int*)(w + 0x5b8), year = *(int*)(w + 0x5bc);
+        int hour = (int)(*(float*)(w + 0x5c4) / HOUR_LENGTH);
         *out = HourKey(year, day, hour);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {

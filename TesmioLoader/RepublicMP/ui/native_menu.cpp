@@ -28,61 +28,61 @@
 #include <string>
 
 // SOVIET64.exe native menu constants (verified via disassembly of 0x140261400 & 0x14028AF60)
-#define MENU_CALL_SITE_RVA      0x261817
-#define MENU_BUILD_FN_RVA       0x28AEE0
+#define MENU_CALL_SITE_RVA      0x27CC17
+#define MENU_BUILD_FN_RVA       0x2A6A90
 
 // SOVIET64.exe in-game Left Sidebar 'system' (Hammer & Sickle) tab constants
 // (verified via disassembly of 0x14031E800, 0x140337450, 0x14021CC20)
-#define SYSTAB_CALL_SITE_RVA    0x31EA78
-#define SYSTAB_BUILD_FN_RVA     0x3373D0
-#define SYSTAB_ROOT_TITLE_RVA   0x337CFB  // 6-byte call [0x14086C880] drawing "Меню параметров" when C65C < 0
-#define IMPORT_CREATE_TEX_RVA   0x86C4C0
-#define IMPORT_DRAW_BOX_RVA     0x86C858
-#define IMPORT_PANEL_DRAW_RVA   0x86C860
-#define IMPORT_MOUSE_POS_RVA    0x86C868
-#define IMPORT_DRAW_TEXT_RVA    0x86C880
-#define IMPORT_GUI_YOFF_RVA     0x86CC60
-#define IMPORT_HAS_SOUND_RVA    0x86CD10
-#define IMPORT_GET_SOUND_RVA    0x86CD18
-#define IMPORT_PLAY_SOUND_RVA   0x86D2A8
-#define SND_CLICK_NAME_RVA      0x88F920
-#define FMT_WSTR_RVA            0x8B5528  // L"%ls"
-#define GUI_SCALE_RVA           0x992088
-#define FONT_REGULAR_RVA        0x995220
-#define FONT_HEADER_RVA         0x995240
-#define FONT_MGR_RVA            0x996FB0
-#define GUI_OBJ_RVA             0x9BE060
-#define GUI_DIM_W_RVA           0x9BE2E8
-#define GUI_DIM_H_RVA           0x9BE2EC
-#define GUI_POS_X_RVA           0x9BE2F0
-#define GUI_POS_Y_RVA           0x9BE2F4
-#define GUI_POS_Z_RVA           0x9BE2F8
-#define GUI_COLOR_RGBA_RVA      0x9BE30C
-#define SOUND_MUTE_BYTE_RVA     0x9D4F24
-#define BTN_FRAME_TEX_RVA       0x9DFF38
-#define SOUND_ENGINE_PTR_RVA    0x9E4C18
-#define SOUND_MGR_RVA           0x9E4C20
-#define MIDDLEPOINT_OBJ_RVA     0x9EACD0
-#define TEX_BIND_ARG_RVA        0x9EAD08
-#define WINDOW_FOCUS_BYTE_RVA   0x99208F
-#define INPUT_OBJ_RVA           0xA54B90
-#define INPUT_LHELD_RVA         0xA54E90
-#define INPUT_LCLICK_RVA        0xA54E91
+#define SYSTAB_CALL_SITE_RVA    0x33D346
+#define SYSTAB_BUILD_FN_RVA     0x355E10
+#define SYSTAB_ROOT_TITLE_RVA   0x35673B  // 6-byte call [0x14086C880] drawing "Меню параметров" when C65C < 0
+#define IMPORT_CREATE_TEX_RVA   0x8B1518
+#define IMPORT_DRAW_BOX_RVA     0x8B18F8
+#define IMPORT_PANEL_DRAW_RVA   0x8B1900
+#define IMPORT_MOUSE_POS_RVA    0x8B1908
+#define IMPORT_DRAW_TEXT_RVA    0x8B1920
+#define IMPORT_GUI_YOFF_RVA     0x8B1CA8
+#define IMPORT_HAS_SOUND_RVA    0x8B1D58
+#define IMPORT_GET_SOUND_RVA    0x8B1D60
+#define IMPORT_PLAY_SOUND_RVA   0x8B22E8
+#define SND_CLICK_NAME_RVA      0x8BB3C8
+#define FMT_WSTR_RVA            0x8FD708  // L"%ls"
+#define GUI_SCALE_RVA           0x9DC08C
+#define FONT_REGULAR_RVA        0x9DF338
+#define FONT_HEADER_RVA         0x9E0368
+#define FONT_MGR_RVA            0x9E0FC0
+#define GUI_OBJ_RVA             0xA08070
+#define GUI_DIM_W_RVA           0xA082F8
+#define GUI_DIM_H_RVA           0xA082FC
+#define GUI_POS_X_RVA           0xA08300
+#define GUI_POS_Y_RVA           0xA08304
+#define GUI_POS_Z_RVA           0xA08308
+#define GUI_COLOR_RGBA_RVA      0xA0831C
+#define SOUND_MUTE_BYTE_RVA     0xA1EF5C
+#define BTN_FRAME_TEX_RVA       0xA29F78
+#define SOUND_ENGINE_PTR_RVA    0xA2ECC0
+#define SOUND_MGR_RVA           0xA2ECC8
+#define MIDDLEPOINT_OBJ_RVA     0xA34D90
+#define TEX_BIND_ARG_RVA        0xA34DC8
+#define WINDOW_FOCUS_BYTE_RVA   0x9DC089
+#define INPUT_OBJ_RVA           0xA9EC50
+#define INPUT_LHELD_RVA         0xA9EF50
+#define INPUT_LCLICK_RVA        0xA9EF51
 
 #define SYSTAB_CHEAT_BYTE_OFF   0x0009
-#define SYSTAB_PANEL_W_OFF      0xAE54
-#define SYSTAB_PANEL_H_OFF      0xAE58
+#define SYSTAB_PANEL_W_OFF      0xAE84
+#define SYSTAB_PANEL_H_OFF      0xAE88
 #define SYSTAB_TAB_PTR_OFF      WORLD_SYSTAB_TAB_PTR_OFFSET
 #define SYSTAB_SUBTAB_IDX_OFF   WORLD_SYSTAB_SUBPAGE_OFFSET
 
-#define MENU_ITEM_COUNT_OFFSET  0x11B0
-#define MENU_ITEMS_OFFSET       0x11B4
+#define MENU_ITEM_COUNT_OFFSET  0x11E0
+#define MENU_ITEMS_OFFSET       0x11E4
 #define MENU_ITEM_STRIDE        0x204   // wchar_t text[256] (0x200 bytes) + int iconFlag (4 bytes)
 #define MENU_ITEM_MAX_SLOTS     28
-#define MENU_TITLE_OFFSET       0x4E2C  // wchar_t title[256]
-#define MENU_HAS_CONTINUE_OFF   0x502C  // BYTE: 1 if "Continue" save exists
-#define MENU_CLICKED_FLAG_OFF   0x5038  // int: 1 if a button was clicked on the previous frame
-#define MENU_CLICKED_IDX_OFF    0x503C  // int: index of the clicked button
+#define MENU_TITLE_OFFSET       0x4E5C  // wchar_t title[256]
+#define MENU_HAS_CONTINUE_OFF   0x505C  // BYTE: 1 if "Continue" save exists
+#define MENU_CLICKED_FLAG_OFF   0x5068  // int: 1 if a button was clicked on the previous frame
+#define MENU_CLICKED_IDX_OFF    0x506C  // int: index of the clicked button
 
 typedef void (__fastcall* MainMenuBuildFn)(BYTE* menuObj);
 typedef void (__fastcall* SystemTabBuildFn)(BYTE* menuObj);

@@ -140,7 +140,7 @@ static bool SubTest_V171_CrashBFillingWorkerAndSale()
     TEST_CHECK(!TwoStates_PtrInStdVector(badHdr, v1.data()));
     TEST_CHECK(TwoStates_ErasePtrFromStdVector(badHdr, v1.data()) == 0);
 
-    // ClearFillingWorkQueues empties all 3 Filling queues (0x9E7738, [0x9E7710]+0x60, [0x9E2350]+0x40)
+    // ClearFillingWorkQueues empties all 3 Filling queues (0xA317F8, [0xA317D0]+0x60, [0xA2C3F8]+0x40)
     std::vector<BYTE> queueObj(0x100, 0), pathsObj(0x100, 0);
     std::vector<BYTE*> qEntries = { v1.data(), v3.data() };
     std::vector<BYTE*> pEntries = { v1.data() };
@@ -181,7 +181,7 @@ static bool SubTest_V171_ClientHostLostModalAndExit()
     std::vector<BYTE> dummyBld(0x2000, 0);
     std::vector<BYTE*> blds = { dummyBld.data() };
     WriteMockVectorHeader(g_mockExeBuffer + VEC_BUILDINGS_BEGIN_RVA, blds);
-    *reinterpret_cast<uint64_t*>(g_mockExeBuffer + 0x9E46B0u) = 0x1000ULL; // ROAD_NETWORK_RVA non-null
+    *reinterpret_cast<uint64_t*>(g_mockExeBuffer + 0xA2E758u) = 0x1000ULL; // ROAD_NETWORK_RVA non-null
     *(volatile char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
 
     TEST_CHECK(SaveSync_IsWorldLoaded());

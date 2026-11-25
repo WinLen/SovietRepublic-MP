@@ -54,16 +54,16 @@ RoadCommitFn g_origRoadCommit = nullptr;
 // Engine addresses and offsets
 // ---------------------------------------------------------------------------
 
-#define HOVER_PORT_BUILDING_RVA 0x9E45B0 // building whose connection port is hovered
-#define HOVER_PORT_INDEX_RVA 0x9E45B8
-#define HOVER_NODE_RVA 0x9E4560          // network node under the cursor (power lines join on it)
-#define HOVER_EDGE_RVA 0x9E4558          // network edge under the cursor
+#define HOVER_PORT_BUILDING_RVA 0xA2E658 // building whose connection port is hovered
+#define HOVER_PORT_INDEX_RVA 0xA2E660
+#define HOVER_NODE_RVA 0xA2E608          // network node under the cursor (power lines join on it)
+#define HOVER_EDGE_RVA 0xA2E600          // network edge under the cursor
 
 // thisPtr fields.
-#define CURSOR_YAW_OFFSET 0xf94          // placement yaw (radians)
-#define PLACEMENT_RESULT_OFFSET 0x11a10  // validation code after a placement call
-#define MIRROR_EFFECTIVE_OFFSET 0x11db1  // byte: mirror state the last placement call used
-#define ACTIVE_TOOL_OFFSET 0xD428        // char*: name of the active tool
+#define CURSOR_YAW_OFFSET 0xfc4          // placement yaw (radians)
+#define PLACEMENT_RESULT_OFFSET 0x11aa8  // validation code after a placement call
+#define MIRROR_EFFECTIVE_OFFSET 0x11e61  // byte: mirror state the last placement call used
+#define ACTIVE_TOOL_OFFSET 0xD4C0        // char*: name of the active tool
 
 // Building object fields.
 #define OBJ_ROT_SIN_OFFSET 0x340
@@ -110,8 +110,8 @@ RoadCommitFn g_origRoadCommit = nullptr;
 
 #define NODE_POS_OFFSET 4
 
-#define PLACE_LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
-#define PLACE_LMB_JUST_PRESSED_RVA 0xA54E91 // byte: pressed this frame
+#define PLACE_LMB_HELD_RVA 0xA9EF50         // byte: left mouse button held
+#define PLACE_LMB_JUST_PRESSED_RVA 0xA9EF51 // byte: pressed this frame
 #define PLACE_SCOPE_MARGIN 150.0f           // view-list scope around a placement
 #ifndef MGR_SEGMENTS_BEGIN_OFFSET
 #define MGR_SEGMENTS_BEGIN_OFFSET 0x2b0  // the network's committed edges (+0xaa0 is only the camera's)
@@ -991,7 +991,7 @@ void HookedRoadCommit(__int64 manager,
         return;
     }
     uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
-    bool fromToolWrapper = (retRva >= 0x3ABF40 && retRva < 0x3D7F40);
+    bool fromToolWrapper = (retRva >= 0x3CCCD0 && retRva < 0x3F6A20);
     if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
         !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
         TakeCommitAsCommand(manager, category))
@@ -1268,7 +1268,7 @@ bool LocalBuilds_PlacementPress()
     __int64 world = g_placeWorld;
     BuildSyncMsg msg = {};
     __try {
-        if (*(int*)(world + 0x11A10) != -1) return false; // not a valid place: the game shows why
+        if (*(int*)(world + PLACEMENT_RESULT_OFFSET) != -1) return false; // not a valid place: the game shows why
         char typeName[64];
         SafeReadCStringDirect(g_placeType, typeName, sizeof(typeName));
         if (!LooksLikeValidType(typeName)) return false;
@@ -1282,7 +1282,7 @@ bool LocalBuilds_PlacementPress()
         msg.cursorRot = *(float*)(world + CURSOR_YAW_OFFSET);
         msg.param5 = (unsigned long long)g_placeParam5;
         msg.mirrored = *(unsigned char*)(world + MIRROR_EFFECTIVE_OFFSET) != 0;
-        msg.pickModes = (*(unsigned char*)(world + 0xF600) ? 1 : 0) | (*(unsigned char*)(world + 0xF698) ? 2 : 0);
+        msg.pickModes = (*(unsigned char*)(world + 0xF698) ? 1 : 0) | (*(unsigned char*)(world + 0xF730) ? 2 : 0);
         strncpy_s(msg.typeName, typeName, _TRUNCATE);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

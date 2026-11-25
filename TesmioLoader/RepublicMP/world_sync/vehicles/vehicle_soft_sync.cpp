@@ -14,12 +14,12 @@
 
 #define VEH_CUR_BLD_OFFSET 0x4F0
 #ifndef VEH_SPEED_OFFSET
-#define VEH_SPEED_OFFSET 0xD24
+#define VEH_SPEED_OFFSET 0xD44
 #endif
-#define VEH_NODE0_OFFSET 0xD60
-#define VEH_WEAR0_OFFSET 0x17E8
-#define VEH_WEAR1_OFFSET 0x1A54
-#define VEH_WEAR2_OFFSET 0x1A7C
+#define VEH_NODE0_OFFSET 0xD98
+#define VEH_WEAR0_OFFSET 0x1880
+#define VEH_WEAR1_OFFSET 0x1BAC
+#define VEH_WEAR2_OFFSET 0x1BD4
 
 #define CARGO_ENTRY_SIZE 0x10
 #define CARGO_AMOUNT_OFFSET 0x08
@@ -93,7 +93,7 @@ static_assert(sizeof(VehicleSoftSyncMsg) + sizeof(VehicleSoftSyncTreasury) + siz
 #define VSS_BLD_STORAGE_MAGIC 0x42535447u
 #define VSS_ENTRY_FLAG_EXACT_CARGO 1u
 
-static const unsigned kVehicleNodeOffsets[6] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080, VEH_SIXTH_NODE_OFFSET };
+static const unsigned kVehicleNodeOffsets[6] = { 0xD98, 0xE54, 0xF10, 0xFCC, 0x10B8, VEH_SIXTH_NODE_OFFSET };
 
 static volatile LONG g_immediateRequested = 0;
 static int g_immediateSweepLeft = 0;

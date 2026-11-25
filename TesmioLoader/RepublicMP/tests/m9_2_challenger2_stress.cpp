@@ -54,7 +54,7 @@ static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
 
     // 1. Verify existence of valid call sites added in Milestone M9.2 + M1 click mutators
     // Site 0x776557 (factory window: replace machines) -> routine 0x1A8D90
-    TEST_CHECK(GameCalls_HasCallSiteForTest(0x776557u, 0x1A8D90u));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(0x7B34E7u, 0x1C1BB0u));
 
     // Read-only per-frame predicate 0x7D8738 -> 0x664940 was removed to stop Lockstep floods
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x664940u));
@@ -63,16 +63,16 @@ static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
     const unsigned kRemovedSites[][2] = {
         { 0x31484Du, 0x5EED80u }, { 0x3142D6u, 0x1D4820u }, { 0x3142F6u, 0x1DB130u },
         { 0x314356u, 0x1D7140u }, { 0x314893u, 0x5F7860u }, { 0x3135F9u, 0x418210u },
-        { 0x1A131Eu, 0x1A0510u }, { 0x1A1343u, 0x1A0510u }, { 0x1A15A8u, 0x1BC010u },
+        { 0x1A131Eu, 0x1B9310u }, { 0x1A1343u, 0x1B9310u }, { 0x1A15A8u, 0x1BC010u },
     };
     for (size_t i = 0; i < sizeof(kRemovedSites) / sizeof(kRemovedSites[0]); ++i) {
         TEST_CHECK(!GameCalls_HasCallSiteForTest(kRemovedSites[i][0], kRemovedSites[i][1]));
     }
 
     // 2. Negative oracle: verify nonexistent or mismatched site/target combinations are rejected
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x776557u, 0x123456u)); // correct site, wrong target
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x1A8D90u)); // wrong site, correct target
-    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1D4E49u, 0x664940u)); // cross target mismatch
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7B34E7u, 0x123456u)); // correct site, wrong target
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x123456u, 0x1C1BB0u)); // wrong site, correct target
+    TEST_CHECK(!GameCalls_HasCallSiteForTest(0x1EF8F9u, 0x664940u)); // cross target mismatch
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x7D8738u, 0x1BC010u)); // cross target mismatch
     TEST_CHECK(!GameCalls_HasCallSiteForTest(0x000000u, 0x000000u)); // null query
 
@@ -85,15 +85,15 @@ static bool SubTest_M9_2_C2_GameCallsSitesAndRelayHeadroom()
 
     // Verify key known existing sites are still intact and present alongside new sites
     const unsigned kKnownSites[][2] = {
-        { 0x7AA3C1u, 0x497AA0u }, // line window: copy schedule
-        { 0x7AA509u, 0x1AAAC0u }, // line window: replace vehicle
-        { 0x7D740Eu, 0x3FBD00u }, // vehicle window: send to depot
-        { 0x7DA8ABu, 0x671150u }, // vehicle window: next skin
-        { 0x7D52C8u, 0x3BB270u }, // line window: launch vehicle
-        { 0x701F1Eu, 0x3FBD00u }, // building: call vehicles home
-        { 0x770464u, 0x1A0510u }, // office window: toggle priority
-        { 0x77DD57u, 0x1A0510u }, // building window: toggle priority
-        { 0x776557u, 0x1A8D90u }, // M9.2: replace machines
+        { 0x7E7D11u, 0x4BDCB0u }, // line window: copy schedule
+        { 0x7E7E59u, 0x1C38E0u }, // line window: replace vehicle
+        { 0x818AFBu, 0x41EE40u }, // vehicle window: send to depot
+        { 0x81921Bu, 0x6A1E10u }, // vehicle window: next skin
+        { 0x8132D8u, 0x3DA0E0u }, // line window: launch vehicle
+        { 0x737BBEu, 0x41EE40u }, // building: call vehicles home
+        { 0x7AD3F4u, 0x1B9310u }, // office window: toggle priority
+        { 0x7BACE7u, 0x1B9310u }, // building window: toggle priority
+        { 0x7B34E7u, 0x1C1BB0u }, // M9.2: replace machines
         { SITE_FIRESTATION_DISPATCH_ROAD_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_FIRESTATION_DISPATCH_HELI_RVA, FN_FIRE_DISPATCH_RVA },
         { SITE_ASSIGN_CO_SINGLE_START_RVA, RVA_START_PLANNED_CONSTRUCTION },
@@ -128,9 +128,9 @@ static bool SubTest_M9_2_C2_WasteContainerResourceIndicesAndSettingWire()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    // Allocate 64 mock resources at 0x340 bytes each
+    // Allocate 64 mock resources at 0x380 bytes each
     const size_t kResourceCount = 64;
-    const size_t kResourceStride = 0x340;
+    const size_t kResourceStride = 0x380;
     std::vector<BYTE> resourceStorage(kResourceCount * kResourceStride, 0xAA);
     BYTE* cbeg = resourceStorage.data();
     BYTE* cend = cbeg + resourceStorage.size();
@@ -141,7 +141,7 @@ static bool SubTest_M9_2_C2_WasteContainerResourceIndicesAndSettingWire()
     // 3. Mock Building with Storage Slots Setup
     // Category 0x6B (or 0x30), position (500.0, 15.0, 600.0)
     std::vector<BYTE> bldType(0x400, 0);
-    *(int*)(bldType.data() + 0x360) = 0x6B;
+    *(int*)(bldType.data() + BLD_TYPE_CAT_OFF) = 0x6B;
 
     std::vector<BYTE> bldObj(BUILDING_STRUCT_BYTES, 0);
     *(BYTE**)(bldObj.data() + 0x318) = bldType.data(); // BLD_TYPE_OFFSET
@@ -198,7 +198,7 @@ static bool SubTest_M9_2_C2_WasteContainerResourceIndicesAndSettingWire()
     TEST_CHECK_NEAR(appliedShare0, 0.4f, 1e-5f);
     TEST_CHECK_NEAR(appliedEnabled0, 1.0f, 1e-5f);
 
-    // Verify pointer for entry 1 was restored to cbeg + 50 * 0x340
+    // Verify pointer for entry 1 was restored to cbeg + 50 * 0x380
     BYTE* appliedRes1 = *(BYTE**)(slot0Entries.data() + 1 * kSlotEntrySize);
     float appliedShare1 = *(float*)(slot0Entries.data() + 1 * kSlotEntrySize + 8);
     float appliedEnabled1 = *(float*)(slot0Entries.data() + 1 * kSlotEntrySize + 12);

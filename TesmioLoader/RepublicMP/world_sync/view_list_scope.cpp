@@ -5,11 +5,11 @@
 #include <vector>
 #include <algorithm>
 
-#define WORLD_THIS_RVA 0x9D4F10
-#define RENDERER_RVA 0x995268
+#define WORLD_THIS_RVA 0xA1EF20
+#define RENDERER_RVA 0x9E03A0
 #define RENDERER_LOCK_OFFSET 0x80
-#define GAME_ALLOCATE_RVA 0x19e0 // FUN_1400019e0(count, stride)
-#define GAME_RELEASE_RVA 0x1a50  // FUN_140001a50(pointer, count, stride)
+#define GAME_ALLOCATE_RVA 0x1a20 // FUN_1400019e0(count, stride)
+#define GAME_RELEASE_RVA 0x1a90  // FUN_140001a50(pointer, count, stride)
 
 #define NET_WHOLE_OFFSET 0x2b0  // committed edges: begin, end
 #define NET_VIEW_OFFSET 0xaa0   // camera-visible edges: begin, end, capacity

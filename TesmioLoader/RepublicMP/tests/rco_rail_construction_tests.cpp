@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Regression tests for Rail Construction Office (RCO) & Rail Construction Fixes (Bugs #1-#6):
-//   1. H_SiteStop (0x160579) & H_SiteResume (0x161440) UI caller filter + unconditional +0x879 = 1
-//   2. 0x161CB0 6th param triggerImmediateScan vs real demolition detection (cat == 0x6A || +0xEA8 != 0)
-//   3. ConstructStep rail next-segment auto-chain (0x159F4D) Two-States ownership enforcement
+//   1. H_SiteStop (0x179019) & H_SiteResume (0x179EE0) UI caller filter + unconditional +0x879 = 1
+//   2. 0x17A750 6th param triggerImmediateScan vs real demolition detection (cat == 0x6A || +0xEA8 != 0)
+//   3. ConstructStep rail next-segment auto-chain (0x1729ED) Two-States ownership enforcement
 //   4. RCO/CO Queue Reorder popup (0x7707E0) permutation & Lockstep LS_CMD_OFFICE_REORDER round-trip
 //   5. Read-only per-frame predicate 0x7D8738 removed; Assign CO rail sites preserved
 
@@ -16,9 +16,9 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
 
     ResetMockWorldMemory();
 
-    // 1. Verify exact H_SiteStop UI caller whitelist (ONLY 0x6FA0E7)
+    // 1. Verify exact H_SiteStop UI caller whitelist (ONLY 0x72FD17)
     TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(RVA_SITE_STOP_UI_RET));
-    TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(0x6FA0E7u));
+    TEST_CHECK(SettingsSync_IsSiteStopUiCallerRva(0x72FD17u));
     TEST_CHECK(!SettingsSync_IsSiteStopUiCallerRva(0u));
     const unsigned kInternalStopCallers[] = {
         0x21C865u, 0x21CAF3u, 0x3BD7D7u, 0x3BD8D8u, 0x3BE8E5u, 0x3BE957u, 0x6FA0E2u,
@@ -46,7 +46,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
     }
 
     // 3. Test H_SiteStop capture behavior:
-    //    Even when 3rd arg (autoAssignOffices / stopVal) == 0, UI click (0x6FA0E7) MUST write 1u to +0x879!
+    //    Even when 3rd arg (autoAssignOffices / stopVal) == 0, UI click (0x72FD17) MUST write 1u to +0x879!
     std::vector<BYTE> site(BUILDING_STRUCT_BYTES, 0);
     site[BLD_STOPPED_OFFSET] = 0;
     TEST_CHECK(SettingsSync_TestSiteCallFilter(site.data(), true, 0, true, RVA_SITE_STOP_UI_RET));
@@ -76,7 +76,7 @@ static bool RcoTest_SiteStopAndResumeUiCallerFilter()
 
 static bool RcoTest_Arg6SemanticsAndRailChainGuard()
 {
-    printf("    [RCO-2] 0x161CB0 Arg6 triggerImmediateScan & Rail Auto-Chain (0x159F4D) Guard ...\n");
+    printf("    [RCO-2] 0x17A750 Arg6 triggerImmediateScan & Rail Auto-Chain (0x1729ED) Guard ...\n");
     fflush(stdout);
 
     ResetMockWorldMemory();
@@ -132,7 +132,7 @@ static bool RcoTest_Arg6SemanticsAndRailChainGuard()
     TEST_CHECK(!GameCalls_CheckOfficeCallAllowedForTest(RVA_ASSIGN_CONSTRUCTION_OFFICE, officeWest.data(), siteEast.data(), 0));
     siteEast[BLD_IS_DEMOLITION_SITE_OFFSET] = 0;
 
-    // 4. ConstructStep rail next-segment auto-chain (0x159F4D, checkFilters == 0): must enforce same-SSR ownership!
+    // 4. ConstructStep rail next-segment auto-chain (0x1729ED, checkFilters == 0): must enforce same-SSR ownership!
     TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteWest.data(), 0.0f, 0, 0, RVA_CALLER_RAIL_CHAIN_ASSIGN));
     TEST_CHECK(TwoStates_AssignConstructionOfficeForTest(world, officeEast.data(), siteEast.data(), 0.0f, 0, 0, RVA_CALLER_RAIL_CHAIN_ASSIGN));
     TEST_CHECK(!TwoStates_AssignConstructionOfficeForTest(world, officeWest.data(), siteEast.data(), 0.0f, 0, 0, RVA_CALLER_RAIL_CHAIN_ASSIGN));

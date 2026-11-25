@@ -16,48 +16,48 @@ struct SessionPatch {
     const char* what;
 };
 
-#define CITIZEN_INIT_RVA 0x824690    // FUN_1408244f0(owner, citizen): sets a citizen's +18 if not above 0
-#define CITIZEN_INIT_GATED_CALL 0x2fd497 // its call in FUN_1402fd2e0 (Late body and interface)
+#define CITIZEN_INIT_RVA 0x865710    // FUN_140865710(owner, citizen): sets a citizen's +18 if not above 0
+#define CITIZEN_INIT_GATED_CALL 0x31b867 // its call in Late body and interface
 
 // The last entries' patches (relays) are filled in at Apply.
 static SessionPatch kPatches[] = {
     // jne +15 -> 2-byte nop: always slow the timer by MultiplyFPS(1/3)
-    { 0x13cb5b, 2, { 0x75, 0x15 }, { 0x66, 0x90 }, "building pass: frame-rate test, timer slowdown" },
+    { 0x15560b, 2, { 0x75, 0x15 }, { 0x66, 0x90 }, "building pass: frame-rate test, timer slowdown" },
     // jne +3a -> nop: always update only this pass's third of the buildings
-    { 0x13dbc1, 2, { 0x75, 0x3a }, { 0x66, 0x90 }, "building pass: frame-rate test, building third" },
+    { 0x156671, 2, { 0x75, 0x3a }, { 0x66, 0x90 }, "building pass: frame-rate test, building third" },
     // jne +15 -> nop: always restore the timer at the end
-    { 0x13e594, 2, { 0x75, 0x15 }, { 0x66, 0x90 }, "building pass: frame-rate test, timer restore" },
+    { 0x157064, 2, { 0x75, 0x15 }, { 0x66, 0x90 }, "building pass: frame-rate test, timer restore" },
     // movzx ecx,byte [rax+178] -> xor ecx,ecx; nop5
-    { 0x13d963, 7, { 0x0f, 0xb6, 0x88, 0x78, 0x01, 0x00, 0x00 }, { 0x31, 0xc9, 0x0f, 0x1f, 0x44, 0x00, 0x00 },
+    { 0x156413, 7, { 0x0f, 0xb6, 0x88, 0x78, 0x01, 0x00, 0x00 }, { 0x31, 0xc9, 0x0f, 0x1f, 0x44, 0x00, 0x00 },
       "construction site: camera visibility" },
     // Citizen init called from interface code -> nop5
-    { 0x4a6a36, 5, { 0xe8, 0x55, 0xdc, 0x37, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: building overlay" },
-    { 0x76474e, 5, { 0xe8, 0x3d, 0xff, 0x0b, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 761300" },
-    { 0x7bba53, 5, { 0xe8, 0x38, 0x8c, 0x06, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 7bada0" },
-    { 0x824562, 5, { 0xe8, 0x29, 0x01, 0x00, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: getter 8243b0" },
+    { 0x4ccc36, 5, { 0xe8, 0xd5, 0x8a, 0x39, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: building overlay" },
+    { 0x7a169e, 5, { 0xe8, 0x6d, 0x40, 0x0c, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 7a169e" },
+    { 0x7f9893, 5, { 0xe8, 0x78, 0xbe, 0x06, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: window 7f9893" },
+    { 0x8655e2, 5, { 0xe8, 0x29, 0x01, 0x00, 0x00 }, { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, "citizen init: getter 8655e2" },
     // Background window / Alt-Tab responsiveness: eliminate 1600ms/1000ms WndProc Sleep() on focus loss,
     // never minimize the window (ShowWindow SW_MINIMIZE) when losing focus, and never freeze or skip 3D
     // rendering in the main loop when unfocused.
-    { 0x10366e, 5, { 0xb9, 0x40, 0x06, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_KILLFOCUS: Sleep(1600) -> Sleep(0)" },
-    { 0x103690, 2, { 0x74, 0x19 }, { 0x66, 0x90 }, "WndProc WM_KILLFOCUS: never minimize on WINDOW_MINIMIZE" },
-    { 0x1036a9, 2, { 0x75, 0x12 }, { 0xeb, 0x12 }, "WndProc WM_KILLFOCUS: never call ShowWindow(SW_MINIMIZE)" },
-    { 0x103748, 5, { 0xb9, 0xe8, 0x03, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_ACTIVATE: Sleep(1000) -> Sleep(0)" },
-    { 0x103771, 6, { 0x0f, 0x84, 0x34, 0xff, 0xff, 0xff }, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }, "WndProc WM_ACTIVATE: never jump to ShowWindow(SW_MINIMIZE)" },
-    { 0x105b94, 6, { 0x0f, 0x85, 0xa4, 0x00, 0x00, 0x00 }, { 0x90, 0xe9, 0xa4, 0x00, 0x00, 0x00 }, "main loop: never freeze when unfocused (WINDOW_PAUSE)" },
-    { 0x105c7f, 3, { 0x0f, 0x44, 0xdd }, { 0x90, 0x90, 0x90 }, "main loop: never skip 3D render when unfocused" },
-    // Vehicle window (0x7D6B00): route Change Stop '>>' (r14d==5) to 0x7DA085 -> 0x7DA088 (CALL_CHANGE_STOP)
-    // and route Ship launch (cat==7, r14d==6) through 0x7DA2D2 -> 0x7DA2F1 (CALL_RELEASE_VEHICLE).
-    { 0x7da15d, 8, { 0x49, 0x83, 0xbf, 0x28, 0x05, 0x00, 0x00, 0x00 }, { 0x41, 0x8b, 0x94, 0x24, 0x64, 0x02, 0x00, 0x00 },
+    { 0x11b26e, 5, { 0xb9, 0x40, 0x06, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_KILLFOCUS: Sleep(1600) -> Sleep(0)" },
+    { 0x11b290, 2, { 0x74, 0x19 }, { 0x66, 0x90 }, "WndProc WM_KILLFOCUS: never minimize on WINDOW_MINIMIZE" },
+    { 0x11b2a9, 2, { 0x75, 0x12 }, { 0xeb, 0x12 }, "WndProc WM_KILLFOCUS: never call ShowWindow(SW_MINIMIZE)" },
+    { 0x11b348, 5, { 0xb9, 0xe8, 0x03, 0x00, 0x00 }, { 0xb9, 0x00, 0x00, 0x00, 0x00 }, "WndProc WM_ACTIVATE: Sleep(1000) -> Sleep(0)" },
+    { 0x11b371, 6, { 0x0f, 0x84, 0x34, 0xff, 0xff, 0xff }, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }, "WndProc WM_ACTIVATE: never jump to ShowWindow(SW_MINIMIZE)" },
+    { 0x11d794, 6, { 0x0f, 0x85, 0xa4, 0x00, 0x00, 0x00 }, { 0x90, 0xe9, 0xa4, 0x00, 0x00, 0x00 }, "main loop: never freeze when unfocused (WINDOW_PAUSE)" },
+    { 0x11d87f, 3, { 0x0f, 0x44, 0xdd }, { 0x90, 0x90, 0x90 }, "main loop: never skip 3D render when unfocused" },
+    // Vehicle window (0x8151f0): route Change Stop '>>' (r14d==5) to 0x8188ca -> 0x818a6c (CALL_CHANGE_STOP)
+    // and route Ship launch (cat==7, r14d==6) through 0x818c91 -> 0x818cbe (CALL_RELEASE_VEHICLE).
+    { 0x8189a6, 7, { 0x49, 0x39, 0xb7, 0x28, 0x05, 0x00, 0x00 }, { 0x41, 0x8b, 0x96, 0x64, 0x02, 0x00, 0x00 },
       "vehicle window: change stop load stopIdx into edx" },
-    { 0x7da165, 5, { 0x75, 0x6f, 0x49, 0x83, 0xbf }, { 0xe9, 0xbb, 0x00, 0x00, 0x00 },
-      "vehicle window: change stop jump to 0x7DA085 call site" },
-    { 0x7da464, 2, { 0x74, 0x0c }, { 0xeb, 0x0c },
-      "vehicle window: ship launch routes through 0x7DA2F1" },
+    { 0x8189ad, 5, { 0x75, 0x6c, 0x49, 0x39, 0xb7 }, { 0xe9, 0xb7, 0x00, 0x00, 0x00 },
+      "vehicle window: change stop jump to 0x818a6c call site" },
+    { 0x818c91, 2, { 0x74, 0x0c }, { 0xeb, 0x0c },
+      "vehicle window: ship launch routes through 0x818cbe" },
     // The call shared by Late and the interface -> the gate's relay (simulation thread only)
-    { CITIZEN_INIT_GATED_CALL, 5, { 0xe8, 0xf4, 0x71, 0x52, 0x00 }, { 0 }, "citizen init: Late / interface" },
-    // World load HUD widget null guards (prevent AV read at 0x6563 / 0x657A)
-    { 0x6563, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #1 null guard" },
-    { 0x657a, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #2 null guard" },
+    { CITIZEN_INIT_GATED_CALL, 5, { 0xe8, 0xa4, 0x9e, 0x54, 0x00 }, { 0 }, "citizen init: Late / interface" },
+    // World load HUD widget null guards (prevent AV read at 0x6A70 / 0x6A87)
+    { 0x6a70, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #1 null guard" },
+    { 0x6a87, 9, { 0x48, 0x8b, 0x01, 0xff, 0x90, 0x98, 0x00, 0x00, 0x00 }, { 0 }, "world load widget #2 null guard" },
 };
 #define PATCH_COUNT (sizeof(kPatches) / sizeof(kPatches[0]))
 
@@ -154,8 +154,8 @@ static bool PrepareGate()
     long long rel = (long long)relay - (long long)(g_exeBase + CITIZEN_INIT_GATED_CALL + 5);
     if (rel < INT_MIN || rel > INT_MAX) return false;
 
-    long long relWidget1 = (long long)(relay + 64) - (long long)(g_exeBase + 0x6563 + 5);
-    long long relWidget2 = (long long)(relay + 64) - (long long)(g_exeBase + 0x657A + 5);
+    long long relWidget1 = (long long)(relay + 64) - (long long)(g_exeBase + 0x6a70 + 5);
+    long long relWidget2 = (long long)(relay + 64) - (long long)(g_exeBase + 0x6a87 + 5);
     if (relWidget1 < INT_MIN || relWidget1 > INT_MAX || relWidget2 < INT_MIN || relWidget2 > INT_MAX) return false;
 
     DWORD old;
@@ -186,12 +186,12 @@ static bool PrepareGate()
             int rel32 = (int)rel;
             kPatches[i].patch[0] = 0xe8;
             memcpy(kPatches[i].patch + 1, &rel32, 4);
-        } else if (kPatches[i].rva == 0x6563) {
+        } else if (kPatches[i].rva == 0x6a70) {
             int rel32 = (int)relWidget1;
             kPatches[i].patch[0] = 0xe8;
             memcpy(kPatches[i].patch + 1, &rel32, 4);
             kPatches[i].patch[5] = 0x0f; kPatches[i].patch[6] = 0x1f; kPatches[i].patch[7] = 0x40; kPatches[i].patch[8] = 0x00;
-        } else if (kPatches[i].rva == 0x657A) {
+        } else if (kPatches[i].rva == 0x6a87) {
             int rel32 = (int)relWidget2;
             kPatches[i].patch[0] = 0xe8;
             memcpy(kPatches[i].patch + 1, &rel32, 4);

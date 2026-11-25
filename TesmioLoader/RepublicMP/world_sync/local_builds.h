@@ -24,8 +24,8 @@
 
 #include "tesmio_plugin.h"
 
-#define HOOK_UNIVERSAL_RVA 0x2BAD60
-#define HOOK_ROAD_COMMIT_RVA 0x518A10
+#define HOOK_UNIVERSAL_RVA 0x2D7670
+#define HOOK_ROAD_COMMIT_RVA 0x53ED90
 
 // Expected function prologues for the inline hooks (SOVIET64.exe, 2026-09-07).
 extern const unsigned char kUniversalExpect[21];

@@ -120,7 +120,7 @@ inline bool SafeIsWorldLoaded(const void* exeBase)
     if (!exeBase) return false;
     const uint8_t* base = (const uint8_t*)exeBase;
     uintptr_t b = 0, e = 0;
-    return SafeReadPod(base + 0x9E6A18, &b) && SafeReadPod(base + 0x9E6A20, &e) && b != 0 && e != 0;
+    return SafeReadPod(base + 0xA30AD0, &b) && SafeReadPod(base + 0xA30AD8, &e) && b != 0 && e != 0;
 }
 
 inline bool SafeIsToolGuardBusy(uintptr_t worldThisPtr)
@@ -128,7 +128,7 @@ inline bool SafeIsToolGuardBusy(uintptr_t worldThisPtr)
     if (!worldThisPtr) return false;
     const uint8_t* w = (const uint8_t*)worldThisPtr;
     uint8_t g1 = 0, g2 = 0, g3 = 0;
-    if (!SafeReadPod(w + 0xFBC, &g1) || !SafeReadPod(w + 0xFBE, &g2) || !SafeReadPod(w + 0xFC3, &g3))
+    if (!SafeReadPod(w + 0xFEC, &g1) || !SafeReadPod(w + 0xFEE, &g2) || !SafeReadPod(w + 0xFF3, &g3))
         return false;
     return (g1 != 0) || (g2 != 0) || (g3 != 0);
 }

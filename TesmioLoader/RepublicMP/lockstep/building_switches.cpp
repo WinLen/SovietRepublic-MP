@@ -46,7 +46,7 @@ static const unsigned kRegionEach[4] = { SLOT_BYTES, 0x10, 0x10, 4 };
 struct WorldRange {
     unsigned at, size;
 };
-static const WorldRange kWorldRanges[] = { { 0xAF8, 0x10 }, { 0xB08, 4 }, { 0xC798, 4 } };
+static const WorldRange kWorldRanges[] = { { 0xB20, 0x10 }, { 0xB30, 4 }, { 0xC830, 4 } };
 
 // Building words that are this PC's view (camera visibility and distance,
 // animation phase, ambience timer, piece index, the window's cost display)
@@ -148,7 +148,7 @@ static int Category(U64 building)
 {
     U64 type = 0;
     int category = -1;
-    if (building && Copy(&type, (const void*)(building + 0x318), 8) && type) Copy(&category, (const void*)(type + 0x360), 4);
+    if (building && Copy(&type, (const void*)(building + 0x318), 8) && type) Copy(&category, (const void*)(type + 0x368), 4);
     return category;
 }
 
@@ -560,7 +560,7 @@ void BuildingSwitches_Reset()
 
 static bool IsOneByteWorldSetting(unsigned at)
 {
-    return (at >= 0xB08 && at <= 0xB0B) || (at >= 0xC798 && at <= 0xC79B);
+    return (at >= 0xB30 && at <= 0xB33) || (at >= 0xC830 && at <= 0xC833);
 }
 
 static void WorldWords()
@@ -585,8 +585,8 @@ static void WorldWords()
 static bool IsLocalPerStateWorldSetting(unsigned at)
 {
     return TwoStates_IsActive() &&
-           ((at >= 0xAF8 && at <= 0xB0B) ||
-            (at >= 0xC798 && at <= 0xC79B));
+           ((at >= 0xB20 && at <= 0xB33) ||
+            (at >= 0xC830 && at <= 0xC833));
 }
 
 static bool ReadWorldSetting(BYTE* world, unsigned at, unsigned& out)
@@ -1061,7 +1061,7 @@ bool BuildingSwitches_ApplyCommand(const void* data, size_t size)
 
 static const TsmRoutineSig kCopyWeightsSig[] = {
     { FN_TOOL_COPY_WEIGHTS_RVA,
-      { 0x4C, 0x8B, 0xDC, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x80, 0xB9, 0xBC, 0x0F, 0x00 },
+      { 0x4C, 0x8B, 0xDC, 0x53, 0x48, 0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00, 0x80, 0xB9, 0xEC, 0x0F, 0x00 },
       16 },
 };
 

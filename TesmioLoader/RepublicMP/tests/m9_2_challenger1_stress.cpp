@@ -6,7 +6,7 @@
 // Focus Areas:
 //   1. Waypoint & Network Node Serialization across 5 Networks (Challenge 1):
 //      - Exhaustive verification of Ref_Node and Ref_NodeAt across all 5 networks:
-//        0xF7A0 (ROAD), 0xF7A8 (SECOND_ROAD), 0xF908 (RAIL), 0xFA28 (WATER), 0xFA30 (AIRROAD).
+//        0xF838 (ROAD), 0xF840 (SECOND_ROAD), 0xF9A0 (RAIL), 0xFAC0 (WATER), 0xFAC8 (AIRROAD).
 //      - Boundary & corrupt input stress: negative places (-1, -100, INT_MIN), out-of-bounds indices,
 //        corrupted network list IDs, mismatched checksums, null nodes, and corrupted vector headers.
 //      - Concurrent multi-network population with 250 nodes (50 per network) verifying cross-network routing.
@@ -21,13 +21,13 @@
 //      - Serialization up to 32 endpoints without buffer overflow.
 //      - Buffer overflow defense: vectors with 33 endpoints (> 32) strictly rejected by ValidVector.
 //      - DiagnosePending validation against counts 32, 33, -1, 100.
-//      - Dual-vector target resolution: targets located in VEC_CONSTRUCTIONS_BEGIN_RVA (0x9E6B38)
-//        and VEC_BUILDINGS_BEGIN_RVA (0x9E6A18) correctly discovered by Listed() and Resolve().
+//      - Dual-vector target resolution: targets located in VEC_CONSTRUCTIONS_BEGIN_RVA (0xA30BF0)
+//        and VEC_BUILDINGS_BEGIN_RVA (0xA30AD0) correctly discovered by Listed() and Resolve().
 //   4. Source Slots Capacity & Constructions Offset Audit (Challenge 3):
 //      - Invariant: SOURCE_SLOTS_MAX_BUILDINGS == 16384.
 //      - Capacity capping test: 17,000 buildings capped strictly at 16,384 without heap/stack overrun.
 //      - Empirical proof of vulnerability: source_slots.cpp line 19 defines CONSTRUCTIONS_OFFSET
-//        as 0x11B20 instead of canonical WORLD_CONSTRUCTIONS_OFFSET (0x11C28 / VEC_CONSTRUCTIONS_BEGIN_RVA),
+//        as 0x11B20 instead of canonical WORLD_CONSTRUCTIONS_OFFSET (0x11CD0 / VEC_CONSTRUCTIONS_BEGIN_RVA),
 //        causing CollectSlotBuildings to completely miss constructions in the game world!
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -54,8 +54,8 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
     ResetMockWorldMemory();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    const unsigned kFiveNetworks[5] = { 0xF7A0u, 0xF7A8u, 0xF908u, 0xFA28u, 0xFA30u };
-    const char* kNetNames[5] = { "ROAD (0xF7A0)", "SECOND_ROAD (0xF7A8)", "RAIL (0xF908)", "WATER (0xFA28)", "AIRROAD (0xFA30)" };
+    const unsigned kFiveNetworks[5] = { 0xF838u, 0xF840u, 0xF9A0u, 0xFAC0u, 0xFAC8u };
+    const char* kNetNames[5] = { "ROAD (0xF838)", "SECOND_ROAD (0xF840)", "RAIL (0xF9A0)", "WATER (0xFAC0)", "AIRROAD (0xFAC8)" };
 
     // 1. Single Network Boundary Oracle for Each Network
     for (int k = 0; k < 5; ++k) {
@@ -124,10 +124,10 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
     // 2. Corrupted Vector Headers & Empty Lists
     {
         std::vector<BYTE> netObj(0x300, 0);
-        *(BYTE**)(world + 0xF7A0) = netObj.data();
+        *(BYTE**)(world + 0xF838) = netObj.data();
 
         // Empty vector (begin == end == 0)
-        RouteRef refEmpty = { 0xF7A0, 0, 0x1234 };
+        RouteRef refEmpty = { 0xF838, 0, 0x1234 };
         TEST_CHECK(Ref_NodeAt(refEmpty) == 0);
 
         // Inverted vector (end < begin)
@@ -139,7 +139,7 @@ static bool SubTest_M9_2_C1_WaypointsAcrossAll5Networks_ExtremeBoundaries()
         RouteRef nullRef = kNoRef;
         TEST_CHECK(!Ref_Node(0, nullRef));
 
-        *(BYTE**)(world + 0xF7A0) = nullptr;
+        *(BYTE**)(world + 0xF838) = nullptr;
     }
 
     // 3. Concurrent Multi-Network Population (50 Nodes per Network = 250 Nodes)
@@ -311,8 +311,8 @@ static bool SubTest_M9_2_C1_CitizenDestinations_CapacityBoundsAndDualVectorSearc
     std::vector<BYTE> conType(0x400, 0);
     strcpy_s((char*)bldType.data(), 64, "school_bld");
     strcpy_s((char*)conType.data(), 64, "hospital_con");
-    *(int*)(bldType.data() + 0x360) = 0x1A; // Category school
-    *(int*)(conType.data() + 0x360) = 0x1C; // Category hospital
+    *(int*)(bldType.data() + BLD_TYPE_CAT_OFF) = 0x1A; // Category school
+    *(int*)(conType.data() + BLD_TYPE_CAT_OFF) = 0x1C; // Category hospital
 
     *(BYTE**)(bldTarget.data() + 0x318) = bldType.data();
     *(BYTE**)(conTarget.data() + 0x318) = conType.data();
@@ -373,23 +373,23 @@ static bool SubTest_M9_2_C1_SourceSlots_ConstructionsOffsetAndCapacityAudit()
     TEST_CHECK(SOURCE_SLOTS_MAX_BUILDINGS == 16384);
 
     // 2. Canonical RVAs and Offsets in engine_rva.h:
-    // BUILDINGS_OFFSET = 0x11B08 -> VEC_BUILDINGS_BEGIN_RVA = WORLD_RVA + 0x11B08 (0x9E6A18)
-    // CONSTRUCTIONS_OFFSET = 0x11C28 -> VEC_CONSTRUCTIONS_BEGIN_RVA = WORLD_RVA + 0x11C28 (0x9E6B38)
-    TEST_CHECK(WORLD_BUILDINGS_OFFSET == 0x11B08u);
-    TEST_CHECK(WORLD_CONSTRUCTIONS_OFFSET == 0x11C28u);
+    // BUILDINGS_OFFSET = 0x11BB0 -> VEC_BUILDINGS_BEGIN_RVA = WORLD_RVA + 0x11BB0 (0xA30AD0)
+    // CONSTRUCTIONS_OFFSET = 0x11CD0 -> VEC_CONSTRUCTIONS_BEGIN_RVA = WORLD_RVA + 0x11CD0 (0xA30BF0)
+    TEST_CHECK(WORLD_BUILDINGS_OFFSET == 0x11BB0u);
+    TEST_CHECK(WORLD_CONSTRUCTIONS_OFFSET == 0x11CD0u);
     TEST_CHECK(VEC_BUILDINGS_BEGIN_RVA == (WORLD_RVA + WORLD_BUILDINGS_OFFSET));
     TEST_CHECK(VEC_CONSTRUCTIONS_BEGIN_RVA == (WORLD_RVA + WORLD_CONSTRUCTIONS_OFFSET));
 
     // 3. EMPIRICAL VULNERABILITY AUDIT:
     // In source_slots.cpp line 19:
-    //   #define BUILDINGS_OFFSET 0x11B08
+    //   #define BUILDINGS_OFFSET 0x11BB0
     //   #define CONSTRUCTIONS_OFFSET 0x11B20   <-- DEFECT!
-    // Notice that 0x11B20 != WORLD_CONSTRUCTIONS_OFFSET (0x11C28)!
-    // 0x11B20 is exactly 0x11B08 + 0x18 (the offset of the contiguous 24-byte vector slot, NOT constructions).
-    // The actual constructions vector in SOVIET64.exe is at 0x11C28 (0x9E6B38).
+    // Notice that 0x11B20 != WORLD_CONSTRUCTIONS_OFFSET (0x11CD0)!
+    // 0x11B20 is exactly 0x11BB0 + 0x18 (the offset of the contiguous 24-byte vector slot, NOT constructions).
+    // The actual constructions vector in SOVIET64.exe is at 0x11CD0 (0xA30BF0).
     //
     // Let us verify empirically that:
-    // A) If a construction is placed at the canonical WORLD_CONSTRUCTIONS_OFFSET (0x11C28),
+    // A) If a construction is placed at the canonical WORLD_CONSTRUCTIONS_OFFSET (0x11CD0),
     //    source_slots completely misses it because it looks at 0x11B20.
     // B) If a construction is placed at 0x11B20, source_slots finds it.
     ResetMockWorldMemory();
@@ -401,13 +401,13 @@ static bool SubTest_M9_2_C1_SourceSlots_ConstructionsOffsetAndCapacityAudit()
     *(BYTE**)(conBld.data() + 0xF78) = conSlots.data();
     *(BYTE**)(conBld.data() + 0xF80) = conSlots.data() + conSlots.size();
 
-    // Populate canonical constructions vector at 0x11C28 (VEC_CONSTRUCTIONS_BEGIN_RVA)
+    // Populate canonical constructions vector at 0x11CD0 (VEC_CONSTRUCTIONS_BEGIN_RVA)
     // with both the construction building and the source supplier building
     std::vector<BYTE*> canonicalConVec = { conBld.data(), supGravel.data() };
     WriteMockVectorHeader(world + WORLD_CONSTRUCTIONS_OFFSET, canonicalConVec);
 
     Commands_SetSession(COMMANDS_HOST);
-    g_mockExeBuffer[0xA54E90] = 1; // DOWN_RVA active
+    g_mockExeBuffer[0xA9EF50] = 1; // DOWN_RVA active
 
     SourceSlots_Before(false);
 
@@ -417,20 +417,20 @@ static bool SubTest_M9_2_C1_SourceSlots_ConstructionsOffsetAndCapacityAudit()
     SourceSlots_After(false);
 
     // Verify whether canonical constructions vector was scanned:
-    // If source_slots scanned 0x11C28, conBld would be in g_held, and SourceSlots_After would
+    // If source_slots scanned 0x11CD0, conBld would be in g_held, and SourceSlots_After would
     // call Take(), which would revert the modified slot back to nullptr.
     // When source_slots.cpp line 19 defines CONSTRUCTIONS_OFFSET as WORLD_CONSTRUCTIONS_OFFSET
-    // (0x11C28), conBld IS scanned into g_held!
+    // (0x11CD0), conBld IS scanned into g_held!
     // As a result:
     // 1. conSlots is reverted to nullptr.
     // 2. Commands_Due is true (lockstep command submitted).
     bool slotWasReverted = (*(BYTE**)(conSlots.data() + 0 * 0x10) == nullptr);
     bool commandSubmitted = Commands_Due(Commands_ApplyEpoch());
 
-    TEST_CHECK(slotWasReverted);    // Empirically proves conBld WAS held from canonical 0x11C28!
+    TEST_CHECK(slotWasReverted);    // Empirically proves conBld WAS held from canonical 0x11CD0!
     TEST_CHECK(commandSubmitted);  // Empirically proves lockstep command WAS submitted!
 
-    printf("      [AUDIT VERIFIED] source_slots.cpp uses WORLD_CONSTRUCTIONS_OFFSET 0x11C28 (0x9E6B38).\n");
+    printf("      [AUDIT VERIFIED] source_slots.cpp uses WORLD_CONSTRUCTIONS_OFFSET 0x11CD0 (0xA30BF0).\n");
     printf("      Empirical proof: Construction office in canonical VEC_CONSTRUCTIONS was scanned by CollectSlotBuildings.\n");
     printf("      Slot rollback was executed (slotWasReverted=1) and lockstep sync was submitted (commandSubmitted=1).\n");
     fflush(stdout);

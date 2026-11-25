@@ -127,8 +127,8 @@ static void HashConstructions(BYTE* w, StateSummary* out)
 static void HashNetworks(BYTE* w, StateSummary* out)
 {
     static const unsigned int kNetworks[14] = {
-        0xF7A0, 0xF7A8, 0xF800, 0xF858, 0xF8B0, 0xF908, 0xF968,
-        0xF9C0, 0xFA18, 0xFA20, 0xFA30, 0xFA40, 0xFA98, 0xFAF0
+        0xF838, 0xF840, 0xF898, 0xF8F0, 0xF948, 0xF9A0, 0xFA00,
+        0xFA58, 0xFAB0, 0xFAB8, 0xFAC8, 0xFAD8, 0xFB30, 0xFB88
     };
     for (unsigned int off : kNetworks) {
         BYTE* mgr = *(BYTE**)(w + off);
@@ -328,7 +328,7 @@ bool StateHash_Compute(StateSummary* out)
 
 #define BLD_TYPE_OFFSET 0x318
 #define BLD_POS_OFFSET 0x3A0
-#define TYPE_CATEGORY_OFFSET 0x360
+#define TYPE_CATEGORY_OFFSET 0x368
 
 static long long ListCount(int listOffset)
 {

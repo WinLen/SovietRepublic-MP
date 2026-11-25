@@ -107,7 +107,7 @@ struct FlatPtrSet {
     }
 };
 
-// Each VEHICLE (0x1AD8 bytes) contains 5 primary C3D_NODE transforms (0xBC bytes each)
+// Each VEHICLE (0x1C30 bytes) contains 5 primary C3D_NODE transforms (0xBC bytes each)
 // saved by VEHICLE::Save (0x6C6770): +0xD60, +0xE1C, +0xED8, +0xF94, +0x1080, plus an
 // optional 6th C3D_NODE at +0x1318 (active when *(int32_t*)(v + 0x1314) >= 0, rendered by 0x66EDD0).
 // Inside each C3D_NODE (0xBC bytes = 47 floats, verified in C3DDLL64.dll 0x2A660..0x2A6E0 & 0xB8340):
@@ -121,7 +121,7 @@ struct FlatPtrSet {
 static constexpr int VEH_MAX_NODES = 6;
 static constexpr int VEH_MAX_WHEELS = 16;
 static constexpr int NODE_SNAPSHOT_FLOATS = 47; // 0xBC bytes: m[16], minv[16], pos[3], rot[3], scale[3], ori[3], up[3]
-static const unsigned kVehicleNodeOffsets[VEH_MAX_NODES] = { 0xD60, 0xE1C, 0xED8, 0xF94, 0x1080, VEH_SIXTH_NODE_OFFSET };
+static const unsigned kVehicleNodeOffsets[VEH_MAX_NODES] = { 0xD98, 0xE54, 0xF10, 0xFCC, 0x10B8, VEH_SIXTH_NODE_OFFSET };
 
 static int GetActiveVehicleNodeCount(const BYTE* p)
 {
@@ -605,7 +605,7 @@ static void SafeRecordOneVehicleTick(BYTE* p, unsigned long long tick)
 {
     if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) return;
     uint64_t probe = 0;
-    if (!Read(p, &probe, sizeof(probe)) || !Read(p + 0x1AD8 - sizeof(probe), &probe, sizeof(probe))) return;
+    if (!Read(p, &probe, sizeof(probe)) || !Read(p + 0x1C30 - sizeof(probe), &probe, sizeof(probe))) return;
     DiagLog_BeginSafeSeh();
     __try {
         RecordOneVehicleTick(p, tick);
@@ -687,7 +687,7 @@ static void AddVisibleVehicleTarget(BYTE* p, FlatPtrSet& seen, std::vector<BYTE*
 {
     if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) return;
     uint64_t probe = 0;
-    if (!Read(p, &probe, sizeof(probe)) || !Read(p + 0x1AD8 - sizeof(probe), &probe, sizeof(probe))) return;
+    if (!Read(p, &probe, sizeof(probe)) || !Read(p + 0x1C30 - sizeof(probe), &probe, sizeof(probe))) return;
     if (seen.Insert(p)) targets.push_back(p);
 }
 
@@ -731,7 +731,7 @@ static void CollectFollowCameraVehicles(std::vector<BYTE*>& outVehicles)
 void HeldFrame_OnSimTick(unsigned long long tick)
 {
     g_interpTick = tick;
-    if (!ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), g_tickVehListScratch)) return;
+    if (!ReadEngineVehicleList((const void*)(g_exeBase + 0xA317E0), g_tickVehListScratch)) return;
 
     g_tickVisitedScratch.Reset(g_tickVehListScratch.size() * 2 + 32);
     for (BYTE* p : g_tickVehListScratch) {
@@ -1075,7 +1075,7 @@ static size_t FilterUniqueValidTargetsBatchPod(const BYTE* const* cand, size_t n
             BYTE* p = const_cast<BYTE*>(cand[idx]);
             if (!p || !IsPointerLikeX64((uint64_t)(uintptr_t)p)) continue;
             volatile uint64_t probe0 = *(const volatile uint64_t*)p;
-            volatile uint64_t probe1 = *(const volatile uint64_t*)(p + 0x1AD8 - sizeof(uint64_t));
+            volatile uint64_t probe1 = *(const volatile uint64_t*)(p + 0x1C30 - sizeof(uint64_t));
             (void)probe0;
             (void)probe1;
             if (seen.Insert(p)) {
@@ -1103,7 +1103,7 @@ static void CommitValidCandTargets(const std::vector<BYTE*>& cand, FlatPtrSet& s
 
 static void ExpandVehicleTargetGraph(FlatPtrSet& seen, std::vector<BYTE*>& targets, std::vector<BYTE*>& candScratch)
 {
-    const size_t maxTargets = (64ull << 20) / 0x1AD8;
+    const size_t maxTargets = (64ull << 20) / 0x1C30;
     const size_t maxCand = maxTargets * 8;
     size_t processed = 0;
     while (processed < targets.size() && targets.size() < maxTargets) {
@@ -1128,7 +1128,7 @@ static void CollectVisibleVehicleGraph(const std::vector<BYTE*>& list, std::vect
                                        std::vector<BYTE*>& candScratch)
 {
     targets.clear();
-    const size_t maxTargets = (64ull << 20) / 0x1AD8;
+    const size_t maxTargets = (64ull << 20) / 0x1C30;
     seenScratch.Reset(list.size() * 2 + 32);
 
     candScratch.resize(list.size() * 2 + 64);
@@ -1189,8 +1189,8 @@ static bool RestoreVehicleCopySeh(BYTE* p, const BYTE* beforeCopy, size_t bytes,
                 memcpy(&before, beforeCopy + o, 8);
                 memcpy(&now, curBuf + o, 8);
                 if (now == before) continue;
-                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) ||
-                               (o >= 0x1318 && o < 0x13D8) || (o >= 0x1480 && o < 0x16F0);
+                bool inNodes = (o >= 0xD98 && o < 0x1088) || (o >= 0x10B8 && o < 0x1178) ||
+                               (o >= 0x1350 && o < 0x1410) || (o >= 0x14C0 && o < 0x1730);
                 if (!inNodes && IsHeapPtrCandidate(before) && IsHeapPtrCandidate(now) &&
                     HeapPointer(before) && HeapPointer(now)) {
                     refused = true;
@@ -1290,8 +1290,8 @@ static void RestoreVehicleCopiesBatchPod(BYTE* const* targets, const BYTE* befor
                 memcpy(&before, beforeCopy + o, 8);
                 memcpy(&now, curBuf + o, 8);
                 if (now == before) continue;
-                bool inNodes = (o >= 0xD60 && o < 0x1050) || (o >= 0x1080 && o < 0x1140) ||
-                               (o >= 0x1318 && o < 0x13D8) || (o >= 0x1480 && o < 0x16F0);
+                bool inNodes = (o >= 0xD98 && o < 0x1088) || (o >= 0x10B8 && o < 0x1178) ||
+                               (o >= 0x1350 && o < 0x1410) || (o >= 0x14C0 && o < 0x1730);
                 if (!inNodes && IsHeapPtrCandidate(before) && IsHeapPtrCandidate(now)) {
                     *outHeapCheckIdx = idx;
                     *ioIdx = idx + 1u;
@@ -1310,7 +1310,7 @@ static void RestoreVehicleCopiesBatchPod(BYTE* const* targets, const BYTE* befor
 }
 
 class VehicleGuard {
-    static const size_t Bytes = 0x1AD8;
+    static const size_t Bytes = 0x1C30;
     std::vector<BYTE*> targets_;
     std::vector<BYTE> copies_;
     std::vector<std::pair<BYTE*, BYTE>> flags_;
@@ -1451,7 +1451,7 @@ static void CallNativeVehicleHighlight(void* vehicle, unsigned char a2, unsigned
         return;
     }
     if (!g_exeBase) return;
-    unsigned rva = isExtraPass ? 0x66EE70u : 0x671350u;
+    unsigned rva = isExtraPass ? 0x69FB10u : 0x6A2010u;
     if (g_exeBase[rva] == 0) return;
     DiagLog_BeginSafeSeh();
     __try {
@@ -1525,7 +1525,7 @@ void HeldFrame_SubmitVehicleHighlight(void* vehicle, unsigned char a2, unsigned 
 void HeldFrame_DrawStepVehicles(void* world)
 {
     typedef void (*DrawVehiclesFn)(void*);
-    DrawVehiclesFn nativeDraw = (DrawVehiclesFn)(g_exeBase + 0x3FA790);
+    DrawVehiclesFn nativeDraw = (DrawVehiclesFn)(g_exeBase + 0x41BA30);
     if (!Determinism_IsActive() || !Determinism_SessionRunning() || Probe_IsRunning() || g_hfDiag.inHeldDraw) {
         nativeDraw(world);
         FlushDeferredVehicleHighlights();
@@ -1538,7 +1538,7 @@ void HeldFrame_DrawStepVehicles(void* world)
     static FlatPtrSet s_stepSeen;
     static std::vector<LiveVehicleVisualBackup> s_stepModified;
     s_stepModified.clear();
-    if (alpha >= 0.0f && alpha < 0.999f && ReadEngineVehicleList((const void*)(g_exeBase + 0x9E7720), s_stepList)) {
+    if (alpha >= 0.0f && alpha < 0.999f && ReadEngineVehicleList((const void*)(g_exeBase + 0xA317E0), s_stepList)) {
         CollectVisibleVehicleGraph(s_stepList, s_stepTargets, s_stepSeen, s_stepFollowRoots, s_stepAttached);
         s_stepModified.reserve(s_stepTargets.size());
         for (BYTE* p : s_stepTargets) {
@@ -1700,7 +1700,7 @@ void HeldFrame_UpdateCameraAfterSimStep()
     }
 
     if (g_exeBase && g_exeBase[RVA_CAMERA_MGR_UPDATE] != 0) {
-        BYTE* timer = g_exeBase + 0x9D4EE0;
+        BYTE* timer = g_exeBase + 0xA1EEF0;
         BYTE savedTimer[13];
         memcpy(savedTimer, timer, sizeof(savedTimer));
         *(float*)timer = g_savedCamFps;
@@ -1734,15 +1734,15 @@ bool HeldFrame_Verify()
 {
     struct Site { unsigned rva; unsigned char bytes[24]; size_t size; };
     static const Site sites[] = {
-        { 0x83D040, { 0x48,0x8b,0xc4,0x48,0x89,0x48,0x08,0x55,0x53,0x41,0x54,0x41,0x55,0x41,0x57,0x48,0x8d,0xa8,0x98,0xfc,0xff,0xff }, 22 },
-        { 0x25952E, { 0x48,0x8d,0x0d,0xdb,0xb9,0x77,0x00,0xe8 }, 8 },
-        { 0x3FA847, { 0x49,0x8b,0x86,0x18,0x28,0x01,00,0x49,0x2b,0x86,0x10,0x28,0x01,00 }, 14 },
-        { 0x3FA953, { 0x41,0x0f,0xb6,0xd7,0xe8,0xf4,0x69,0x27,0x00 }, 9 },
-        { 0x6713FB, { 0x80,0xb9,0xd8,0x13,0x00,0x00,0x00 }, 7 },
-        { 0x671408, { 0x48,0x8b,0x89,0x98,0x03,0x00,0x00 }, 7 },
-        { 0x671470, { 0x48,0x8b,0x9e,0xa8,0x03,0x00,0x00,0x48,0x2b,0x9e,0xa0 }, 11 },
-        { 0x66EE99, { 0x80,0xb9,0xd8,0x13,0x00,0x00,0x00 }, 7 },
-        { 0x67C34E, { 0x48,0x8b,0xb1,0xa0,0x04,00,00,0x49,0x8b,0xd8,0x44,0x0f,0xb6,0xe2,0x4c,0x8b,0xf1,0x80,0xbe,0xd8,0x13,0x00,0x00,0x00 }, 24 },
+        { 0x87E0E0, { 0x48,0x8b,0xc4,0x48,0x89,0x48,0x08,0x55,0x53,0x41,0x54,0x41,0x55,0x41,0x57,0x48,0x8d,0xa8,0x98,0xfc,0xff,0xff }, 22 },
+        { 0x27485E, { 0x48,0x8d,0x0d,0xbb,0xa6,0x7a,0x00,0xe8 }, 8 },
+        { 0x41BADD, { 0x48,0x8b,0x85,0xc8,0x28,0x01,00,0x48,0x2b,0x85,0xc0,0x28,0x01,00 }, 14 },
+        { 0x41BC09, { 0x41,0x0f,0xb6,0xd7,0xe8,0xfe,0x63,0x28,0x00 }, 9 },
+        { 0x6A20BE, { 0x80,0xb9,0x18,0x14,0x00,0x00,0x00 }, 7 },
+        { 0x6A20CB, { 0x48,0x8b,0x89,0x98,0x03,0x00,0x00 }, 7 },
+        { 0x6A2133, { 0x48,0x8b,0x9e,0xa8,0x03,0x00,0x00,0x48,0x2b,0x9e,0xa0 }, 11 },
+        { 0x69FB39, { 0x80,0xb9,0x18,0x14,0x00,0x00,0x00 }, 7 },
+        { 0x6AE4CE, { 0x48,0x8b,0xb1,0xa0,0x04,00,00,0x49,0x8b,0xd8,0x44,0x0f,0xb6,0xe2,0x4c,0x8b,0xf1,0x80,0xbe,0x18,0x14,0x00,0x00,0x00 }, 24 },
     };
     for (const auto& s : sites) {
         if (memcmp(g_exeBase + s.rva, s.bytes, s.size) != 0) {
@@ -1772,24 +1772,24 @@ static bool CallTargets(unsigned site, unsigned target)
 static void DrawJunctions()
 {
     if (g_junctionsChecked < 0) {
-        static const unsigned char load[7] = { 0x48, 0x8b, 0x8e, 0x08, 0x28, 0x01, 0x00 }; // mov rcx,[rsi+12808]
-        g_junctionsChecked = memcmp(g_exeBase + 0x30C7D1, load, sizeof(load)) == 0 && CallTargets(0x30C7D8, 0x228AD0) &&
-                             CallTargets(0x30C81D, 0x223950) ? 1 : 0;
+        static const unsigned char load[7] = { 0x48, 0x8b, 0x8e, 0xb8, 0x28, 0x01, 0x00 }; // mov rcx,[rsi+128b8]
+        g_junctionsChecked = memcmp(g_exeBase + 0x32AD31, load, sizeof(load)) == 0 && CallTargets(0x32AD38, 0x243D00) &&
+                             CallTargets(0x32AD7D, 0x23EB80) ? 1 : 0;
         if (!g_junctionsChecked) Logf("republicmp  HELD FRAME: Early's junction drawing differs - junction lights drawn on tick frames only");
     }
     if (!g_junctionsChecked) return;
-    BYTE* world = g_exeBase + 0x9D4F10;
+    BYTE* world = g_exeBase + 0xA1EF20;
     DiagLog_BeginSafeSeh();
     __try {
-        BYTE* manager = *(BYTE**)(world + 0x12808);
+        BYTE* manager = *(BYTE**)(world + 0x128B8);
         if (manager) {
-            ((void (*)(void*))(g_exeBase + 0x228AD0))(manager);
-            if (world[0x14451]) {
+            ((void (*)(void*))(g_exeBase + 0x243D00))(manager);
+            if (world[0x14501]) {
                 BYTE** begin = *(BYTE***)(manager + 0x50);
                 size_t n = begin ? (size_t)(*(BYTE***)(manager + 0x58) - begin) : 0;
                 for (size_t i = 0; i < n; i++) {
                     BYTE* junction = (*(BYTE***)(manager + 0x50))[i];
-                    if (junction) ((void (*)(void*))(g_exeBase + 0x223950))(junction);
+                    if (junction) ((void (*)(void*))(g_exeBase + 0x23EB80))(junction);
                 }
             }
         }
@@ -1805,17 +1805,17 @@ static void DrawJunctions()
 // simulation now sees every building off the camera (sim_patches.cpp), so the
 // pass moves no door; every frame (after Early, or on a held frame) the doors
 // of the buildings this PC sees are moved by its own frame time and queued.
-#define BUILDINGS_BEGIN_RVA 0x9E6A18
-#define BUILDINGS_END_RVA 0x9E6A20
-#define ENGINE_RVA 0x9941F0       // engine object: +ff8 models, +ee0 map quadtree
-#define FRAGMENT_IMPORT 0x86CFB8  // a model's fragment
-#define GETNODE_IMPORT 0x86C560   // the quadtree's node of a fragment (+25: visible)
-#define AGENTS_ALL 0x126A8
-#define DRAW_AGENTS_RVA 0x83D040
-#define AGENT_NEAR_RVA 0x90AF7C
-#define CAMERA_RVA 0x9E9C90
-#define NODE_POSITION_IMPORT 0x86C7B8   // C3D_NODE::GetPosition
-#define CAMERA_ZDISTANCE_IMPORT 0x86D008 // C3D_CAMERA::GetZDistance
+#define BUILDINGS_BEGIN_RVA 0xA30AD0
+#define BUILDINGS_END_RVA 0xA30AD8
+#define ENGINE_RVA 0x9DDC88       // engine object: +1098 models, +f80 map quadtree
+#define FRAGMENT_IMPORT 0x8B2008  // a model's fragment
+#define GETNODE_IMPORT 0x8B15D0   // the quadtree's node of a fragment (+25: visible)
+#define AGENTS_ALL 0x12758
+#define DRAW_AGENTS_RVA 0x87E0E0
+#define AGENT_NEAR_RVA 0x9524B4
+#define CAMERA_RVA 0xA33D50
+#define NODE_POSITION_IMPORT 0x8B1858   // C3D_NODE::GetPosition
+#define CAMERA_ZDISTANCE_IMPORT 0x8B2058 // C3D_CAMERA::GetZDistance
 static int g_doorsChecked = -1;
 
 static size_t Count(const BYTE* vector, size_t elem)
@@ -1849,8 +1849,8 @@ static float ComputeDoorFrameSeconds()
 static void EnsureDoorsChecked()
 {
     if (g_doorsChecked < 0) {
-        static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0xe2, 0xbc, 0x85, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
-        g_doorsChecked = CallTargets(0x13DB61, 0x138B90) && memcmp(g_exeBase + 0x13957F, list, sizeof(list)) == 0 ? 1 : 0;
+        static const unsigned char list[14] = { 0x48, 0x8b, 0x1d, 0x7a, 0xe3, 0x88, 0x00, 0x48, 0x81, 0xc3, 0xa8, 0x00, 0x00, 0x00 };
+        g_doorsChecked = CallTargets(0x156611, 0x151620) && memcmp(g_exeBase + 0x15201F, list, sizeof(list)) == 0 ? 1 : 0;
         if (!g_doorsChecked) Logf("republicmp  HELD FRAME: Early's door drawing differs - doors drawn on tick frames only");
     }
 }
@@ -1885,8 +1885,8 @@ static size_t ScanBuildingsForDoorsAndView(bool runDoors, float seconds, ViewBui
             BYTE* type = *(BYTE**)(b + 0x318);
             bool visible;
             if (type) {
-                BYTE* f = fragment(*(void**)(engine + 0xFF8), *(int*)(type + 0x410), *(int*)(b + 0x5F4));
-                BYTE* node = f ? getNode(*(void**)(engine + 0xEE0), *(int*)(f + 0x3C)) : nullptr;
+                BYTE* f = fragment(*(void**)(engine + 0x1098), *(int*)(type + 0x418), *(int*)(b + 0x5F4));
+                BYTE* node = f ? getNode(*(void**)(engine + 0xF80), *(int*)(f + 0x3C)) : nullptr;
                 visible = node && node[0x25];
             } else {
                 BYTE* render = *(BYTE**)(b + 0x5D0);
@@ -1895,8 +1895,8 @@ static size_t ScanBuildingsForDoorsAndView(bool runDoors, float seconds, ViewBui
             if (!visible) continue;
 
             if (runDoors && type && *(float*)(b + 0x604) == 1.0f && *(void**)(b + 0x5D0) == nullptr) {
-                if (Count(type + 0xA18, 0x28) || Count(type + 0xA30, 0x30)) {
-                    ((void (*)(void*, float))(g_exeBase + 0x138B90))(b, seconds);
+                if (Count(type + 0xC28, 0x28) || Count(type + 0xC40, 0x30)) {
+                    ((void (*)(void*, float))(g_exeBase + 0x151620))(b, seconds);
                 }
             }
             if (collectView && n < maxView) {
@@ -1929,8 +1929,8 @@ static size_t CollectNear(const ViewBuilding* view, size_t nView, BYTE** out, si
     DiagLog_BeginSafeSeh();
     __try {
         float limit = *(float*)(g_exeBase + AGENT_NEAR_RVA);
-        BYTE** begin = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL);
-        BYTE** end = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL + 8);
+        BYTE** begin = *(BYTE***)(g_exeBase + 0xA1EF20 + AGENTS_ALL);
+        BYTE** end = *(BYTE***)(g_exeBase + 0xA1EF20 + AGENTS_ALL + 8);
         for (BYTE** it = begin; it && it < end && n < max; ++it) {
             BYTE* a = *it;
             if (!a || a[0x2C] || *(float*)(a + 0x10) > 0.0f) continue;
@@ -1995,8 +1995,8 @@ static bool ListSizes(size_t* buildings, size_t* agents)
     __try {
         BYTE** b = *(BYTE***)(g_exeBase + BUILDINGS_BEGIN_RVA);
         BYTE** e = *(BYTE***)(g_exeBase + BUILDINGS_END_RVA);
-        BYTE** ab = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL);
-        BYTE** ae = *(BYTE***)(g_exeBase + 0x9D4F10 + AGENTS_ALL + 8);
+        BYTE** ab = *(BYTE***)(g_exeBase + 0xA1EF20 + AGENTS_ALL);
+        BYTE** ae = *(BYTE***)(g_exeBase + 0xA1EF20 + AGENTS_ALL + 8);
         if (b && e > b) *buildings = (size_t)(e - b);
         if (ab && ae > ab) *agents = (size_t)(ae - ab);
         ok = true;
@@ -2292,7 +2292,7 @@ void HeldFrame_StepBuildingAnimations(float fps)
     int speed = 1;
     Determinism_SessionSpeed(&paused, &speed);
     BYTE menuByte = 0;
-    Read(g_exeBase + 0x9D4EE0 + 13, &menuByte, sizeof(menuByte));
+    Read(g_exeBase + 0xA1EEF0 + 13, &menuByte, sizeof(menuByte));
     if (paused || menuByte != 0 || !isfinite(fps) || fps <= 0.0f) return;
 
     const size_t written = CollectAllAnimatedBuildings(true, false, nullptr, nullptr, nullptr);
@@ -2332,7 +2332,7 @@ void HeldFrame_AfterEarly()
 // a usable worker the entities are still drawn. (by SoylentGreed)
 bool HeldFrame_Draw(bool entitiesReady)
 {
-    BYTE* worker = *(BYTE**)(g_exeBase + 0x995290);
+    BYTE* worker = *(BYTE**)(g_exeBase + 0x9DDC80);
     bool workerOk = worker && !worker[0x28] && *(HANDLE*)(worker + 0x60) && *(DWORD*)(worker + 0xC8);
     static VehicleGuard guard;
     static bool hiddenLogged = false;
@@ -2345,7 +2345,7 @@ bool HeldFrame_Draw(bool entitiesReady)
     g_hfDiag.lastAlpha = alpha;
     if (workerOk) {
         try {
-            guarded = guard.Begin(g_exeBase + 0x9E7720, alpha);
+            guarded = guard.Begin(g_exeBase + 0xA317E0, alpha);
         } catch (const std::bad_alloc&) {
             guarded = false;
         }
@@ -2355,11 +2355,11 @@ bool HeldFrame_Draw(bool entitiesReady)
                 hiddenLogged = true;
                 Logf("republicmp  HELD FRAME: vehicle graph could not be captured - vehicles hidden on such frames");
             }
-            hidden[0] = *(uintptr_t*)(g_exeBase + 0x9E7728);
-            *(uintptr_t*)(g_exeBase + 0x9E7728) = *(uintptr_t*)(g_exeBase + 0x9E7720);
+            hidden[0] = *(uintptr_t*)(g_exeBase + 0xA317E8);
+            *(uintptr_t*)(g_exeBase + 0xA317E8) = *(uintptr_t*)(g_exeBase + 0xA317E0);
             hidden[1] = 1;
-            realism = *(int*)(g_exeBase + 0x9D54CC);
-            *(int*)(g_exeBase + 0x9D54CC) = 0;
+            realism = *(int*)(g_exeBase + 0xA1F504);
+            *(int*)(g_exeBase + 0xA1F504) = 0;
         }
     }
     // Early queues the junctions and doors before it starts the worker, whose
@@ -2371,9 +2371,9 @@ bool HeldFrame_Draw(bool entitiesReady)
         DrawJunctions();
         PrepareDoorsAndView(&heldAgents, &canSubmitCitizens);
     }
-    BYTE* queue = *(BYTE**)(g_exeBase + 0x9E7710);
-    BYTE* paths = *(BYTE**)(g_exeBase + 0x9E2350);
-    BYTE* headers[] = { g_exeBase + 0x9E7738, queue ? queue + 0x60 : nullptr, paths ? paths + 0x40 : nullptr };
+    BYTE* queue = *(BYTE**)(g_exeBase + 0xA317D0);
+    BYTE* paths = *(BYTE**)(g_exeBase + 0xA2C3F8);
+    BYTE* headers[] = { g_exeBase + 0xA317F8, queue ? queue + 0x60 : nullptr, paths ? paths + 0x40 : nullptr };
     uintptr_t ends[3] = {};
     bool started = false;
     if (workerOk) {
@@ -2408,8 +2408,8 @@ bool HeldFrame_Draw(bool entitiesReady)
         }
         for (int i = 0; i < 3; i++) if (headers[i]) *(uintptr_t*)(headers[i] + 8) = ends[i];
         if (hidden[1]) {
-            *(uintptr_t*)(g_exeBase + 0x9E7728) = hidden[0];
-            *(int*)(g_exeBase + 0x9D54CC) = realism;
+            *(uintptr_t*)(g_exeBase + 0xA317E8) = hidden[0];
+            *(int*)(g_exeBase + 0xA1F504) = realism;
         }
     }
     g_deferredPrepHighlights.clear();

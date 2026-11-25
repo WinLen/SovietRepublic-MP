@@ -16,7 +16,7 @@
 #pragma intrinsic(_AddressOfReturnAddress)
 
 #define OBJ_TYPE_OFFSET 0x318          // building type record
-#define TYPE_CATEGORY_OFFSET 0x360     // int category in the type record
+#define TYPE_CATEGORY_OFFSET 0x368     // int category in the type record
 #define OBJ_DEMOLISH_FLAG_OFFSET 0xeb1 // zeroed by some player paths before the call, 1 in building window
 
 // mov rax,rsp / mov [rax+20],r9b / mov [rax+18],r8b / mov [rax+10],rdx -
@@ -85,29 +85,29 @@ static void PopulateDemolishMsg(__int64 thisPtr, __int64 building, const unsigne
     msg.demolishCategory = BuildingCategory(building);
     for (int k = 0; k < 5; k++) msg.demolishArgs[k] = args[k];
     msg.demolishEb1 = *(unsigned char*)(building + OBJ_DEMOLISH_FLAG_OFFSET);
-    msg.demolishShift = (*(int*)(g_exeBase + 0x9D5A08) != 0) ? 1 : 0;
-    msg.demolishCtrl  = (*(int*)(g_exeBase + 0x9D5A0C) != 0) ? 1 : 0;
-    msg.fromDialog424 = (callerRva == 0x7FD1A0) ? 1 : 0;
-    msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC798);
-    msg.assignFromTool = (callerRva == 0x1DA9F8 || callerRva == 0x1DAF7E) ? 1 : 0;
-    msg.assignPriority = (*(unsigned char*)(g_exeBase + 0xA54BAD) != 0) ? 1 : 0;
+    msg.demolishShift = (*(int*)(g_exeBase + 0xA1FA40) != 0) ? 1 : 0;
+    msg.demolishCtrl  = (*(int*)(g_exeBase + 0xA1FA44) != 0) ? 1 : 0;
+    msg.fromDialog424 = (callerRva == 0x83D5A2) ? 1 : 0;
+    msg.autoSearchOffices = *(unsigned char*)(thisPtr + 0xC830);
+    msg.assignFromTool = (callerRva == 0x1F54A8 || callerRva == 0x1F5A2E) ? 1 : 0;
+    msg.assignPriority = (*(unsigned char*)(g_exeBase + 0xA9EC6D) != 0) ? 1 : 0;
     msg.assignIsDemolishOffice = 0;
     msg.sliderValue = 0;
-    void* sliderWidget = *(void**)(thisPtr + 0xC790);
+    void* sliderWidget = *(void**)(thisPtr + 0xC828);
     if (sliderWidget && (msg.demolishEb1 != 0 || msg.fromDialog424)) {
         typedef float (*ReadSliderFn)(void*);
-        msg.sliderValue = (int)((ReadSliderFn)(g_exeBase + 0x0FF6A0))(sliderWidget);
+        msg.sliderValue = (int)((ReadSliderFn)(g_exeBase + 0x117290))(sliderWidget);
     }
     msg.assignOffice = kNoRef;
     msg.assignDist = 0.0f;
     if (msg.assignFromTool) {
-        U64 office = *(U64*)(thisPtr + 0xD298);
+        U64 office = *(U64*)(thisPtr + 0xD330);
         if (office && Ref_Building(office, msg.assignOffice)) {
-            // Native 0x1DAFFD passes (office->cat == 0x1C [RCO]) ? 1 : 0 as 0x161CB0's triggerImmediateScan.
+            // Native 0x1DAFFD passes (office->cat == 0x1C [RCO]) ? 1 : 0 as 0x17A750's triggerImmediateScan.
             msg.assignIsDemolishOffice = (BuildingCategory((__int64)office) == (int)BLD_CAT_RAIL_CO) ? 1 : 0;
         }
-        if (callerRva == 0x1DAF7E)
-            msg.assignDist = *(float*)(thisPtr + 0xF5C0);
+        if (callerRva == 0x1F5A2E)
+            msg.assignDist = *(float*)(thisPtr + 0xF658);
     }
 }
 
@@ -182,8 +182,8 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
     if (depth == 1 && !LocalBuilds_InBuildingPlacement() && !BuildSync_IsApplyingRemote() &&
         !RoadSync_IsApplyingSegment() && g_terrainApplyingRemote == 0) {
         if (SaveSync_IsWaitingLobbyActive() || (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE)) {
-            if (callerRva == 0x7FD1A0) {
-                *retSlot = g_exeBase + 0x7FD1EF;
+            if (callerRva == 0x83D5A2) {
+                *retSlot = g_exeBase + 0x83D5F1;
             }
             SaveSync_NotifyWaitingLobbyActionBlocked();
             InterlockedDecrement(&g_depth);
@@ -191,10 +191,10 @@ static void HookedDemolish(__int64 thisPtr, __int64 building,
         }
         unsigned long long args[5] = { p3, p4, p5, p6, p7 };
         if (Commands_TakeLocal() && DemolishAsCommand(thisPtr, building, args, callerRva)) {
-            if (callerRva == 0x7FD1A0) {
+            if (callerRva == 0x83D5A2) {
                 // Skip post-call 0x7FD000..0x7FD04E on the UI pass so it does not write
                 // +0x879/+0x630 before 0x168730 runs at the Lockstep boundary.
-                *retSlot = g_exeBase + 0x7FD1EF;
+                *retSlot = g_exeBase + 0x83D5F1;
             }
             InterlockedDecrement(&g_depth);
             return;
@@ -234,9 +234,9 @@ bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyn
     DemolishFn fn = g_origDemolish ? g_origDemolish : (DemolishFn)(g_exeBase + HOOK_DEMOLISH_RVA);
     __try {
         BuildMode savedMode = BuildMode_Read();
-        int* shiftFlag = (int*)(g_exeBase + 0x9D5A08);
-        int* ctrlFlag  = (int*)(g_exeBase + 0x9D5A0C);
-        unsigned long long* af8Ptr = (unsigned long long*)(thisPtr + 0xAF8);
+        int* shiftFlag = (int*)(g_exeBase + 0xA1FA40);
+        int* ctrlFlag  = (int*)(g_exeBase + 0xA1FA44);
+        unsigned long long* af8Ptr = (unsigned long long*)(thisPtr + 0xB20);
         int savedShift = *shiftFlag;
         int savedCtrl  = *ctrlFlag;
         unsigned long long savedAf8 = *af8Ptr;
@@ -264,7 +264,7 @@ bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyn
             if (msg.demolishEb1 != 0) {
                 *(int*)(building + 0x630) = msg.sliderValue;
             }
-            if (msg.fromDialog424 && *(int*)(thisPtr + 0x5B8) > 1) {
+            if (msg.fromDialog424 && *(int*)(thisPtr + 0x5E0) > 1) {
                 if (msg.autoSearchOffices == 0)
                     *(unsigned char*)(building + 0x879) = 0;
                 int maxW = *(int*)(building + 0x62C);
@@ -275,11 +275,11 @@ bool DemolishHook_CallOriginal(__int64 thisPtr, __int64 building, const BuildSyn
                 if (office) {
                     typedef void (*AssignOfficeFn)(__int64 world, __int64 office, __int64 target,
                                                    float dist, unsigned char p5, unsigned char isDemolishOffice);
-                    ((AssignOfficeFn)(g_exeBase + 0x161CB0))(thisPtr, (__int64)office, building,
+                    ((AssignOfficeFn)(g_exeBase + 0x17A750))(thisPtr, (__int64)office, building,
                                                              msg.assignDist, 0, msg.assignIsDemolishOffice);
                     if (msg.assignPriority) {
                         typedef void (*SetPriorityFn)(__int64 world, __int64 target, unsigned char prio);
-                        ((SetPriorityFn)(g_exeBase + 0x1A0510))(thisPtr, building, 1);
+                        ((SetPriorityFn)(g_exeBase + 0x1B9310))(thisPtr, building, 1);
                     }
                 }
             }

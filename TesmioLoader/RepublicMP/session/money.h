@@ -26,10 +26,10 @@
 
 #include "tesmio_plugin.h"
 
-#define MONEY_THIS_RVA     0x9D4F10
-#define MONEY_USD_OFFSET   0x580
-#define MONEY_RUB_OFFSET   0x588
-#define MONEY_NOCOST_OFFSET 0x578
+#define MONEY_THIS_RVA     0xA1EF20
+#define MONEY_USD_OFFSET   0x5a8
+#define MONEY_RUB_OFFSET   0x5b0
+#define MONEY_NOCOST_OFFSET 0x5a0
 
 void Money_Bind(const TsmHost* host);
 

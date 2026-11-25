@@ -267,18 +267,18 @@ static bool SubTest_M9_4_C2_CustomsTouristSpawnEdgeCases()
     TwoStates_OnWorldLoaded();
 
     // 1. Setup USD customs building
-    std::vector<BYTE> bldTypeUsd(0x600, 0);
-    *(uint8_t*)(bldTypeUsd.data() + 0x360) = 0x14;
-    *(uint8_t*)(bldTypeUsd.data() + 0x528) = 1; // 1 = USD customs
+    std::vector<BYTE> bldTypeUsd(0xC00, 0);
+    *(uint8_t*)(bldTypeUsd.data() + BLD_TYPE_CAT_OFF) = 0x14;
+    *(uint8_t*)(bldTypeUsd.data() + BLD_TYPE_CUSTOMS_SUBTYPE_OFF) = 1; // 1 = USD customs
 
     std::vector<BYTE> customsUsd(0x1420, 0);
     *(float*)(customsUsd.data() + OBJ_POS_OFFSET) = -1000.0f; // West
     *(BYTE**)(customsUsd.data() + 0x318) = bldTypeUsd.data();
 
     // 2. Setup Soviet customs building
-    std::vector<BYTE> bldTypeRub(0x600, 0);
-    *(uint8_t*)(bldTypeRub.data() + 0x360) = 0x14;
-    *(uint8_t*)(bldTypeRub.data() + 0x528) = 0; // 0 = Soviet customs
+    std::vector<BYTE> bldTypeRub(0xC00, 0);
+    *(uint8_t*)(bldTypeRub.data() + BLD_TYPE_CAT_OFF) = 0x14;
+    *(uint8_t*)(bldTypeRub.data() + BLD_TYPE_CUSTOMS_SUBTYPE_OFF) = 0; // 0 = Soviet customs
 
     std::vector<BYTE> customsRub(0x1420, 0);
     *(float*)(customsRub.data() + OBJ_POS_OFFSET) = 1000.0f; // East

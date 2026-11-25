@@ -337,7 +337,7 @@ static bool SubTest_M4_Challenger1_R10_VehicleSnappingSpectrum0To50km()
     VehicleSoftSync_Reset();
     BYTE* world = g_mockExeBuffer + WORLD_RVA;
 
-    std::vector<BYTE> bus(0x1B00, 0);
+    std::vector<BYTE> bus(VEHICLE_STRUCT_BYTES, 0);
     *(unsigned*)(bus.data() + VEH_ID_OFFSET) = 888;
     *(float*)(bus.data() + VEH_POS_OFFSET)     = 0.0f;
     *(float*)(bus.data() + VEH_POS_OFFSET + 4) = 0.0f;

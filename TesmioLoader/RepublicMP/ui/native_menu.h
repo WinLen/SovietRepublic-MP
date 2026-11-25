@@ -56,8 +56,8 @@ void NativeMenu_SetHostOnNextLoadForTest(bool host);
 
 // Returns the game's current menu screen ID (1 = Root Main Menu, 2 = Load Game,
 // 0x62 = Campaign, 0x63 = Custom Game Map Select, 3 = Custom Game Setup).
-#define MENU_OBJ_RVA            0x9D4F10
-#define MENU_SCREEN_ID_OFF      0x5044
+#define MENU_OBJ_RVA            0xA1EF20
+#define MENU_SCREEN_ID_OFF      0x5074
 int NativeMenu_GetActiveScreenId(void);
 
 // True when the Load/New Game Co-op bar or manual IP input modal is hovered/active.

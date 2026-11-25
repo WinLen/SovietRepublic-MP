@@ -169,8 +169,8 @@ void Commands_Submit(int kind, const void* data, size_t size)
 }
 
 // The republic's balances: world +0x588 rubles, +0x580 dollars (doubles).
-#define MONEY_RUB_RVA (0x9D4F10 + 0x588)
-#define MONEY_USD_RVA (0x9D4F10 + 0x580)
+#define MONEY_RUB_RVA (0xA1EF20 + 0x5B0)
+#define MONEY_USD_RVA (0xA1EF20 + 0x5A8)
 static double* Rubles() { return (double*)(g_exeBase + MONEY_RUB_RVA); }
 static double* Dollars() { return (double*)(g_exeBase + MONEY_USD_RVA); }
 
@@ -444,7 +444,7 @@ static double g_lateSimRubles = 0, g_lateSimDollars = 0;
 // recorded ones are written back exactly (not by subtracting).
 static void TakeMoney(double rub, double usd, const char* where)
 {
-    if (*(const int*)(g_exeBase + 0x9D4F10 + 0x578) != 0) {
+    if (*(const int*)(g_exeBase + 0xA1EF20 + 0x5A0) != 0) {
         *Rubles() = 100000000.0;
         *Dollars() = 100000000.0;
         return;
@@ -543,7 +543,7 @@ static void ShowBlockedToolToast(ULONGLONG* lastToast, const char* msg)
 static void PutAwayUncarriedTool()
 {
     if (!g_capturing || !g_exeBase) return;
-    __int64* tool = (__int64*)(g_exeBase + 0x9D4F10 + 0xD428);
+    __int64* tool = (__int64*)(g_exeBase + 0xA1EF20 + 0xD4C0);
     char name[64] = {};
     __try {
         if (!*tool) return;
@@ -607,13 +607,13 @@ struct GameRulePair {
     unsigned copy, rule, bytes;
 };
 static const GameRulePair kGameRules[] = {
-    { 0xC81C, 0x5B0, 4 }, { 0xC844, 0x5B4, 4 }, { 0xC848, 0x5B8, 4 }, { 0xC84C, 0x5BC, 4 }, { 0xC820, 0x5C0, 4 },
-    { 0xC824, 0x5C4, 4 }, { 0xC828, 0x5C8, 4 }, { 0xC82C, 0x5CC, 4 }, { 0xC830, 0x5D0, 4 }, { 0xC834, 0x5D4, 4 },
-    { 0xC838, 0x5D8, 4 }, { 0xC83C, 0x5DC, 4 }, { 0xC840, 0x5E0, 4 }, { 0xC850, 0x14451, 1 }, { 0xC851, 0x14453, 1 },
-    { 0xC852, 0x14452, 1 },
+    { 0xC8B4, 0x5D8, 4 }, { 0xC8DC, 0x5DC, 4 }, { 0xC8E0, 0x5E0, 4 }, { 0xC8E4, 0x5E4, 4 }, { 0xC8B8, 0x5E8, 4 },
+    { 0xC8BC, 0x5EC, 4 }, { 0xC8C0, 0x5F0, 4 }, { 0xC8C4, 0x5F4, 4 }, { 0xC8C8, 0x5F8, 4 }, { 0xC8CC, 0x5FC, 4 },
+    { 0xC8D0, 0x600, 4 }, { 0xC8D4, 0x604, 4 }, { 0xC8D8, 0x608, 4 }, { 0xC8E8, 0x14501, 1 }, { 0xC8E9, 0x14503, 1 },
+    { 0xC8EA, 0x14502, 1 },
 };
-#define RELOAD_FLAGS_OFFSET 0x14D3C // 4 bytes: a critical rule's save and reload
-#define GAME_RULES_APPLY_RVA 0x3370F0
+#define RELOAD_FLAGS_OFFSET 0x14DEC // 4 bytes: a critical rule's save and reload
+#define GAME_RULES_APPLY_RVA 0x355B20
 
 #pragma pack(push, 1)
 struct LsGameRules {
@@ -645,9 +645,9 @@ bool Commands_SanitizeCheatState(BYTE* world)
         world[WORLD_MAP_EDITOR_MODE_OFFSET] = 0;
         changed = true;
     }
-    if (*(int32_t*)(world + 0xADE8) != 0 || *(float*)(world + 0xADEC) != 0.0f) {
-        *(int32_t*)(world + 0xADE8) = 0;
-        *(float*)(world + 0xADEC) = 0.0f;
+    if (*(int32_t*)(world + 0xAE18) != 0 || *(float*)(world + 0xAE1C) != 0.0f) {
+        *(int32_t*)(world + 0xAE18) = 0;
+        *(float*)(world + 0xAE1C) = 0.0f;
         changed = true;
     }
     int32_t subPage = *(int32_t*)(world + WORLD_SYSTAB_SUBPAGE_OFFSET);
@@ -688,7 +688,7 @@ void Commands_GuardSettings()
 void Commands_CaptureGameRules()
 {
     LsGameRules m = {};
-    BYTE* world = g_exeBase + 0x9D4F10;
+    BYTE* world = g_exeBase + 0xA1EF20;
     __try {
         for (size_t i = 0; i < sizeof(kGameRules) / sizeof(kGameRules[0]); i++)
             memcpy(m.copy[i], world + kGameRules[i].copy, kGameRules[i].bytes);

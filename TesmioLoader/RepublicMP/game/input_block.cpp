@@ -6,8 +6,8 @@
 #include "../determinism/determinism.h"
 #include "../core/engine_rva.h"
 
-#define LMB_HELD_RVA 0xA54E90         // byte: left mouse button held
-#define LMB_JUST_PRESSED_RVA 0xA54E91 // byte: left mouse button pressed this frame
+#define LMB_HELD_RVA 0xA9EF50         // byte: left mouse button held
+#define LMB_JUST_PRESSED_RVA 0xA9EF51 // byte: left mouse button pressed this frame
 
 void InputBlock_Bind(const TsmHost* host)
 {

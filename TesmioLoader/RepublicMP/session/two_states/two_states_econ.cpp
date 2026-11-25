@@ -6,13 +6,13 @@
 void TwoStates_BindEcon(const TsmHost* host) { if (host) TsmBind(host); }
 
 #ifndef RVA_BLD_ECON
-#define RVA_BLD_ECON        0x173340
+#define RVA_BLD_ECON        0x18C140
 #endif
 #ifndef RVA_CONSTRUCT_STEP
-#define RVA_CONSTRUCT_STEP  0x159070
+#define RVA_CONSTRUCT_STEP  0x171B10
 #endif
 #ifndef RVA_VEHICLE_SALE
-#define RVA_VEHICLE_SALE    0x3E0670
+#define RVA_VEHICLE_SALE    0x3FF7B0
 #endif
 
 // ---------------------------------------------------------------------------
@@ -760,7 +760,7 @@ static float ComputeCitizenProductivity(const BYTE* cit, const BYTE* home)
 
     const BYTE* bldType = home ? *(const BYTE* const*)(home + 0x318) : nullptr;
     float prod = 0.0f;
-    if (bldType && *(const int32_t*)(bldType + 0x360) == 0x4C) {
+    if (bldType && *(const int32_t*)(bldType + BLD_TYPE_CAT_OFF) == 0x4C) {
         prod = d8 * 0.4f + 0.6f;
     } else {
         float term1 = dc * 0.3f + 0.1f + e0 * 0.15f + (d8 - 0.55f) * 1.5f;
@@ -776,7 +776,7 @@ static void AccumulateAdultCitizenBrackets(const BYTE* cit, const BYTE* home, in
     *ioProdSum += ComputeCitizenProductivity(cit, home);
     if (*(const BYTE*)(cit + 0x2D) != 0) {
         const BYTE* bldType = home ? *(const BYTE* const*)(home + 0x318) : nullptr;
-        if (!bldType || (*(const int32_t*)(bldType + 0x360) == 2 && *(const int32_t*)(bldType + 0x364) != 1)) {
+        if (!bldType || (*(const int32_t*)(bldType + BLD_TYPE_CAT_OFF) == 2 && *(const int32_t*)(bldType + 0x36C) != 1)) {
             ioBrackets[0]++;
         }
     }
@@ -966,7 +966,7 @@ static inline bool IsCitizenDormStudentRaw(const BYTE* holder, const BYTE* holde
 {
     if (*(const BYTE*)(holder + 0x2D) != 1) return false;
     const BYTE* bldType = holderHome ? *(const BYTE* const*)(holderHome + 0x318) : nullptr;
-    return bldType && *(const BYTE*)(bldType + 0x8E8) == 1;
+    return bldType && *(const BYTE*)(bldType + BLD_TYPE_IS_DORM_OFF) == 1;
 }
 
 static inline bool CitOwnerMatchesHolderHome(int primeLocalState, const BYTE* home,
@@ -1512,8 +1512,7 @@ static const BYTE kBldTourismStepExpect[16] = {
     0x81, 0xEC, 0x10, 0x01, 0x00, 0x00
 };
 static const BYTE kBldStepPrePostExpect[17] = {
-    0x40, 0x53, 0x57, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00,
-    0x83, 0xB9, 0xB0, 0x05, 0x00, 0x00, 0x00
+    0x40, 0x53, 0x57, 0x48, 0x81, 0xEC, 0xB8, 0x00, 0x00, 0x00, 0x83, 0xB9, 0xD8, 0x05, 0x00, 0x00, 0x00
 };
 static const BYTE kBldStepUtilityExpect[14] = {
     0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
@@ -1590,9 +1589,7 @@ static const BYTE kStatRecordClearExpect[19] = {
 };
 
 static const BYTE kGetMaxBorrowExpect[17] = {
-    0x4C, 0x8B, 0x81, 0xB0, 0x26, 0x01, 0x00,
-    0x45, 0x33, 0xC9,
-    0x4C, 0x2B, 0x81, 0xA8, 0x26, 0x01, 0x00
+    0x4C, 0x8B, 0x81, 0x60, 0x27, 0x01, 0x00, 0x45, 0x33, 0xC9, 0x4C, 0x2B, 0x81, 0x58, 0x27, 0x01, 0x00
 };
 static const BYTE kStepOneLoanDayExpect[20] = {
     0x48, 0x83, 0xEC, 0x18,
@@ -2710,7 +2707,7 @@ static void AccumulateCivicBuilding(const BYTE* bld, int state, StateCivicStats*
     if (!bld || !outStats || LookupBuildingOwnerCached(bld) != state) return;
     const BYTE* bldType = *(const BYTE* const*)(bld + 0x318);
     if (!bldType) return;
-    BYTE kind = *(const BYTE*)(bldType + 0x360);
+    BYTE kind = *(const BYTE*)(bldType + BLD_TYPE_CAT_OFF);
     if (kind == 0x4B) {
         outStats->courthouses++;
         int cl = *(const int*)(bld + 0x1388);
