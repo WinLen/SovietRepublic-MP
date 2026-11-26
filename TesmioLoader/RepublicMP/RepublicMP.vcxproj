@@ -181,6 +181,7 @@
     <ClCompile Include="game\save_load.cpp" />
     <ClCompile Include="core\main.cpp" />
     <ClCompile Include="core\diag_log.cpp" />
+    <ClCompile Include="core\crash_upload.cpp" />
     <ClCompile Include="world_sync\local_builds.cpp" />
     <ClCompile Include="game\present_hook.cpp" />
     <ClCompile Include="session\game_speed.cpp" />
@@ -213,6 +214,7 @@
     <ClCompile Include="session\two_states\two_states_research.cpp" />
     <ClCompile Include="session\two_states\two_states_overlay.cpp" />
     <ClCompile Include="session\two_states\two_states_persistence.cpp" />
+    <ClCompile Include="session\two_states\two_states_space.cpp" />
     <ClCompile Include="session\mod_sync.cpp" />
     <ClCompile Include="session\updater.cpp" />
     <ClCompile Include="session\settings_sync.cpp" />
@@ -303,6 +305,7 @@
     <ClInclude Include="game\input_block.h" />
     <ClInclude Include="core\version.h" />
     <ClInclude Include="core\diag_log.h" />
+    <ClInclude Include="core\crash_upload.h" />
     <ClInclude Include="core\engine_rva.h" />
     <ClInclude Include="core\safe_mem.h" />
     <ClInclude Include="world_sync\buildings\build_sync.h" />

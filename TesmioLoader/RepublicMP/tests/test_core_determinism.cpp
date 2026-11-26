@@ -564,7 +564,7 @@ bool Test_StateHash()
     WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
 
     // Construct a mock vehicle
-    std::vector<BYTE> veh(0x1000, 0);
+    std::vector<BYTE> veh(VEHICLE_STRUCT_BYTES, 0);
     *(int*)(veh.data() + VEH_ID_OFFSET)        = 7;
     *(int*)(veh.data() + VEH_SCHED_IDX_OFFSET) = 2;
     *(float*)(veh.data() + VEH_POS_OFFSET + 0) = 125.0f;
@@ -655,13 +655,13 @@ struct LsHash_M9_4 {
     StateSummary s;
 };
 #pragma pack(pop)
-static_assert(sizeof(LsHash_M9_4) == 208, "LsHash_M9_4 must be exactly 208 bytes");
+static_assert(sizeof(LsHash_M9_4) == 216, "LsHash_M9_4 must be exactly 216 bytes");
 
 static bool SubTest_M9_4_StateSummaryAndHashing()
 {
-    // Feature 37: StateSummary struct layout and expanded hashing (200 bytes, 8-byte aligned)
-    TEST_CHECK(sizeof(StateSummary) == 200);
-    TEST_CHECK(sizeof(LsHash_M9_4) == 208);
+    // Feature 37: StateSummary struct layout and expanded hashing (208 bytes, 8-byte aligned)
+    TEST_CHECK(sizeof(StateSummary) == 208);
+    TEST_CHECK(sizeof(LsHash_M9_4) == 216);
 
     ResetMockWorldMemory();
     TwoStates_OnSessionEnded();
@@ -2304,7 +2304,7 @@ static bool SubTest_Perf_SettingsRoadAnimCoalescedSeh()
     *(int32_t*)(animCtrl.data() + ANIM_CTRL_MAX_FRAMES_OFFSET) = 100;
     std::vector<BYTE> submesh(0x200, 0);
     *(BYTE**)(submesh.data() + MESH_ANIM_CTRL_OFFSET) = animCtrl.data();
-    std::vector<BYTE> animType(0x450, 0);
+    std::vector<BYTE> animType(BLD_TYPE_ANIM_SPEED_OFFSET + 0x40u, 0);
     *(BYTE**)(animType.data() + BLD_TYPE_ANIM_SUBMESH_OFFSET) = submesh.data();
     *(float*)(animType.data() + BLD_TYPE_ANIM_SPEED_OFFSET) = 1.0f;
 
@@ -2700,4 +2700,2459 @@ bool SubTest_M6_HeldFrameCoalescedGuardAndVisualParity()
     *(BYTE***)(g_mockExeBuffer + 0xA317F0) = nullptr;
     ResetMockWorldMemory();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test 71: Space Program Phase 2 (Presentation RNG, hashSpace, SoftSync, -119 VehicleType, orbits.dta Zip)
+// ---------------------------------------------------------------------------
+
+static bool SubTest_Phase2_PresentationRngSites()
+{
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_MC_RAND1_RET));
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_MC_RAND2_RET));
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_EXHAUST_RAND_RET));
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_SOUND_RAND1_RET));
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_SOUND_RAND2_RET));
+    TEST_CHECK(Determinism_IsPresentationSiteForTest(RVA_SPACE_SOUND_RAND3_RET));
+
+    // Space simulation RNG call sites must remain part of deterministic simulation stream
+    TEST_CHECK(!Determinism_IsPresentationSiteForTest(0x6961AEu));
+    TEST_CHECK(!Determinism_IsPresentationSiteForTest(0x6985CCu));
+    TEST_CHECK(!Determinism_IsPresentationSiteForTest(0x697458u));
+    return true;
+}
+
+static bool SubTest_Phase2_StateHashSpaceAndMixedDlcMilestones()
+{
+    ResetMockWorldMemory();
+    TwoStates_OnSessionEnded();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // Minimal buildings vector required for StateHash_Compute to walk world
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE*> bldVec = { bld.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    // 2 orbit slots (0x60 bytes each) + global clock at +0x18 + local UI view at +0x14
+    std::vector<BYTE> orbits(2u * ORBIT_SLOT_STRIDE, 0);
+    *(float*)(orbits.data() + 0x00) = 250.0f;
+    *(int32_t*)(orbits.data() + ORBIT_SLOT_TYPE_OFFSET) = 1;
+    *(float*)(orbits.data() + ORBIT_SLOT_START_CLOCK_OFFSET) = 12.5f;
+    *(float*)(orbits.data() + ORBIT_SLOT_STRIDE + 0x00) = 400.0f;
+    *(int32_t*)(orbits.data() + ORBIT_SLOT_STRIDE + ORBIT_SLOT_TYPE_OFFSET) = 2;
+    *(float*)(orbits.data() + ORBIT_SLOT_STRIDE + ORBIT_SLOT_START_CLOCK_OFFSET) = 33.25f;
+
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = 0;
+    *(float*)(world + WORLD_ORBIT_CLOCK_OFFSET) = 45.5f;
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    // Host VehicleType pool: 119 dlc5 types (zero milestones) + 3 shared types
+    std::vector<BYTE> hostTypes(122u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    for (int i = 0; i < 119; ++i) {
+        _snprintf_s((char*)(hostTypes.data() + (size_t)i * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+                    64, _TRUNCATE, "media_soviet/dlc5/vehicles/rocket_%03d.ini", i);
+    }
+    BYTE* hS0 = hostTypes.data() + 119u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* hS1 = hostTypes.data() + 120u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* hS2 = hostTypes.data() + 121u * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(hS0 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "media_soviet/vehicles/soyuz_capsule.ini");
+    strcpy_s((char*)(hS1 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "media_soviet/vehicles/tatra_148.ini");
+    strcpy_s((char*)(hS2 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "media_soviet/dlc2/vehicles/skoda_706.ini");
+    hS0[VEH_TYPE_ROCKET_FLAG_OFFSET] = 1;
+    *(int32_t*)(hS0 + VEH_TYPE_BUILT_IN_PROD_OFFSET) = 5;
+    *(int32_t*)(hS0 + VEH_TYPE_SPACE_ORBIT_OFFSET) = 2;
+    *(int32_t*)(hS0 + VEH_TYPE_SPACE_REENTRY_OFFSET) = 1;
+
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = hostTypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = hostTypes.data() + hostTypes.size();
+
+    std::vector<BYTE> station(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> capsule(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(station.data() + VEH_ID_OFFSET) = 9001u;
+    *(int32_t*)(station.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    *(int32_t*)(station.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(station.data() + VEH_SPACE_DOCK_SLOT_OFFSET) = -1;
+    *(int32_t*)(station.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    *(float*)(station.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.5f;
+
+    *(unsigned*)(capsule.data() + VEH_ID_OFFSET) = 9002u;
+    *(BYTE**)(capsule.data() + VEH_TYPE_PTR_OFFSET) = hS0;
+    *(int32_t*)(capsule.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    *(int32_t*)(capsule.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 1;
+    *(BYTE**)(capsule.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = station.data();
+    *(int32_t*)(capsule.data() + VEH_SPACE_DOCK_SLOT_OFFSET) = 2;
+    *(int32_t*)(capsule.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    *(float*)(capsule.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.75f;
+
+    std::vector<BYTE*> vehVec = { station.data(), capsule.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehVec);
+
+    StateSummary sHost = {};
+    TEST_CHECK(StateHash_Compute(&sHost));
+
+    // Local UI orbit view change (+0x14) must NEVER affect hashSpace
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = 1;
+    StateSummary sUiOnly = {};
+    TEST_CHECK(StateHash_Compute(&sUiOnly));
+    TEST_CHECK(sUiOnly.hashSpace == sHost.hashSpace);
+
+    // Mixed-DLC Client (3 types only, reversed order, mixed path case & slashes) must match Host hashSpace!
+    std::vector<BYTE> clientTypes(3u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* cS2 = clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* cS1 = clientTypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* cS0 = clientTypes.data() + 2u * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(cS2 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "DLC2\\VEHICLES\\SKODA_706.INI");
+    strcpy_s((char*)(cS1 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/tatra_148.ini");
+    strcpy_s((char*)(cS0 + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "MEDIA_SOVIET\\VEHICLES\\SOYUZ_CAPSULE.INI");
+    cS0[VEH_TYPE_ROCKET_FLAG_OFFSET] = 1;
+    *(int32_t*)(cS0 + VEH_TYPE_BUILT_IN_PROD_OFFSET) = 5;
+    *(int32_t*)(cS0 + VEH_TYPE_SPACE_ORBIT_OFFSET) = 2;
+    *(int32_t*)(cS0 + VEH_TYPE_SPACE_REENTRY_OFFSET) = 1;
+    *(BYTE**)(capsule.data() + VEH_TYPE_PTR_OFFSET) = cS0;
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = clientTypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = clientTypes.data() + clientTypes.size();
+
+    StateSummary sClient = {};
+    TEST_CHECK(StateHash_Compute(&sClient));
+    TEST_CHECK(sClient.hashSpace == sHost.hashSpace);
+
+    // Negative zero vs positive zero in orbit slot must normalize identically
+    *(uint32_t*)(orbits.data() + ORBIT_SLOT_STRIDE + 0x04) = 0x80000000u;
+    StateSummary sNegZero = {};
+    TEST_CHECK(StateHash_Compute(&sNegZero));
+    TEST_CHECK(sNegZero.hashSpace == sClient.hashSpace);
+
+    // Mutate orbit clock, orbit slot type, rocket progress, and milestone counter -> each mutates hashSpace only
+    *(float*)(world + WORLD_ORBIT_CLOCK_OFFSET) = 46.0f;
+    StateSummary sClockMut = {};
+    TEST_CHECK(StateHash_Compute(&sClockMut));
+    TEST_CHECK(sClockMut.hashSpace != sClient.hashSpace);
+    TEST_CHECK(sClockMut.hashVehicles == sClient.hashVehicles && sClockMut.hashClock == sClient.hashClock);
+    char what[128] = {};
+    TEST_CHECK(LockstepNet_CompareSummaryForTest(sClient, sClockMut, what, sizeof(what)));
+    TEST_CHECK(strstr(what, "space") != nullptr);
+
+    *(float*)(world + WORLD_ORBIT_CLOCK_OFFSET) = 45.5f;
+    *(int32_t*)(orbits.data() + ORBIT_SLOT_TYPE_OFFSET) = 3;
+    StateSummary sSlotMut = {};
+    TEST_CHECK(StateHash_Compute(&sSlotMut));
+    TEST_CHECK(sSlotMut.hashSpace != sClient.hashSpace);
+
+    *(int32_t*)(orbits.data() + ORBIT_SLOT_TYPE_OFFSET) = 1;
+    *(float*)(capsule.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.80f;
+    StateSummary sVehSpaceMut = {};
+    TEST_CHECK(StateHash_Compute(&sVehSpaceMut));
+    TEST_CHECK(sVehSpaceMut.hashSpace != sClient.hashSpace);
+    TEST_CHECK(sVehSpaceMut.hashVehicles == sClient.hashVehicles);
+
+    *(float*)(capsule.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.75f;
+    *(int32_t*)(cS0 + VEH_TYPE_SPACE_ORBIT_OFFSET) = 3;
+    StateSummary sMilestoneMut = {};
+    TEST_CHECK(StateHash_Compute(&sMilestoneMut));
+    TEST_CHECK(sMilestoneMut.hashSpace != sClient.hashSpace);
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase2_VehicleSoftSyncSpaceExclusion()
+{
+    ResetMockWorldMemory();
+    VehicleSoftSync_Reset();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> orbits(ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    std::vector<BYTE> rocketType(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    rocketType[VEH_TYPE_ROCKET_FLAG_OFFSET] = 1;
+    std::vector<BYTE> rocketPartType(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    rocketPartType[VEH_TYPE_ROCKETPART_FLAG_OFFSET] = 1;
+    std::vector<BYTE> reentryType(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    reentryType[VEH_TYPE_SPACECRAFT_FLAG_OFFSET] = 1;
+    reentryType[VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET] = 1;
+
+    std::vector<BYTE> rocketFlight(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> rocketOrbit(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> rocketDocked(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> rocketPad(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> landedCapsule(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> rocketPartOnTruck(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> rocketPartOnRocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> groundTruck(VEHICLE_STRUCT_BYTES, 0);
+
+    *(unsigned*)(rocketFlight.data() + VEH_ID_OFFSET) = 1001u;
+    *(int32_t*)(rocketFlight.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(rocketFlight.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 2; // reentry
+    *(float*)(rocketFlight.data() + VEH_SPEED_OFFSET) = 150.0f;
+    *(float*)(rocketFlight.data() + VEH_POS_OFFSET) = 500.0f;
+
+    *(unsigned*)(rocketOrbit.data() + VEH_ID_OFFSET) = 1002u;
+    *(BYTE**)(rocketOrbit.data() + VEH_TYPE_PTR_OFFSET) = rocketType.data();
+    *(int32_t*)(rocketOrbit.data() + VEH_ORBIT_INDEX_OFFSET) = 0; // in valid orbit 0
+    *(float*)(rocketOrbit.data() + VEH_SPEED_OFFSET) = 10.0f;
+
+    *(unsigned*)(rocketDocked.data() + VEH_ID_OFFSET) = 1003u;
+    *(int32_t*)(rocketDocked.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(BYTE**)(rocketDocked.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = rocketOrbit.data();
+    *(float*)(rocketDocked.data() + VEH_SPEED_OFFSET) = 5.0f;
+
+    // Pad rocket ($SPACE_ROCKET) and landed capsule ($SPACE_SHIP_REENTRY) must be protected from SoftSync
+    // (even with real CreateVehicle 0x403FBD defaults: progress = 1.0f, orbitIdx = -1, targetOrbitIdx = -1).
+    *(unsigned*)(rocketPad.data() + VEH_ID_OFFSET) = 1004u;
+    *(BYTE**)(rocketPad.data() + VEH_TYPE_PTR_OFFSET) = rocketType.data();
+    *(int32_t*)(rocketPad.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(rocketPad.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(rocketPad.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(rocketPad.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+    *(float*)(rocketPad.data() + VEH_SPEED_OFFSET) = 1.0f;
+
+    *(unsigned*)(landedCapsule.data() + VEH_ID_OFFSET) = 1006u;
+    *(BYTE**)(landedCapsule.data() + VEH_TYPE_PTR_OFFSET) = reentryType.data();
+    *(int32_t*)(landedCapsule.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(landedCapsule.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(landedCapsule.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(landedCapsule.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+
+    // Ground truck with REAL CreateVehicle (0x403FBD) default progress == 1.0f MUST still sync when orbits exist!
+    *(unsigned*)(groundTruck.data() + VEH_ID_OFFSET) = 1005u;
+    *(int32_t*)(groundTruck.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(groundTruck.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(groundTruck.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(groundTruck.data() + VEH_SPEED_OFFSET) = 45.0f;
+    *(float*)(groundTruck.data() + VEH_POS_OFFSET) = 123.0f;
+
+    *(unsigned*)(rocketPartOnTruck.data() + VEH_ID_OFFSET) = 1007u;
+    *(BYTE**)(rocketPartOnTruck.data() + VEH_TYPE_PTR_OFFSET) = rocketPartType.data();
+    *(int32_t*)(rocketPartOnTruck.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(rocketPartOnTruck.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(rocketPartOnTruck.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(BYTE**)(rocketPartOnTruck.data() + VEH_PARENT_PTR_OFFSET) = groundTruck.data();
+
+    // Rocket part (+0x296) attached to a flying rocket IS excluded via parent recursion
+    *(unsigned*)(rocketPartOnRocket.data() + VEH_ID_OFFSET) = 1008u;
+    *(BYTE**)(rocketPartOnRocket.data() + VEH_TYPE_PTR_OFFSET) = rocketPartType.data();
+    *(int32_t*)(rocketPartOnRocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(rocketPartOnRocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(rocketPartOnRocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(BYTE**)(rocketPartOnRocket.data() + VEH_PARENT_PTR_OFFSET) = rocketFlight.data();
+
+    // Earth ground transport of dlc5 vehicles: $SPACE_SHIP container on flatbed truck & $SPACE_ROCKET wagon towed by locomotive
+    std::vector<BYTE> carriedShip(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(carriedShip.data() + VEH_ID_OFFSET) = 1009u;
+    *(BYTE**)(carriedShip.data() + VEH_TYPE_PTR_OFFSET) = reentryType.data();
+    *(int32_t*)(carriedShip.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(carriedShip.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(carriedShip.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(BYTE**)(carriedShip.data() + VEH_PARENT_PTR_OFFSET) = groundTruck.data();
+
+    std::vector<BYTE> towedRocket(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(towedRocket.data() + VEH_ID_OFFSET) = 1010u;
+    *(BYTE**)(towedRocket.data() + VEH_TYPE_PTR_OFFSET) = rocketType.data();
+    *(int32_t*)(towedRocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(towedRocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(towedRocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(BYTE**)(towedRocket.data() + VEH_LINK_PTR_OFFSET) = groundTruck.data();
+
+    std::vector<BYTE> padType(0x400, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL;
+    std::vector<BYTE> launchPad(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(launchPad.data() + BLD_TYPE_OFFSET) = padType.data();
+
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketFlight.data()));
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketOrbit.data()));
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketDocked.data()));
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketPad.data()));
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, landedCapsule.data()));
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketPartOnRocket.data()));
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, rocketPartOnTruck.data()));
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, groundTruck.data()));
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, carriedShip.data()));
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, towedRocket.data()));
+    // Once the towed rocket enters a Launch Pad building, it IS excluded from SoftSync immediately
+    *(BYTE**)(towedRocket.data() + VEH_CUR_BLD_OFFSET) = launchPad.data();
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, towedRocket.data()));
+    *(BYTE**)(towedRocket.data() + VEH_CUR_BLD_OFFSET) = nullptr;
+
+    // Active transfer progress strictly inside (0, 1) with valid world orbits IS excluded
+    std::vector<BYTE> activeTransfer(VEHICLE_STRUCT_BYTES, 0);
+    *(int32_t*)(activeTransfer.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(activeTransfer.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    *(float*)(activeTransfer.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.5f;
+    TEST_CHECK(VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, activeTransfer.data()));
+
+    // Verify 0-initialized truck is NOT falsely skipped even when world has active orbits
+    std::vector<BYTE> zeroTruck(VEHICLE_STRUCT_BYTES, 0);
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(world, zeroTruck.data()));
+    TEST_CHECK(!VehicleSoftSync_IsVehicleInSpaceFlightForTest(nullptr, zeroTruck.data()));
+
+    std::vector<BYTE*> vehList = {
+        rocketFlight.data(), rocketOrbit.data(), rocketDocked.data(), rocketPad.data(),
+        landedCapsule.data(), rocketPartOnRocket.data(), rocketPartOnTruck.data(), groundTruck.data()
+    };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    // Build immediate packet: only rocketPartOnTruck (1007) and groundTruck (1005) may be captured
+    std::vector<BYTE> pkt(4096, 0);
+    size_t pktSz = 0;
+    TEST_CHECK(VehicleSoftSync_BuildPacketForTest(pkt.data(), pkt.size(), &pktSz, true));
+    const VehicleSoftSyncMsg_M4* msg = (const VehicleSoftSyncMsg_M4*)pkt.data();
+    TEST_CHECK(msg->count == 2u);
+    TEST_CHECK((msg->entries[0].vehicleId == 1007u && msg->entries[1].vehicleId == 1005u) ||
+               (msg->entries[0].vehicleId == 1005u && msg->entries[1].vehicleId == 1007u));
+
+    // Client defense-in-depth: spoofed packet targeting rocketFlight (place 0, id 1001) must NOT alter its position
+    VehicleSoftSyncMsg_M4 spoof = {};
+    spoof.count = 1u;
+    spoof.entries[0].place = 0;
+    spoof.entries[0].vehicleId = 1001u;
+    spoof.entries[0].currentBldId = -1;
+    spoof.entries[0].pos[0] = 9999.0f;
+    TEST_CHECK(VehicleSoftSync_ApplyCommand(&spoof, sizeof(spoof)));
+    TEST_CHECK_NEAR(*(float*)(rocketFlight.data() + VEH_POS_OFFSET), 500.0f, 1e-4);
+
+    // Child translation guard: carried $SPACE_SHIP container translates WITH flatbed truck, while active rocket does NOT
+    *(float*)(carriedShip.data() + VEH_POS_OFFSET) = 123.0f;
+    std::vector<BYTE*> children = { rocketFlight.data(), carriedShip.data() };
+    WriteMockVectorHeader(groundTruck.data() + VEH_CHILDREN_BEGIN_OFFSET, children);
+    VehicleSoftSync_TranslateWithChildrenForTest(groundTruck.data(), 10.0f, 0.0f, 0.0f, false);
+    TEST_CHECK_NEAR(*(float*)(groundTruck.data() + VEH_POS_OFFSET), 133.0f, 1e-4);
+    TEST_CHECK_NEAR(*(float*)(carriedShip.data() + VEH_POS_OFFSET), 133.0f, 1e-4);
+    TEST_CHECK_NEAR(*(float*)(rocketFlight.data() + VEH_POS_OFFSET), 500.0f, 1e-4);
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static U64 g_phase2CapturedHalfTypePtr = 0;
+static void __fastcall Phase2_MockCargoDestroy(U64) {}
+static void __fastcall Phase2_MockCargoCopy(U64, U64 src)
+{
+    U64 b = 0, e = 0;
+    if (SafeReadPod((const BYTE*)(src + 0x68), &b) && SafeReadPod((const BYTE*)(src + 0x70), &e) && b && e >= b + 8) {
+        SafeReadPod((const BYTE*)b, &g_phase2CapturedHalfTypePtr);
+    }
+}
+
+static bool SubTest_Phase2_MixedDlcWorldRefsShift119()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // Host has 122 VehicleTypes: 0..118 dlc5 rockets, 119 Workshop truck, 120 vanilla truck, 121 unnamed mock
+    std::vector<BYTE> hostTypes(122u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    for (int i = 0; i < 119; ++i) {
+        _snprintf_s((char*)(hostTypes.data() + (size_t)i * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+                    64, _TRUNCATE, "media_soviet/dlc5/vehicles/rocket_%03d.ini", i);
+    }
+    strcpy_s((char*)(hostTypes.data() + 119u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+             64, "media_soviet/workshop_wip/3123456789/kamaz_5320.ini");
+    strcpy_s((char*)(hostTypes.data() + 120u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+             64, "media_soviet/vehicles/tatra_148.ini");
+
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = hostTypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = hostTypes.data() + hostTypes.size();
+
+    U64 hostWorkshopVt = (U64)(hostTypes.data() + 119u * WORLD_VEHICLE_TYPE_STRIDE);
+    U64 hostDlc5Vt = (U64)(hostTypes.data() + 12u * WORLD_VEHICLE_TYPE_STRIDE);
+    U64 hostUnnamedVt = (U64)(hostTypes.data() + 121u * WORLD_VEHICLE_TYPE_STRIDE);
+
+    BYTE encWs[136] = {}, encDlc5[136] = {}, encUnnamed[136] = {};
+    size_t lenWs = 0, lenDlc5 = 0, lenUnnamed = 0;
+    TEST_CHECK(Ref_EncodeDefPtrBytes(hostWorkshopVt, encWs, sizeof(encWs), lenWs));
+    TEST_CHECK(encWs[0] == 5u && lenWs > 6u);
+    TEST_CHECK(Ref_EncodeDefPtrBytes(hostDlc5Vt, encDlc5, sizeof(encDlc5), lenDlc5));
+    TEST_CHECK(encDlc5[0] == 5u && lenDlc5 > 6u);
+    TEST_CHECK(Ref_EncodeDefPtrBytes(hostUnnamedVt, encUnnamed, sizeof(encUnnamed), lenUnnamed));
+    TEST_CHECK(encUnnamed[0] == 2u && lenUnnamed == 5u);
+
+    // Switch world to Client without dlc5 (2 types only: Workshop at index 0, vanilla at index 1)
+    std::vector<BYTE> clientTypes(2u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+             64, "WORKSHOP_WIP\\3123456789\\KAMAZ_5320.INI");
+    strcpy_s((char*)(clientTypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET),
+             64, "media_soviet/vehicles/tatra_148.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = clientTypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = clientTypes.data() + clientTypes.size();
+
+    U64 decoded = 0;
+    size_t at = 0;
+    TEST_CHECK(Ref_DecodeDefPtrBytes(encWs, lenWs, at, decoded));
+    TEST_CHECK(at == lenWs && decoded == (U64)(clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE));
+
+    // Unshared dlc5 rocket must fail cleanly instead of aliasing clientTypes[0]
+    at = 0;
+    TEST_CHECK(!Ref_DecodeDefPtrBytes(encDlc5, lenDlc5, at, decoded));
+
+    // End-to-end CargoSettings_ApplyCommand decode using tag==5 Workshop VehicleType inside vector index 3 (+0x68)
+    const unsigned char sigDestroy[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 };
+    const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
+    const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
+    memcpy(g_mockExeBuffer + 0x0F6520, sigDestroy, 16);
+    memcpy(g_mockExeBuffer + 0x21FBF0, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x4BFC10, sigRefresh, 16);
+
+    std::vector<BYTE> stopVeh(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> stopRec(0x198, 0);
+    *(unsigned*)(stopVeh.data() + VEH_ID_OFFSET) = 4242u;
+    *(BYTE**)(stopVeh.data() + 0x638) = stopRec.data();
+    *(BYTE**)(stopVeh.data() + 0x640) = stopRec.data() + 0x198;
+    std::vector<BYTE*> vehList = { stopVeh.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    RouteRef stopRef = kNoRef, noTarget = kNoRef;
+    TEST_CHECK(Ref_Vehicle((U64)stopVeh.data(), stopRef));
+
+    BYTE primeBuf[64] = {};
+    *(unsigned*)primeBuf = 0x32534743u;
+    CargoSettings_ApplyCommand(primeBuf, sizeof(primeBuf));
+    WriteAbsJmp12(g_mockExeBuffer + 0x0F6520, (void*)&Phase2_MockCargoDestroy);
+    WriteAbsJmp12(g_mockExeBuffer + 0x21FBF0, (void*)&Phase2_MockCargoCopy);
+
+    std::vector<BYTE> pkt;
+    auto pushRaw = [&](const void* p, size_t n) { pkt.insert(pkt.end(), (const BYTE*)p, (const BYTE*)p + n); };
+    unsigned magic = 0x32534743u, recTotal = 1u, zeroVec = 0u, oneVec = 1u;
+    BYTE kind = 0, half = 0, linkActive = 0, scalars[22] = {};
+    unsigned short recIdx = 0;
+    U64 tail190 = 0;
+    pushRaw(&magic, 4);
+    pushRaw(&kind, 1);
+    pushRaw(&half, 1);
+    pushRaw(&recIdx, 2);
+    pushRaw(&recTotal, 4);
+    pushRaw(&stopRef, sizeof(stopRef));
+    pushRaw(&noTarget, sizeof(noTarget));
+    pushRaw(&linkActive, 1);
+    pushRaw(&tail190, 8);
+    pushRaw(scalars, sizeof(scalars));
+    for (int v = 0; v < 7; ++v) {
+        if (v == 3) {
+            pushRaw(&oneVec, 4);
+            pushRaw(encWs, lenWs);
+        } else {
+            pushRaw(&zeroVec, 4);
+        }
+    }
+    g_phase2CapturedHalfTypePtr = 0;
+    TEST_CHECK(CargoSettings_ApplyCommand(pkt.data(), pkt.size()));
+    TEST_CHECK(g_phase2CapturedHalfTypePtr == (U64)(clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE));
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase2_OrbitsDtaSaveZipRoundTrip()
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path tmpRoot = fs::path(g_mockBaseDir) / "phase2_orbits_zip";
+    fs::path srcDir = tmpRoot / "save_src";
+    fs::path dstDir = tmpRoot / "save_dst";
+    fs::path zipPath = tmpRoot / "save.zip";
+    fs::remove_all(tmpRoot, ec);
+    fs::create_directories(srcDir, ec);
+
+    // Build exact SOVIET64 orbits.dta payload: float clock + int32 count(2) + 2 x 0x60-byte slots
+    std::vector<BYTE> orbitsBytes(4u + 4u + 2u * ORBIT_SLOT_STRIDE, 0);
+    *(float*)(orbitsBytes.data() + 0) = 123.75f;
+    *(int32_t*)(orbitsBytes.data() + 4) = 2;
+    for (size_t s = 0; s < 2u; ++s) {
+        BYTE* slot = orbitsBytes.data() + 8u + s * ORBIT_SLOT_STRIDE;
+        *(float*)(slot + 0x00) = (float)(200 + s * 100);
+        *(int32_t*)(slot + ORBIT_SLOT_TYPE_OFFSET) = (int32_t)(s + 1);
+        *(float*)(slot + ORBIT_SLOT_START_CLOCK_OFFSET) = (float)(10.5f + s * 5.25f);
+    }
+
+    auto writeBin = [](const fs::path& p, const void* data, size_t len) -> bool {
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, p.wstring().c_str(), L"wb") != 0 || !f) return false;
+        size_t wr = fwrite(data, 1, len, f);
+        fclose(f);
+        return wr == len;
+    };
+    const char hdr[] = "HDR";
+    TEST_CHECK(writeBin(srcDir / "header.bin", hdr, sizeof(hdr)));
+    TEST_CHECK(writeBin(srcDir / "orbits.dta", orbitsBytes.data(), orbitsBytes.size()));
+
+    TEST_CHECK(ZipSaveDirectory(srcDir.string().c_str(), zipPath.string().c_str(), nullptr, nullptr));
+    TEST_CHECK(UnzipToDirectory(zipPath.string().c_str(), dstDir.string().c_str(), nullptr, nullptr));
+
+    FILE* fIn = nullptr;
+    TEST_CHECK(_wfopen_s(&fIn, (dstDir / "orbits.dta").wstring().c_str(), L"rb") == 0 && fIn != nullptr);
+    std::vector<BYTE> roundTrip(orbitsBytes.size(), 0);
+    size_t rd = fread(roundTrip.data(), 1, roundTrip.size(), fIn);
+    int extraByte = fgetc(fIn);
+    fclose(fIn);
+
+    TEST_CHECK(rd == orbitsBytes.size() && extraByte == EOF);
+    TEST_CHECK(memcmp(roundTrip.data(), orbitsBytes.data(), orbitsBytes.size()) == 0);
+    fs::remove_all(tmpRoot, ec);
+    return true;
+}
+
+bool Test_SpaceProgramPhase2_DeterminismOrbitsSoftSyncMixedDlc()
+{
+    return SubTest_Phase2_PresentationRngSites() &&
+           SubTest_Phase2_StateHashSpaceAndMixedDlcMilestones() &&
+           SubTest_Phase2_VehicleSoftSyncSpaceExclusion() &&
+           SubTest_Phase2_MixedDlcWorldRefsShift119() &&
+           SubTest_Phase2_OrbitsDtaSaveZipRoundTrip();
+}
+
+// ---------------------------------------------------------------------------
+// Test 72: Space Program DLC Phase 3 (4 Space kSites, Zero-Pre-Mutation
+//          Deorbit/Reentry/Abort, Pad Switches, VehicleSwitches, Camera+0x14)
+// ---------------------------------------------------------------------------
+
+static int g_p3HasReentryCalls = 0;
+static int g_p3SetupReentryCalls = 0;
+static int g_p3SetupDeorbitCalls = 0;
+static unsigned char g_p3HasReentryRet = 1;
+
+static int g_p3LaunchCalls = 0;
+static int g_p3AttachCalls = 0;
+static int g_p3DetachCalls = 0;
+static uint32_t g_p3SeenPadWords[5] = {};
+static int g_p3ShiftCancelOrigCalls = 0;
+static BYTE* g_p3AutoReplaceSeenTarget = nullptr;
+static BYTE* g_p3AutoReplaceSeenNew = nullptr;
+
+static void __fastcall Phase3_MockLaunchRocket(U64 veh, int)
+{
+    ++g_p3LaunchCalls;
+    U64 curBld = 0;
+    if (IsPointerLikeX64(veh) && SafeReadPod((const U64*)(veh + VEH_CUR_BLD_OFFSET), &curBld) && IsPointerLikeX64(curBld)) {
+        SafeReadPod((const uint32_t*)(curBld + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF), &g_p3SeenPadWords[0]);
+        SafeMemcpyPod(&g_p3SeenPadWords[1], (const void*)(curBld + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF), 16u);
+    }
+    // Simulate vanilla 0x698CF1..0x698E88 + 0x17BB0 camera hijack on launch
+    BYTE* cam = g_mockExeBuffer + CAMERA_RVA;
+    *(float*)(cam + CAMERA_POS_OFFSET) = 9876.0f;
+    BYTE* camMgr = *(BYTE**)(g_mockExeBuffer + WORLD_RVA + WORLD_CAMERA_MGR_PTR_OFF);
+    if (camMgr && IsPointerLikeX64((U64)(uintptr_t)camMgr)) {
+        camMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] = 1;
+        *(U64*)(camMgr + CAM_MGR_RIDE_VEH_PTR_OFF) = veh;
+        BYTE* pid0 = *(BYTE**)(camMgr + CAM_MGR_PID_PTRS_OFFSET);
+        if (pid0 && IsPointerLikeX64((U64)(uintptr_t)pid0)) {
+            *(uint64_t*)(pid0 + 0x58) = 0xDEADBEEFULL;
+        }
+    }
+}
+
+static void __fastcall Phase3_MockOrbitAttach(U64, U64, int)
+{
+    ++g_p3AttachCalls;
+}
+
+static void __fastcall Phase3_MockOrbitDetach(U64)
+{
+    ++g_p3DetachCalls;
+}
+
+static void __fastcall Phase3_MockShiftCancelOrig(__int64)
+{
+    ++g_p3ShiftCancelOrigCalls;
+}
+
+static void __fastcall Phase3_MockSetAutoReplace(BYTE*, BYTE* targetType, BYTE* newType)
+{
+    g_p3AutoReplaceSeenTarget = targetType;
+    g_p3AutoReplaceSeenNew = newType;
+}
+
+static unsigned char __fastcall Phase3_MockHasReentry(unsigned long long)
+{
+    ++g_p3HasReentryCalls;
+    return g_p3HasReentryRet;
+}
+
+static void __fastcall Phase3_MockSetupReentry(unsigned long long)
+{
+    ++g_p3SetupReentryCalls;
+}
+
+static void __fastcall Phase3_MockSetupDeorbit(unsigned long long)
+{
+    ++g_p3SetupDeorbitCalls;
+}
+
+static void Phase3_ResetSpaceActionMockCounters(unsigned char hasReentryRet)
+{
+    g_p3HasReentryCalls = 0;
+    g_p3SetupReentryCalls = 0;
+    g_p3SetupDeorbitCalls = 0;
+    g_p3HasReentryRet = hasReentryRet;
+}
+
+static bool SubTest_Phase3_SpaceKSitesAndPreconditions()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    double initRub[2] = { 1000000.0, 1000000.0 };
+    double initUsd[2] = { 500000.0, 500000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, FN_SPACE_LAUNCH_ROCKET_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, FN_SPACE_LAUNCH_ROCKET_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SPACE_ORBIT_ATTACH_RVA, FN_SPACE_ORBIT_ATTACH_RVA));
+    TEST_CHECK(GameCalls_HasCallSiteForTest(SITE_SPACE_ORBIT_DETACH_RVA, FN_SPACE_ORBIT_DETACH_RVA));
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA), "VI") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA), "VI") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_SPACE_ORBIT_ATTACH_RVA), "VVI") == 0);
+    TEST_CHECK(strcmp(GameCalls_GetSiteSchemaForTest(SITE_SPACE_ORBIT_DETACH_RVA), "V") == 0);
+
+    // Install real executable mock handlers at Space target RVAs so preconditions prove invocation vs skip
+    g_p3LaunchCalls = g_p3AttachCalls = g_p3DetachCalls = 0;
+    memset(g_p3SeenPadWords, 0, sizeof(g_p3SeenPadWords));
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_LAUNCH_ROCKET_RVA, (void*)&Phase3_MockLaunchRocket);
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_ORBIT_ATTACH_RVA, (void*)&Phase3_MockOrbitAttach);
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_ORBIT_DETACH_RVA, (void*)&Phase3_MockOrbitDetach);
+
+    // Setup mock camera + camera manager + 7 PID structs (0x78 bytes each) for remote launch camera isolation
+    std::vector<BYTE> camMgr(CAM_MGR_STRUCT_BYTES, 0);
+    std::vector<std::vector<BYTE>> pids(CAM_MGR_PID_COUNT, std::vector<BYTE>(CAM_MGR_PID_STRUCT_BYTES, 0));
+    for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+        *(uint64_t*)(pids[i].data() + 0x58) = 0x11110000ULL + (uint64_t)i;
+        *(BYTE**)(camMgr.data() + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*)) = pids[i].data();
+    }
+    *(BYTE**)(world + WORLD_CAMERA_MGR_PTR_OFF) = camMgr.data();
+    *(float*)(g_mockExeBuffer + CAMERA_RVA + CAMERA_POS_OFFSET) = 321.5f;
+
+    std::vector<BYTE> padType(0x400u, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL;
+
+    std::vector<BYTE> pad(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)(pad.data() + 0x00) = 6001u;
+    *(BYTE**)(pad.data() + BLD_TYPE_OFFSET) = padType.data();
+    *(float*)(pad.data() + OBJ_POS_OFFSET) = -300.0f;
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) = 2u;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 0u) = 51.6f;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 4u) = 12.5f;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 8u) = 350.0f;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 12u) = 300.0f;
+
+    std::vector<BYTE> rocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> station(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> foreignRocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> foreignStation(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(rocket.data() + VEH_ID_OFFSET) = 5001u;
+    *(float*)(rocket.data() + VEH_POS_OFFSET) = 100.0f;
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad.data();
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+
+    *(unsigned*)(station.data() + VEH_ID_OFFSET) = 5002u;
+    *(float*)(station.data() + VEH_POS_OFFSET) = 100.0f;
+    *(int32_t*)(station.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    *(int32_t*)(station.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+
+    *(unsigned*)(foreignRocket.data() + VEH_ID_OFFSET) = 5003u;
+    *(float*)(foreignRocket.data() + VEH_POS_OFFSET) = 400.0f;
+    *(U64*)(foreignRocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad.data();
+    *(int32_t*)(foreignRocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+
+    *(unsigned*)(foreignStation.data() + VEH_ID_OFFSET) = 5004u;
+    *(float*)(foreignStation.data() + VEH_POS_OFFSET) = 400.0f;
+    *(int32_t*)(foreignStation.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    *(int32_t*)(foreignStation.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+
+    std::vector<BYTE*> vehList = { rocket.data(), station.data(), foreignRocket.data(), foreignStation.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    std::vector<BYTE> orbits(ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    TwoStates_RegisterVehicleOwner(5001, 1);
+    TwoStates_RegisterVehicleOwner(5002, 1);
+    TwoStates_RegisterVehicleOwner(5003, 2);
+    TwoStates_RegisterVehicleOwner(5004, 2);
+
+    // Two-States ownership enforcement on Space sites (including (ownCraft, foreignStation))
+    U64 launchOkArgs[7] = { (U64)(uintptr_t)rocket.data(), (U64)(unsigned)-1, 0, 0, 0, 0, 0 };
+    U64 launchForeignArgs[7] = { (U64)(uintptr_t)foreignRocket.data(), (U64)(unsigned)-1, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchOkArgs));
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchForeignArgs));
+
+    U64 attachOkArgs[7] = { (U64)(uintptr_t)rocket.data(), (U64)(uintptr_t)station.data(), 2, 0, 0, 0, 0 };
+    U64 attachForeignCraft[7] = { (U64)(uintptr_t)foreignRocket.data(), (U64)(uintptr_t)station.data(), 2, 0, 0, 0, 0 };
+    U64 attachForeignStation[7] = { (U64)(uintptr_t)rocket.data(), (U64)(uintptr_t)foreignStation.data(), 2, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachOkArgs));
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachForeignCraft));
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachForeignStation));
+
+    U64 detachOkArgs[7] = { (U64)(uintptr_t)rocket.data(), 0, 0, 0, 0, 0, 0 };
+    U64 detachForeignArgs[7] = { (U64)(uintptr_t)foreignRocket.data(), 0, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachOkArgs));
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachForeignArgs));
+
+    // Item #11 + #12: Launch captures 5 pad orbit dwords, applies them before 0x698720 even after clamping,
+    // and preserves local camera + PIDs when replaying a REMOTE launch!
+    BYTE msg[256] = {};
+    size_t msgSize = 0;
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchOkArgs, msg, sizeof(msg), &msgSize));
+    // Simulate Mission Control clamping pad fields on non-click frames before boundary
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) = 0u;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 0u) = 0.0f;
+    *(float*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 8u) = 100.0f;
+
+    TwoStates_BeginCommand(1);
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    Commands_EndRemoteReplayScope();
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3LaunchCalls == 1);
+    TEST_CHECK(g_p3SeenPadWords[0] == 2u);
+    float seenIncl = 0.0f, seenApo = 0.0f;
+    memcpy(&seenIncl, &g_p3SeenPadWords[1], 4);
+    memcpy(&seenApo, &g_p3SeenPadWords[3], 4);
+    TEST_CHECK_NEAR(seenIncl, 51.6f, 1e-4f);
+    TEST_CHECK_NEAR(seenApo, 350.0f, 1e-4f);
+    // Remote replay MUST restore CAMERA_RVA, camMgr, and all 7 PID structs (no camera hijack)
+    TEST_CHECK_NEAR(*(float*)(g_mockExeBuffer + CAMERA_RVA + CAMERA_POS_OFFSET), 321.5f, 1e-4f);
+    TEST_CHECK(camMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] == 0);
+    TEST_CHECK(*(U64*)(camMgr.data() + CAM_MGR_RIDE_VEH_PTR_OFF) == 0);
+    TEST_CHECK(*(uint64_t*)(pids[0].data() + 0x58) == 0x11110000ULL);
+
+    // Local replay (not remote): camera follow IS allowed to activate
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3LaunchCalls == 2);
+    TEST_CHECK(camMgr[CAM_MGR_FOLLOW_ACTIVE_OFF] == 1);
+    TEST_CHECK(*(U64*)(camMgr.data() + CAM_MGR_RIDE_VEH_PTR_OFF) == (U64)(uintptr_t)rocket.data());
+
+    // Invalid launches MUST NOT invoke 0x698720:
+    // (a) foreign owner on replay, (b) double-click flightState!=0 or orbitIdx!=-1, (c) off-pad, (d) OOB orbit
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(2);
+    TEST_CHECK(g_p3LaunchCalls == 2);
+
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3LaunchCalls == 2);
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3LaunchCalls == 2);
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = 0;
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3LaunchCalls == 2);
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad.data();
+
+    U64 launchOob[7] = { (U64)(uintptr_t)rocket.data(), 99u, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, launchOob, msg, sizeof(msg), &msgSize));
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3LaunchCalls == 2);
+
+    // Attach preconditions: mismatch orbit, flightState!=1, dockPartner!=0, negative slot, (ownCraft, foreignStation)
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachOkArgs, msg, sizeof(msg), &msgSize));
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize)); // rocket orbit (-1) != station orbit (0)
+    TEST_CHECK(g_p3AttachCalls == 0);
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize)); // flightState == 0 != 1
+    TEST_CHECK(g_p3AttachCalls == 0);
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    *(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = (U64)(uintptr_t)station.data();
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize)); // dockPartner != 0
+    TEST_CHECK(g_p3AttachCalls == 0);
+    *(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = 0;
+    // Valid attach -> MUST invoke 0x693B00!
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3AttachCalls == 1);
+    // Replay-side (ownCraft, foreignStation) -> MUST NOT invoke 0x693B00!
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachForeignStation, msg, sizeof(msg), &msgSize));
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3AttachCalls == 1);
+
+    // Detach preconditions: (a) link==0 && dockPartner==0 skipped, (b) approach-only link==0 && dockPartner!=0 skipped without invoking 0x693D40 ([P2] fix),
+    // (c) docked link!=0 invokes 0x693D40, (d) foreign craft skipped on replay
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachOkArgs, msg, sizeof(msg), &msgSize));
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3DetachCalls == 0);
+    *(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = (U64)(uintptr_t)station.data();
+    *(int32_t*)(rocket.data() + VEH_SPACE_DOCK_SLOT_OFFSET) = 2;
+    rocket[VEH_SPACE_DOCK_APPROACH_FLAG_OFF] = 1;
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TEST_CHECK(g_p3DetachCalls == 0);
+    TEST_CHECK(*(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) == (U64)(uintptr_t)station.data());
+    *(U64*)(rocket.data() + VEH_LINK_PTR_OFFSET) = (U64)(uintptr_t)station.data();
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize)); // foreign owner skipped
+    TwoStates_EndCommand(2);
+    TEST_CHECK(g_p3DetachCalls == 0);
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize)); // valid docked detach invokes 0x693D40!
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3DetachCalls == 1);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_SpaceKSitesSpLobbyAndClientTwoStates()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    g_p3LaunchCalls = g_p3AttachCalls = g_p3DetachCalls = 0;
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_LAUNCH_ROCKET_RVA, (void*)&Phase3_MockLaunchRocket);
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_ORBIT_ATTACH_RVA, (void*)&Phase3_MockOrbitAttach);
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_ORBIT_DETACH_RVA, (void*)&Phase3_MockOrbitDetach);
+
+    std::vector<BYTE> padType(0x400u, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL;
+
+    std::vector<BYTE> pad(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(pad.data() + BLD_TYPE_OFFSET) = padType.data();
+    std::vector<BYTE> rocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> station(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(rocket.data() + VEH_ID_OFFSET) = 5201u;
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad.data();
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(unsigned*)(station.data() + VEH_ID_OFFSET) = 5202u;
+    *(int32_t*)(station.data() + VEH_ORBIT_INDEX_OFFSET) = 0;
+    std::vector<BYTE*> vehList = { rocket.data(), station.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    U64 launchNew[7] = { (U64)(uintptr_t)rocket.data(), (U64)(unsigned)-1, 0, 0, 0, 0, 0 };
+    U64 launchCatch[7] = { (U64)(uintptr_t)rocket.data(), 0, 0, 0, 0, 0, 0 };
+    U64 attachArgs[7] = { (U64)(uintptr_t)rocket.data(), (U64)(uintptr_t)station.data(), 1, 0, 0, 0, 0 };
+    U64 detachArgs[7] = { (U64)(uintptr_t)rocket.data(), 0, 0, 0, 0, 0, 0 };
+
+    // 1. Single-Player passthrough: all 4 Space kSites invoke native target directly with 0 Lockstep commands
+    Commands_SetSession(COMMANDS_OFF);
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchNew, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, launchCatch, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachArgs, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachArgs, nullptr));
+    TEST_CHECK(g_p3LaunchCalls == 2 && g_p3AttachCalls == 1 && g_p3DetachCalls == 1);
+    TEST_CHECK(!Commands_Due(0));
+
+    // 2. Waiting Lobby blocks all 4 Space kSites without invoking target or submitting Lockstep commands
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(SaveSync_IsWaitingLobbyActive());
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchNew, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, launchCatch, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachArgs, nullptr));
+    TEST_CHECK(GameCalls_RunSiteForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachArgs, nullptr));
+    TEST_CHECK(g_p3LaunchCalls == 2 && g_p3AttachCalls == 1 && g_p3DetachCalls == 1);
+    TEST_CHECK(!Commands_Due(0));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+
+    // 3. Client-side (State 2) Two-States ownership enforcement (including (ownCraft, foreignStation))
+    double initRub[2] = { 1000000.0, 1000000.0 };
+    double initUsd[2] = { 500000.0, 500000.0 };
+    TwoStates_OnSessionJoined(false, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+    TwoStates_RegisterVehicleOwner(5201, 2); // Client's own craft
+    TwoStates_RegisterVehicleOwner(5202, 1); // Host's foreign station
+
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchNew));
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachArgs)); // (ownCraft, foreignStation)
+    U64 hostDetach[7] = { (U64)(uintptr_t)station.data(), 0, 0, 0, 0, 0, 0 };
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_DETACH_RVA, hostDetach));
+    TwoStates_RegisterVehicleOwner(5202, 2);
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_ORBIT_ATTACH_RVA, attachArgs));
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_SpaceActionZeroPreMutationAndReplay()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    std::vector<BYTE> reentryType(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    reentryType[VEH_TYPE_SPACECRAFT_FLAG_OFFSET] = 1;
+    reentryType[VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET] = 1; // +0x29A $SPACE_SHIP_REENTRY
+    std::vector<BYTE> nonReentryType(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    nonReentryType[VEH_TYPE_SPACECRAFT_FLAG_OFFSET] = 1; // +0x298 only, +0x29A == 0
+
+    std::vector<BYTE> rocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> foreignRocket(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(rocket.data() + VEH_ID_OFFSET) = 5101u;
+    *(float*)(rocket.data() + VEH_POS_OFFSET) = 100.0f;
+    *(BYTE**)(rocket.data() + VEH_TYPE_PTR_OFFSET) = reentryType.data();
+    *(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.25f;
+    *(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 3;
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+
+    *(unsigned*)(foreignRocket.data() + VEH_ID_OFFSET) = 5102u;
+    *(float*)(foreignRocket.data() + VEH_POS_OFFSET) = 400.0f;
+    *(BYTE**)(foreignRocket.data() + VEH_TYPE_PTR_OFFSET) = reentryType.data();
+    *(float*)(foreignRocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(foreignRocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 3;
+    *(int32_t*)(foreignRocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+
+    std::vector<BYTE*> vehList = { rocket.data(), foreignRocket.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    Commands_SetSession(COMMANDS_HOST);
+    GameCalls_SetSpaceActionFnsForTest(&Phase3_MockHasReentry, &Phase3_MockSetupReentry, &Phase3_MockSetupDeorbit);
+
+    // 1. Targeted Reentry: ZERO pre-mutation at capture, applied only at Commands_Boundary
+    Phase3_ResetSpaceActionMockCounters(1);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    TEST_CHECK_NEAR(*(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET), 0.25f, 1e-6f);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 3);
+    TEST_CHECK(g_p3HasReentryCalls == 0 && g_p3SetupReentryCalls == 0 && g_p3SetupDeorbitCalls == 0);
+    TEST_CHECK(Commands_Due(10));
+    Commands_Boundary(10);
+    TEST_CHECK(*(uint32_t*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) == 0x3F7FBE77u);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == -2);
+    TEST_CHECK(g_p3HasReentryCalls == 1 && g_p3SetupReentryCalls == 1 && g_p3SetupDeorbitCalls == 1);
+
+    // Duplicate reentry while already reentering (progress < 1.0f && targetOrbit == -2) MUST be skipped
+    Phase3_ResetSpaceActionMockCounters(1);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(10);
+    TEST_CHECK(g_p3HasReentryCalls == 0 && g_p3SetupReentryCalls == 0 && g_p3SetupDeorbitCalls == 0);
+
+    // Non-reentry craft (+0x29A == 0) MUST be rejected for targeted reentry
+    *(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 2;
+    *(BYTE**)(rocket.data() + VEH_TYPE_PTR_OFFSET) = nonReentryType.data();
+    Phase3_ResetSpaceActionMockCounters(1);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(10);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 2 && g_p3SetupDeorbitCalls == 0);
+    *(BYTE**)(rocket.data() + VEH_TYPE_PTR_OFFSET) = reentryType.data();
+
+    // 2. Simple Deorbit (flightState == 1, hasReentry == 0 -> SetupReentry skipped, SetupDeorbit called)
+    *(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 0.50f;
+    *(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 2;
+    Phase3_ResetSpaceActionMockCounters(0);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 0));
+    TEST_CHECK_NEAR(*(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET), 0.50f, 1e-6f);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 2);
+    Commands_Boundary(11);
+    TEST_CHECK(*(uint32_t*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) == 0x3F7FBE77u);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == -1);
+    TEST_CHECK(g_p3HasReentryCalls == 1 && g_p3SetupReentryCalls == 0 && g_p3SetupDeorbitCalls == 1);
+
+    // Duplicate deorbit while already deorbiting (progress < 1.0f && targetOrbit == -1) MUST be skipped
+    Phase3_ResetSpaceActionMockCounters(0);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 0));
+    Commands_Boundary(11);
+    TEST_CHECK(g_p3SetupDeorbitCalls == 0);
+
+    // Targeted Reentry while ALREADY deorbiting (progress < 1.0f && targetOrbit == -1) MUST ALSO be skipped (0x816C40)
+    Phase3_ResetSpaceActionMockCounters(1);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(11);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == -1 && g_p3SetupDeorbitCalls == 0);
+
+    // 3. Emergency Abort: rejected while on Launch Pad (curBld != 0) or carried (parent != 0) per 0x813BB6..0x813BE0;
+    //    succeeds when airborne (flightState == 0, curBld == 0, parent == 0, progress == 1.0f, variant == 1 -> 11)
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+    *(float*)(rocket.data() + VEH_ROCKET_PROGRESS_OFFSET) = 1.0f;
+    *(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = -1;
+    std::vector<BYTE> dummyPad(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(rocket.data() + VEH_CUR_BLD_OFFSET) = dummyPad.data();
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 1));
+    Commands_Boundary(12);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) == 0);
+    *(BYTE**)(rocket.data() + VEH_CUR_BLD_OFFSET) = nullptr;
+    *(BYTE**)(rocket.data() + VEH_PARENT_PTR_OFFSET) = foreignRocket.data();
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 1));
+    Commands_Boundary(12);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) == 0);
+    *(BYTE**)(rocket.data() + VEH_PARENT_PTR_OFFSET) = nullptr;
+
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 1));
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) == 0);
+    Commands_Boundary(12);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) == 11);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 0));
+    Commands_Boundary(13);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) == 11);
+
+    // 4. Stale reentry blocked if trajectory (+0x738) non-empty, docked (+0x4A0 != 0), or docked children (+0x488..+0x490)
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    *(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) = 4;
+    BYTE dummyTraj[64] = {};
+    *(U64*)(rocket.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = (U64)(uintptr_t)dummyTraj;
+    *(U64*)(rocket.data() + VEH_WAYPOINTS_BEGIN_OFFSET + 8) = (U64)(uintptr_t)(dummyTraj + 16);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(14);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 4);
+    *(U64*)(rocket.data() + VEH_WAYPOINTS_BEGIN_OFFSET) = 0;
+    *(U64*)(rocket.data() + VEH_WAYPOINTS_BEGIN_OFFSET + 8) = 0;
+    *(U64*)(rocket.data() + VEH_LINK_PTR_OFFSET) = (U64)(uintptr_t)foreignRocket.data();
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(15);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 4);
+    *(U64*)(rocket.data() + VEH_LINK_PTR_OFFSET) = 0;
+    // Docked children vector (+0x488..+0x490) >= 8 bytes MUST block reentry
+    U64 childSlot[1] = { (U64)(uintptr_t)foreignRocket.data() };
+    *(U64*)(rocket.data() + VEH_CARRIED_BEGIN_OFFSET) = (U64)(uintptr_t)childSlot;
+    *(U64*)(rocket.data() + VEH_CARRIED_END_OFFSET) = (U64)(uintptr_t)(childSlot + 1);
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    Commands_Boundary(15);
+    TEST_CHECK(*(int32_t*)(rocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 4);
+    *(U64*)(rocket.data() + VEH_CARRIED_BEGIN_OFFSET) = 0;
+    *(U64*)(rocket.data() + VEH_CARRIED_END_OFFSET) = 0;
+
+    // 5. Two-States (capture & replay) + Waiting Lobby block with zero mutation
+    double initRub[2] = { 1000000.0, 1000000.0 };
+    double initUsd[2] = { 500000.0, 500000.0 };
+    TwoStates_OnSessionJoined(true, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+    TwoStates_RegisterVehicleOwner(5101, 1);
+    TwoStates_RegisterVehicleOwner(5102, 2);
+    TEST_CHECK(!GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)foreignRocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 0));
+    TEST_CHECK(!Commands_Due(16));
+
+    // Replay-side ownership validation: State 1 command targeting State 2 foreignRocket MUST be ignored
+    struct TestSpaceActionWire { RouteRef veh; uint8_t kind; uint8_t var; uint16_t res; } foreignCmd = {};
+    TEST_CHECK(Ref_Vehicle((U64)(uintptr_t)foreignRocket.data(), foreignCmd.veh));
+    foreignCmd.kind = SPACE_ACT_REENTRY_TARGETED;
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplySpaceActionCommand(&foreignCmd, sizeof(foreignCmd)));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(*(int32_t*)(foreignRocket.data() + VEH_TARGET_ORBIT_INDEX_OFFSET) == 3);
+
+    *(__int64*)(g_mockExeBuffer + 0xA2E760) = 1;
+    *(unsigned char*)(g_mockExeBuffer + LOAD_TRIGGER_DAT_RVA) = 0;
+    SaveSync_SetTestSessionState(SESSION_HOST_LISTENING, false, "");
+    TEST_CHECK(SaveSync_IsWaitingLobbyActive());
+    TEST_CHECK(!GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_REENTRY_TARGETED, 0));
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+
+    GameCalls_SetSpaceActionFnsForTest(nullptr, nullptr, nullptr);
+    TwoStates_OnSessionEnded();
+    Commands_SetSession(COMMANDS_OFF);
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_SpaceActionPatchBytesAndJumpTargets()
+{
+    ResetMockWorldMemory();
+    static const BYTE kReentryOrig[22] = {
+        0x41, 0xC7, 0x87, 0x68, 0x1A, 0x00, 0x00, 0x77, 0xBE, 0x7F, 0x3F,
+        0x41, 0xC7, 0x87, 0x60, 0x17, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF
+    };
+    static const BYTE kDeorbitOrig[22] = {
+        0x41, 0x83, 0xBF, 0x6C, 0x1A, 0x00, 0x00, 0x01, 0x75, 0x1B,
+        0x41, 0xC7, 0x87, 0x68, 0x1A, 0x00, 0x00, 0x77, 0xBE, 0x7F, 0x3F, 0x41
+    };
+    BYTE* pReentry = g_mockExeBuffer + SITE_SPACE_REENTRY_PATCH_RVA;
+    BYTE* pDeorbit = g_mockExeBuffer + SITE_SPACE_DEORBIT_ABORT_PATCH_RVA;
+    BYTE* pRelaySlot = g_mockExeBuffer + 0x7E0000u;
+
+    // Atomic check: if either site differs, NEITHER site may be half-patched
+    memcpy(pReentry, kReentryOrig, 22);
+    memcpy(pDeorbit, kDeorbitOrig, 22);
+    pReentry[0] = 0xCC;
+    TEST_CHECK(!GameCalls_InstallSpaceActionPatchesForTest(pRelaySlot));
+    TEST_CHECK(pReentry[0] == 0xCC);
+    TEST_CHECK(memcmp(pDeorbit, kDeorbitOrig, 22) == 0);
+
+    // Exact bytes at both sites -> 2/2 patched with exact mov rcx, r15; mov edx, kind; call; jmp 0x819815; nop*4
+    memcpy(pReentry, kReentryOrig, 22);
+    memcpy(pDeorbit, kDeorbitOrig, 22);
+    TEST_CHECK(GameCalls_InstallSpaceActionPatchesForTest(pRelaySlot));
+
+    const BYTE* sites[2] = { pReentry, pDeorbit };
+    const uint32_t kinds[2] = { SPACE_SITE_REENTRY_TARGETED, SPACE_SITE_DEORBIT_OR_ABORT };
+    for (int i = 0; i < 2; ++i) {
+        const BYTE* s = sites[i];
+        TEST_CHECK(s[0] == 0x49 && s[1] == 0x8B && s[2] == 0xCF && s[3] == 0xBA);
+        uint32_t kindImm = 0;
+        memcpy(&kindImm, s + 4, 4);
+        TEST_CHECK(kindImm == kinds[i]);
+        TEST_CHECK(s[8] == 0xE8 && s[13] == 0xE9);
+        TEST_CHECK(s[18] == 0x90 && s[19] == 0x90 && s[20] == 0x90 && s[21] == 0x90);
+
+        int32_t callRel = 0, jmpRel = 0;
+        memcpy(&callRel, s + 9, 4);
+        memcpy(&jmpRel, s + 14, 4);
+        const BYTE* relay = (s + 13) + callRel;
+        const BYTE* jmpTgt = (s + 18) + jmpRel;
+        TEST_CHECK(jmpTgt == g_mockExeBuffer + SITE_SPACE_VEH_WIN_EXIT_RVA);
+        TEST_CHECK(relay[0] == 0xFF && relay[1] == 0x25);
+        U64 absFn = 0;
+        memcpy(&absFn, relay + 6, 8);
+        TEST_CHECK(absFn != 0);
+    }
+
+    memset(pReentry, 0, 22);
+    memset(pDeorbit, 0, 22);
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_LaunchPadOrbitSwitches()
+{
+    ResetMockWorldMemory();
+    std::vector<BYTE> padType(0x400, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD; // 0x2F
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL; // 0x2D
+    std::vector<BYTE> bigPadType(0x400, 0);
+    *(int32_t*)(bigPadType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD; // 0x2F
+    *(int32_t*)(bigPadType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_BIG; // 0x30
+    std::vector<BYTE> airportParkType(0x400, 0);
+    *(int32_t*)(airportParkType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD; // 0x2F ($TYPE_AIRPLANE_PARKING)
+    *(int32_t*)(airportParkType.data() + BLD_TYPE_SUBTYPE_OFF) = 0; // ordinary airport apron (NOT launch pad!)
+    std::vector<BYTE> pollType(0x400, 0);
+    *(int32_t*)(pollType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_POLLUTION_MONITOR; // 0x24
+
+    std::vector<BYTE> pad(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)(pad.data() + 0x00) = 6201u;
+    *(BYTE**)(pad.data() + 0x318) = padType.data();
+    *(float*)(pad.data() + OBJ_POS_OFFSET) = 100.0f;
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) = 1u;
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF) = 0x42B40000u; // 90.0f
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 4u) = 0x42340000u; // 45.0f
+
+    std::vector<BYTE> bigPad(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)(bigPad.data() + 0x00) = 6203u;
+    *(BYTE**)(bigPad.data() + 0x318) = bigPadType.data();
+
+    std::vector<BYTE> airportPark(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)(airportPark.data() + 0x00) = 6204u;
+    *(BYTE**)(airportPark.data() + 0x318) = airportParkType.data();
+
+    std::vector<BYTE> pollBld(BUILDING_STRUCT_BYTES, 0);
+    *(unsigned*)(pollBld.data() + 0x00) = 6202u;
+    *(BYTE**)(pollBld.data() + 0x318) = pollType.data();
+
+    // Launch Pads (0x2F + subtype 0x2D/0x30) whitelist 0x0CD8 and 0x0E34..0x0E40;
+    // normal Airplane Parking (0x2F/0x00) and Pollution Monitor (0x24) MUST NOT whitelist 0x0E34..0x0E40!
+    TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(BLD_LAUNCH_PAD_ORBIT_TYPE_OFF));
+    TEST_CHECK(BuildingSwitches_IsNonPointerBuildingWordForTest(BLD_LAUNCH_PAD_ORBIT_TYPE_OFF, (U64)(uintptr_t)pad.data()));
+    TEST_CHECK(BuildingSwitches_IsNeverNoiseBuildingWordForTest(BLD_LAUNCH_PAD_ORBIT_TYPE_OFF, (U64)(uintptr_t)pad.data()));
+    for (unsigned off = BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF; off < BLD_LAUNCH_PAD_ORBIT_PARAMS_END_OFF; off += 4u) {
+        TEST_CHECK(!BuildingSwitches_IsExcludedBuildingOffset(off));
+        TEST_CHECK(BuildingSwitches_IsNonPointerBuildingWordForTest(off, (U64)(uintptr_t)pad.data()));
+        TEST_CHECK(BuildingSwitches_IsNeverNoiseBuildingWordForTest(off, (U64)(uintptr_t)pad.data()));
+        TEST_CHECK(BuildingSwitches_IsNonPointerBuildingWordForTest(off, (U64)(uintptr_t)bigPad.data()));
+        TEST_CHECK(BuildingSwitches_IsNeverNoiseBuildingWordForTest(off, (U64)(uintptr_t)bigPad.data()));
+        TEST_CHECK(!BuildingSwitches_IsNonPointerBuildingWordForTest(off, (U64)(uintptr_t)airportPark.data()));
+        TEST_CHECK(!BuildingSwitches_IsNeverNoiseBuildingWordForTest(off, (U64)(uintptr_t)airportPark.data()));
+        TEST_CHECK(!BuildingSwitches_IsNonPointerBuildingWordForTest(off, (U64)(uintptr_t)pollBld.data()));
+        TEST_CHECK(!BuildingSwitches_IsNeverNoiseBuildingWordForTest(off, (U64)(uintptr_t)pollBld.data()));
+        TEST_CHECK(!BuildingSwitches_IsNonPointerBuildingWordForTest(off, 0));
+    }
+
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    std::vector<BYTE*> bldVec = { pad.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    BuildingSwitches_Reset();
+    Commands_SetSession(COMMANDS_HOST);
+
+    // Non-click sampled frames changing 0xE34 on Launch Pad must NOT mark it as noise
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 0;
+    for (int f = 0; f < 16; ++f) {
+        BuildingSwitches_Before(false);
+        if (f == 15) *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF) = 0x42700000u; // 60.0f
+        BuildingSwitches_After(false);
+    }
+
+    // Click frame changing 0xCD8 and 0xE34 must revert immediately and apply at Commands_Boundary
+    const uint32_t expectedBeforeClick = *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF);
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 1;
+    BuildingSwitches_Before(false);
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) = 2u;
+    *(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF) = 0x43340000u; // 180.0f
+    BuildingSwitches_After(false);
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 0;
+
+    TEST_CHECK(*(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) == 1u);
+    TEST_CHECK(*(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF) == expectedBeforeClick);
+    TEST_CHECK(Commands_Due(Commands_ApplyEpoch()));
+    Commands_Boundary(Commands_ApplyEpoch());
+    TEST_CHECK(*(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF) == 2u);
+    TEST_CHECK(*(uint32_t*)(pad.data() + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF) == 0x43340000u);
+
+    Commands_SetSession(COMMANDS_OFF);
+    BuildingSwitches_Reset();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_VehicleSwitchesSpaceExclusions()
+{
+    const unsigned kExcludedSpaceOffs[] = {
+        0x0664u, 0x1418u,
+        0x175Cu, 0x1760u, 0x1764u, 0x1768u, 0x176Cu, 0x1770u,
+        0x1774u, 0x1790u, 0x17B4u,
+        0x1860u, 0x1864u, 0x1938u, 0x193Cu,
+        0x1A68u, 0x1A6Cu,
+        0x1AD8u, 0x1AE0u, 0x1AF0u, 0x1B08u, 0x1B10u,
+        0x1B50u, 0x1B60u, 0x1B74u, 0x1B78u, 0x1B80u, 0x1B94u
+    };
+    for (unsigned off : kExcludedSpaceOffs) {
+        TEST_CHECK(VehicleSwitches_IsListWordForTest(0, off));
+    }
+    // Tight boundary checks outside newly excluded Space ranges
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x0660u));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x0668u));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x185Cu));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x1868u));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x1934u));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x1940u));
+    TEST_CHECK(!VehicleSwitches_IsListWordForTest(0, 0x1B98u));
+    return true;
+}
+
+static bool SubTest_Phase3_SpaceToolsAndWorldCamera14Isolation()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    Commands_SetSession(COMMANDS_HOST);
+
+    static const char kOrbitalAttach[] = "orbital_attach";
+    static const char kCatchOrbit[] = "catch_orbit";
+    static const char kUncarriedVeh[] = "vehicle_unknown";
+
+    TEST_CHECK(SimPatches_HasToolCallForTest(SITE_TOOL_ORBITAL_ATTACH_RVA, FN_TOOL_ORBITAL_ATTACH_RVA));
+
+    *(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = kOrbitalAttach;
+    Commands_PutAwayUncarriedToolForTest();
+    TEST_CHECK(*(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == kOrbitalAttach);
+
+    *(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = kCatchOrbit;
+    Commands_PutAwayUncarriedToolForTest();
+    TEST_CHECK(*(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == kCatchOrbit);
+
+    *(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) = kUncarriedVeh;
+    Commands_PutAwayUncarriedToolForTest();
+    TEST_CHECK(*(const char**)(world + WORLD_SELECTED_TOOL_PTR_OFF) == nullptr);
+
+    // WORLD+0x14 (local 3D Earth camera/orbit view) must never hash into StateSummary, enter BuildingSwitches,
+    // be clobbered by remote command replay, or allow F6 flat-map camera jump
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE*> bldVec = { bld.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+    *(float*)(world + WORLD_ORBIT_CLOCK_OFFSET) = 12.5f;
+    std::vector<BYTE> orbit(ORBIT_SLOT_STRIDE, 0);
+    *(int32_t*)(orbit.data() + ORBIT_SLOT_TYPE_OFFSET) = 2;
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbit.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbit.data() + orbit.size();
+
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = -1;
+    StateSummary sA = {};
+    TEST_CHECK(StateHash_Compute(&sA));
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = 0;
+    StateSummary sB = {};
+    TEST_CHECK(StateHash_Compute(&sB));
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = 2;
+    StateSummary sC = {};
+    TEST_CHECK(StateHash_Compute(&sC));
+    TEST_CHECK(sA.hashSpace == sB.hashSpace && sB.hashSpace == sC.hashSpace);
+    TEST_CHECK(!BuildingSwitches_IsOneByteWorldSettingForTest(WORLD_ACTIVE_ORBIT_VIEW_OFFSET));
+    TEST_CHECK(!Commands_Due(0));
+
+    // Remote replay scope saves & restores WORLD+0x14
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = 3;
+    Commands_BeginRemoteReplayScope();
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = -1;
+    Commands_EndRemoteReplayScope();
+    TEST_CHECK(*(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) == 3);
+
+    // Non-tautological orbit-view suppression: in orbit view (WORLD+0x14 == 3), JumpCameraToPartner returns early
+    // BEFORE emitting the "not connected" toast (0 toasts) and JumpCameraTo refuses; in ground view (-1), toast fires.
+    TwoStates_ClearToastsForTest();
+    TEST_CHECK(!TwoStates_JumpCameraToPartner());
+    TEST_CHECK(TwoStates_GetToastCountForTest() == 0);
+    TEST_CHECK(!TwoStates_JumpCameraTo(100.0f, 200.0f));
+    *(int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) = -1;
+    TEST_CHECK(!TwoStates_JumpCameraToPartner());
+    TEST_CHECK(TwoStates_GetToastCountForTest() == 1);
+    TwoStates_ClearToastsForTest();
+
+    Commands_SetSession(COMMANDS_OFF);
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_HardeningRegressions()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 1. Item #1: Shift-Cancel uses v1.2.0.9 TOOL_GUARD1/2/3_OFFSET (0xFEC/0xFEE/0xFF3), NOT stale 0xFBC/0xFBE/0xFC3
+    g_p3ShiftCancelOrigCalls = 0;
+    WriteAbsJmp12(g_mockExeBuffer + 0x22F270u, (void*)&Phase3_MockShiftCancelOrig);
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "");
+    Commands_SetSession(COMMANDS_HOST);
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 1;
+    world[TOOL_GUARD1_OFFSET] = 1;
+    RoadSync_ShiftCancelTool((__int64)world);
+    TEST_CHECK(!Commands_Due(0)); // blocked by v1.2.0.9 guard
+    world[TOOL_GUARD1_OFFSET] = 0;
+    world[0xFBC] = 1; // stale v1.1.1.13 offset must NOT suppress click
+    RoadSync_ShiftCancelTool((__int64)world);
+    TEST_CHECK(Commands_Due(0));
+    Commands_Boundary(0);
+    world[0xFBC] = 0;
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 0;
+    Commands_SetSession(COMMANDS_OFF);
+
+    // 2. Item #4: Mixed-DLC Auto-Replace resolves targetType by canonical targetScriptName across +-119 shift,
+    //    strips "media_soviet/" so >64-char paths never truncate, and enforces DLC on both targetType & newType
+    std::vector<BYTE> clientTypes(4u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 128, "vehicles/kamaz_5320.ini");
+    strcpy_s((char*)(clientTypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 128, "vehicles/tatra_148.ini");
+    strcpy_s((char*)(clientTypes.data() + 2u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 128, "media_soviet/dlc5/vehicles/rocket_soyuz.ini");
+    strcpy_s((char*)(clientTypes.data() + 3u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 128,
+             "media_soviet/vehicles/heavy_tractor_k701_long_variant_name_1984/script.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = clientTypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = clientTypes.data() + clientTypes.size();
+    std::vector<BYTE> mockMgr(64, 0);
+    *(BYTE**)(world + WORLD_AUTO_REPLACE_MGR_OFFSET) = mockMgr.data();
+    g_p3AutoReplaceSeenTarget = g_p3AutoReplaceSeenNew = nullptr;
+    WriteAbsJmp12(g_mockExeBuffer + RVA_SET_AUTO_REPLACE, (void*)&Phase3_MockSetAutoReplace);
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1"); // dlc5 unshared
+
+    PurchaseMsg ar = {};
+    ar.kind = 0xB;
+    ar.typeIndex = 120u; // shifted Host index
+    ar.resIndex = 119;   // shifted Host index (would be OOB on Client without targetScriptName!)
+    strcpy_s(ar.scriptName, sizeof(ar.scriptName), "MEDIA_SOVIET\\VEHICLES\\TATRA_148.INI");
+    strcpy_s(ar.targetScriptName, sizeof(ar.targetScriptName), "MEDIA_SOVIET\\VEHICLES\\KAMAZ_5320.INI");
+    TEST_CHECK(Purchase_ApplyAutoReplaceForTest(ar));
+    TEST_CHECK(g_p3AutoReplaceSeenTarget == clientTypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE);
+    TEST_CHECK(g_p3AutoReplaceSeenNew == clientTypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE);
+
+    // 74-char raw path ("media_soviet/...") normalizes via Ref_ReadVehicleTypeScriptName into 61 chars (< 64) cleanly!
+    TEST_CHECK(Ref_ReadVehicleTypeScriptName((U64)(uintptr_t)(clientTypes.data() + 3u * WORLD_VEHICLE_TYPE_STRIDE),
+                                             ar.targetScriptName, sizeof(ar.targetScriptName)));
+    TEST_CHECK(Purchase_ApplyAutoReplaceForTest(ar));
+    TEST_CHECK(g_p3AutoReplaceSeenTarget == clientTypes.data() + 3u * WORLD_VEHICLE_TYPE_STRIDE);
+
+    // Unshared dlc5 targetType or newType MUST be refused on both replay and clear-submit
+    strcpy_s(ar.targetScriptName, sizeof(ar.targetScriptName), "media_soviet/dlc5/vehicles/rocket_soyuz.ini");
+    TEST_CHECK(!Purchase_ApplyAutoReplaceForTest(ar));
+    TEST_CHECK(!Purchase_SubmitAutoReplaceClear(clientTypes.data() + 2u * WORLD_VEHICLE_TYPE_STRIDE));
+
+    // 3. Item #6: CargoSettings decode failure MUST NOT call WriteRecordMeta or Replace
+    const unsigned char sigDestroy[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 };
+    const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
+    const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
+    memcpy(g_mockExeBuffer + 0x0F6520, sigDestroy, 16);
+    memcpy(g_mockExeBuffer + 0x21FBF0, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x4BFC10, sigRefresh, 16);
+    std::vector<BYTE> stopVeh(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> stopRec(0x198, 0);
+    *(unsigned*)(stopVeh.data() + VEH_ID_OFFSET) = 4243u;
+    *(U64*)(stopRec.data() + 0x190) = 0x12345678ULL;
+    *(BYTE**)(stopVeh.data() + 0x638) = stopRec.data();
+    *(BYTE**)(stopVeh.data() + 0x640) = stopRec.data() + 0x198;
+    std::vector<BYTE*> vehList = { stopVeh.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+    RouteRef stopRef = kNoRef, noTarget = kNoRef;
+    TEST_CHECK(Ref_Vehicle((U64)(uintptr_t)stopVeh.data(), stopRef));
+    WriteAbsJmp12(g_mockExeBuffer + 0x0F6520, (void*)&Phase2_MockCargoDestroy);
+    WriteAbsJmp12(g_mockExeBuffer + 0x21FBF0, (void*)&Phase2_MockCargoCopy);
+    // Build truncated/bad-decode packet with mutated recTail190 = 0x99999999: must return false & NOT overwrite +0x190
+    std::vector<BYTE> badPkt;
+    auto pushRaw = [&](const void* p, size_t n) { badPkt.insert(badPkt.end(), (const BYTE*)p, (const BYTE*)p + n); };
+    unsigned magic = 0x32534743u, recTotal = 1u;
+    BYTE kind = 0, half = 0, linkActive = 1, scalars[22] = {};
+    unsigned short recIdx = 0;
+    U64 newTail = 0x99999999ULL;
+    pushRaw(&magic, 4); pushRaw(&kind, 1); pushRaw(&half, 1); pushRaw(&recIdx, 2); pushRaw(&recTotal, 4);
+    pushRaw(&stopRef, sizeof(stopRef)); pushRaw(&noTarget, sizeof(noTarget)); pushRaw(&linkActive, 1); pushRaw(&newTail, 8);
+    pushRaw(scalars, sizeof(scalars)); // intentionally omit vectors -> Decode fails
+    g_phase2CapturedHalfTypePtr = 0xCAFEULL;
+    TEST_CHECK(!CargoSettings_ApplyCommand(badPkt.data(), badPkt.size()));
+    TEST_CHECK(*(U64*)(stopRec.data() + 0x190) == 0x12345678ULL); // WriteRecordMeta NOT called!
+    TEST_CHECK(g_phase2CapturedHalfTypePtr == 0xCAFEULL);         // Replace NOT called!
+
+    // 4. Item #7: Ref_FindBuildMenuRecord name-scan fallback when DLC shifts build-menu index
+    std::vector<BYTE> menuBuf(3u * 0x2D0u, 0);
+    strcpy_s((char*)(menuBuf.data() + 0u * 0x2D0u), 32, "terrain_raise");
+    strcpy_s((char*)(menuBuf.data() + 1u * 0x2D0u), 32, "road_sign_stop");
+    strcpy_s((char*)(menuBuf.data() + 2u * 0x2D0u), 32, "tree_pine");
+    *(BYTE**)(world + 0xD320) = menuBuf.data();
+    *(BYTE**)(world + 0xD328) = menuBuf.data() + menuBuf.size();
+    TEST_CHECK(Ref_FindBuildMenuRecord((U64)(uintptr_t)world, 1, "road_sign_stop", 32) == (U64)(uintptr_t)(menuBuf.data() + 0x2D0u));
+    TEST_CHECK(Ref_FindBuildMenuRecord((U64)(uintptr_t)world, 0, "tree_pine", 32) == (U64)(uintptr_t)(menuBuf.data() + 2u * 0x2D0u));
+    TEST_CHECK(Ref_FindBuildMenuRecord((U64)(uintptr_t)world, 99, "road_sign_stop", 32) == (U64)(uintptr_t)(menuBuf.data() + 0x2D0u));
+    TEST_CHECK(Ref_FindBuildMenuRecord((U64)(uintptr_t)world, 0, "missing_tool", 32) == 0);
+
+    // 5. Item #17: Disconnect clears DLC session masks; Ref_DefPtr/Ref_DefPtrAt SEH-guards invalid waste vector
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    SaveSync_RequestDisconnect();
+    uint32_t hMask = 1, cMask = 1, comMask = 1;
+    SaveSync_GetDlcMasks(&hMask, &cMask, &comMask);
+    TEST_CHECK(hMask == 0 && cMask == 0 && comMask == 0);
+
+    *(U64*)(world + WORLD_WASTE_RESOURCES_OFFSET) = 0x10000000ULL;
+    *(U64*)(world + WORLD_WASTE_RESOURCES_OFFSET + 8) = 0x10000020ULL;
+    unsigned char tag = 0;
+    unsigned idx = 0;
+    U64 outPtr = 0;
+    TEST_CHECK(!Ref_DefPtr(0x12345678ULL, tag, idx));
+    TEST_CHECK(!Ref_DefPtrAt(4, 0, outPtr));
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase3_CargoAndLineAcceptDlcFilter()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    Commands_SetSession(COMMANDS_HOST);
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "");
+
+    std::vector<BYTE> vtypes(2u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/kamaz_5320.ini");
+    strcpy_s((char*)(vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "media_soviet/dlc5/vehicles/rocket_soyuz.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+    BYTE* baseVt = vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* dlc5Vt = vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE;
+
+    // 1. CargoSettings::Encode blocks unshared dlc5 VehicleType on vehicle stop half
+    const unsigned char sigDestroy[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x33, 0xff, 0x48 };
+    const unsigned char sigCopy[16]    = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe };
+    const unsigned char sigRefresh[16] = { 0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x54, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
+    memcpy(g_mockExeBuffer + 0x0F6520, sigDestroy, 16);
+    memcpy(g_mockExeBuffer + 0x21FBF0, sigCopy, 16);
+    memcpy(g_mockExeBuffer + 0x4BFC10, sigRefresh, 16);
+
+    std::vector<BYTE> stopVeh(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> stopRec(0x198, 0);
+    *(unsigned*)(stopVeh.data() + VEH_ID_OFFSET) = 4299u;
+    *(BYTE**)(stopVeh.data() + 0x638) = stopRec.data();
+    *(BYTE**)(stopVeh.data() + 0x640) = stopRec.data() + 0x198;
+    std::vector<BYTE*> vehList = { stopVeh.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehList);
+
+    std::vector<BYTE> vehWin(0x600, 0);
+    *(unsigned*)(vehWin.data() + 0x248) = 1u; // VEHICLE_WINDOW
+    *(BYTE**)(vehWin.data() + 0x240) = stopVeh.data();
+    std::vector<BYTE*> winList = { vehWin.data() };
+    WriteMockVectorHeader(g_mockExeBuffer + WORLD_OPEN_WINDOWS_BEGIN_RVA, winList);
+
+    // Prime CargoSettings::Ready() before redirecting DESTROY/COPY to mocks
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 1;
+    CargoSettings_Before(false);
+    CargoSettings_After(false);
+    WriteAbsJmp12(g_mockExeBuffer + 0x0F6520, (void*)&Phase2_MockCargoDestroy);
+    WriteAbsJmp12(g_mockExeBuffer + 0x21FBF0, (void*)&Phase2_MockCargoCopy);
+
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1"); // dlc5 unshared
+    U64 defSlot[1] = { (U64)(uintptr_t)dlc5Vt };
+    CargoSettings_Before(false);
+    *(U64*)(stopRec.data() + 0x68) = (U64)(uintptr_t)defSlot;
+    *(U64*)(stopRec.data() + 0x70) = (U64)(uintptr_t)(defSlot + 1);
+    CargoSettings_After(false);
+    TEST_CHECK(!Commands_Due(0)); // blocked by SaveSync_CheckVehicleDlcAllowed
+
+    // Shared dlc5 -> CargoSettings submits LS_CMD_CARGO_SETTINGS
+    *(U64*)(stopRec.data() + 0x68) = 0;
+    *(U64*)(stopRec.data() + 0x70) = 0;
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1,dlc5");
+    CargoSettings_Before(false);
+    *(U64*)(stopRec.data() + 0x68) = (U64)(uintptr_t)defSlot;
+    *(U64*)(stopRec.data() + 0x70) = (U64)(uintptr_t)(defSlot + 1);
+    CargoSettings_After(false);
+    TEST_CHECK(Commands_Due(0));
+    Commands_SetSession(COMMANDS_OFF);
+    Commands_SetSession(COMMANDS_HOST);
+    g_mockExeBuffer[SWITCH_PRESS_RVA] = 0;
+
+    // 2. LineAccept::Encode blocks unshared dlc5 VehicleType in BOTH HALF_PAIRS (+0x08) and kHalfPtrs (+0x68)
+    const unsigned char sigLCopy[16] = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x11, 0x05, 0x00, 0x00, 0x48, 0x8b, 0xc4, 0x44, 0x88, 0x48, 0x20 };
+    const unsigned char sigLMerge[16] = { 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41 };
+    const unsigned char sigLDirty[16] = { 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48 };
+    const unsigned char sigLVeh[16]   = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0xf5, 0x02, 0x00, 0x00, 0x53, 0x41, 0x56, 0x48, 0x83, 0xec, 0x38 };
+    const unsigned char sigLName[16]  = { 0x48, 0x85, 0xd2, 0x0f, 0x84, 0x78, 0x01, 0x00, 0x00, 0x4c, 0x8b, 0xdc, 0x56, 0x48, 0x81, 0xec };
+    memcpy(g_mockExeBuffer + 0x4BBCB0, sigLCopy, 16);
+    memcpy(g_mockExeBuffer + 0x4BAA20, sigLMerge, 16);
+    memcpy(g_mockExeBuffer + 0x245730, sigLDirty, 16);
+    memcpy(g_mockExeBuffer + 0x4BDAD0, sigLVeh, 16);
+    memcpy(g_mockExeBuffer + 0x4BFA80, sigLName, 16);
+
+    std::vector<BYTE> lineMgr(0x60, 0);
+    std::vector<BYTE> lineObj(0x290, 0);
+    std::vector<BYTE> lineCopy(0x290, 0);
+    std::vector<BYTE> lineRec(0x198, 0);
+    std::vector<BYTE*> linePtrs = { lineObj.data() };
+    WriteMockVectorHeader(lineMgr.data(), linePtrs);
+    *(BYTE**)(world + 0x128B8) = lineMgr.data();
+    *(BYTE**)(lineCopy.data() + 0x228) = lineRec.data();
+    *(BYTE**)(lineCopy.data() + 0x230) = lineRec.data() + lineRec.size();
+
+    // Test HALF_PAIRS (+0x08) with unshared dlc5 VehicleType
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1");
+    U64 pairSlot[2] = { (U64)(uintptr_t)dlc5Vt, 0u };
+    *(U64*)(lineRec.data() + 0x08) = (U64)(uintptr_t)pairSlot;
+    *(U64*)(lineRec.data() + 0x10) = (U64)(uintptr_t)(pairSlot + 2);
+    TEST_CHECK(LineAccept_Capture((U64)(uintptr_t)lineObj.data(), (U64)(uintptr_t)lineCopy.data()));
+    TEST_CHECK(!Commands_Due(0));
+
+    // Test kHalfPtrs (+0x68) with unshared dlc5 VehicleType
+    *(U64*)(lineRec.data() + 0x08) = 0;
+    *(U64*)(lineRec.data() + 0x10) = 0;
+    *(U64*)(lineRec.data() + 0x68) = (U64)(uintptr_t)defSlot;
+    *(U64*)(lineRec.data() + 0x70) = (U64)(uintptr_t)(defSlot + 1);
+    TEST_CHECK(LineAccept_Capture((U64)(uintptr_t)lineObj.data(), (U64)(uintptr_t)lineCopy.data()));
+    TEST_CHECK(!Commands_Due(0));
+
+    // Test base-game VehicleType in kHalfPtrs (+0x68) -> allowed & submitted
+    U64 baseSlot[1] = { (U64)(uintptr_t)baseVt };
+    *(U64*)(lineRec.data() + 0x68) = (U64)(uintptr_t)baseSlot;
+    *(U64*)(lineRec.data() + 0x70) = (U64)(uintptr_t)(baseSlot + 1);
+    TEST_CHECK(LineAccept_Capture((U64)(uintptr_t)lineObj.data(), (U64)(uintptr_t)lineCopy.data()));
+    TEST_CHECK(Commands_Due(0));
+
+    // 3. Replay-side DLC defense-in-depth: Ref_DecodeDefPtrBytes blocks unshared dlc5 VehicleTypes
+    //    for both tag==5 (scriptName) and tag==2 (indexed), defending CargoSettings & LineAccept Decode()
+    BYTE encDlc5[136] = {};
+    size_t lenDlc5 = 0;
+    TEST_CHECK(Ref_EncodeDefPtrBytes((U64)(uintptr_t)dlc5Vt, encDlc5, sizeof(encDlc5), lenDlc5));
+    TEST_CHECK(encDlc5[0] == 5u);
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1"); // dlc5 unshared
+    U64 decPtr = 0;
+    size_t decAt = 0;
+    TEST_CHECK(!Ref_DecodeDefPtrBytes(encDlc5, lenDlc5, decAt, decPtr));
+    BYTE encTag2[5] = { 2u, 1u, 0u, 0u, 0u }; // tag == 2, index == 1 (dlc5Vt)
+    decAt = 0;
+    TEST_CHECK(!Ref_DecodeDefPtrBytes(encTag2, sizeof(encTag2), decAt, decPtr));
+    SaveSync_SetTestDlcLists("dlc1,dlc5", "dlc1,dlc5"); // dlc5 shared -> allowed
+    decAt = 0;
+    TEST_CHECK(Ref_DecodeDefPtrBytes(encDlc5, lenDlc5, decAt, decPtr) && decPtr == (U64)(uintptr_t)dlc5Vt);
+
+    Commands_SetSession(COMMANDS_OFF);
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    ResetMockWorldMemory();
+    return true;
+}
+
+bool Test_SpaceProgramPhase3_MutatorsPadSwitchesAndCameraIsolation()
+{
+    return SubTest_Phase3_SpaceKSitesAndPreconditions() &&
+           SubTest_Phase3_SpaceKSitesSpLobbyAndClientTwoStates() &&
+           SubTest_Phase3_SpaceActionZeroPreMutationAndReplay() &&
+           SubTest_Phase3_SpaceActionPatchBytesAndJumpTargets() &&
+           SubTest_Phase3_LaunchPadOrbitSwitches() &&
+           SubTest_Phase3_VehicleSwitchesSpaceExclusions() &&
+           SubTest_Phase3_SpaceToolsAndWorldCamera14Isolation() &&
+           SubTest_Phase3_HardeningRegressions() &&
+           SubTest_Phase3_CargoAndLineAcceptDlcFilter();
+}
+
+// ---------------------------------------------------------------------------
+// Test 73: Space Program Phase 4 (True Space Race in Two-States Mode)
+// ---------------------------------------------------------------------------
+
+static BYTE* g_p4SpawnedVehPtr = nullptr;
+static BYTE* g_p4ProdSpawnBld = nullptr;
+static int   g_p4RemoveOrbitCalls = 0;
+static int   g_p4LastRemovedOrbitIdx = -99;
+static int   g_p4BorderCargoCalls = 0;
+static float g_p4BorderSeenProg0 = 0.0f;
+static float g_p4BorderSeenProg1 = 0.0f;
+static int   g_p4McWinCalls = 0;
+static int   g_p4McSeenBlds = 0;
+static int   g_p4McSeenVehs = 0;
+static size_t g_p4McSeenOrbits = 0;
+static int   g_p4TopBarCalls = 0;
+static BYTE* g_p4TopBarSeenMcPtr = nullptr;
+static double g_p4OrbitRewardRub = 0.0;
+static double g_p4OrbitRewardUsd = 0.0;
+static float  g_p4OrbitStatUsd = 0.0f;
+static float  g_p4OrbitStatRub = 0.0f;
+static bool   g_p4OrbitCreateNewOrbit = false;
+static int    g_p4OrbitSeenPopupAllowed = -1;
+
+static void Phase4_InitTwoStates(bool isHost)
+{
+    ResetMockWorldMemory();
+    double initRub[2] = { 1000000.0, 1000000.0 };
+    double initUsd[2] = { 500000.0, 500000.0 };
+    TwoStates_OnSessionJoined(isHost, COOP_MODE_TWO_STATES, 250.0f, false, initRub, initUsd);
+    TwoStates_OnWorldLoaded();
+    TwoStates_ResetSpaceForTest();
+}
+
+static BYTE* __fastcall Phase4_MockCreateVehicle(BYTE*, BYTE* vt, BYTE*, uintptr_t, uintptr_t,
+                                                  uintptr_t, uintptr_t, uintptr_t, uintptr_t,
+                                                  uintptr_t, uintptr_t)
+{
+    if (vt) {
+        *(int32_t*)(vt + VEH_TYPE_BUILT_IN_PROD_OFFSET) += 1;
+    }
+    return g_p4SpawnedVehPtr;
+}
+
+static void __fastcall Phase4_MockProdLineStep(BYTE* world, BYTE* bld)
+{
+    if (!world || !bld || !g_p4SpawnedVehPtr) return;
+    // Append spawned vehicle to WORLD_VEHICLES_OFFSET and increment +0x9CE4 on its VehicleType
+    std::vector<BYTE*> vehList;
+    BYTE* const* curB = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET);
+    BYTE* const* curE = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET + 8);
+    if (curB && curE >= curB) {
+        vehList.assign(curB, curE);
+    }
+    vehList.push_back(g_p4SpawnedVehPtr);
+    static std::vector<BYTE*> s_p4VehBacking;
+    s_p4VehBacking = vehList;
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, s_p4VehBacking);
+
+    BYTE* vt = *(BYTE**)(g_p4SpawnedVehPtr + VEH_TYPE_PTR_OFFSET);
+    if (vt) {
+        *(int32_t*)(vt + VEH_TYPE_BUILT_IN_PROD_OFFSET) += 1;
+    }
+    (void)g_p4ProdSpawnBld;
+}
+
+static void __fastcall Phase4_MockOrbitStep(BYTE* veh)
+{
+    if (!veh) return;
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    BYTE* vt = *(BYTE**)(veh + VEH_TYPE_PTR_OFFSET);
+    if (vt) {
+        *(int32_t*)(vt + VEH_TYPE_SPACE_ORBIT_OFFSET) += 1;
+    }
+    if (fabs(g_p4OrbitRewardRub) > 1e-6) {
+        *(double*)(world + WORLD_RUB_OFFSET) += g_p4OrbitRewardRub;
+    }
+    if (fabs(g_p4OrbitRewardUsd) > 1e-6) {
+        *(double*)(world + WORLD_USD_OFFSET) += g_p4OrbitRewardUsd;
+    }
+    if (fabsf(g_p4OrbitStatUsd) > 1e-6f) {
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_VEHICLES_EXPORT_USD_OFF) += g_p4OrbitStatUsd;
+    }
+    if (fabsf(g_p4OrbitStatRub) > 1e-6f) {
+        *(float*)(world + WORLD_STAT_CURRENT_OFFSET + STAT_VEHICLES_EXPORT_RUB_OFF) += g_p4OrbitStatRub;
+    }
+    if (g_p4OrbitCreateNewOrbit) {
+        static std::vector<BYTE> s_p4OrbitBacking;
+        BYTE* orbB = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET);
+        BYTE* orbE = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8);
+        size_t oldBytes = (orbB && orbE >= orbB) ? (size_t)(orbE - orbB) : 0u;
+        s_p4OrbitBacking.assign(oldBytes + ORBIT_SLOT_STRIDE, 0);
+        if (oldBytes > 0) memcpy(s_p4OrbitBacking.data(), orbB, oldBytes);
+        *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = s_p4OrbitBacking.data();
+        *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = s_p4OrbitBacking.data() + s_p4OrbitBacking.size();
+    }
+    g_p4OrbitSeenPopupAllowed = (int)Commands_OnCreatePopupWindow(
+        (long long)(uintptr_t)world, 4, (long long)(uintptr_t)veh, 4, 0,
+        WINDOW_POPUP_TYPE_SPACE_PAYOUT, 0, 0, 0);
+}
+
+static void __fastcall Phase4_MockReentryStep(BYTE* veh)
+{
+    if (!veh) return;
+    BYTE* vt = *(BYTE**)(veh + VEH_TYPE_PTR_OFFSET);
+    if (vt) {
+        *(int32_t*)(vt + VEH_TYPE_SPACE_REENTRY_OFFSET) += 1;
+    }
+}
+
+static void __fastcall Phase4_MockRemoveOrbit(BYTE* world, int orbitIdx)
+{
+    ++g_p4RemoveOrbitCalls;
+    g_p4LastRemovedOrbitIdx = orbitIdx;
+    BYTE* orbB = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET);
+    BYTE* orbE = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8);
+    if (orbB && orbE > orbB && orbitIdx >= 0) {
+        size_t cnt = (size_t)(orbE - orbB) / ORBIT_SLOT_STRIDE;
+        if ((size_t)orbitIdx < cnt) {
+            for (size_t i = (size_t)orbitIdx; i + 1 < cnt; ++i) {
+                memcpy(orbB + i * ORBIT_SLOT_STRIDE, orbB + (i + 1) * ORBIT_SLOT_STRIDE, ORBIT_SLOT_STRIDE);
+            }
+            *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbE - ORBIT_SLOT_STRIDE;
+        }
+    }
+}
+
+static void __fastcall Phase4_MockSpawnBorderCargo(BYTE* world)
+{
+    ++g_p4BorderCargoCalls;
+    BYTE* resB = *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET);
+    BYTE* resE = *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8);
+    if (resB && resE >= resB + 2u * RESEARCH_ITEM_STRIDE) {
+        g_p4BorderSeenProg0 = *(const float*)(resB + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET);
+        g_p4BorderSeenProg1 = *(const float*)(resB + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET);
+    }
+}
+
+static void __fastcall Phase4_MockMissionControlWin(BYTE* world, BYTE*)
+{
+    ++g_p4McWinCalls;
+    BYTE* const* bb = *(BYTE* const**)(world + WORLD_BUILDINGS_OFFSET);
+    BYTE* const* be = *(BYTE* const**)(world + WORLD_BUILDINGS_OFFSET + 8);
+    g_p4McSeenBlds = (bb && be >= bb) ? (int)(be - bb) : -1;
+    BYTE* const* vb = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET);
+    BYTE* const* ve = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET + 8);
+    g_p4McSeenVehs = (vb && ve >= vb) ? (int)(ve - vb) : -1;
+    BYTE* ob = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET);
+    BYTE* oe = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8);
+    g_p4McSeenOrbits = (ob && oe >= ob) ? ((size_t)(oe - ob) / ORBIT_SLOT_STRIDE) : 0u;
+}
+
+static void __fastcall Phase4_MockTopBarHudDraw(BYTE* world)
+{
+    ++g_p4TopBarCalls;
+    g_p4TopBarSeenMcPtr = *(BYTE**)(world + WORLD_MISSION_CONTROL_BLD_PTR_OFF);
+}
+
+static bool SubTest_Phase4_HardeningAndRvaRegressions()
+{
+    // Verified SOVIET64.exe v1.2.0.9 RVA & struct offset invariants fixed in Phase 4
+    TEST_CHECK(CIT_RIDING_VEHICLE_PTR_OFF == 0x060u);
+    TEST_CHECK(RESEARCH_ITEM_REQ_WORK_OFFSET == 0x5Cu);
+    TEST_CHECK(RVA_PROD_LINE_STEP == 0x1E42C0u);
+    TEST_CHECK(RVA_CREATE_VEHICLE == 0x403E60u);
+    TEST_CHECK(RVA_SPACE_VEH_ORBIT_STEP == 0x695AC0u);
+    TEST_CHECK(RVA_SPACE_VEH_REENTRY_STEP == 0x692790u);
+    TEST_CHECK(RVA_REMOVE_ORBIT == 0x41DAB0u);
+    TEST_CHECK(RVA_SPAWN_SPACE_CARGO_AT_BORDER == 0x314A60u);
+    TEST_CHECK(RVA_MISSION_CONTROL_WINDOW == 0x78DB70u);
+    TEST_CHECK(RVA_TOP_BAR_HUD_DRAW == 0x94020u);
+
+    Phase4_InitTwoStates(true);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    g_p3LaunchCalls = g_p3DetachCalls = 0;
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_LAUNCH_ROCKET_RVA, (void*)&Phase3_MockLaunchRocket);
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_ORBIT_DETACH_RVA, (void*)&Phase3_MockOrbitDetach);
+
+    // Non-LaunchPad building ($TYPE_AIRPLANE_PARKING: cat=0x2F, sub=0) MUST be blocked on Launch replay ([P2] #2)
+    std::vector<BYTE> nonPadType(0x400u, 0);
+    *(int32_t*)(nonPadType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(nonPadType.data() + BLD_TYPE_SUBTYPE_OFF) = 0;
+    std::vector<BYTE> nonPad(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(nonPad.data() + BLD_TYPE_OFFSET) = nonPadType.data();
+    *(float*)(nonPad.data() + OBJ_POS_OFFSET) = -100.0f;
+
+    std::vector<BYTE> krazType(WORLD_VEHICLE_TYPE_STRIDE, 0); // all space flags 0 ([P2] #3)
+    std::vector<BYTE> rocket(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> partner(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(rocket.data() + VEH_ID_OFFSET) = 6101u;
+    *(float*)(rocket.data() + VEH_POS_OFFSET) = -100.0f;
+    *(BYTE**)(rocket.data() + VEH_TYPE_PTR_OFFSET) = krazType.data();
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)nonPad.data();
+    *(int32_t*)(rocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(unsigned*)(partner.data() + VEH_ID_OFFSET) = 6102u;
+    std::vector<BYTE*> vehs = { rocket.data(), partner.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehs);
+    TwoStates_RegisterVehicleOwner(6101, 1);
+
+    U64 launchArgs[7] = { (U64)(uintptr_t)rocket.data(), (U64)(unsigned)-1, 0, 0, 0, 0, 0 };
+    BYTE msg[256] = {};
+    size_t msgSize = 0;
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchArgs, msg, sizeof(msg), &msgSize));
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3LaunchCalls == 0); // [P2] #2 rejected non-launchpad
+
+    // Non-spacecraft Kraz_255 rejected on replay by Deorbit/Reentry ([P2] #3)
+    Commands_SetSession(COMMANDS_HOST);
+    Phase3_ResetSpaceActionMockCounters(1);
+    GameCalls_SetSpaceActionFnsForTest(&Phase3_MockHasReentry, &Phase3_MockSetupReentry, &Phase3_MockSetupDeorbit);
+    *(U64*)(rocket.data() + VEH_CUR_BLD_OFFSET) = 0;
+    *(int32_t*)(rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 1;
+    TEST_CHECK(GameCalls_CaptureSpaceActionForTest((U64)(uintptr_t)rocket.data(), SPACE_SITE_DEORBIT_OR_ABORT, 0));
+    Commands_Boundary(10);
+    TEST_CHECK(g_p3SetupDeorbitCalls == 0);
+
+    // Detach with linkPtr == 0 && dockPartner != 0 skips without touching partner ([P2] #1)
+    *(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = (U64)(uintptr_t)partner.data();
+    *(U64*)(rocket.data() + VEH_LINK_PTR_OFFSET) = 0;
+    U64 detachArgs[7] = { (U64)(uintptr_t)rocket.data(), 0, 0, 0, 0, 0, 0 };
+    TEST_CHECK(GameCalls_CaptureMsgForTest(SITE_SPACE_ORBIT_DETACH_RVA, detachArgs, msg, sizeof(msg), &msgSize));
+    TwoStates_BeginCommand(1);
+    TEST_CHECK(GameCalls_ApplyCommand(msg, msgSize));
+    TwoStates_EndCommand(1);
+    TEST_CHECK(g_p3DetachCalls == 0);
+    TEST_CHECK(*(U64*)(rocket.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) == (U64)(uintptr_t)partner.data());
+
+    Commands_SetSession(COMMANDS_OFF);
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase4_MilestonesAndResearchUnlockIsolation()
+{
+    Phase4_InitTwoStates(true); // State 1 local
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 2 VehicleTypes: index 0 vs 1 (dlc5 rocket), plus 2 research items for $REQUIRE_MISSION parity
+    std::vector<BYTE> vtypes(2u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* vtSoyuz = vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vtCargo = vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(vtSoyuz + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "media_soviet/dlc5/vehicles/rocket_soyuz.ini");
+    strcpy_s((char*)(vtCargo + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5\\vehicles\\cargo_progress.ini");
+    vtSoyuz[VEH_TYPE_ROCKET_FLAG_OFFSET] = 1;
+    vtCargo[VEH_TYPE_SPACECRAFT_FLAG_OFFSET] = 1;
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    std::vector<BYTE> resVec(2u * RESEARCH_ITEM_STRIDE, 0);
+    *(float*)(resVec.data() + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(resVec.data() + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;
+    *(int32_t*)(resVec.data() + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_REQ_WORK_OFFSET) = 1; // +0x5C verified
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resVec.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8) = resVec.data() + resVec.size();
+    // Ensure State 2 has 0.0f progress on item 0 while State 1 holds 1.0f
+    TwoStates_BeginCommand(2);
+    *(float*)(resVec.data() + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.0f;
+    TwoStates_EndCommand(2);
+
+    std::vector<BYTE> fac1(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(fac1.data() + OBJ_POS_OFFSET) = -350.0f; // State 1
+    std::vector<BYTE> newRocket(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(newRocket.data() + VEH_ID_OFFSET) = 6201u;
+    *(float*)(newRocket.data() + VEH_POS_OFFSET) = 50.0f; // near border: must inherit State 1 via H_ProdLineStep!
+    *(BYTE**)(newRocket.data() + VEH_TYPE_PTR_OFFSET) = vtSoyuz;
+
+    g_p4SpawnedVehPtr = newRocket.data();
+    g_p4ProdSpawnBld = fac1.data();
+    std::vector<BYTE*> initVehs;
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, initVehs);
+
+    // 1. State 1 builds rocket via H_ProdLineStep -> +0x9CE4 == 1 ONLY in State 1; vehicle owner == 1
+    TwoStates_InvokeProdLineStepForTest(world, fac1.data(), &Phase4_MockProdLineStep);
+    int b1 = -1, o1 = -1, r1 = -1;
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/rocket_soyuz.ini", &b1, &o1, &r1));
+    TEST_CHECK(b1 == 1 && o1 == 0 && r1 == 0);
+    TEST_CHECK(!TwoStates_GetSpaceMilestoneForTest(2, "dlc5/vehicles/rocket_soyuz.ini", &b1, &o1, &r1));
+    TEST_CHECK(TwoStates_GetVehicleOwner(6201, newRocket.data()) == 1);
+
+    // Non-factory CreateVehicle (factoryBuilt == 0) MUST NOT attribute milestone as factory production
+    TwoStates_InvokeCreateVehicleForTest(world, vtCargo, fac1.data(), 0, &Phase4_MockCreateVehicle);
+    TEST_CHECK(!TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/cargo_progress.ini", &b1, &o1, &r1));
+
+    // Factory CreateVehicle (factoryBuilt == 1) on fac2 (State 2) sets built ONLY in State 2
+    std::vector<BYTE> fac2(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(fac2.data() + OBJ_POS_OFFSET) = 350.0f; // State 2
+    std::vector<BYTE> cargo2(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(cargo2.data() + VEH_ID_OFFSET) = 6202u;
+    *(BYTE**)(cargo2.data() + VEH_TYPE_PTR_OFFSET) = vtCargo;
+    g_p4SpawnedVehPtr = cargo2.data();
+    TwoStates_InvokeCreateVehicleForTest(world, vtCargo, fac2.data(), 1, &Phase4_MockCreateVehicle);
+    int b2 = -1, o2 = -1, r2 = -1;
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(2, "MEDIA_SOVIET/DLC5/VEHICLES/CARGO_PROGRESS.INI", &b2, &o2, &r2));
+    TEST_CHECK(b2 == 1 && o2 == 0 && r2 == 0);
+    TEST_CHECK(!TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/cargo_progress.ini", &b1, &o1, &r1));
+
+    // 2. Orbit & Reentry steps isolate +0x9CE8 / +0x9CEC strictly to owner's slice and preserve previous mount;
+    //    furthermore, State 2 launching the SAME vtSoyuz after State 1 ALREADY reached orbit==1 still records orbit==1 in State 2!
+    g_p4OrbitRewardRub = 0.0;
+    g_p4OrbitRewardUsd = 0.0;
+    g_p4OrbitStatUsd = 0.0f;
+    g_p4OrbitStatRub = 0.0f;
+    g_p4OrbitCreateNewOrbit = false;
+    TwoStates_InvokeSpaceOrbitStepForTest(newRocket.data(), &Phase4_MockOrbitStep);
+    TwoStates_InvokeSpaceReentryStepForTest(cargo2.data(), &Phase4_MockReentryStep);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/rocket_soyuz.ini", &b1, &o1, &r1));
+    TEST_CHECK(b1 == 1 && o1 == 1 && r1 == 0);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(2, "dlc5/vehicles/cargo_progress.ini", &b2, &o2, &r2));
+    TEST_CHECK(b2 == 1 && o2 == 0 && r2 == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 1, 0) == 1);
+    TEST_CHECK(TwoStates_GetEngineResearchUnlockByte(world, 2, 0) == 0);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneMountStateForTest() == 1);
+
+    // Same vtSoyuz for State 2 right after State 1's mount: must detect 0 -> 1 cleanly!
+    std::vector<BYTE> s2Soyuz(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(s2Soyuz.data() + VEH_ID_OFFSET) = 6203u;
+    *(BYTE**)(s2Soyuz.data() + VEH_TYPE_PTR_OFFSET) = vtSoyuz;
+    TwoStates_RegisterVehicleOwner(6203, 2);
+    TwoStates_InvokeSpaceOrbitStepForTest(s2Soyuz.data(), &Phase4_MockOrbitStep);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(2, "dlc5/vehicles/rocket_soyuz.ini", &b2, &o2, &r2));
+    TEST_CHECK(o2 == 1);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/rocket_soyuz.ini", &b1, &o1, &r1));
+    TEST_CHECK(b1 == 1 && o1 == 1);
+
+    // 3. Space cargo unlocks (WORLD+0x11BA8..0x11BA9) remain isolated per state
+    TwoStates_BeginCommand(1);
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 1;
+    world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] = 0;
+    TwoStates_EndCommand(1);
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] == 0);
+    world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] = 1;
+    TwoStates_EndCommand(2);
+    TEST_CHECK(world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] == 1);
+    TEST_CHECK(world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] == 0);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase4_OrbitPayoutAndPopupSuppression()
+{
+    Phase4_InitTwoStates(true); // Host = State 1 local
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> vtypes(1u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5/vehicles/sat_comm.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    std::vector<BYTE> craft2(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(craft2.data() + VEH_ID_OFFSET) = 6302u;
+    *(BYTE**)(craft2.data() + VEH_TYPE_PTR_OFFSET) = vtypes.data();
+    TwoStates_RegisterVehicleOwner(6302, 2);
+
+    std::vector<BYTE> craft1(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(craft1.data() + VEH_ID_OFFSET) = 6301u;
+    *(BYTE**)(craft1.data() + VEH_TYPE_PTR_OFFSET) = vtypes.data();
+    TwoStates_RegisterVehicleOwner(6301, 1);
+
+    std::vector<BYTE*> vehs = { craft2.data(), craft1.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehs);
+
+    // State 2 orbit commercial payout on Host (local == 1): USD/RUB + STAT+0x190/+0x194 attributed to State 2, popup 0x27 suppressed
+    g_p4OrbitRewardRub = 8000.0;
+    g_p4OrbitRewardUsd = 12000.0;
+    g_p4OrbitStatUsd = 12000.0f;
+    g_p4OrbitStatRub = 8000.0f;
+    g_p4OrbitCreateNewOrbit = false;
+    g_p4OrbitSeenPopupAllowed = -1;
+
+    TwoStates_InvokeSpaceOrbitStepForTest(craft2.data(), &Phase4_MockOrbitStep);
+    TEST_CHECK(g_p4OrbitSeenPopupAllowed == 0); // suppressed for local State 1!
+    TEST_CHECK_NEAR(TwoStates_GetRubles(1), 1000000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 500000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetRubles(2), 1008000.0, 1e-3);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(2), 512000.0, 1e-3);
+    float s1Vec[4] = {}, s2Vec[4] = {};
+    TwoStates_GetStateEconFloat4ForTest(1, false, s1Vec);
+    TwoStates_GetStateEconFloat4ForTest(2, false, s2Vec);
+    TEST_CHECK_NEAR(s1Vec[2], 0.0f, 1e-2f);
+    TEST_CHECK_NEAR(s2Vec[2], 12000.0f, 1e-2f);
+    TEST_CHECK_NEAR(s2Vec[3], 8000.0f, 1e-2f);
+
+    // State 1 orbit commercial payout on Host (local == 1): popup 0x27 ALLOWED (returns non-zero)
+    g_p4OrbitSeenPopupAllowed = 0;
+    TwoStates_InvokeSpaceOrbitStepForTest(craft1.data(), &Phase4_MockOrbitStep);
+    TEST_CHECK(g_p4OrbitSeenPopupAllowed != 0);
+    TEST_CHECK_NEAR(TwoStates_GetDollars(1), 512000.0, 1e-3);
+    TEST_CHECK(TwoStates_GetSpaceActiveOwner() == 0);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase4_OrbitOwnershipAndCrashSiteGuards()
+{
+    Phase4_InitTwoStates(true); // State 1 local
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> orbits(2u * ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    std::vector<BYTE> vtypes(1u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5/vehicles/sat.ini");
+    vtypes[VEH_TYPE_ROCKET_FLAG_OFFSET] = 1;
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    // State 2 launches and creates orbit index 2 via H_SpaceVehOrbitStep
+    std::vector<BYTE> c2(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(c2.data() + VEH_ID_OFFSET) = 6402u;
+    *(BYTE**)(c2.data() + VEH_TYPE_PTR_OFFSET) = vtypes.data();
+    TwoStates_RegisterVehicleOwner(6402, 2);
+
+    const int initOwners[2] = { 1, 1 };
+    TwoStates_SetOrbitOwnersForTest(initOwners, 2);
+    g_p4OrbitRewardRub = g_p4OrbitRewardUsd = 0.0;
+    g_p4OrbitStatUsd = g_p4OrbitStatRub = 0.0f;
+    g_p4OrbitCreateNewOrbit = true;
+    TwoStates_InvokeSpaceOrbitStepForTest(c2.data(), &Phase4_MockOrbitStep);
+    g_p4OrbitCreateNewOrbit = false;
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 3u);
+    TEST_CHECK(TwoStates_GetOrbitOwner(0) == 1);
+    TEST_CHECK(TwoStates_GetOrbitOwner(1) == 1);
+    TEST_CHECK(TwoStates_GetOrbitOwner(2) == 2);
+
+    // Negative orbitIdx in H_RemoveOrbit MUST short-circuit safely before origFn (js prologue guard)
+    g_p4RemoveOrbitCalls = 0;
+    TwoStates_InvokeRemoveOrbitForTest(world, -1, &Phase4_MockRemoveOrbit);
+    TEST_CHECK(g_p4RemoveOrbitCalls == 0);
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 3u);
+
+    // Valid removal of orbitIdx 1 shifts State 2's orbit down from index 2 -> index 1
+    TwoStates_InvokeRemoveOrbitForTest(world, 1, &Phase4_MockRemoveOrbit);
+    TEST_CHECK(g_p4RemoveOrbitCalls == 1 && g_p4LastRemovedOrbitIdx == 1);
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 2u);
+    TEST_CHECK(TwoStates_GetOrbitOwner(0) == 1);
+    TEST_CHECK(TwoStates_GetOrbitOwner(1) == 2);
+
+    // Launch Pad ownership & catch_orbit ownership guards
+    std::vector<BYTE> padType(0x400u, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL;
+    std::vector<BYTE> pad1(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> pad2(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(pad1.data() + BLD_TYPE_OFFSET) = padType.data();
+    *(float*)(pad1.data() + OBJ_POS_OFFSET) = -300.0f; // State 1
+    *(BYTE**)(pad2.data() + BLD_TYPE_OFFSET) = padType.data();
+    *(float*)(pad2.data() + OBJ_POS_OFFSET) = +300.0f; // State 2
+
+    std::vector<BYTE> rocket1(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(rocket1.data() + VEH_ID_OFFSET) = 6401u;
+    *(BYTE**)(rocket1.data() + VEH_TYPE_PTR_OFFSET) = vtypes.data();
+    *(U64*)(rocket1.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad2.data();
+    *(int32_t*)(rocket1.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    std::vector<BYTE*> guardVehs = { rocket1.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, guardVehs);
+    TwoStates_RegisterVehicleOwner(6401, 1);
+
+    U64 catchForeignOrbit[7] = { (U64)(uintptr_t)rocket1.data(), 1u, 0, 0, 0, 0, 0 };
+    U64 catchOwnOrbit[7] = { (U64)(uintptr_t)rocket1.data(), 0u, 0, 0, 0, 0, 0 };
+    // Rocket1 on foreign Pad2 -> blocked even for own orbit
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, catchOwnOrbit));
+    // Rocket1 on own Pad1, catching foreign orbit 1 -> blocked
+    *(U64*)(rocket1.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad1.data();
+    TEST_CHECK(!GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, catchForeignOrbit));
+    // Rocket1 on own Pad1, catching own orbit 0 -> allowed!
+    TEST_CHECK(GameCalls_CheckTwoStatesArgsForTest(SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, catchOwnOrbit));
+
+    // Mid-orbit vehicle with $SPACE_SHIP_REENTRY flag without g_vehicleOwners entry + positive X coord inherits State 1 via orbit[0],
+    // docked child inherits State 1 via dockPartner, and cosmonaut citizen riding vehId==0 (+0x60) resolves State 1!
+    std::vector<BYTE> reentryVt(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    reentryVt[VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET] = 1;
+    std::vector<BYTE> midOrbitVeh(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(midOrbitVeh.data() + VEH_ID_OFFSET) = 0u; // vehId == 0!
+    *(BYTE**)(midOrbitVeh.data() + VEH_TYPE_PTR_OFFSET) = reentryVt.data();
+    *(float*)(midOrbitVeh.data() + VEH_POS_OFFSET) = +450.0f; // State 2 X-coord
+    *(int32_t*)(midOrbitVeh.data() + VEH_ORBIT_INDEX_OFFSET) = 0; // State 1 orbit
+    std::vector<BYTE> childVeh(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(childVeh.data() + VEH_ID_OFFSET) = 6499u;
+    *(float*)(childVeh.data() + VEH_POS_OFFSET) = +450.0f;
+    *(int32_t*)(childVeh.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(BYTE**)(childVeh.data() + VEH_SPACE_DOCK_PARTNER_OFFSET) = midOrbitVeh.data();
+
+    std::vector<BYTE> cosmonaut(0x800u, 0);
+    *(float*)(cosmonaut.data() + CIT_POS_OFFSET) = +450.0f;
+    *(BYTE**)(cosmonaut.data() + CIT_RIDING_VEHICLE_PTR_OFF) = midOrbitVeh.data();
+
+    TEST_CHECK(TwoStates_GetVehicleOwner(0, midOrbitVeh.data()) == 1);
+    TEST_CHECK(TwoStates_GetVehicleOwner(6499, childVeh.data()) == 1);
+    TEST_CHECK(TwoStates_ResolveCitizenOwnerForTest(cosmonaut.data()) == 1);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase4_MissionControlHudAndBorderContracts()
+{
+    Phase4_InitTwoStates(true); // State 1 local
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // Setup buildings (pad1 [S1], mc1 [S1 built], mc2 [S2 built]) + vehicles (s1Veh, s2Veh) + 2 orbits
+    std::vector<BYTE> mcType(0x400u, 0);
+    *(uint32_t*)(mcType.data() + BLD_TYPE_CAT_OFF) = BLD_CAT_MISSION_CONTROL;
+    *(uint32_t*)(mcType.data() + BLD_TYPE_SUBTYPE_OFF) = BLD_SUBTYPE_MISSION_CONTROL;
+
+    std::vector<BYTE> pad1(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> mc1(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> mc2(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(pad1.data() + OBJ_POS_OFFSET) = -200.0f;
+    *(float*)(mc1.data() + OBJ_POS_OFFSET) = -300.0f;
+    *(BYTE**)(mc1.data() + BLD_TYPE_OFFSET) = mcType.data();
+    *(float*)(mc1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(mc2.data() + OBJ_POS_OFFSET) = +300.0f;
+    *(BYTE**)(mc2.data() + BLD_TYPE_OFFSET) = mcType.data();
+    *(float*)(mc2.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+    std::vector<BYTE*> bldVec = { pad1.data(), mc1.data(), mc2.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    std::vector<BYTE> v1(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> v2(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(v1.data() + VEH_ID_OFFSET) = 6501u;
+    *(unsigned*)(v2.data() + VEH_ID_OFFSET) = 6502u;
+    TwoStates_RegisterVehicleOwner(6501, 1);
+    TwoStates_RegisterVehicleOwner(6502, 2);
+    std::vector<BYTE*> vehVec = { v1.data(), v2.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehVec);
+
+    std::vector<BYTE> orbits(2u * ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    // 1. H_MissionControlWindow filters BLD & VEH to State 1, leaves ALL orbits visible, and restores vectors
+    BYTE dummyWin[64] = {};
+    g_p4McWinCalls = 0;
+    TwoStates_InvokeMissionControlWinForTest(world, dummyWin, &Phase4_MockMissionControlWin);
+    TEST_CHECK(g_p4McWinCalls == 1);
+    TEST_CHECK(g_p4McSeenBlds == 2); // pad1 + mc1 only
+    TEST_CHECK(g_p4McSeenVehs == 1); // v1 only
+    TEST_CHECK(g_p4McSeenOrbits == 2u); // ALL orbits remain visible
+    BYTE* const* postBb = *(BYTE* const**)(world + WORLD_BUILDINGS_OFFSET);
+    BYTE* const* postBe = *(BYTE* const**)(world + WORLD_BUILDINGS_OFFSET + 8);
+    BYTE* const* postVb = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET);
+    BYTE* const* postVe = *(BYTE* const**)(world + WORLD_VEHICLES_OFFSET + 8);
+    TEST_CHECK((postBe - postBb) == 3);
+    TEST_CHECK((postVe - postVb) == 2);
+
+    // 2. H_TopBarHudDraw swaps foreign WORLD+0x11BB0 (mc2) -> local mc1 during draw and restores afterwards
+    *(BYTE**)(world + WORLD_MISSION_CONTROL_BLD_PTR_OFF) = mc2.data();
+    g_p4TopBarCalls = 0;
+    g_p4TopBarSeenMcPtr = nullptr;
+    TwoStates_InvokeTopBarHudDrawForTest(world, &Phase4_MockTopBarHudDraw);
+    TEST_CHECK(g_p4TopBarCalls == 1);
+    TEST_CHECK(g_p4TopBarSeenMcPtr == mc1.data());
+    TEST_CHECK(*(BYTE**)(world + WORLD_MISSION_CONTROL_BLD_PTR_OFF) == mc2.data());
+
+    // 3. H_SpawnSpaceCargoAtBorder applies UNION max(s1, s2) research progress during 0x314A60 & restores
+    std::vector<BYTE> resVec(2u * RESEARCH_ITEM_STRIDE, 0);
+    *(float*)(resVec.data() + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(resVec.data() + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.25f;
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resVec.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8) = resVec.data() + resVec.size();
+    TwoStates_BeginCommand(2);
+    *(float*)(resVec.data() + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 0.4f;
+    *(float*)(resVec.data() + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    TwoStates_EndCommand(2);
+
+    g_p4BorderCargoCalls = 0;
+    g_p4BorderSeenProg0 = g_p4BorderSeenProg1 = 0.0f;
+    TwoStates_InvokeSpawnSpaceCargoForTest(world, &Phase4_MockSpawnBorderCargo);
+    TEST_CHECK(g_p4BorderCargoCalls == 1);
+    TEST_CHECK_NEAR(g_p4BorderSeenProg0, 1.0f, 1e-4f); // State 1 max
+    TEST_CHECK_NEAR(g_p4BorderSeenProg1, 1.0f, 1e-4f); // State 2 max
+    TEST_CHECK_NEAR(*(float*)(resVec.data() + 0u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET), 1.0f, 1e-4f);
+    TEST_CHECK_NEAR(*(float*)(resVec.data() + 1u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET), 0.25f, 1e-4f);
+
+    TwoStates_OnSessionEnded();
+    ResetMockWorldMemory();
+    return true;
+}
+
+static bool SubTest_Phase4_StateHashPersistenceAndSpIsolation()
+{
+    Phase4_InitTwoStates(true);
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    std::vector<BYTE> bld(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(bld.data() + OBJ_POS_OFFSET) = -100.0f;
+    std::vector<BYTE*> bldVec = { bld.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    std::vector<BYTE> vtypes(2u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5/vehicles/rocket_soyuz.ini");
+    strcpy_s((char*)(vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5/vehicles/cargo_progress.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    std::vector<BYTE> resVec(2u * RESEARCH_ITEM_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = resVec.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8) = resVec.data() + resVec.size();
+
+    std::vector<BYTE> orbits(2u * ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbits.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbits.data() + orbits.size();
+
+    const int ownersInit[2] = { 1, 2 };
+    TwoStates_SetOrbitOwnersForTest(ownersInit, 2);
+    TwoStates_SetSpaceMilestoneForTest(1, "media_soviet/dlc5/vehicles/rocket_soyuz.ini", 3, 1, 0);
+    TwoStates_SetSpaceMilestoneForTest(2, "dlc5/vehicles/cargo_progress.ini", 2, 2, 1);
+
+    // StateHash detects any per-state milestone or orbit owner asymmetry
+    StateSummary sumA = {};
+    TEST_CHECK(StateHash_Compute(&sumA));
+    TwoStates_SetSpaceMilestoneForTest(2, "dlc5/vehicles/cargo_progress.ini", 2, 2, 2);
+    StateSummary sumB = {};
+    TEST_CHECK(StateHash_Compute(&sumB));
+    TEST_CHECK(sumA.hashSpace != sumB.hashSpace);
+    const int ownersFlipped[2] = { 2, 1 };
+    TwoStates_SetOrbitOwnersForTest(ownersFlipped, 2);
+    StateSummary sumC = {};
+    TEST_CHECK(StateHash_Compute(&sumC));
+    TEST_CHECK(sumB.hashSpace != sumC.hashSpace);
+
+    // Order-independent hash parity when Mixed-DLC case/slashes differ across Host vs Client
+    unsigned long long h1 = 0x123456789ABCDEF0ULL, h2 = 0x123456789ABCDEF0ULL;
+    TEST_CHECK(TwoStates_HashSpaceMilestones(&h1));
+    TwoStates_ResetSpaceForTest();
+    TwoStates_SetOrbitOwnersForTest(ownersFlipped, 2);
+    TwoStates_SetSpaceMilestoneForTest(2, "MEDIA_SOVIET\\DLC5\\VEHICLES\\CARGO_PROGRESS.INI", 2, 2, 2);
+    TwoStates_SetSpaceMilestoneForTest(1, "dlc5\\vehicles\\rocket_soyuz.ini", 3, 1, 0);
+    TEST_CHECK(TwoStates_HashSpaceMilestones(&h2));
+    TEST_CHECK(h1 == h2);
+
+    // republicmp_coop.ini round-trip serialization + reload parity (for both states' cargo unlocks, milestones, and orbit_owners)
+    TwoStates_BeginCommand(1);
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 1;
+    world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] = 0;
+    TwoStates_EndCommand(1);
+    TwoStates_BeginCommand(2);
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 0;
+    world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] = 1;
+    TwoStates_EndCommand(2);
+
+    std::filesystem::path coopDir = std::filesystem::path(g_mockBaseDir) / "phase4_coop_save";
+    std::error_code ec;
+    std::filesystem::create_directories(coopDir, ec);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(coopDir.string().c_str()));
+
+    TwoStates_ResetSpaceForTest();
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 0u);
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(coopDir.string().c_str(), true));
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 2u);
+    TEST_CHECK(TwoStates_GetOrbitOwner(0) == 2 && TwoStates_GetOrbitOwner(1) == 1);
+    int rb = 0, ro = 0, rr = 0;
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/rocket_soyuz.ini", &rb, &ro, &rr));
+    TEST_CHECK(rb == 3 && ro == 1 && rr == 0);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(2, "dlc5/vehicles/cargo_progress.ini", &rb, &ro, &rr));
+    TEST_CHECK(rb == 2 && ro == 2 && rr == 2);
+    TEST_CHECK(world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] == 1 && world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] == 0);
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] == 0 && world[WORLD_SPACE_CARGO_EAST_UNLOCK_OFF] == 1);
+    TwoStates_EndCommand(2);
+
+    // Legacy meta upgrade without orbit_owners infers orbit owners from orbiting vehicles in WORLD_VEHICLES
+    std::vector<BYTE> orbVeh(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(orbVeh.data() + VEH_ID_OFFSET) = 6602u;
+    *(int32_t*)(orbVeh.data() + VEH_ORBIT_INDEX_OFFSET) = 1;
+    std::vector<BYTE*> orbVehVec = { orbVeh.data() };
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, orbVehVec);
+    TwoStates_RegisterVehicleOwner(6602, 2);
+    TwoStates_SetOrbitOwnersForTest(nullptr, 0);
+    TEST_CHECK(TwoStates_WriteSaveMetaToDir(coopDir.string().c_str()));
+    TEST_CHECK(TwoStates_ReadSaveMetaFromDir(coopDir.string().c_str(), true));
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 2u);
+    TEST_CHECK(TwoStates_GetOrbitOwner(1) == 2);
+    std::filesystem::remove_all(coopDir, ec);
+
+    // Single-Player isolation after TwoStates_OnSessionEnded()
+    TwoStates_OnSessionEnded();
+    TEST_CHECK(!TwoStates_IsActive());
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 0u);
+    g_p4RemoveOrbitCalls = g_p4TopBarCalls = 0;
+    TwoStates_InvokeRemoveOrbitForTest(world, 0, &Phase4_MockRemoveOrbit);
+    TwoStates_InvokeTopBarHudDrawForTest(world, &Phase4_MockTopBarHudDraw);
+    TEST_CHECK(g_p4RemoveOrbitCalls == 1 && g_p4TopBarCalls == 1);
+    TEST_CHECK(Commands_OnCreatePopupWindow((long long)(uintptr_t)world, 4, 0, 4, 0,
+                                            WINDOW_POPUP_TYPE_SPACE_PAYOUT, 0, 0, 0) != 0);
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static BYTE* g_p4McCaptureRocket = nullptr;
+static BYTE  g_p4McCapturedLaunchMsg[256] = {};
+static size_t g_p4McCapturedLaunchSize = 0;
+static bool  g_p4McCaptureOk = false;
+static float g_p4BorderSeenProg120 = 0.0f;
+static float g_p4BorderSeenProg121 = 0.0f;
+static BYTE* g_p4OrbitMockRemoveTarget = nullptr;
+
+static void __fastcall Phase4_MockMcCaptureLaunch(BYTE*, BYTE*)
+{
+    g_p4McCapturedLaunchSize = 0;
+    U64 launchArgs[7] = { (U64)(uintptr_t)g_p4McCaptureRocket, (U64)(unsigned)-1, 0, 0, 0, 0, 0 };
+    g_p4McCaptureOk = GameCalls_CaptureMsgForTest(
+        SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, launchArgs,
+        g_p4McCapturedLaunchMsg, sizeof(g_p4McCapturedLaunchMsg), &g_p4McCapturedLaunchSize);
+}
+
+static void __fastcall Phase4_MockLaunchPushesOrbitAndClearsOwners(U64 veh, int)
+{
+    ++g_p3LaunchCalls;
+    // Vanilla 0x698720 resets home/depot fields (+0x4F0/+0x4F8) on launch
+    *(U64*)(veh + VEH_HOME_OFFSET) = 0;
+    *(U64*)(veh + VEH_DEPOT_OFFSET) = 0;
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    static std::vector<BYTE> s_p4LaunchOrbitBacking;
+    BYTE* orbB = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET);
+    BYTE* orbE = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8);
+    size_t oldBytes = (orbB && orbE >= orbB) ? (size_t)(orbE - orbB) : 0u;
+    s_p4LaunchOrbitBacking.assign(oldBytes + ORBIT_SLOT_STRIDE, 0);
+    if (oldBytes > 0) memcpy(s_p4LaunchOrbitBacking.data(), orbB, oldBytes);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = s_p4LaunchOrbitBacking.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = s_p4LaunchOrbitBacking.data() + s_p4LaunchOrbitBacking.size();
+}
+
+static void __fastcall Phase4_MockOrbitStepRemoveAndPush(BYTE*)
+{
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    // Simulate 0x695AC0 removing orbit 0 AND pushing a new orbit in the same call (net count delta == 0)
+    TwoStates_InvokeRemoveOrbitForTest(world, 0, &Phase4_MockRemoveOrbit);
+    static std::vector<BYTE> s_p4RepushBacking;
+    BYTE* orbB = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET);
+    BYTE* orbE = *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8);
+    size_t oldBytes = (orbB && orbE >= orbB) ? (size_t)(orbE - orbB) : 0u;
+    s_p4RepushBacking.assign(oldBytes + ORBIT_SLOT_STRIDE, 0);
+    if (oldBytes > 0) memcpy(s_p4RepushBacking.data(), orbB, oldBytes);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = s_p4RepushBacking.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = s_p4RepushBacking.data() + s_p4RepushBacking.size();
+    (void)g_p4OrbitMockRemoveTarget;
+}
+
+static void __fastcall Phase4_MockSpawnBorder135(BYTE* world)
+{
+    ++g_p4BorderCargoCalls;
+    BYTE* resB = *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET);
+    BYTE* resE = *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8);
+    if (resB && resE >= resB + 122u * RESEARCH_ITEM_STRIDE) {
+        g_p4BorderSeenProg120 = *(const float*)(resB + 120u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET);
+        g_p4BorderSeenProg121 = *(const float*)(resB + 121u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET);
+    }
+}
+
+static bool SubTest_Phase4_ReviewRegressions()
+{
+    // 1. [P0-1] Launch captured INSIDE H_MissionControlWindow with preceding foreign vehicles resolves true WORLD index
+    Phase4_InitTwoStates(false); // Client (State 2 local)
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    WriteAbsJmp12(g_mockExeBuffer + FN_SPACE_LAUNCH_ROCKET_RVA, (void*)&Phase4_MockLaunchPushesOrbitAndClearsOwners);
+
+    std::vector<BYTE> padType(0x400u, 0);
+    *(int32_t*)(padType.data() + BLD_TYPE_CAT_OFF) = (int32_t)BLD_CAT_SPACE_LAUNCH_PAD;
+    *(int32_t*)(padType.data() + BLD_TYPE_SUBTYPE_OFF) = (int32_t)BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL;
+    std::vector<BYTE> pad2(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> pad1(BUILDING_STRUCT_BYTES, 0);
+    *(BYTE**)(pad2.data() + BLD_TYPE_OFFSET) = padType.data();
+    *(float*)(pad2.data() + OBJ_POS_OFFSET) = +320.0f; // State 2
+    *(BYTE**)(pad1.data() + BLD_TYPE_OFFSET) = padType.data();
+    *(float*)(pad1.data() + OBJ_POS_OFFSET) = -320.0f; // State 1
+
+    std::vector<BYTE> s1VehA(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> s1VehB(VEHICLE_STRUCT_BYTES, 0);
+    std::vector<BYTE> s2Rocket(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(s1VehA.data() + VEH_ID_OFFSET) = 6701u;
+    *(unsigned*)(s1VehB.data() + VEH_ID_OFFSET) = 6702u;
+    *(unsigned*)(s2Rocket.data() + VEH_ID_OFFSET) = 6703u;
+    *(float*)(s2Rocket.data() + VEH_POS_OFFSET) = +320.0f;
+    *(U64*)(s2Rocket.data() + VEH_HOME_OFFSET) = (U64)(uintptr_t)pad2.data();
+    *(U64*)(s2Rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad2.data();
+    *(int32_t*)(s2Rocket.data() + VEH_ORBIT_INDEX_OFFSET) = -1;
+    *(int32_t*)(s2Rocket.data() + VEH_ROCKET_FLIGHT_STATE_OFFSET) = 0;
+
+    std::vector<BYTE*> blds = { pad1.data(), pad2.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, blds);
+    std::vector<BYTE*> vehs = { s1VehA.data(), s1VehB.data(), s2Rocket.data() }; // s2Rocket is at real index 2, filtered index 0!
+    WriteMockVectorHeader(world + WORLD_VEHICLES_OFFSET, vehs);
+    TwoStates_RegisterVehicleOwner(6701, 1);
+    TwoStates_RegisterVehicleOwner(6702, 1);
+    TwoStates_RegisterVehicleOwner(6703, 2);
+
+    BYTE dummyWin[64] = {};
+    g_p4McCaptureRocket = s2Rocket.data();
+    g_p4McCaptureOk = false;
+    TwoStates_InvokeMissionControlWinForTest(world, dummyWin, &Phase4_MockMcCaptureLaunch);
+    TEST_CHECK(g_p4McCaptureOk);
+
+    g_p3LaunchCalls = 0;
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(GameCalls_ApplyCommand(g_p4McCapturedLaunchMsg, g_p4McCapturedLaunchSize));
+    TwoStates_EndCommand(2);
+    TEST_CHECK(g_p3LaunchCalls == 1);
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 1u && TwoStates_GetOrbitOwner(0) == 2);
+    // Replay Launch blocks foreign Launch Pad (s2Rocket moved to pad1 under cmdOwner 2)
+    *(U64*)(s2Rocket.data() + VEH_CUR_BLD_OFFSET) = (U64)(uintptr_t)pad1.data();
+    TwoStates_BeginCommand(2);
+    TEST_CHECK(GameCalls_ApplyCommand(g_p4McCapturedLaunchMsg, g_p4McCapturedLaunchSize));
+    TwoStates_EndCommand(2);
+    TEST_CHECK(g_p3LaunchCalls == 1);
+
+    // 2. [P0-3] Simultaneous RemoveOrbit + PushOrbit inside one H_SpaceVehOrbitStep attributes the pushed orbit cleanly
+    std::vector<BYTE> orbInit(2u * ORBIT_SLOT_STRIDE, 0);
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET) = orbInit.data();
+    *(BYTE**)(world + WORLD_ORBITS_VEC_OFFSET + 8) = orbInit.data() + orbInit.size();
+    const int orbOwnersInit[2] = { 1, 1 };
+    TwoStates_SetOrbitOwnersForTest(orbOwnersInit, 2);
+    TwoStates_InvokeSpaceOrbitStepForTest(s2Rocket.data(), &Phase4_MockOrbitStepRemoveAndPush);
+    TEST_CHECK(TwoStates_GetOrbitOwnerCountForTest() == 2u);
+    TEST_CHECK(TwoStates_GetOrbitOwner(0) == 1 && TwoStates_GetOrbitOwner(1) == 2);
+
+    // 3. [P0-2], [P1-1], [P1-2], [P1-6]: Space milestone mounts in ResearchDailyUpdate/BldUnivStep,
+    //    135-tech #120/#121 union in H_SpawnSpaceCargoAtBorder, Mixed-DLC key preservation, and cargo unlock hashing
+    std::vector<BYTE> vtypes(1u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc5/vehicles/rocket_soyuz.ini");
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    std::vector<BYTE> res135(135u * RESEARCH_ITEM_STRIDE, 0);
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET) = res135.data();
+    *(BYTE**)(world + WORLD_RESEARCH_VEC_BEGIN_OFFSET + 8) = res135.data() + res135.size();
+    TwoStates_BeginCommand(2);
+    for (int i = 0; i < 80; ++i) {
+        *(float*)(res135.data() + (size_t)i * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    }
+    *(float*)(res135.data() + 120u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    *(float*)(res135.data() + 121u * RESEARCH_ITEM_STRIDE + RESEARCH_ITEM_PROGRESS_OFFSET) = 1.0f;
+    TwoStates_EndCommand(2);
+
+    g_p4BorderCargoCalls = 0;
+    g_p4BorderSeenProg120 = g_p4BorderSeenProg121 = 0.0f;
+    TwoStates_InvokeSpawnSpaceCargoForTest(world, &Phase4_MockSpawnBorder135);
+    TEST_CHECK(g_p4BorderCargoCalls == 1);
+    TEST_CHECK_NEAR(g_p4BorderSeenProg120, 1.0f, 1e-4f);
+    TEST_CHECK_NEAR(g_p4BorderSeenProg121, 1.0f, 1e-4f);
+
+    TwoStates_SetSpaceMilestoneForTest(1, "dlc5/vehicles/uninstalled_dlc_craft.ini", 2, 1, 1);
+    std::vector<BYTE> univ2(BUILDING_STRUCT_BYTES, 0);
+    *(float*)(univ2.data() + OBJ_POS_OFFSET) = +350.0f;
+    TwoStates_BldUnivStepForTest(world, univ2.data());
+    TwoStates_ResearchDailyUpdateForTest(world);
+    TEST_CHECK(TwoStates_GetSpaceMilestoneMountStateForTest() == 2);
+
+    std::vector<BYTE> s1Soyuz(VEHICLE_STRUCT_BYTES, 0);
+    *(unsigned*)(s1Soyuz.data() + VEH_ID_OFFSET) = 6799u;
+    *(BYTE**)(s1Soyuz.data() + VEH_TYPE_PTR_OFFSET) = vtypes.data();
+    g_p4SpawnedVehPtr = s1Soyuz.data();
+    TwoStates_InvokeProdLineStepForTest(world, pad1.data(), &Phase4_MockProdLineStep);
+    int ub = 0, uo = 0, ur = 0;
+    TEST_CHECK(TwoStates_GetSpaceMilestoneForTest(1, "dlc5/vehicles/uninstalled_dlc_craft.ini", &ub, &uo, &ur));
+    TEST_CHECK(ub == 2 && uo == 1 && ur == 1); // Mixed-DLC absent key NOT wiped by CaptureWorldSpaceMilestonesToSlice!
+
+    // [P1-6] spaceCargoUnlocks[2] mutates hashResearch in Two-States AND One-State modes
+    StateSummary rHashBefore = {}, rHashAfter = {};
+    TEST_CHECK(StateHash_Compute(&rHashBefore));
+    TwoStates_BeginCommand(1);
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 1;
+    TwoStates_EndCommand(1);
+    TEST_CHECK(StateHash_Compute(&rHashAfter));
+    TEST_CHECK(rHashBefore.hashResearch != rHashAfter.hashResearch);
+
+    TwoStates_OnSessionEnded();
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 0;
+    StateSummary spBefore = {}, spAfter = {};
+    TEST_CHECK(StateHash_Compute(&spBefore));
+    world[WORLD_SPACE_CARGO_WEST_UNLOCK_OFF] = 1;
+    TEST_CHECK(StateHash_Compute(&spAfter));
+    TEST_CHECK(spBefore.hashResearch != spAfter.hashResearch);
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+bool Test_SpaceProgramPhase4_TwoStatesSpaceRace()
+{
+    return SubTest_Phase4_HardeningAndRvaRegressions() &&
+           SubTest_Phase4_MilestonesAndResearchUnlockIsolation() &&
+           SubTest_Phase4_OrbitPayoutAndPopupSuppression() &&
+           SubTest_Phase4_OrbitOwnershipAndCrashSiteGuards() &&
+           SubTest_Phase4_MissionControlHudAndBorderContracts() &&
+           SubTest_Phase4_StateHashPersistenceAndSpIsolation() &&
+           SubTest_Phase4_ReviewRegressions();
 }

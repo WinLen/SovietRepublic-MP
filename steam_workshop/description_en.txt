@@ -1,4 +1,4 @@
-[h1]☭ RepublicMP v1.7.4 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
+[h1]☭ RepublicMP v1.8.0 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
 
 Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P and Steam-free LAN auto-discovery[/b] (physical LAN, Radmin VPN, Hamachi, ZeroTier — works even without Steam running), seamless integration into the [b]native game UI[/b] (with game [b]v1.2.0.9[/b] support), the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
 
@@ -10,11 +10,11 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
   1. [b]One State (Shared Republic)[/b] — classic co-op where both players share one treasury and build a single republic together.
   2. [b]Two States on One Map (Western SSR & Eastern SSR)[/b] — splits the map into Western SSR (Host, [i]X < 0[/i]) and Eastern SSR (Client, [i]X > 0[/i]) with a configurable [b]Shared Border Zone[/b] ([i]150 / 250 / 500 / 1000 m[/i]) and native minimap territory overlay to connect roads, railways, power lines, and pipes:
      • [b]Separate Treasuries & Banking:[/b] independent RUB/USD balances (100% starting capital each or 50/50 split), instant wire transfers ([b]50,000 RUB / $[/b]), separate bank loans, inflation, and persistent economy ledgers ([i]EconStateBlob[/i]).
-     • [b]Isolated Research, Economy & Citizens:[/b] independent university research trees, vehicle licenses, free-building limits, university hostels, citizen health/happiness/illness/loyalty & radio/TV trackers, warehouses, auto-purchase sliders, and HUD stats show exclusively your own republic's data.
+     • [b]Isolated Research, Space Race (dlc5), Economy & Citizens:[/b] independent university research trees, vehicle licenses, free-building limits, per-state orbits/launches/milestones/Mission Control & payouts, hostels, health/loyalty trackers, warehouses, auto-purchase sliders, and HUD stats show exclusively your own republic's data.
 [*] [b]Full Lockstep Sync & Smooth 60–144+ FPS Interpolation:[/b]
   • [b]Sub-tick Visual Interpolation:[/b] jitter-free movement for road vehicles, trains, coupled wagons, trailers, wheel rotation/steering, follow/cabin cameras, 3D selection outlines, and local full-FPS building animations.
   • [b]Complete Gameplay Sync:[/b] mouse-wheel sliders, vehicle auto-replacement, factory production queues & ReplaceMachines, road/air waypoints, waste filters, distribution & technical service offices, construction offices, join-segments tool, and loyalty/upbringing sliders.
-  • [b]Saved 3D Cameras & Sound Isolation:[/b] each player's exact 3D camera is saved in co-op saves and restored on resync; partner 2D UI clicks and distant notifications are isolated. Full speed support ([b]>[/b], [b]>>[/b], [b]>>>[/b]).
+  • [b]Saved 3D Cameras, Sound Isolation & Crash Reports:[/b] each player's exact 3D camera is saved in co-op saves and restored on resync; partner 2D UI clicks and distant notifications are isolated. Full speed support ([b]>[/b], [b]>>[/b], [b]>>>[/b]) and configurable auto crash/desync reporting in Settings.
 [*] [b]Host-Authoritative Steam Workshop Mod Sync & DLC Guard:[/b]
   • Choose [b]"Mods: Host Only (Auto)"[/b] or [b]"Mods: From Save Only"[/b]. Pre-save mod handshake automatically subscribes and downloads missing Workshop mods with a 1-click restart button; extra Client mods are safely hidden and unowned DLCs guarded.
 [*] [b]Dedicated Co-op Save Bank & Deterministic Autosaves:[/b]
@@ -23,7 +23,7 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 [/list]
 
 [h2]🚀 Installation & Launch Rules:[/h2]
-[b]Important:[/b] Both players must run the same game version ([b]v1.2.0.9[/b]) and [b]RepublicMP v1.7.4[/b].
+[b]Important:[/b] Both players must run the same game version ([b]v1.2.0.9[/b]) and [b]RepublicMP v1.8.0[/b].
 
 [b]Method 1 — Via Steam Workshop (Recommended):[/b]
 1. Subscribe to this mod on Steam Workshop (both players).

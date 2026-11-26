@@ -34,6 +34,10 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
 bool DiagLog_SaveRemoteClientLogBundle(const void* data, size_t size);
 bool DiagLog_IsSafeRemoteLogFileName(const char* name);
 bool DiagLog_HasPrevCrashOrDesyncLog(void);
+bool DiagLog_DetectPrevCrashOrDesync(void);
+const char* DiagLog_GetGameDir(void);
+const char* DiagLog_GetLoaderBaseDir(void);
+void DiagLog_ReadFileTail(const char* fullPath, size_t maxBytes, std::vector<unsigned char>& outBuf);
 
 // Vehicle synchronization & DLC protection telemetry
 struct VehicleSyncDiagStats {

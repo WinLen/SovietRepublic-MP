@@ -46,6 +46,20 @@ void Ref_SetStandInVector(unsigned char* at, const void* begin, size_t bytes);
 bool Ref_DefPtr(U64 p, unsigned char& tag, unsigned& index);
 bool Ref_DefPtrAt(unsigned char tag, unsigned index, U64& p);
 
+// Canonical Mixed-DLC-safe VehicleType scriptName resolution & wire encoding (tag == 5 carries scriptName).
+void Ref_NormalizeVehicleScriptName(const char* src, char* out, size_t outSize);
+bool Ref_ReadVehicleTypeScriptName(U64 vehTypePtr, char* outNorm, size_t outSize);
+unsigned char* Ref_FindVehicleTypeByScriptName(unsigned char* world, const char* scriptName);
+bool Ref_EncodeDefPtrBytes(U64 p, unsigned char* outBuf, size_t outCap, size_t& outLen);
+bool Ref_DecodeDefPtrBytes(const unsigned char* data, size_t size, size_t& at, U64& p);
+
+// Build-menu (world + 0xD320, stride 0x2D0) lookup by index with mixed-DLC name-scan fallback.
+U64 Ref_FindBuildMenuRecord(U64 world, int place, const char* name, size_t nameBytes);
+
+// Space Program (dlc5) shared SEH-safe object classification helpers.
+bool Ref_IsSpaceVehicleType(U64 vehTypePtr);
+bool Ref_IsSpaceLaunchPadBuilding(U64 building);
+
 struct TsmRoutineSig;
 bool Ref_CheckRoutineTable(int* cache, const TsmRoutineSig* table, size_t count, const char* moduleTag);
 

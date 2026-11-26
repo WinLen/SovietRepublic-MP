@@ -504,6 +504,7 @@ enum SettingsMenuAction {
     SACT_MODS,
     SACT_DLC_CHECK,
     SACT_SEND_LOGS,
+    SACT_CRASH_REPORTS,
     SACT_LANG,
     SACT_BACK,
 };
@@ -565,6 +566,11 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
             ? TrW(L"Логи Хосту: ВКЛ",  L"Logs to Host: ON")
             : TrW(L"Логи Хосту: ВЫКЛ", L"Logs to Host: OFF"));
 
+        bool uploadCrash = TwoStates_GetUploadCrashReports();
+        addEntry(SACT_CRASH_REPORTS, uploadCrash
+            ? TrW(L"Краш-логи: ВКЛ",  L"Crash Logs: ON")
+            : TrW(L"Краш-логи: ВЫКЛ", L"Crash Logs: OFF"));
+
         addEntry(SACT_LANG, (Lang_Get() == MP_LANG_EN)
             ? L"Language: English"
             : L"Язык: Русский");
@@ -617,6 +623,15 @@ static void BuildSettingsSubMenu(BYTE* menuObj, bool hasContinue, int clicked, i
                      "Auto-upload of client logs to Host enabled (on desync, crash & disconnect)")
                 : Tr("Авто-отправка логов Хосту отключена",
                      "Auto-upload of client logs to Host disabled"), next ? 1 : 0);
+        } else if (act == SACT_CRASH_REPORTS) {
+            bool next = !TwoStates_GetUploadCrashReports();
+            TwoStates_SetUploadCrashReports(next);
+            TwoStates_SaveSettings();
+            TwoStates_AddToast(next
+                ? Tr("Авто-отправка отчётов о вылетах и рассинхроне включена",
+                     "Auto-upload of crash & desync reports enabled")
+                : Tr("Авто-отправка отчётов о вылетах отключена",
+                     "Auto-upload of crash & desync reports disabled"), next ? 1 : 0);
         } else if (act == SACT_LANG) {
             Lang_Toggle();
             TwoStates_SaveSettings();

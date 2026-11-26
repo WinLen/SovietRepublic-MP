@@ -194,6 +194,9 @@ const char* TwoStates_GetSavedJoinAddress();
 void TwoStates_SetSavedJoinAddress(const char* addr);
 bool TwoStates_GetSendClientLogs();
 void TwoStates_SetSendClientLogs(bool send);
+bool TwoStates_GetUploadCrashReports();
+void TwoStates_SetUploadCrashReports(bool enabled);
+const char* TwoStates_GetCrashUploadUrl();
 
 // Separate Singleplayer vs Co-op Save Banks (media_soviet\save <-> save_sp / save_coop)
 bool TwoStates_MountSaveBank(bool wantCoop);
@@ -336,4 +339,31 @@ void     TwoStates_InvokeCitComputeLifespanHookForTest(BYTE* world, BYTE* cit);
 size_t   TwoStates_GetUiSavedLifespanCountForTest();
 size_t   TwoStates_GetUiDirtyLifespanCountForTest();
 uint64_t TwoStates_GetHistSwapGenForTest();
+
+// Phase 4: True Space Race (dlc5) per-state milestones, orbit ownership & UI isolation
+int      TwoStates_GetOrbitOwner(int orbitIdx);
+void     TwoStates_OnOrbitsCreated(size_t countBefore, size_t countAfter, int ownerState);
+void     TwoStates_OnOrbitRemoved(int orbitIdx);
+int      TwoStates_GetSpaceActiveOwner();
+bool     TwoStates_GetUnfilteredWorldVecRange(size_t vecOffset, uintptr_t* outBegin, uintptr_t* outEnd);
+bool     TwoStates_HashSpaceMilestones(unsigned long long* ioHash);
+void     TwoStates_HashOrbitOwners(unsigned long long* ioHash);
+void     TwoStates_LogSpaceDesyncDetails();
+
+void     TwoStates_ResetSpaceForTest();
+void     TwoStates_SetOrbitOwnersForTest(const int* owners, size_t count);
+size_t   TwoStates_GetOrbitOwnerCountForTest();
+void     TwoStates_SetSpaceMilestoneForTest(int state, const char* scriptName, int built, int orbit, int reentry);
+bool     TwoStates_GetSpaceMilestoneForTest(int state, const char* scriptName, int* outBuilt, int* outOrbit, int* outReentry);
+int      TwoStates_GetSpaceMilestoneMountStateForTest();
+void     TwoStates_InvokeProdLineStepForTest(BYTE* world, BYTE* bld, void (*origFn)(BYTE*, BYTE*));
+BYTE*    TwoStates_InvokeCreateVehicleForTest(BYTE* world, BYTE* vt, BYTE* bld, unsigned char factoryBuilt,
+                                              BYTE* (*origFn)(BYTE*, BYTE*, BYTE*, uintptr_t, uintptr_t, uintptr_t,
+                                                              uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t));
+void     TwoStates_InvokeSpaceOrbitStepForTest(BYTE* veh, void (*origFn)(BYTE*));
+void     TwoStates_InvokeSpaceReentryStepForTest(BYTE* veh, void (*origFn)(BYTE*));
+void     TwoStates_InvokeRemoveOrbitForTest(BYTE* world, int orbitIdx, void (*origFn)(BYTE*, int));
+void     TwoStates_InvokeSpawnSpaceCargoForTest(BYTE* world, void (*origFn)(BYTE*));
+void     TwoStates_InvokeMissionControlWinForTest(BYTE* world, BYTE* window, void (*origFn)(BYTE*, BYTE*));
+void     TwoStates_InvokeTopBarHudDrawForTest(BYTE* world, void (*origFn)(BYTE*));
 

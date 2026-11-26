@@ -476,6 +476,8 @@ static bool HelloMatches(const SessionHello& peer, char* why, size_t whySize)
 // Live sync channels
 // ---------------------------------------------------------------------------
 
+static void ClearSessionDlcState();
+
 // Closes every channel, connected or still waiting for its peer.
 static void ResetChannels()
 {
@@ -484,6 +486,7 @@ static void ResetChannels()
     TerrainSync_Reset();
     LockstepNet_Close();
     Determinism_EndSession();
+    ClearSessionDlcState();
 }
 
 // Blocks while the session is live. Returns why it ended (nullptr = the
@@ -815,6 +818,15 @@ static void MakeDlcs(SessionDlcs* d)
 static char g_sessionHostDlcs[64] = {};
 static char g_sessionPlayerDlcs[64] = {};
 static volatile LONG g_sessionDlcsValid = 0;
+
+static void ClearSessionDlcState()
+{
+    EnterCriticalSection(&g_lock);
+    g_sessionHostDlcs[0] = '\0';
+    g_sessionPlayerDlcs[0] = '\0';
+    InterlockedExchange(&g_sessionDlcsValid, 0);
+    LeaveCriticalSection(&g_lock);
+}
 
 bool SaveSync_SafeReadAscii(const char* src, char* outBuf, size_t outBufSize)
 {

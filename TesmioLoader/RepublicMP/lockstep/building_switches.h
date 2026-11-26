@@ -60,3 +60,5 @@ void BuildingSwitches_GetStatsForTest(SwitchPerfStatsForTest* out);
 // Tool stub target for building_copyweights (FN_TOOL_COPY_WEIGHTS_RVA) in Late tool dispatch.
 unsigned long long BuildingSwitches_CopyWeightsTool(unsigned long long world, unsigned long long a2);
 void BuildingSwitches_SetCopyWeightsOverrideForTest(unsigned long long (*fn)(unsigned long long world, unsigned long long a2));
+bool BuildingSwitches_IsNonPointerBuildingWordForTest(unsigned offset, unsigned long long building = 0);
+bool BuildingSwitches_IsNeverNoiseBuildingWordForTest(unsigned offset, unsigned long long building = 0);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // See state_hash.h.
 #include "state_hash.h"
+#include "../lockstep/world_refs.h"
 #include "../session/two_states.h"
 #include "../core/diag_log.h"
 #include "../core/engine_rva.h"
@@ -199,6 +200,7 @@ static void HashResearch(BYTE* w, StateSummary* out)
         return;
     }
     Mix(out->hashResearch, w + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+    Mix(out->hashResearch, w + WORLD_SPACE_CARGO_WEST_UNLOCK_OFF, 2u);
     long long n = Count(w + WORLD_RESEARCH_VEC_BEGIN_OFFSET, RESEARCH_ITEM_STRIDE);
     if (n < 0) n = 0;
     long long limit = (n > 256) ? 256 : n;
@@ -231,13 +233,147 @@ static void HashBalances(BYTE* w, StateSummary* out)
     }
 }
 
+static void MixQuantizedFloat(unsigned long long& h, float v)
+{
+    if (!isfinite(v) || fabsf(v) <= 1e-6f) {
+        long long q = 0;
+        Mix(h, &q, sizeof(q));
+        return;
+    }
+    double scaled = (double)v * 10000.0;
+    if (scaled > 9.0e15) scaled = 9.0e15;
+    else if (scaled < -9.0e15) scaled = -9.0e15;
+    long long q = llround(scaled);
+    Mix(h, &q, sizeof(q));
+}
+
+static bool HasActiveSpaceVehicleState(const BYTE* v)
+{
+    if (!v || !IsPointerLikeX64((uint64_t)(uintptr_t)v)) return false;
+    int flightState = *(const int*)(v + VEH_ROCKET_FLIGHT_STATE_OFFSET);
+    const BYTE* dockPartner = *(const BYTE* const*)(v + VEH_SPACE_DOCK_PARTNER_OFFSET);
+    if (flightState != 0 || (dockPartner != nullptr && IsPointerLikeX64((uint64_t)(uintptr_t)dockPartner))) return true;
+    int orbitIdx = *(const int*)(v + VEH_ORBIT_INDEX_OFFSET);
+    int targetOrbitIdx = *(const int*)(v + VEH_TARGET_ORBIT_INDEX_OFFSET);
+    float flightProgress = *(const float*)(v + VEH_ROCKET_PROGRESS_OFFSET);
+    const BYTE* vt = *(const BYTE* const*)(v + VEH_TYPE_PTR_OFFSET);
+    // CreateVehicle (0x403FBD) sets +0x1A68 = 1.0f for all vehicles; active space transfers count down inside (0, 1).
+    const bool activeProgress = isfinite(flightProgress) && flightProgress > 1e-6f && flightProgress < (1.0f - 1e-5f);
+    if (Ref_IsSpaceVehicleType((U64)(uintptr_t)vt) &&
+        (orbitIdx >= 0 || targetOrbitIdx != -1 || activeProgress)) {
+        return true;
+    }
+    return false;
+}
+
+static void HashOrbits(BYTE* w, unsigned long long& h)
+{
+    MixQuantizedFloat(h, *(const float*)(w + WORLD_ORBIT_CLOCK_OFFSET));
+    const BYTE* b = *(const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET);
+    const BYTE* e = *(const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET + 8);
+    if (!b || e < b || !IsPointerLikeX64((uint64_t)(uintptr_t)b)) {
+        MixInt(h, 0);
+        return;
+    }
+    uintptr_t diff = (uintptr_t)e - (uintptr_t)b;
+    if ((diff % ORBIT_SLOT_STRIDE) != 0) {
+        MixInt(h, 0);
+        return;
+    }
+    long long nOrbits = (long long)(diff / ORBIT_SLOT_STRIDE);
+    if (nOrbits > 256) nOrbits = 256;
+    MixInt(h, (int)nOrbits);
+    for (long long i = 0; i < nOrbits; ++i) {
+        const BYTE* slot = b + i * ORBIT_SLOT_STRIDE;
+        for (unsigned off = 0; off < ORBIT_SLOT_STRIDE; off += 4u) {
+            if (off == ORBIT_SLOT_TYPE_OFFSET) {
+                MixInt(h, *(const int*)(slot + off));
+            } else {
+                MixQuantizedFloat(h, *(const float*)(slot + off));
+            }
+        }
+    }
+    TwoStates_HashOrbitOwners(&h);
+}
+
+static void HashSpaceVehicles(BYTE* w, unsigned long long& h)
+{
+    long long nv = Count(w + WORLD_VEHICLES_OFFSET, 8);
+    BYTE** vl = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
+    int activeCount = 0;
+    if (vl && nv > 0) {
+        for (long long i = 0; i < nv; ++i) {
+            const BYTE* v = vl[i];
+            if (!HasActiveSpaceVehicleState(v)) continue;
+            const BYTE* dockPartner = *(const BYTE* const*)(v + VEH_SPACE_DOCK_PARTNER_OFFSET);
+            int dockPartnerId = (dockPartner && IsPointerLikeX64((uint64_t)(uintptr_t)dockPartner))
+                                    ? *(const int*)(dockPartner + VEH_INDEX_OFFSET)
+                                    : -1;
+            MixInt(h, *(const int*)(v + VEH_INDEX_OFFSET));
+            MixInt(h, *(const int*)(v + VEH_ROCKET_FLIGHT_STATE_OFFSET));
+            MixInt(h, *(const int*)(v + VEH_ORBIT_INDEX_OFFSET));
+            MixInt(h, *(const int*)(v + VEH_TARGET_ORBIT_INDEX_OFFSET));
+            MixInt(h, dockPartnerId);
+            MixInt(h, *(const int*)(v + VEH_SPACE_DOCK_SLOT_OFFSET));
+            MixQuantizedFloat(h, *(const float*)(v + VEH_ROCKET_PROGRESS_OFFSET));
+            ++activeCount;
+        }
+    }
+    MixInt(h, activeCount);
+}
+
+static void HashVehicleTypeMilestones(BYTE* w, unsigned long long& h)
+{
+    if (TwoStates_HashSpaceMilestones(&h)) return;
+    const BYTE* vtBeg = *(const BYTE* const*)(w + WORLD_VEHICLE_TYPES_OFFSET);
+    const BYTE* vtEnd = *(const BYTE* const*)(w + WORLD_VEHICLE_TYPES_OFFSET + 8);
+    int activeCount = 0;
+    unsigned long long accSum = 0;
+    unsigned long long accXor = 0;
+    if (vtBeg && vtEnd >= vtBeg && IsPointerLikeX64((uint64_t)(uintptr_t)vtBeg)) {
+        uintptr_t diff = (uintptr_t)vtEnd - (uintptr_t)vtBeg;
+        if ((diff % WORLD_VEHICLE_TYPE_STRIDE) == 0) {
+            size_t nTypes = (size_t)(diff / WORLD_VEHICLE_TYPE_STRIDE);
+            if (nTypes > 4096u) nTypes = 4096u;
+            for (size_t i = 0; i < nTypes; ++i) {
+                const BYTE* t = vtBeg + i * WORLD_VEHICLE_TYPE_STRIDE;
+                int built = *(const int*)(t + VEH_TYPE_BUILT_IN_PROD_OFFSET);
+                int orbit = *(const int*)(t + VEH_TYPE_SPACE_ORBIT_OFFSET);
+                int reentry = *(const int*)(t + VEH_TYPE_SPACE_REENTRY_OFFSET);
+                if (built == 0 && orbit == 0 && reentry == 0) continue;
+                char normName[128] = {};
+                Ref_ReadVehicleTypeScriptName((U64)t, normName, sizeof(normName));
+                unsigned long long eh = 0xcbf29ce484222325ull;
+                MixName(eh, normName);
+                MixInt(eh, built);
+                MixInt(eh, orbit);
+                MixInt(eh, reentry);
+                eh = Mix64Finalizer(eh);
+                accSum += eh;
+                accXor ^= eh;
+                ++activeCount;
+            }
+        }
+    }
+    MixInt(h, activeCount);
+    Mix(h, &accSum, sizeof(accSum));
+    Mix(h, &accXor, sizeof(accXor));
+}
+
+static void HashSpace(BYTE* w, StateSummary* out)
+{
+    HashOrbits(w, out->hashSpace);
+    HashSpaceVehicles(w, out->hashSpace);
+    HashVehicleTypeMilestones(w, out->hashSpace);
+}
+
 bool StateHash_Compute(StateSummary* out)
 {
     memset(out, 0, sizeof(*out));
     const unsigned long long seed = 0xcbf29ce484222325ull;
     out->hashClock = out->hashBuildings = out->hashConstructions = out->hashVehicles =
         out->hashVehiclesPos = out->hashCitizens = out->hashNetworks = out->hashLines =
-        out->hashLoans = out->hashResearch = seed;
+        out->hashLoans = out->hashResearch = out->hashSpace = seed;
     BYTE* w = g_exeBase + WORLD_RVA;
     bool ok = false;
     DiagLog_BeginSafeSeh();
@@ -312,6 +448,7 @@ bool StateHash_Compute(StateSummary* out)
             HashLines(w, out);
             HashLoans(w, out);
             HashResearch(w, out);
+            HashSpace(w, out);
 
             ok = true;
         }
@@ -613,6 +750,77 @@ static void LogDesyncBuildingsOrConstructions(BYTE* w, int listOff, const char* 
     }
 }
 
+static void LogDesyncSpace(BYTE* w, unsigned long long tick)
+{
+    float orbitClock = 0.0f;
+    long long nOrbits = 0;
+    const BYTE* ob = nullptr;
+    const BYTE* oe = nullptr;
+    DiagLog_BeginSafeSeh();
+    __try {
+        orbitClock = *(const float*)(w + WORLD_ORBIT_CLOCK_OFFSET);
+        ob = *(const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET);
+        oe = *(const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET + 8);
+        if (ob && oe >= ob && ((uintptr_t)(oe - ob) % ORBIT_SLOT_STRIDE) == 0) {
+            nOrbits = (long long)((oe - ob) / ORBIT_SLOT_STRIDE);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        nOrbits = 0;
+    }
+    DiagLog_EndSafeSeh();
+    Logf("republicmp  DESYNC_DUMP[space] t=%llu orbitClock=%.4f orbitCount=%lld", tick, orbitClock, nOrbits);
+
+    long long orbLimit = (nOrbits > 16) ? 16 : nOrbits;
+    for (long long i = 0; i < orbLimit; ++i) {
+        int orbType = 0;
+        float f0 = 0.0f, startClock = 0.0f;
+        DiagLog_BeginSafeSeh();
+        __try {
+            const BYTE* slot = ob + i * ORBIT_SLOT_STRIDE;
+            f0 = *(const float*)slot;
+            orbType = *(const int*)(slot + ORBIT_SLOT_TYPE_OFFSET);
+            startClock = *(const float*)(slot + ORBIT_SLOT_START_CLOCK_OFFSET);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        DiagLog_EndSafeSeh();
+        Logf("republicmp  DESYNC_DUMP[orbit] t=%llu i=%lld type=%d f0=%.3f start=%.3f",
+             tick, i, orbType, f0, startClock);
+    }
+
+    long long nv = ListCount(WORLD_VEHICLES_OFFSET);
+    long long vehLimit = (nv > 256) ? 256 : nv;
+    for (long long i = 0; i < vehLimit; ++i) {
+        bool active = false;
+        unsigned id = 0;
+        int orbIdx = -1, tgtIdx = -1, flState = 0, dockSlot = -1;
+        float prog = 0.0f;
+        DiagLog_BeginSafeSeh();
+        __try {
+            BYTE** vl = *(BYTE***)(w + WORLD_VEHICLES_OFFSET);
+            BYTE* v = vl ? vl[i] : nullptr;
+            if (v && IsPointerLikeX64((uint64_t)(uintptr_t)v) && HasActiveSpaceVehicleState(v)) {
+                active = true;
+                id = *(const unsigned*)(v + VEH_INDEX_OFFSET);
+                flState = *(const int*)(v + VEH_ROCKET_FLIGHT_STATE_OFFSET);
+                orbIdx = *(const int*)(v + VEH_ORBIT_INDEX_OFFSET);
+                tgtIdx = *(const int*)(v + VEH_TARGET_ORBIT_INDEX_OFFSET);
+                dockSlot = *(const int*)(v + VEH_SPACE_DOCK_SLOT_OFFSET);
+                prog = *(const float*)(v + VEH_ROCKET_PROGRESS_OFFSET);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            active = false;
+        }
+        DiagLog_EndSafeSeh();
+        if (active) {
+            Logf("republicmp  DESYNC_DUMP[space_veh] t=%llu i=%lld id=%u state=%d orb=%d tgt=%d dock=%d prog=%.4f",
+                 tick, i, id, flState, orbIdx, tgtIdx, dockSlot, prog);
+        }
+    }
+    if (TwoStates_IsActive()) {
+        TwoStates_LogSpaceDesyncDetails();
+    }
+}
+
 void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick)
 {
     if (!g_exeBase || !H || !H->log) return;
@@ -625,6 +833,9 @@ void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick)
     }
     if (what && strstr(what, "constructions") != nullptr) {
         LogDesyncBuildingsOrConstructions(w, WORLD_CONSTRUCTIONS_OFFSET, "con", 128, false, tick);
+    }
+    if (!what || strstr(what, "space") != nullptr) {
+        LogDesyncSpace(w, tick);
     }
 }
 
@@ -641,5 +852,6 @@ unsigned long long StateHash_All(const StateSummary& s)
     Mix(h, &s.hashLines, 8);
     Mix(h, &s.hashLoans, 8);
     Mix(h, &s.hashResearch, 8);
+    Mix(h, &s.hashSpace, 8);
     return h;
 }

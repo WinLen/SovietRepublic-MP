@@ -65,6 +65,7 @@ const void* MockHost_Consume(const char*, unsigned)
 
 void InitMockHarness()
 {
+    SetEnvironmentVariableA("REPUBLICMP_DISABLE_CRASH_UPLOAD", "1");
     if (!g_mockExeBuffer) {
         g_mockExeBuffer = (BYTE*)VirtualAlloc(nullptr, MOCK_EXE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     }

@@ -309,9 +309,13 @@ void BuildingSwitches_RevertBuildingName(unsigned long long building)
     }
 }
 
-static bool IsNonPointerBuildingWord(int kind, unsigned offset)
+static bool IsNonPointerBuildingWord(int kind, unsigned offset, U64 building)
 {
     if (kind != KIND_BUILDING) return false;
+    if (offset >= BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF && offset < BLD_LAUNCH_PAD_ORBIT_PARAMS_END_OFF) {
+        return Ref_IsSpaceLaunchPadBuilding(building);
+    }
+    // Note: BLD_LAUNCH_PAD_ORBIT_TYPE_OFF (0x0CD8) is already covered by [BLD_CITIZEN_FILTER_AT, BLD_CITIZEN_FILTER_END).
     return offset == BLD_SEARCH_RANGE_OFFSET ||
            (offset >= NAME_AT && offset < NAME_END) ||
            (offset >= BLD_CITIZEN_FILTER_AT && offset < BLD_CITIZEN_FILTER_END) ||
@@ -323,7 +327,7 @@ static bool IsNeverNoiseWord(const Range& r, unsigned offset)
     if (r.kind == KIND_BUILDING)
         return offset == BLD_AUTO_BUY_MODE_OFFSET || offset == BLD_EXPORT_MODE_OFFSET ||
                offset == BLD_UNIV_STAFF_RATIO_OFFSET || offset == BLD_SEARCH_RANGE_OFFSET ||
-               IsNonPointerBuildingWord(r.kind, offset);
+               IsNonPointerBuildingWord(r.kind, offset, r.building);
     if (r.kind == KIND_SLOT)
         return ((offset % SLOT_STRIDE) / REGION_STRIDE == 1) &&
                (((offset % 16) == 0x0C) || ((offset % 16) == 8));
@@ -479,7 +483,7 @@ static bool CompareChangedRange(const Range& r, bool click)
         if (!neverNoise && word < noise.size() && noise[word]) continue;
         // A heap address in the aligned pair (names and citizen/car filters are non-pointer fields).
         unsigned pair = q & ~7u;
-        bool nonPtrPair = IsNonPointerBuildingWord(r.kind, offset);
+        bool nonPtrPair = IsNonPointerBuildingWord(r.kind, offset, r.building);
         if (!nonPtrPair && pair + 8 <= r.bytes &&
             (PointerLike(*(const U64*)(old + pair)) || PointerLike(*(const U64*)(cur + pair)))) {
             if (g_heapLogged < 20) {
@@ -984,7 +988,7 @@ static const char* ValidateSwitchWords(U64 building, const SwitchMsg& m)
             Range checkR = { building, (int)m.kind, 0, 0, 0, m.shape, 0 };
             if (LeftOut(checkR, off, true))
                 return "a word is in a view/vector range";
-            bool nonPtrPair = IsNonPointerBuildingWord((int)m.kind, off);
+            bool nonPtrPair = IsNonPointerBuildingWord((int)m.kind, off, building);
             U64 pairAddr = WordAddress(building, m, off & ~7u);
             if (!nonPtrPair && pairAddr && WordAddress(building, m, (off & ~7u) + 4) == pairAddr + 4 &&
                 PointerLike(*(const U64*)pairAddr))
@@ -1196,4 +1200,17 @@ void BuildingSwitches_GetStatsForTest(SwitchPerfStatsForTest* out)
 {
     SwitchCommon_FillStats(out, g_backoff, g_snapshotCount, g_mismatchCopyCount,
                            g_listScratch.capacity(), g_cmpScratch.capacity());
+}
+
+bool BuildingSwitches_IsNonPointerBuildingWordForTest(unsigned offset, unsigned long long building)
+{
+    return IsNonPointerBuildingWord(KIND_BUILDING, offset, building);
+}
+
+bool BuildingSwitches_IsNeverNoiseBuildingWordForTest(unsigned offset, unsigned long long building)
+{
+    Range r = {};
+    r.kind = KIND_BUILDING;
+    r.building = building;
+    return IsNeverNoiseWord(r, offset);
 }

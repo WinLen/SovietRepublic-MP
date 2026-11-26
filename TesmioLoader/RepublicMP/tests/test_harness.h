@@ -23,12 +23,14 @@
 #include "../../src/tesmio_plugin.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
+#include "../core/crash_upload.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
 #include "../lockstep/world_refs.h"
 #include "../lockstep/commands.h"
 #include "../lockstep/game_calls.h"
 #include "../lockstep/building_switches.h"
+#include "../lockstep/vehicle_switches.h"
 #include "../determinism/determinism.h"
 #include "../determinism/state_hash.h"
 #include "../determinism/held_frame.h"
@@ -60,11 +62,11 @@
 #include "../transport/lan_discovery.h"
 #include "../session/settings_sync.h"
 #include "../lockstep/source_slots.h"
-#include "../lockstep/vehicle_switches.h"
 #include "../lockstep/switch_common.h"
 #include "../lockstep/route_tools.h"
 #include "../lockstep/junction_accept.h"
 #include "../lockstep/cargo_settings.h"
+#include "../lockstep/line_accept.h"
 #include "../lockstep/lockstep_net.h"
 #include "../world_sync/citizens/citizen_destinations.h"
 
@@ -209,7 +211,7 @@ struct VehicleSoftSyncMsg_M4 {
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------------
-// All 70 Test Suite Entry Points (order matches kTests[70] in test_main.cpp)
+// All 74 Test Suite Entry Points (order matches kTests[74] in test_main.cpp)
 // ---------------------------------------------------------------------------
 
 bool Test_RvaAndSafeMem();
@@ -283,3 +285,7 @@ bool TestPerf_SiteRandFlatTableAndSwitchInPlaceCompare();
 bool TestPerf_TcpNoDelayAndSteamP2PRingBuffer();
 bool TestPerf_M6TsUiAndHeldFrameOptimizations();
 bool SubTest_M6_HeldFrameCoalescedGuardAndVisualParity();
+bool Test_SpaceProgramPhase2_DeterminismOrbitsSoftSyncMixedDlc();
+bool Test_SpaceProgramPhase3_MutatorsPadSwitchesAndCameraIsolation();
+bool Test_SpaceProgramPhase4_TwoStatesSpaceRace();
+bool Test_CrashUpload_ZipBundleDedupAndHttpPost();

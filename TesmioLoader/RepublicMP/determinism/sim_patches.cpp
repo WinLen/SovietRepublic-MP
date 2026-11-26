@@ -749,7 +749,13 @@ static const unsigned kToolCalls[][2] = {
     { 0x3326DA, 0x3D77E0 }, { 0x3326DA, 0x3D77E0 }, { 0x332700, 0x3D77E0 }, { 0x33274D, 0x3D77E0 },
     { 0x332AB7, 0x3F3790 }, { 0x332B71, 0x43D0C0 }, { 0x332BD3, 0x2D0530 }, { 0x332C21, 0x2CE180 },
     { 0x332C41, 0x2CD2E0 }, { 0x332C63, 0x2CE7F0 }, { 0x332C85, 0x2CE7F0 }, { 0x332CA5, 0x2CF760 },
-    { 0x332CC5, 0x2D0160 }, { 0x332CE5, 0x2D3250 }, { 0x332DF7, 0x1EFAD0 }, { 0x332E17, 0x1F1150 },
+    { 0x332CC5, 0x2D0160 }, { 0x332CE5, 0x2D3250 },
+    // Space Program (dlc5): "orbital_attach" Late tool handler (0x332D05 -> 0x2D2B30).
+    // Note: "catch_orbit" at 0x332D0F..0x332D57 is an inline window-alive check with no call instruction
+    // in Late dispatch; its launch mutator (0x79031A -> 0x698720) runs inside Mission Control UI (0x78DB70)
+    // and is relayed by GameCalls.
+    { SITE_TOOL_ORBITAL_ATTACH_RVA, FN_TOOL_ORBITAL_ATTACH_RVA },
+    { 0x332DF7, 0x1EFAD0 }, { 0x332E17, 0x1F1150 },
     { 0x332E57, 0x1F42B0 }, { 0x332E77, 0x1F4EB0 }, { 0x332E97, 0x1F15E0 }, { 0x332EB7, 0x1F2D40 },
     { 0x332ED7, 0x1F31D0 }, { 0x332EF7, 0x1F6310 }, { 0x332F17, 0x1F6670 }, { 0x332F3A, 0x3F5ED0 },
     { 0x332F5A, 0x3F5ED0 }, { 0x332F7A, 0x3F5ED0 }, { 0x332F84, 0x2D55C0 }, { 0x332F8E, 0x2D0740 },
@@ -2323,4 +2329,12 @@ void SimPatches_Tick()
     g_saplingQueue.clear(); // the loads that follow rebuild the forest from the list anyway
     ReleaseSRWLockExclusive(&g_saplingLock);
     Logf("republicmp  SIM_PATCHES: restored (%ld interface frame(s) searched in their own vectors)", g_uiEnclosed);
+}
+
+bool SimPatches_HasToolCallForTest(unsigned siteRva, unsigned targetRva)
+{
+    for (size_t i = 0; i < TOOL_CALL_COUNT; ++i) {
+        if (kToolCalls[i][0] == siteRva && kToolCalls[i][1] == targetRva) return true;
+    }
+    return false;
 }

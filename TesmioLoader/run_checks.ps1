@@ -105,6 +105,7 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    /I"..\src" /I"third_party\imgui" /I"third_party\imgui\backends" ^
    core\main.cpp ^
    core\diag_log.cpp ^
+   core\crash_upload.cpp ^
    game\save_load.cpp ^
    game\present_hook.cpp ^
    game\imgui_hook.cpp ^
@@ -119,6 +120,7 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
    session\two_states\two_states_research.cpp ^
    session\two_states\two_states_overlay.cpp ^
    session\two_states\two_states_persistence.cpp ^
+   session\two_states\two_states_space.cpp ^
    session\mod_sync.cpp ^
    session\updater.cpp ^
    session\settings_sync.cpp ^
@@ -187,7 +189,7 @@ if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
     Write-Error "MSVC /analyze failed with exit code $analyzeExit and $($warns.Count) warning(s)"
     exit 1
 }
-Write-Host "[PASS] MSVC /analyze completed cleanly across all 71 compilation units (0 warnings)." -ForegroundColor Green
+Write-Host "[PASS] MSVC /analyze completed cleanly across all 73 compilation units (0 warnings)." -ForegroundColor Green
 
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " [4/5] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
@@ -217,6 +219,7 @@ cd /d "$repDir"
 "$clangTidy" --quiet ^
    core\main.cpp ^
    core\diag_log.cpp ^
+   core\crash_upload.cpp ^
    determinism\state_hash.cpp ^
    determinism\determinism.cpp ^
    game\imgui_hook.cpp ^
@@ -231,6 +234,7 @@ cd /d "$repDir"
    session\two_states\two_states_research.cpp ^
    session\two_states\two_states_overlay.cpp ^
    session\two_states\two_states_persistence.cpp ^
+   session\two_states\two_states_space.cpp ^
    session\mod_sync.cpp ^
    session\save_sync.cpp ^
    save\save_zip.cpp ^

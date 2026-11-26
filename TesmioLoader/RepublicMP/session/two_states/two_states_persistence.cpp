@@ -11,6 +11,8 @@ void TwoStates_BindPersistence(const TsmHost* host) { if (host) TsmBind(host); }
 #define RVA_MASTER_SAVE_AUTOSAVE_JE 0x450FB9
 
 static volatile bool g_sendClientLogs = true;
+static volatile bool g_uploadCrashReports = true;
+static char g_crashUploadUrl[256] = "";
 static volatile bool g_importingSpSave = false;
 static char g_savedJoinAddress[64] = "";
 
@@ -266,6 +268,13 @@ void TwoStates_LoadSettings()
     int sendLogs = GetPrivateProfileIntA("coop", "send_client_logs", g_sendClientLogs ? 1 : 0, ini.c_str());
     g_sendClientLogs = (sendLogs != 0);
 
+    int uploadCrash = GetPrivateProfileIntA("coop", "upload_crash_reports", g_uploadCrashReports ? 1 : 0, ini.c_str());
+    g_uploadCrashReports = (uploadCrash != 0);
+
+    char uploadUrl[256] = {};
+    GetPrivateProfileStringA("coop", "crash_upload_url", "", uploadUrl, sizeof(uploadUrl), ini.c_str());
+    strncpy_s(g_crashUploadUrl, uploadUrl, _TRUNCATE);
+
     char addr[64] = {};
     GetPrivateProfileStringA("coop", "last_join_address", "", addr, sizeof(addr), ini.c_str());
     if (addr[0]) {
@@ -274,10 +283,10 @@ void TwoStates_LoadSettings()
 
     ModSync_LoadSettingsFromIni(ini.c_str());
 
-    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, showMini=%d, dlc=%d, sendLogs=%d, addr='%s')",
+    Logf("republicmp  SETTINGS: loaded from [%s] (mode=%d, fullCap=%d, border=%dm, expand=%d, show3d=%d, showMini=%d, dlc=%d, sendLogs=%d, uploadCrash=%d, addr='%s')",
          ini.c_str(), (int)g_chosenMode, g_fullStartingCapital ? 1 : 0, (int)g_borderHalfWidth,
          g_expandBorders ? 1 : 0, g_show3DBorder ? 1 : 0, g_showMinimapBorders ? 1 : 0,
-         SaveSync_GetDlcCheck() ? 1 : 0, g_sendClientLogs ? 1 : 0, g_savedJoinAddress);
+         SaveSync_GetDlcCheck() ? 1 : 0, g_sendClientLogs ? 1 : 0, g_uploadCrashReports ? 1 : 0, g_savedJoinAddress);
 }
 
 void TwoStates_SaveSettings()
@@ -298,6 +307,7 @@ void TwoStates_SaveSettings()
     WritePrivateProfileStringA("coop", "show_minimap_borders", g_showMinimapBorders ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "dlc_check", SaveSync_GetDlcCheck() ? "1" : "0", ini.c_str());
     WritePrivateProfileStringA("coop", "send_client_logs", g_sendClientLogs ? "1" : "0", ini.c_str());
+    WritePrivateProfileStringA("coop", "upload_crash_reports", g_uploadCrashReports ? "1" : "0", ini.c_str());
 
     if (g_savedJoinAddress[0]) {
         WritePrivateProfileStringA("coop", "last_join_address", g_savedJoinAddress, ini.c_str());
@@ -324,6 +334,21 @@ bool TwoStates_GetSendClientLogs()
 void TwoStates_SetSendClientLogs(bool send)
 {
     g_sendClientLogs = send;
+}
+
+bool TwoStates_GetUploadCrashReports()
+{
+    return g_uploadCrashReports;
+}
+
+void TwoStates_SetUploadCrashReports(bool enabled)
+{
+    g_uploadCrashReports = enabled;
+}
+
+const char* TwoStates_GetCrashUploadUrl()
+{
+    return g_crashUploadUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,22 +1278,44 @@ static void WriteCoopSaveMetaInternal(const char* fullSaveDir)
     out << "state2_research_progress=" << (long long)llround((double)g_stateResearch[1].activeTechProgress * 10000.0) << "\r\n";
 
     if (mode == COOP_MODE_TWO_STATES && world) {
+        EnsureSpaceMilestonesInitialized(const_cast<BYTE*>(world));
         EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
         EnsureEngineVehLicensesInitialized(const_cast<BYTE*>(world));
+        TwoStates_ReconcileOrbitOwnersFromWorld(world);
     }
     if (g_engineResearch[0].initialized) {
         out << "engine_research_unlocks1=" << SerializeEngineResearchUnlocks(g_engineResearch[0]) << "\r\n";
         out << "engine_research_items1=" << SerializeEngineResearchItems(g_engineResearch[0]) << "\r\n";
+        out << "space_cargo_unlocks1=" << (int)g_engineResearch[0].spaceCargoUnlocks[0] << ","
+            << (int)g_engineResearch[0].spaceCargoUnlocks[1] << "\r\n";
     }
     if (g_engineResearch[1].initialized) {
         out << "engine_research_unlocks2=" << SerializeEngineResearchUnlocks(g_engineResearch[1]) << "\r\n";
         out << "engine_research_items2=" << SerializeEngineResearchItems(g_engineResearch[1]) << "\r\n";
+        out << "space_cargo_unlocks2=" << (int)g_engineResearch[1].spaceCargoUnlocks[0] << ","
+            << (int)g_engineResearch[1].spaceCargoUnlocks[1] << "\r\n";
     }
     if (g_engineVehLicenses[0].initialized) {
         out << "veh_licenses1=" << SerializeEngineVehLicenses(g_engineVehLicenses[0]) << "\r\n";
     }
     if (g_engineVehLicenses[1].initialized) {
         out << "veh_licenses2=" << SerializeEngineVehLicenses(g_engineVehLicenses[1]) << "\r\n";
+    }
+    if (g_spaceMilestones[0].initialized) {
+        out << "space_milestones1=" << SerializeSpaceMilestones(g_spaceMilestones[0]) << "\r\n";
+    }
+    if (g_spaceMilestones[1].initialized) {
+        out << "space_milestones2=" << SerializeSpaceMilestones(g_spaceMilestones[1]) << "\r\n";
+    }
+    std::string orbitOwnersStr;
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    if (!g_orbitOwners.empty()) {
+        orbitOwnersStr = SerializeOrbitOwners();
+    }
+    LeaveCriticalSection(&g_ownerLock);
+    if (!orbitOwnersStr.empty()) {
+        out << "orbit_owners=" << orbitOwnersStr << "\r\n";
     }
 
     // Feature 35: Demographic Trackers Persistence
@@ -1593,6 +1640,27 @@ static bool ParseCoopMetaResearchKey(const std::string& key, const std::string& 
         ParseEngineVehLicenses(val, &g_engineVehLicenses[1]);
         return true;
     }
+    if (key == "space_cargo_unlocks1" || key == "space_cargo_unlocks2") {
+        StateEngineResearch& dst = g_engineResearch[(key.back() == '2') ? 1 : 0];
+        int w = 0, e = 0;
+        if (sscanf_s(val.c_str(), "%d,%d", &w, &e) == 2) {
+            dst.spaceCargoUnlocks[0] = (w != 0) ? 1u : 0u;
+            dst.spaceCargoUnlocks[1] = (e != 0) ? 1u : 0u;
+        }
+        return true;
+    }
+    if (key == "space_milestones1") {
+        ParseSpaceMilestones(val, &g_spaceMilestones[0]);
+        return true;
+    }
+    if (key == "space_milestones2") {
+        ParseSpaceMilestones(val, &g_spaceMilestones[1]);
+        return true;
+    }
+    if (key == "orbit_owners") {
+        ParseOrbitOwners(val);
+        return true;
+    }
     return false;
 }
 
@@ -1809,11 +1877,17 @@ static bool ReadCoopSaveMetaInternal(const char* fullSaveDir, bool updateBudgets
         memset(&g_unattributedScalars, 0, sizeof(g_unattributedScalars));
         EnsureStateEconInitialized(const_cast<BYTE*>(world));
     }
+    if ((g_spaceMilestones[0].initialized || g_spaceMilestones[1].initialized) && world) {
+        EnsureSpaceMilestonesInitialized(const_cast<BYTE*>(world));
+    }
     if ((g_engineResearch[0].initialized || g_engineResearch[1].initialized) && world) {
         EnsureEngineResearchInitialized(const_cast<BYTE*>(world));
     }
     if ((g_engineVehLicenses[0].initialized || g_engineVehLicenses[1].initialized) && world) {
         EnsureEngineVehLicensesInitialized(const_cast<BYTE*>(world));
+    }
+    if (world) {
+        TwoStates_ReconcileOrbitOwnersFromWorld(world);
     }
 
     g_netTradeRub[0] = (double)tradeRubCents[0] / 100.0;
@@ -1861,6 +1935,7 @@ void TwoStates_BeforeAnyWorldLoad()
     ResetStateTrackerSlices();
     ResetEngineResearchSlices();
     ResetEngineVehLicenseSlices();
+    ResetSpaceStateSlices();
     g_stateEconInitialized = false;
     ClearStateEconPeriod(&g_stateCurEcon[0], 0, 0);
     ClearStateEconPeriod(&g_stateCurEcon[1], 0, 0);
@@ -2036,8 +2111,10 @@ void TwoStates_OnAnyWorldLoaded(bool isLockstepSessionLoad)
         if (g_chosenMode == COOP_MODE_TWO_STATES) {
             g_treasuryInitialized = true;
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+            EnsureSpaceMilestonesInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
+            TwoStates_ReconcileOrbitOwnersFromWorld(g_exeBase + WORLD_RVA);
             char msg[240];
             _snprintf_s(msg, sizeof(msg), _TRUNCATE,
                         Tr("Загружен кооп-сейв «2 государства» (Запад: %.0f РУБ / %.0f $, Восток: %.0f РУБ / %.0f $)",
@@ -2201,6 +2278,7 @@ static void __fastcall H_MasterSave(BYTE* world)
     char fullSaveDir[MAX_PATH] = {};
     double prevRub = 0.0, prevUsd = 0.0;
     bool moneySwapped = false;
+    int activeWorldSt = 1;
     BYTE prevFc90 = 0;
     bool fc90Patched = false;
     BYTE* autosaveJeAddr = g_exeBase ? (g_exeBase + RVA_MASTER_SAVE_AUTOSAVE_JE) : nullptr;
@@ -2260,13 +2338,20 @@ static void __fastcall H_MasterSave(BYTE* world)
                 moneySwapped = true;
             }
             if (twoStates) {
+                const int mountedSpaceBefore = TwoStates_GetSpaceMilestoneMountStateForTest();
                 TwoStates_InvalidateMountCaches();
+                EnsureSpaceMilestonesInitialized(world);
                 EnsureEngineResearchInitialized(world);
                 EnsureEngineVehLicensesInitialized(world);
-                int localSt = TwoStates_LocalState();
-                if (localSt != 1 && localSt != 2) localSt = 1;
-                CaptureWorldResearchToSlice(world, &g_engineResearch[localSt - 1], localSt);
-                CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[localSt - 1]);
+                activeWorldSt = ResolveActiveResearchWorldState();
+                if (activeWorldSt != 1 && activeWorldSt != 2) activeWorldSt = 1;
+                const int spaceCaptureSt = (mountedSpaceBefore == 1 || mountedSpaceBefore == 2)
+                    ? mountedSpaceBefore
+                    : activeWorldSt;
+                CaptureWorldSpaceMilestonesToSlice(world, &g_spaceMilestones[spaceCaptureSt - 1]);
+                CaptureWorldResearchToSlice(world, &g_engineResearch[activeWorldSt - 1], activeWorldSt);
+                CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[activeWorldSt - 1]);
+                WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[0], 1);
                 WriteSliceToWorldResearch(world, &g_engineResearch[0]);
                 WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[0]);
             }
@@ -2301,10 +2386,9 @@ static void __fastcall H_MasterSave(BYTE* world)
         }
         if (twoStates && world) {
             TwoStates_InvalidateMountCaches();
-            int localSt = TwoStates_LocalState();
-            if (localSt != 1 && localSt != 2) localSt = 1;
-            WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
-            WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
+            WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[activeWorldSt - 1], activeWorldSt);
+            WriteSliceToWorldResearch(world, &g_engineResearch[activeWorldSt - 1]);
+            WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[activeWorldSt - 1]);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }

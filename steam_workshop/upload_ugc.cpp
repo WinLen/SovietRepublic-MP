@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Hotfix port to Workers & Resources v1.2.0.9 (PE 0x6B05A574, Build 26898154): updated all RVAs, WORLD tail offsets (+8 from 0xC348), inline hooks & tesmiolauncher version check; Space Program DLC (dlc5) metadata & DLC guard; 70/70 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
+                "v%s (Protocol %d) - Full Space Program DLC (dlc5) Co-op & Two-States Space Race (Phases 2-4: rockets, orbits, milestones, Mission Control UI, commercial payouts, reentry/deorbit) + auto crash/desync report uploader; 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

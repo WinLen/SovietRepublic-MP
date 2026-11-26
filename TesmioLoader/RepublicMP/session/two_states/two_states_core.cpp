@@ -11,6 +11,7 @@ void TwoStates_Bind(const TsmHost* host)
     TwoStates_BindResearch(host);
     TwoStates_BindOverlay(host);
     TwoStates_BindPersistence(host);
+    TwoStates_BindSpace(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -475,15 +476,52 @@ static int LookupVehIdOwnerInCache(int vehicleId)
     return 0;
 }
 
-static int ResolveVehicleOwnerFallbackRaw(const BYTE* veh, const BldPtrOwnerSlot* slots, size_t mask)
+static int ResolveVehPtrOwnerRawImpl(const BYTE* veh, const BldPtrOwnerSlot* slots, size_t mask, int depth)
 {
+    if (!veh || !IsPointerLikeX64((uintptr_t)veh)) return 1;
     const BYTE* home = *(const BYTE* const*)(veh + VEH_HOME_OFFSET);
     if (!home) home = *(const BYTE* const*)(veh + VEH_DEPOT_OFFSET);
+    if (!home) home = *(const BYTE* const*)(veh + VEH_CUR_BLD_OFFSET);
+    if (!home) home = *(const BYTE* const*)(veh + VEH_STOPPED_BLD_OFFSET);
     if (home && IsPointerLikeX64((uintptr_t)home)) {
         return LookupBldPtrOwnerInSlots(slots, mask, home);
     }
+    if (depth < 4) {
+        static const size_t kParentVehOffs[3] = {
+            VEH_PARENT_PTR_OFFSET, VEH_LINK_PTR_OFFSET, VEH_SPACE_DOCK_PARTNER_OFFSET
+        };
+        for (size_t i = 0; i < 3; ++i) {
+            const BYTE* relVeh = *(const BYTE* const*)(veh + kParentVehOffs[i]);
+            if (relVeh && relVeh != veh && IsPointerLikeX64((uintptr_t)relVeh)) {
+                int relId = *(const int*)(relVeh + VEH_ID_OFFSET);
+                if (relId >= 0) {
+                    int found = LookupVehIdOwnerInCache(relId);
+                    if (found == 1 || found == 2) return found;
+                }
+                return ResolveVehPtrOwnerRawImpl(relVeh, slots, mask, depth + 1);
+            }
+        }
+    }
+    const int32_t orbitIdx = *(const int32_t*)(veh + VEH_ORBIT_INDEX_OFFSET);
+    if (orbitIdx >= 0) {
+        const BYTE* vt = *(const BYTE* const*)(veh + VEH_TYPE_PTR_OFFSET);
+        const bool maybeSpace = !vt || !IsPointerLikeX64((uintptr_t)vt) ||
+                                *(const uint8_t*)(vt + VEH_TYPE_ROCKET_FLAG_OFFSET) != 0 ||
+                                *(const uint8_t*)(vt + VEH_TYPE_SPACECRAFT_FLAG_OFFSET) != 0 ||
+                                *(const uint8_t*)(vt + VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET) != 0 ||
+                                *(const int32_t*)(veh + VEH_ROCKET_FLIGHT_STATE_OFFSET) != 0;
+        int orbOwner = 1;
+        if (maybeSpace && TwoStates_TryGetOrbitOwner(orbitIdx, &orbOwner)) {
+            return orbOwner;
+        }
+    }
     const float vx = *(const float*)(veh + VEH_POS_OFFSET);
     return (vx < 0.0f) ? 1 : 2;
+}
+
+static int ResolveVehicleOwnerFallbackRaw(const BYTE* veh, const BldPtrOwnerSlot* slots, size_t mask)
+{
+    return ResolveVehPtrOwnerRawImpl(veh, slots, mask, 0);
 }
 
 static int ResolveUnhousedCitizenOwner(const BYTE* cit, const BldPtrOwnerSlot* slots, size_t mask,
@@ -504,10 +542,10 @@ static int ResolveUnhousedCitizenOwner(const BYTE* cit, const BldPtrOwnerSlot* s
             return fallbackResolveBld ? fallbackResolveBld(b) : LookupBldPtrOwnerInSlots(slots, mask, b);
         }
     }
-    const BYTE* veh = *(const BYTE* const*)(cit + 0x60);
+    const BYTE* veh = *(const BYTE* const*)(cit + CIT_RIDING_VEHICLE_PTR_OFF);
     if (IsPointerLikeX64((uintptr_t)veh)) {
         int vehId = *(const int*)(veh + VEH_ID_OFFSET);
-        if (vehId > 0) {
+        if (vehId >= 0) {
             int found = LookupVehIdOwnerInCache(vehId);
             if (found == 1 || found == 2) return found;
             return ResolveVehicleOwnerFallbackRaw(veh, slots, mask);
@@ -604,9 +642,10 @@ bool TwoStates_Install()
     econOk += TwoStates_InstallSimHooks();
     econOk += TwoStates_InstallResearchHooks();
     econOk += TwoStates_InstallOverlayHooks();
+    econOk += TwoStates_InstallSpaceHooks();
     int saveOk = TwoStates_InstallPersistenceHooks();
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap hooks (%d/67), master_save=%d, heightFn=%p",
+    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap/space hooks (%d/75), master_save=%d, heightFn=%p",
          ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
 }
@@ -824,8 +863,10 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
             if (g_exeBase && !g_beforeLoadPrepared && !Determinism_WorldLoading() &&
                 (!TwoStates_AreEconHooksInstalled() || SaveSync_IsWorldLoaded())) {
                 EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+                EnsureSpaceMilestonesInitialized(g_exeBase + WORLD_RVA);
                 EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
                 EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
+                TwoStates_ReconcileOrbitOwnersFromWorld(g_exeBase + WORLD_RVA);
             }
             Commands_RecordMoney();
         } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -870,8 +911,10 @@ void TwoStates_OnWorldLoaded()
         }
         if (g_exeBase) {
             EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
+            EnsureSpaceMilestonesInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
             EnsureEngineVehLicensesInitialized(g_exeBase + WORLD_RVA);
+            TwoStates_ReconcileOrbitOwnersFromWorld(g_exeBase + WORLD_RVA);
         }
         Commands_RecordMoney();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -999,6 +1042,8 @@ void TwoStates_BeginCommand(int ownerState)
     if (TwoStates_IsActive() && g_exeBase) {
         BYTE* world = g_exeBase + WORLD_RVA;
         TwoStates_InvalidateMountCaches();
+        EnsureSpaceMilestonesInitialized(world);
+        WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[g_cmdOwner - 1], g_cmdOwner);
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[g_cmdOwner - 1]);
         EnsureEngineVehLicensesInitialized(world);
@@ -1078,10 +1123,12 @@ void TwoStates_EndCommand(int ownerState)
     if (g_inCommand && TwoStates_IsActive() && g_exeBase) {
         BYTE* world = g_exeBase + WORLD_RVA;
         TwoStates_InvalidateMountCaches();
+        CaptureWorldSpaceMilestonesToSlice(world, &g_spaceMilestones[owner - 1]);
         CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
         CaptureWorldVehLicensesToSlice(world, &g_engineVehLicenses[owner - 1]);
         int localSt = TwoStates_LocalState();
         if (localSt != 1 && localSt != 2) localSt = 1;
+        WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[localSt - 1], localSt);
         WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
         WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
     }
@@ -1255,11 +1302,18 @@ void TwoStates_BeforeSubStep(BYTE* world, bool isEarly)
                                         !g_engineResearch[0].hasUnresolvedBldPtr && !g_engineResearch[1].hasUnresolvedBldPtr;
             const bool licReadyBefore = g_engineVehLicenses[0].initialized && g_engineVehLicenses[1].initialized &&
                                         !g_engineVehLicenses[0].loadedFromMeta && !g_engineVehLicenses[1].loadedFromMeta;
+            const bool spaceReadyBefore = g_spaceMilestones[0].initialized && g_spaceMilestones[1].initialized &&
+                                          !g_spaceMilestones[0].loadedFromMeta && !g_spaceMilestones[1].loadedFromMeta;
+            EnsureSpaceMilestonesInitialized(world);
             EnsureEngineResearchInitialized(world);
             EnsureEngineVehLicensesInitialized(world);
+            TwoStates_ReconcileOrbitOwnersFromWorld(world);
             if (isEarly && !wasInSimStep && !Determinism_SessionRunning()) {
                 int localSt = TwoStates_LocalState();
                 if (localSt != 1 && localSt != 2) localSt = 1;
+                if (spaceReadyBefore) {
+                    CaptureWorldSpaceMilestonesToSlice(world, &g_spaceMilestones[localSt - 1]);
+                }
                 if (resReadyBefore) {
                     CaptureWorldResearchToSlice(world, &g_engineResearch[localSt - 1], localSt);
                 }
@@ -1270,6 +1324,7 @@ void TwoStates_BeforeSubStep(BYTE* world, bool isEarly)
             g_inSimStep = true;
             // Both Host and Client mount the identical canonical simulation baseline (State 1)
             // without any OR-merging or union mixing between the two republics' trees!
+            WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[0], 1);
             WriteSliceToWorldResearch(world, &g_engineResearch[0]);
             WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[0]);
         } else {
@@ -1349,6 +1404,7 @@ void TwoStates_AfterSubStep(BYTE* world, bool isEarly)
         if (!isEarly && IsTwoStatesResearchOrLicenseActive()) {
             int localSt = TwoStates_LocalState();
             if (localSt != 1 && localSt != 2) localSt = 1;
+            WriteSliceToWorldSpaceMilestones(world, &g_spaceMilestones[localSt - 1], localSt);
             WriteSliceToWorldResearch(world, &g_engineResearch[localSt - 1]);
             WriteSliceToWorldVehLicenses(world, &g_engineVehLicenses[localSt - 1]);
         }

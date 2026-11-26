@@ -60,6 +60,7 @@ enum LockstepCommandKind {
     LS_CMD_CITY_DELETE = 29,    // rename.cpp: city deletion
     LS_CMD_RESEARCH = 30,       // two_states.cpp: independent state research program selection
     LS_CMD_OFFICE_REORDER = 31, // game_calls.cpp: construction/rail office queue reorder popup (0x7707E0)
+    LS_CMD_SPACE_ACTION = 32,   // game_calls.cpp: space reentry / deorbit / abort (0x819293, 0x819544)
 };
 
 // Money a local action changed on this PC (an interface purchase, a terrain

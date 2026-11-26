@@ -75,6 +75,9 @@
     <ClCompile Include="core\main.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="core\crash_upload.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="world_sync\local_builds.cpp">
       <Filter>world_sync</Filter>
     </ClCompile>
@@ -139,6 +142,9 @@
       <Filter>session\two_states</Filter>
     </ClCompile>
     <ClCompile Include="session\two_states\two_states_persistence.cpp">
+      <Filter>session\two_states</Filter>
+    </ClCompile>
+    <ClCompile Include="session\two_states\two_states_space.cpp">
       <Filter>session\two_states</Filter>
     </ClCompile>
     <ClCompile Include="third_party\miniz\miniz.c">
@@ -300,6 +306,9 @@
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="core\version.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\crash_upload.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="game\present_hook.h">

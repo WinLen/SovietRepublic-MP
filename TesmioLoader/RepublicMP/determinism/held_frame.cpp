@@ -1781,15 +1781,19 @@ static void DrawJunctions()
     BYTE* world = g_exeBase + 0xA1EF20;
     DiagLog_BeginSafeSeh();
     __try {
-        BYTE* manager = *(BYTE**)(world + 0x128C0);
-        if (manager) {
-            ((void (*)(void*))(g_exeBase + 0x243BB0))(manager);
-            if (world[0x14509]) {
-                BYTE** begin = *(BYTE***)(manager + 0x50);
-                size_t n = begin ? (size_t)(*(BYTE***)(manager + 0x58) - begin) : 0;
-                for (size_t i = 0; i < n; i++) {
-                    BYTE* junction = (*(BYTE***)(manager + 0x50))[i];
-                    if (junction) ((void (*)(void*))(g_exeBase + 0x23EA30))(junction);
+        // Matches vanilla Early (0x32AF86: cmp dword ptr [rsi+0x14], -1; jne skip):
+        // never draw ground junction lights while the local camera is in 3D orbit view.
+        if (*(const int32_t*)(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET) == -1) {
+            BYTE* manager = *(BYTE**)(world + 0x128C0);
+            if (manager) {
+                ((void (*)(void*))(g_exeBase + 0x243BB0))(manager);
+                if (world[0x14509]) {
+                    BYTE** begin = *(BYTE***)(manager + 0x50);
+                    size_t n = begin ? (size_t)(*(BYTE***)(manager + 0x58) - begin) : 0;
+                    for (size_t i = 0; i < n; i++) {
+                        BYTE* junction = (*(BYTE***)(manager + 0x50))[i];
+                        if (junction) ((void (*)(void*))(g_exeBase + 0x23EA30))(junction);
+                    }
                 }
             }
         }

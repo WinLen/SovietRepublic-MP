@@ -98,3 +98,4 @@ bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned
 // Crash A: validates a rail segment + signal block (+0xB8, +0x08/+0x14) or connected-node vector (+0x10/+0x18).
 bool SimPatches_IsSignalSegmentSafe(const void* segPtr);
 bool SimPatches_TestHookedUpdateSignalBlock(void* world, void* segPtr);
+bool SimPatches_HasToolCallForTest(unsigned siteRva, unsigned targetRva);

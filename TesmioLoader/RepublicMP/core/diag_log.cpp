@@ -740,9 +740,10 @@ struct RemoteLogFileEntry {
 };
 #pragma pack(pop)
 
-static void ReadLogFileTail(const char* fullPath, size_t maxBytes, std::vector<unsigned char>& outBuf)
+void DiagLog_ReadFileTail(const char* fullPath, size_t maxBytes, std::vector<unsigned char>& outBuf)
 {
     outBuf.clear();
+    if (!fullPath || !fullPath[0] || maxBytes == 0) return;
     HANDLE h = CreateFileA(fullPath, GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -768,10 +769,19 @@ static void ReadLogFileTail(const char* fullPath, size_t maxBytes, std::vector<u
     CloseHandle(h);
 }
 
-bool DiagLog_HasPrevCrashOrDesyncLog(void)
+const char* DiagLog_GetGameDir(void)
 {
-    static bool s_checkedAndSent = false;
-    if (s_checkedAndSent || !g_gameDir[0]) return false;
+    return g_gameDir;
+}
+
+const char* DiagLog_GetLoaderBaseDir(void)
+{
+    return (g_origHost && g_origHost->baseDir) ? g_origHost->baseDir : "";
+}
+
+bool DiagLog_DetectPrevCrashOrDesync(void)
+{
+    if (!g_gameDir[0]) return false;
 
     bool hadCrashInLoader = false;
     if (g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
@@ -780,7 +790,7 @@ bool DiagLog_HasPrevCrashOrDesyncLog(void)
             char loaderLogPath[MAX_PATH] = {};
             _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\%s", g_origHost->baseDir, kLoaderLogs[i]);
             std::vector<unsigned char> loaderTail;
-            ReadLogFileTail(loaderLogPath, 64 * 1024, loaderTail);
+            DiagLog_ReadFileTail(loaderLogPath, 64 * 1024, loaderTail);
             if (!loaderTail.empty()) {
                 loaderTail.push_back(0);
                 if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
@@ -797,18 +807,26 @@ bool DiagLog_HasPrevCrashOrDesyncLog(void)
     char prevPath[MAX_PATH] = {};
     _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
     std::vector<unsigned char> tail;
-    ReadLogFileTail(prevPath, 128 * 1024, tail);
+    DiagLog_ReadFileTail(prevPath, 128 * 1024, tail);
     bool hadCrashInDiagPrev = false;
     bool abnormalInGameExit = false;
     if (!tail.empty()) {
         tail.push_back(0);
         const char* text = (const char*)tail.data();
         hadCrashInDiagPrev = (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr);
-        abnormalInGameExit = (strstr(text, "State=CLIENT_IN_GAME") != nullptr &&
+        abnormalInGameExit = ((strstr(text, "State=CLIENT_IN_GAME") != nullptr ||
+                               strstr(text, "State=HOST_IN_GAME") != nullptr) &&
                               strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
     }
 
-    if (hadCrashInDiagPrev || hadCrashInLoader || abnormalInGameExit || hasLastCrashFile) {
+    return hadCrashInDiagPrev || hadCrashInLoader || abnormalInGameExit || hasLastCrashFile;
+}
+
+bool DiagLog_HasPrevCrashOrDesyncLog(void)
+{
+    static bool s_checkedAndSent = false;
+    if (s_checkedAndSent || !g_gameDir[0]) return false;
+    if (DiagLog_DetectPrevCrashOrDesync()) {
         s_checkedAndSent = true;
         return true;
     }
@@ -838,10 +856,10 @@ bool DiagLog_BuildClientLogBundle(std::vector<unsigned char>& outPayload, const 
         char path[MAX_PATH] = {};
         _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_gameDir, kFiles[i]);
         std::vector<unsigned char> content;
-        ReadLogFileTail(path, kMaxTailPerFile, content);
+        DiagLog_ReadFileTail(path, kMaxTailPerFile, content);
         if (content.empty() && i <= 1 && g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
             _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", g_origHost->baseDir, kFiles[i]);
-            ReadLogFileTail(path, kMaxTailPerFile, content);
+            DiagLog_ReadFileTail(path, kMaxTailPerFile, content);
         }
         if (content.empty()) continue;
 

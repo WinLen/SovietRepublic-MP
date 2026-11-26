@@ -97,12 +97,22 @@ static const unsigned kPresentationSites[] = {
     0x6CD458, 0x6DB124,                     // electric wire sparks
     0x69E84C, 0x6A0CF6, 0x6A11C0,           // vehicle animation starts
     0x156088, 0x15611E,                     // ambient sounds
+    RVA_SPACE_MC_RAND1_RET,                 // Mission Control UI noise
+    RVA_SPACE_MC_RAND2_RET,                 // Mission Control UI noise
+    RVA_SPACE_EXHAUST_RAND_RET,             // rocket exhaust visual particles
+    RVA_SPACE_SOUND_RAND1_RET,              // rocket 3D sound playback
+    RVA_SPACE_SOUND_RAND2_RET,              // rocket 3D sound playback
+    RVA_SPACE_SOUND_RAND3_RET,              // rocket 3D sound playback
 };
 static bool IsPresentationSite(unsigned site)
 {
     for (unsigned s : kPresentationSites)
         if (s == site) return true;
     return false;
+}
+bool Determinism_IsPresentationSiteForTest(unsigned siteRva)
+{
+    return IsPresentationSite(siteRva);
 }
 
 // ---------------------------------------------------------------------------
@@ -2035,6 +2045,7 @@ static void CompareRuns()
         if (a.hashBuildings != b.hashBuildings) strcat_s(parts, "buildings ");
         if (a.hashVehicles != b.hashVehicles) strcat_s(parts, "vehicles ");
         if (a.hashCitizens != b.hashCitizens) strcat_s(parts, "citizens ");
+        if (a.hashSpace != b.hashSpace) strcat_s(parts, "space ");
         SetProbeStatus("DIFFERENT from step %llu (sample %d/%d): %s- draws %llu/%llu, vehicles %d/%d, citizens %d/%d, "
                        "storage %.1f/%.1f", g_samples[0][i].step, i + 1, n, parts, pa.draws, pb.draws, a.vehicles,
                        b.vehicles, a.citizens, b.citizens, a.storageTotal, b.storageTotal);

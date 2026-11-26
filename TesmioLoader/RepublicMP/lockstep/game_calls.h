@@ -19,8 +19,12 @@ void GameCalls_Bind(const TsmHost* host);
 bool GameCalls_Install();
 
 // The command (lockstep/commands).
+enum SpaceActionKind { SPACE_ACT_REENTRY_TARGETED = 1, SPACE_ACT_DEORBIT = 2, SPACE_ACT_ABORT = 3 };
+enum SpaceActionSiteKind { SPACE_SITE_REENTRY_TARGETED = 1, SPACE_SITE_DEORBIT_OR_ABORT = 2 };
+
 bool GameCalls_ApplyCommand(const void* data, size_t size);
 bool GameCalls_ApplyOfficeReorderCommand(const void* data, size_t size);
+bool GameCalls_ApplySpaceActionCommand(const void* data, size_t size);
 bool GameCalls_ApplyOfficeQueuePermutation(unsigned long long* sites, float* dists, size_t count,
                                            const unsigned short* newOrder, size_t orderCount);
 bool GameCalls_BuildOfficeReorderPayloadForTest(const BYTE* itemsVec, const BYTE* office,
@@ -54,4 +58,9 @@ bool GameCalls_CaptureMsgForTest(unsigned atSiteRva, const unsigned long long* i
 bool GameCalls_RunSiteForTest(unsigned atSiteRva, const unsigned long long* args, unsigned long long* outRet);
 bool GameCalls_RunSiteWithRetAddrForTest(unsigned atSiteRva, const unsigned long long* args,
                                          unsigned long long* outRet, unsigned long long* inOutRetAddr);
+bool GameCalls_CaptureSpaceActionForTest(unsigned long long veh, int siteKind, unsigned char abortVariant);
+void GameCalls_SetSpaceActionFnsForTest(unsigned char (*hasReentry)(unsigned long long),
+                                        void (*setupReentry)(unsigned long long),
+                                        void (*setupDeorbit)(unsigned long long));
+bool GameCalls_InstallSpaceActionPatchesForTest(BYTE* testSpaceRelay);
 

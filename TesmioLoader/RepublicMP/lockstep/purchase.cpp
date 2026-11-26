@@ -174,57 +174,12 @@ static BYTE* BuildingAt(BYTE* world, const BuildingRef& r)
 
 void NormalizeVehicleScriptName(const char* src, char* out, size_t outSize)
 {
-    if (!out || outSize == 0) return;
-    out[0] = '\0';
-    if (!src) return;
-
-    if (_strnicmp(src, "media_soviet/", 13) == 0 || _strnicmp(src, "media_soviet\\", 13) == 0) {
-        src += 13;
-    }
-
-    size_t i = 0;
-    while (src[i] && i + 1 < outSize) {
-        char c = src[i];
-        if (c == '\\') {
-            c = '/';
-        } else if (c >= 'A' && c <= 'Z') {
-            c = (char)(c + ('a' - 'A'));
-        }
-        out[i] = c;
-        ++i;
-    }
-    out[i] = '\0';
+    Ref_NormalizeVehicleScriptName(src, out, outSize);
 }
 
 BYTE* Purchase_FindVehicleTypeByScriptName(BYTE* world, const char* scriptName)
 {
-    if (!world || !scriptName) return nullptr;
-    char targetName[64] = {};
-    if (!SafeReadAsciiDirect(scriptName, targetName, sizeof(targetName)) || !targetName[0]) {
-        return nullptr;
-    }
-    BYTE* begin = nullptr;
-    BYTE* end = nullptr;
-    if (!SafeReadPod(world + TYPES_OFFSET, &begin) ||
-        !SafeReadPod(world + TYPES_OFFSET + 8, &end) ||
-        !begin || end <= begin || (end - begin) % TYPE_STRIDE != 0)
-    {
-        return nullptr;
-    }
-
-    char normTarget[64] = {};
-    NormalizeVehicleScriptName(targetName, normTarget, sizeof(normTarget));
-    if (!normTarget[0]) return nullptr;
-
-    for (BYTE* t = begin; t + TYPE_STRIDE <= end; t += TYPE_STRIDE) {
-        char name[64] = {};
-        if (SafeReadAsciiDirect((const char*)t + 0x200, name, sizeof(name)) && name[0]) {
-            char normCand[64] = {};
-            NormalizeVehicleScriptName(name, normCand, sizeof(normCand));
-            if (_stricmp(normCand, normTarget) == 0) return t;
-        }
-    }
-    return nullptr;
+    return Ref_FindVehicleTypeByScriptName(world, scriptName);
 }
 
 static BYTE* TypeAt(BYTE* world, unsigned index)
@@ -382,9 +337,11 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
             m.kind = kind;
             m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
             m.typeCheck = TypeCheck(type);
-            SafeReadAsciiDirect((const char*)type + 0x200, m.scriptName, sizeof(m.scriptName));
+            Ref_ReadVehicleTypeScriptName((U64)type, m.scriptName, sizeof(m.scriptName));
             if (targetType && types && targetType >= types && targetType < typesEnd && ((targetType - types) % TYPE_STRIDE) == 0) {
                 m.resIndex = (int)((targetType - types) / TYPE_STRIDE);
+                m.targetTypeCheck = TypeCheck(targetType);
+                Ref_ReadVehicleTypeScriptName((U64)targetType, m.targetScriptName, sizeof(m.targetScriptName));
             } else {
                 m.resIndex = -1;
             }
@@ -427,7 +384,7 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         m.kind = kind;
         m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
         m.typeCheck = TypeCheck(type);
-        SafeReadAsciiDirect((const char*)type + 0x200, m.scriptName, sizeof(m.scriptName));
+        Ref_ReadVehicleTypeScriptName((U64)type, m.scriptName, sizeof(m.scriptName));
         m.refill = window[0x2B8] ? 1 : 0;
         m.depot = RefOf(world, depot);
         m.customsRub = RefOf(world, *(BYTE**)(root + 0x2C0));
@@ -466,6 +423,18 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
     return PRESS_TAKE;
 }
 
+static void NotifyVehicleDlcBlocked()
+{
+    static ULONGLONG s_lastVehToastMs = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - s_lastVehToastMs >= 1500) {
+        s_lastVehToastMs = now;
+        TwoStates_AddToast(Tr("★ ТРАНСПОРТ ИЗ НЕУСТАНОВЛЕННОГО DLC ЗАБЛОКИРОВАН В КООПЕРАТИВЕ ★",
+                              "★ VEHICLE FROM UNINSTALLED DLC BLOCKED IN CO-OP ★"), 3);
+    }
+    InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedDlc);
+}
+
 bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
 {
     if (!pressed || !Commands_TakeLocal()) return pressed;
@@ -482,14 +451,7 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
         InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesAttempted);
         const void* vehType = caller ? (const void*)caller->R13 : nullptr;
         if (!SaveSync_CheckVehicleDlcAllowed(vehType)) {
-            static ULONGLONG s_lastVehToastMs = 0;
-            ULONGLONG now = GetTickCount64();
-            if (now - s_lastVehToastMs >= 1500) {
-                s_lastVehToastMs = now;
-                TwoStates_AddToast(Tr("★ ТРАНСПОРТ ИЗ НЕУСТАНОВЛЕННОГО DLC ЗАБЛОКИРОВАН В КООПЕРАТИВЕ ★",
-                                      "★ VEHICLE FROM UNINSTALLED DLC BLOCKED IN CO-OP ★"), 3);
-            }
-            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedDlc);
+            NotifyVehicleDlcBlocked();
             return false;
         }
         if (!ModSync_CheckVehicleTypeAllowed(vehType)) {
@@ -497,9 +459,18 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
             return false;
         }
         if (m.kind == 0xB) {
+            BYTE* targetType = (m.resIndex >= 0) ? TypeAt(g_exeBase + WORLD_RVA, (unsigned)m.resIndex) : nullptr;
+            if (targetType && !SaveSync_CheckVehicleDlcAllowed(targetType)) {
+                NotifyVehicleDlcBlocked();
+                return false;
+            }
+            if (targetType && !ModSync_CheckVehicleTypeAllowed(targetType)) {
+                InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMod);
+                return false;
+            }
             Commands_Submit(LS_CMD_PURCHASE, &m, sizeof(m));
-            DiagLog_Printf("VEH_REP", "Auto-Replace Submitted: Script='%s' | NetIdx=%u | TargetIdx=%d",
-                           m.scriptName, m.typeIndex, m.resIndex);
+            DiagLog_Printf("VEH_REP", "Auto-Replace Submitted: Script='%s' | NetIdx=%u | Target='%s' (Idx=%d)",
+                           m.scriptName, m.typeIndex, m.targetScriptName, m.resIndex);
             return false;
         }
         __try {
@@ -546,7 +517,7 @@ static bool BuildAutoReplaceClearMsg(BYTE* targetType, PurchaseMsg* outMsg)
             outMsg->used = 2;
             outMsg->typeIndex = (unsigned)((targetType - types) / TYPE_STRIDE);
             outMsg->typeCheck = TypeCheck(targetType);
-            SafeReadAsciiDirect((const char*)targetType + 0x200, outMsg->scriptName, sizeof(outMsg->scriptName));
+            Ref_ReadVehicleTypeScriptName((U64)targetType, outMsg->scriptName, sizeof(outMsg->scriptName));
             ok = true;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -560,6 +531,11 @@ bool Purchase_SubmitAutoReplaceClear(BYTE* targetType)
     PurchaseMsg m = {};
     if (!BuildAutoReplaceClearMsg(targetType, &m)) {
         Logf("republicmp  PURCHASE: auto-replace clear refused (invalid target vehicle type)");
+        return false;
+    }
+    if (!SaveSync_CheckVehicleDlcAllowed(targetType)) {
+        InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedDlc);
+        Logf("republicmp  PURCHASE: auto-replace clear refused (target DLC not allowed in session)");
         return false;
     }
     Commands_Submit(LS_CMD_PURCHASE, &m, sizeof(m));
@@ -933,6 +909,7 @@ static const char* ReplayAutoReplace(BYTE* world, const PurchaseMsg& m)
     if (m.used == 2) {
         BYTE* targetType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
         if (!targetType) return "the target vehicle type is not in this PC's list";
+        if (!SaveSync_CheckVehicleDlcAllowed(targetType)) return "refused (target DLC not allowed in session)";
         ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, nullptr);
         DiagLog_Printf("VEH_REP", "Replay Auto-Replace Clear Success: Script='%s' | TargetIdx=%u",
                        m.scriptName, m.typeIndex);
@@ -940,14 +917,27 @@ static const char* ReplayAutoReplace(BYTE* world, const PurchaseMsg& m)
     }
     BYTE* newType = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
     if (!newType) return "the new vehicle type is not in this PC's list";
+    if (!SaveSync_CheckVehicleDlcAllowed(newType)) return "refused (new DLC not allowed in session)";
     BYTE* targetType = nullptr;
-    if (m.resIndex >= 0) {
-        targetType = TypeAt(world, (unsigned)m.resIndex);
+    if (m.targetScriptName[0]) {
+        targetType = Purchase_FindVehicleTypeByScriptName(world, m.targetScriptName);
+        if (!targetType && m.targetTypeCheck != 0 &&
+            strlen(m.targetScriptName) == sizeof(m.targetScriptName) - 1) {
+            targetType = TypeFor(world, (unsigned)(m.resIndex >= 0 ? m.resIndex : 0), m.targetTypeCheck, nullptr);
+        }
+        if (!targetType) return "the target vehicle type is not in this PC's list";
+    } else if (m.resIndex >= 0) {
+        targetType = (m.targetTypeCheck != 0)
+            ? TypeFor(world, (unsigned)m.resIndex, m.targetTypeCheck, nullptr)
+            : TypeAt(world, (unsigned)m.resIndex);
         if (!targetType) return "the target vehicle type is not in this PC's list";
     }
+    if (targetType && !SaveSync_CheckVehicleDlcAllowed(targetType)) {
+        return "refused (target DLC not allowed in session)";
+    }
     ((SetAutoReplaceFn)(g_exeBase + RVA_SET_AUTO_REPLACE))(mgr, targetType, newType);
-    DiagLog_Printf("VEH_REP", "Replay Auto-Replace Success: Script='%s' | NewIdx=%u | TargetIdx=%d",
-                   m.scriptName, m.typeIndex, m.resIndex);
+    DiagLog_Printf("VEH_REP", "Replay Auto-Replace Success: Script='%s' | NewIdx=%u | Target='%s' (Idx=%d)",
+                   m.scriptName, m.typeIndex, m.targetScriptName, m.resIndex);
     return nullptr;
 }
 
@@ -1011,10 +1001,11 @@ static const char* Replay(const PurchaseMsg& m)
 
 bool Purchase_ApplyCommand(const void* data, size_t size)
 {
-    if (size != sizeof(PurchaseMsg) && size != 152) return false;
+    if (size != sizeof(PurchaseMsg) && size != 216u && size != 152u) return false;
     PurchaseMsg m = {};
     memcpy(&m, data, (size < sizeof(m)) ? size : sizeof(m));
     m.scriptName[sizeof(m.scriptName) - 1] = '\0';
+    m.targetScriptName[sizeof(m.targetScriptName) - 1] = '\0';
     if (!RoutinesOk()) {
         Logf("republicmp  PURCHASE: not made - this PC's game routines differ");
         return false;
@@ -1037,6 +1028,7 @@ bool Purchase_ApplyAutoReplaceForTest(const PurchaseMsg& m)
     if (!g_exeBase) return false;
     PurchaseMsg clean = m;
     clean.scriptName[sizeof(clean.scriptName) - 1] = '\0';
+    clean.targetScriptName[sizeof(clean.targetScriptName) - 1] = '\0';
     __try {
         return ReplayAutoReplace(g_exeBase + WORLD_RVA, clean) == nullptr;
     } __except (EXCEPTION_EXECUTE_HANDLER) {

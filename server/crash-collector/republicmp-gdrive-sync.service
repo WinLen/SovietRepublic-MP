@@ -1,0 +1,9 @@
+[Unit]
+Description=One-way copy of RepublicMP crash/desync reports to Google Drive (gdrive:republicmp-logs)
+After=network-online.target republicmp-collector.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900
+ExecStart=/usr/local/bin/republicmp-gdrive-sync.sh

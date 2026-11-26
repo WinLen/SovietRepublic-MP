@@ -138,6 +138,7 @@ static const char* const kCmdKindNames[] = {
     "city deletion",                  // LS_CMD_CITY_DELETE (29)
     "research program",               // LS_CMD_RESEARCH (30)
     "office queue reorder",           // LS_CMD_OFFICE_REORDER (31)
+    "space action",                   // LS_CMD_SPACE_ACTION (32)
 };
 
 static const char* KindName(int kind)
@@ -246,6 +247,7 @@ static const RawCmdHandlerEntry kRawCmdHandlers[] = {
     { LS_CMD_CITY_DELETE, Rename_ApplyDeleteCommand },
     { LS_CMD_RESEARCH, ApplyResearchCommand },
     { LS_CMD_OFFICE_REORDER, GameCalls_ApplyOfficeReorderCommand },
+    { LS_CMD_SPACE_ACTION, GameCalls_ApplySpaceActionCommand },
 };
 
 static bool DispatchCommandPayload(int kind, const void* p, size_t n)
@@ -274,10 +276,6 @@ static bool DispatchCommandPayload(int kind, const void* p, size_t n)
         return n == sizeof(LsStateTransfer) && TwoStates_ApplyTransferCommand(*(const LsStateTransfer*)p);
     case LS_CMD_LOAN:
         return n == sizeof(LsLoanCommand) && TwoStates_ApplyLoanCommand(*(const LsLoanCommand*)p);
-    case LS_CMD_CITY_DELETE:
-        return Rename_ApplyDeleteCommand(p, n);
-    case LS_CMD_RESEARCH:
-        return n == sizeof(LsResearchCommand) && TwoStates_ApplyResearchCommand(*(const LsResearchCommand*)p);
     default:
         return false;
     }
@@ -573,6 +571,7 @@ static void PutAwayUncarriedTool()
     }
     for (const char* carried : kCarriedTools)
         if (strcmp(name, carried) == 0 && (RouteTools_Ready() || strncmp(name, "second_road", 11) == 0)) return;
+    // Space tools ("orbital_attach", "catch_orbit") are allowed explicitly via kSites / Pad UI and match no prefix below.
     if ((strcmp(name, "building_addsource") == 0 || strcmp(name, "building_copysource") == 0) && SourceSlots_Ready()) return; // source_slots.cpp
     bool trees = false;
     for (const char* prefix : kTreeTools) trees |= strncmp(name, prefix, strlen(prefix)) == 0;
@@ -974,6 +973,8 @@ struct RemoteReplaySnapshot {
     bool                   hasOpenWindows;
     void*                  savedOpenWinBegin;
     void*                  savedOpenWinEnd;
+    bool                   hasActiveOrbitView;
+    int32_t                savedActiveOrbitView;
     int                    brushSoundCount;
     BrushSoundSnapshotItem brushSounds[MAX_BRUSH_SOUND_SNAPSHOT];
 };
@@ -1024,6 +1025,9 @@ static void SaveRemoteReplaySnapshot()
     if (g_remoteReplaySnap.hasOpenWindows) {
         SafeWritePod(g_exeBase + WORLD_OPEN_WINDOWS_END_RVA, g_remoteReplaySnap.savedOpenWinBegin);
     }
+    g_remoteReplaySnap.savedActiveOrbitView = -1;
+    g_remoteReplaySnap.hasActiveOrbitView =
+        SafeReadPod(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET, &g_remoteReplaySnap.savedActiveOrbitView);
     g_remoteReplaySnap.valid = true;
 }
 
@@ -1031,6 +1035,10 @@ static void RestoreRemoteReplaySnapshot()
 {
     if (!g_remoteReplaySnap.valid || !g_exeBase) return;
     BYTE* world = g_exeBase + WORLD_RVA;
+
+    if (g_remoteReplaySnap.hasActiveOrbitView) {
+        SafeWritePod(world + WORLD_ACTIVE_ORBIT_VIEW_OFFSET, g_remoteReplaySnap.savedActiveOrbitView);
+    }
 
     if (g_remoteReplaySnap.hasOpenWindows) {
         SafeWritePod(g_exeBase + WORLD_OPEN_WINDOWS_BEGIN_RVA, g_remoteReplaySnap.savedOpenWinBegin);
@@ -1125,6 +1133,10 @@ long long Commands_OnCreatePopupWindow(long long world, int kind, long long ptr,
                                        int popupType, int stringId, long long p8, long long p9)
 {
     if (Commands_IsApplyingRemote()) return 0;
+    if (TwoStates_IsActive() && kind == 4 && subkind == 4 && popupType == WINDOW_POPUP_TYPE_SPACE_PAYOUT) {
+        const int spaceOwner = TwoStates_GetSpaceActiveOwner();
+        if (spaceOwner != 0 && spaceOwner != TwoStates_LocalState()) return 0;
+    }
     if (kind == 2 && subkind == 5 && IsForeignTerritoryNotification((uintptr_t)ptr)) {
         return 0;
     }

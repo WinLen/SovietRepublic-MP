@@ -34,6 +34,7 @@ bool VehicleSoftSync_ApplyCommand(const void* data, size_t size);
 // Resolves the building a vehicle (or its lead locomotive if a coupled wagon) is currently parked/stopped at.
 BYTE* VehicleSoftSync_ResolveEffectiveBld(const BYTE* v);
 bool VehicleSoftSync_HasActiveEnginePathForTest(const BYTE* v);
+bool VehicleSoftSync_IsVehicleInSpaceFlightForTest(const BYTE* w, const BYTE* v);
 void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, float dz, bool smoothBlend);
 
 // Test helper: builds a wire packet into outBuf (returns true if non-empty).

@@ -6,6 +6,7 @@
 #include "commands.h"
 #include "world_refs.h"
 #include "../core/safe_mem.h"
+#include "../session/save_sync.h"
 #include <string.h>
 #include <vector>
 
@@ -199,11 +200,14 @@ static const char* Encode(U64 line, U64 copy, Writer& w)
             if (!ReadVec(live + o + HALF_PAIRS, 16, bytes)) return "a stop's cargo list cannot be read";
             w.u32((unsigned)(bytes.size() / 16));
             for (size_t k = 0; k < bytes.size(); k += 16) {
-                BYTE tag;
-                unsigned index;
-                if (!Ref_DefPtr(*(U64*)&bytes[k], tag, index)) return "a cargo definition is unknown";
-                w.u8(tag);
-                w.u32(index);
+                U64 defPtr = *(const U64*)&bytes[k];
+                BYTE defEnc[136];
+                size_t defLen = 0;
+                if (!Ref_EncodeDefPtrBytes(defPtr, defEnc, sizeof(defEnc), defLen))
+                    return "a cargo definition is unknown";
+                if ((defEnc[0] == 2u || defEnc[0] == 5u) && !SaveSync_CheckVehicleDlcAllowed((const void*)defPtr))
+                    return "a cargo vehicle type is from an unshared DLC";
+                w.raw(defEnc, defLen);
                 w.u64(*(U64*)&bytes[k + 8]);
             }
             for (unsigned off : kHalfInts) {
@@ -215,11 +219,14 @@ static const char* Encode(U64 line, U64 copy, Writer& w)
                 if (!ReadVec(live + o + off, 8, bytes)) return "a stop's list cannot be read";
                 w.u32((unsigned)(bytes.size() / 8));
                 for (size_t k = 0; k < bytes.size(); k += 8) {
-                    BYTE tag;
-                    unsigned index;
-                    if (!Ref_DefPtr(*(U64*)&bytes[k], tag, index)) return "a definition is unknown";
-                    w.u8(tag);
-                    w.u32(index);
+                    U64 defPtr = *(const U64*)&bytes[k];
+                    BYTE defEnc[136];
+                    size_t defLen = 0;
+                    if (!Ref_EncodeDefPtrBytes(defPtr, defEnc, sizeof(defEnc), defLen))
+                        return "a definition is unknown";
+                    if ((defEnc[0] == 2u || defEnc[0] == 5u) && !SaveSync_CheckVehicleDlcAllowed((const void*)defPtr))
+                        return "a vehicle type is from an unshared DLC";
+                    w.raw(defEnc, defLen);
                 }
             }
         }
@@ -349,10 +356,11 @@ static const char* Decode(const BYTE* data, size_t size, StandIn& s, U64& line)
             unsigned np = in.count(MAX_ELEMENTS);
             tmp.assign((size_t)np * 16, 0);
             for (unsigned k = 0; k < np && in.ok; k++) {
-                BYTE tag = in.u8();
-                unsigned index = in.u32();
                 U64 p = 0;
-                if (!Ref_DefPtrAt(tag, index, p)) return "a cargo definition is unknown here";
+                if (!Ref_DecodeDefPtrBytes(in.p, in.n, in.at, p)) {
+                    in.ok = false;
+                    return "a cargo definition is unknown here";
+                }
                 U64 value = in.u64();
                 memcpy(&tmp[k * 16], &p, 8);
                 memcpy(&tmp[k * 16 + 8], &value, 8);
@@ -368,10 +376,11 @@ static const char* Decode(const BYTE* data, size_t size, StandIn& s, U64& line)
                 unsigned n = in.count(MAX_ELEMENTS);
                 tmp.assign((size_t)n * 8, 0);
                 for (unsigned k = 0; k < n && in.ok; k++) {
-                    BYTE tag = in.u8();
-                    unsigned index = in.u32();
                     U64 p = 0;
-                    if (!Ref_DefPtrAt(tag, index, p)) return "a definition is unknown here";
+                    if (!Ref_DecodeDefPtrBytes(in.p, in.n, in.at, p)) {
+                        in.ok = false;
+                        return "a definition is unknown here";
+                    }
                     memcpy(&tmp[k * 8], &p, 8);
                 }
                 Ref_SetStandInVector(o + off, Pool(s, tmp), tmp.size());

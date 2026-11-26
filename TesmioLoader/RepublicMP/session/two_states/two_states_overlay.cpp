@@ -435,9 +435,17 @@ bool TwoStates_HasCapturedResyncCamera()
     return g_hasResyncCam;
 }
 
+static bool IsInOrbitView()
+{
+    if (!g_exeBase) return false;
+    int32_t activeOrbit = -1;
+    return SafeReadPod((const int32_t*)(g_exeBase + WORLD_RVA + WORLD_ACTIVE_ORBIT_VIEW_OFFSET), &activeOrbit) &&
+           activeOrbit >= 0;
+}
+
 bool TwoStates_JumpCameraTo(float wx, float wz)
 {
-    if (!SaveSync_IsWorldLoaded() || !isfinite(wx) || !isfinite(wz)) return false;
+    if (IsInOrbitView() || !SaveSync_IsWorldLoaded() || !isfinite(wx) || !isfinite(wz)) return false;
     float curPos[3] = {};
     float curLook[3] = {};
     if (!TwoStates_GetCameraView(curPos, curLook)) return false;
@@ -456,6 +464,7 @@ bool TwoStates_JumpCameraTo(float wx, float wz)
 
 bool TwoStates_JumpCameraToPartner()
 {
+    if (IsInOrbitView()) return false;
     PartnerCursorInfo pc = LockstepNet_GetPartnerCursor();
     if (!pc.valid) {
         TwoStates_AddToast(Tr("Партнёр ещё не подключён в режиме Lockstep",
@@ -490,6 +499,7 @@ bool TwoStates_GetShowMinimapBorders()        { return g_showMinimapBorders; }
 
 void TwoStates_PingAtCursor()
 {
+    if (IsInOrbitView()) return;
     float cx = 0.0f, cy = 0.0f, cz = 0.0f;
     float lx = 0.0f, ly = 0.0f, lz = 0.0f;
     if (!TwoStates_GetCursorWorldPos(&cx, &cy, &cz)) return;
@@ -1366,13 +1376,15 @@ void TwoStates_DrawOverlay()
         }
         s_f7WasDown = f7Down;
 
-        bool f6Down = allowWorldHotkeys && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+        const bool inOrbitView = worldLoaded && IsInOrbitView();
+
+        bool f6Down = allowWorldHotkeys && !inOrbitView && (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
         if (f6Down && !s_f6WasDown && worldLoaded) {
             TwoStates_JumpCameraToPartner();
         }
         s_f6WasDown = f6Down;
 
-        bool altClickDown = allowWorldHotkeys && !ImGui::GetIO().WantCaptureMouse &&
+        bool altClickDown = allowWorldHotkeys && !inOrbitView && !ImGui::GetIO().WantCaptureMouse &&
                             (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 &&
                             (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         if (altClickDown && !s_altClickWasDown && worldLoaded) {
@@ -1397,14 +1409,14 @@ void TwoStates_DrawOverlay()
         ImDrawList* bg = ImGui::GetBackgroundDrawList();
 
         // Draw 3D border lines whenever world is loaded & Two States mode is active & g_show3DBorder is true
-        if (worldLoaded && g_show3DBorder && TwoStates_IsActive()) {
+        if (worldLoaded && !inOrbitView && g_show3DBorder && TwoStates_IsActive()) {
             Draw3DBorderLines(bg, displaySize);
         }
 
         // Draw 3D partner cursor and map ping beacon (local + partner, 20s lifetime).
         // Minimap territory/border/ping overlay is rendered natively inside H_MinimapDrawContent (0x4BDE80)
         // and its toggle button inside H_MinimapDrawButtons (0x4BFF40), respecting HUD hide (G) and window Z-order.
-        if (worldLoaded) {
+        if (worldLoaded && !inOrbitView) {
             DrawPartnerCursorAndPing(bg, displaySize);
         }
     }

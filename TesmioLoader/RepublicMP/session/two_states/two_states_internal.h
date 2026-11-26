@@ -54,18 +54,35 @@
 // ---------------------------------------------------------------------------
 
 struct EngineResearchItemSlice {
-    uint8_t available = 0;            // +0xCC
-    float   progress = 0.0f;          // +0xD0
-    BYTE*   researchingBld = nullptr; // +0xD8
+    uint8_t available = 0;            // +0x11C
+    float   progress = 0.0f;          // +0x120
+    BYTE*   researchingBld = nullptr; // +0x128
     int32_t bldPosKey = 0;            // deterministic TwoStates_BuildingPosKey(x, z) of researchingBld
-    int32_t timerE0 = 0;              // +0xE0
+    int32_t timerE0 = 0;              // +0x130
 };
 
 struct StateEngineResearch {
     uint8_t unlocks[WORLD_RESEARCH_UNLOCKS_BYTES] = {};
+    uint8_t spaceCargoUnlocks[2] = {}; // WORLD+0x11BA8 (west), WORLD+0x11BA9 (east)
     std::vector<EngineResearchItemSlice> items;
     uint64_t gen = 1;
     bool hasUnresolvedBldPtr = false;
+    bool initialized = false;
+    bool loadedFromMeta = false;
+};
+
+struct SpaceMilestoneTriple {
+    int32_t built = 0;   // +0x9CE4 ($VEHICLE_BUILT_IN_PRODUCTION_LINE)
+    int32_t orbit = 0;   // +0x9CE8 ($VEHICLE_SPACE_REACHED_ORBIT)
+    int32_t reentry = 0; // +0x9CEC ($VEHICLE_SPACE_REENTRY_LANDED)
+};
+
+struct StateSpaceMilestones {
+    std::unordered_map<std::string, SpaceMilestoneTriple> byKey;
+    mutable std::vector<SpaceMilestoneTriple> cachedTriples;
+    mutable uint64_t cachedGen = 0;
+    mutable uint64_t cachedWorldGen = 0;
+    uint64_t gen = 1;
     bool initialized = false;
     bool loadedFromMeta = false;
 };
@@ -212,6 +229,10 @@ extern StateResearchTree g_stateResearch[2];
 extern StateEngineResearch g_engineResearch[2];
 extern StateEngineVehLicenses g_engineVehLicenses[2];
 
+// Owned by two_states_space.cpp
+extern StateSpaceMilestones g_spaceMilestones[2];
+extern std::vector<uint8_t> g_orbitOwners;
+
 // Owned by two_states_overlay.cpp
 extern bool g_show3DBorder;
 extern bool g_showMinimapBorders;
@@ -237,6 +258,7 @@ void TwoStates_BindSimHooks(const TsmHost* host);    // two_states_sim_hooks.cpp
 void TwoStates_BindResearch(const TsmHost* host);    // two_states_research.cpp
 void TwoStates_BindOverlay(const TsmHost* host);     // two_states_overlay.cpp
 void TwoStates_BindPersistence(const TsmHost* host); // two_states_persistence.cpp
+void TwoStates_BindSpace(const TsmHost* host);       // two_states_space.cpp
 
 int TwoStates_InstallTerrainIatHooks();  // two_states_sim_hooks.cpp (returns 0..4)
 int TwoStates_InstallEconHooks();        // two_states_econ.cpp
@@ -244,6 +266,7 @@ int TwoStates_InstallSimHooks();         // two_states_sim_hooks.cpp
 int TwoStates_InstallResearchHooks();    // two_states_research.cpp
 int TwoStates_InstallOverlayHooks();     // two_states_overlay.cpp
 int TwoStates_InstallPersistenceHooks(); // two_states_persistence.cpp
+int TwoStates_InstallSpaceHooks();       // two_states_space.cpp
 bool TwoStates_AreEconHooksInstalled();  // two_states_econ.cpp
 
 // ---------------------------------------------------------------------------
@@ -365,9 +388,12 @@ int ResolveCustomsTourismOwner(const BYTE* customsBld);
 int ResolveCustomsTourismOwnerRawUnsafe(const BYTE* customsBld, const BldPtrOwnerSlot* slots, size_t mask);
 
 // Owned by two_states_research.cpp
+bool SafeReadStridedWorldVecHeader(const BYTE* world, size_t vecOffset, size_t elemStride, int maxCount,
+                                   BYTE** outBegin, int* outCount);
 bool IsTwoStatesResearchOrLicenseActive();
 int ResolveActiveResearchWorldState();
 int ComputeBuildingPosKeySafe(const BYTE* bld);
+void TwoStates_RecomputeAndCaptureResearchForState(BYTE* world, int stateOwner);
 void EnsureEngineResearchInitialized(BYTE* world);
 void EnsureEngineVehLicensesInitialized(BYTE* world);
 void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* dst, int filterOwnerState);
@@ -380,6 +406,20 @@ void ResetEngineVehLicenseSlices();
 void AddLicenseKeyToSlice(StateEngineVehLicenses* slice, const std::string& key);
 void TwoStates_InvalidateResearchMountCache();
 void TwoStates_InvalidateMountCaches();
+
+// Owned by two_states_space.cpp
+void TwoStates_InvalidateSpaceMountCache();
+void EnsureSpaceMilestonesInitialized(BYTE* world);
+void CaptureWorldSpaceMilestonesToSlice(const BYTE* world, StateSpaceMilestones* dst);
+void WriteSliceToWorldSpaceMilestones(BYTE* world, const StateSpaceMilestones* src, int stateOwner);
+void TwoStates_MountSpaceMilestonesForState(BYTE* world, int stateOwner);
+void ResetSpaceStateSlices();
+void TwoStates_ReconcileOrbitOwnersFromWorld(const BYTE* world);
+bool TwoStates_TryGetOrbitOwner(int orbitIdx, int* outOwner);
+std::string SerializeSpaceMilestones(const StateSpaceMilestones& slice);
+void ParseSpaceMilestones(const std::string& val, StateSpaceMilestones* dst);
+std::string SerializeOrbitOwners();
+void ParseOrbitOwners(const std::string& val);
 
 // Owned by two_states_overlay.cpp
 void ResetSavedCameraState();

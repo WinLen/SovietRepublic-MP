@@ -61,8 +61,9 @@ struct StateSummary {
     unsigned long long hashLines;       // 8 bytes (offset 176)
     unsigned long long hashLoans;       // 8 bytes (offset 184)
     unsigned long long hashResearch;    // 8 bytes (offset 192)
+    unsigned long long hashSpace;       // 8 bytes (offset 200)
 };
-static_assert(sizeof(StateSummary) == 200, "StateSummary must be exactly 200 bytes with clean alignment");
+static_assert(sizeof(StateSummary) == 208, "StateSummary must be exactly 208 bytes with clean alignment");
 
 void StateHash_Bind(const TsmHost* host);
 

@@ -91,6 +91,9 @@ enum {
     CALL_CANCEL_CRIME_ASSIGN,
     CALL_DO_FIND_CONNECTIONS,
     CALL_GAME_RULES_REBUILD_STORAGES,
+    CALL_SPACE_LAUNCH,
+    CALL_SPACE_ORBIT_ATTACH,
+    CALL_SPACE_ORBIT_DETACH,
 };
 
 // Appended only: a command names its site by index.
@@ -245,6 +248,10 @@ static const GameCallSite kSites[] = {
     { SITE_GAME_RULES_REBUILD_1_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings page: rebuild storages before close", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
     { SITE_GAME_RULES_REBUILD_2_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings page: rebuild storages before save", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
     { SITE_GAME_RULES_REBUILD_3_RVA, FN_REBUILD_BLD_STORAGES_RVA, "settings popup: rebuild storages before apply", "WB", 0, 0, false, CALL_GAME_RULES_REBUILD_STORAGES },
+    { SITE_SPACE_LAUNCH_NEW_ORBIT_RVA, FN_SPACE_LAUNCH_ROCKET_RVA, "launch pad: launch rocket into new orbit", "VI", 0, 0, false, CALL_SPACE_LAUNCH },
+    { SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA, FN_SPACE_LAUNCH_ROCKET_RVA, "launch pad: launch rocket into existing orbit", "VI", 0, 0, false, CALL_SPACE_LAUNCH },
+    { SITE_SPACE_ORBIT_ATTACH_RVA, FN_SPACE_ORBIT_ATTACH_RVA, "orbital attach tool: dock spacecraft to station", "VVI", 0, 0, false, CALL_SPACE_ORBIT_ATTACH },
+    { SITE_SPACE_ORBIT_DETACH_RVA, FN_SPACE_ORBIT_DETACH_RVA, "vehicle window: undock spacecraft", "V", 0, 0, false, CALL_SPACE_ORBIT_DETACH },
 };
 #define SITE_COUNT (sizeof(kSites) / sizeof(kSites[0]))
 
@@ -591,6 +598,23 @@ static const char* Capture(unsigned index, const U64* a, GameCallMsg& m)
         default: return "unknown argument kind";
         }
     }
+    if (s.special == CALL_SPACE_LAUNCH && IsPointerLikeX64(a[0])) {
+        U64 curBld = 0;
+        if (SafeReadPod((const U64*)(a[0] + VEH_CUR_BLD_OFFSET), &curBld) && IsPointerLikeX64(curBld)) {
+            uint32_t padOrbitType = 0;
+            uint32_t padOrbitParams[4] = {};
+            if (SafeReadPod((const uint32_t*)(curBld + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF), &padOrbitType) &&
+                SafeMemcpyPod(padOrbitParams, (const void*)(curBld + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF),
+                              sizeof(padOrbitParams))) {
+                m.values[0] = 1u;
+                m.values[2] = padOrbitType;
+                m.values[3] = padOrbitParams[0];
+                m.values[4] = padOrbitParams[1];
+                m.values[5] = padOrbitParams[2];
+                m.values[6] = padOrbitParams[3];
+            }
+        }
+    }
     return nullptr;
 }
 
@@ -613,6 +637,13 @@ static const char* Rebuild(const GameCallMsg& m, U64* a)
         case 'b': a[j] = m.values[j] & 0xff; break;
         case 'I': case 'F': a[j] = m.values[j]; break;
         }
+    }
+    if (s.special == CALL_SPACE_LAUNCH && m.values[0] == 1u) {
+        a[2] = (1ull << 32) | (U64)m.values[2];
+        a[3] = (U64)m.values[3];
+        a[4] = (U64)m.values[4];
+        a[5] = (U64)m.values[5];
+        a[6] = (U64)m.values[6];
     }
     return nullptr;
 }
@@ -647,7 +678,8 @@ static bool IsCommandSpecialSite(int special)
            special == CALL_WASTE_CONTAINER || special == CALL_SET_FOR_BIO ||
            special == CALL_FIRE_DISPATCH || special == CALL_DISCARD_VEH_CARGO ||
            special == CALL_EMPTY_STORAGE || special == CALL_CANCEL_CRIME_ASSIGN ||
-           special == CALL_DO_FIND_CONNECTIONS;
+           special == CALL_DO_FIND_CONNECTIONS || special == CALL_SPACE_LAUNCH ||
+           special == CALL_SPACE_ORBIT_ATTACH || special == CALL_SPACE_ORBIT_DETACH;
 }
 
 static void RestoreMechToBuildingInventory(U64 mech, U64 carrier)
@@ -774,11 +806,20 @@ static const unsigned long long kDenominationCooldownTicks = 150ULL;
 static bool g_hasDenominationStep = false;
 static unsigned long long g_lastDenominationStep = 0;
 
+typedef unsigned char (__fastcall* SpaceHasReentryFn)(U64 veh);
+typedef void (__fastcall* SpaceVehMutatorFn)(U64 veh);
+static SpaceHasReentryFn g_testSpaceHasReentryFn = nullptr;
+static SpaceVehMutatorFn g_testSpaceSetupReentryFn = nullptr;
+static SpaceVehMutatorFn g_testSpaceSetupDeorbitFn = nullptr;
+
 void GameCalls_ResetSessionState()
 {
     g_hasDenominationStep = false;
     g_lastDenominationStep = 0;
     g_skipDepotRowCouple = false;
+    g_testSpaceHasReentryFn = nullptr;
+    g_testSpaceSetupReentryFn = nullptr;
+    g_testSpaceSetupDeorbitFn = nullptr;
 }
 
 bool GameCalls_IsDenominationCommand(const void* data, size_t size)
@@ -1327,6 +1368,206 @@ static void ExecuteDoFindConnectionsNow(const U64* a)
     }
 }
 
+static bool ReadWorldOrbitCount(size_t& outCount)
+{
+    outCount = 0;
+    if (!g_exeBase) return false;
+    U64 vec[2] = {};
+    if (!SafeMemcpyPod(vec, World() + WORLD_ORBITS_VEC_OFFSET, sizeof(vec))) return false;
+    if (!vec[0] || !vec[1]) return vec[0] == vec[1];
+    if (!IsPointerLikeX64(vec[0]) || vec[1] < vec[0] || ((vec[1] - vec[0]) % ORBIT_SLOT_STRIDE) != 0) return false;
+    outCount = (size_t)((vec[1] - vec[0]) / ORBIT_SLOT_STRIDE);
+    return true;
+}
+
+static bool CheckReplaySpaceVehicleOwner(U64 veh)
+{
+    if (!TwoStates_IsActive()) return true;
+    const int cmdOwner = TwoStates_GetCommandOwner();
+    if (cmdOwner != 1 && cmdOwner != 2) return true;
+    int vehId = 0;
+    if (!IsPointerLikeX64(veh) || !SafeReadPod((const int*)(veh + VEH_ID_OFFSET), &vehId)) return false;
+    return TwoStates_GetVehicleOwner(vehId, (const BYTE*)veh) == cmdOwner;
+}
+
+struct SpaceLaunchCameraSnap {
+    bool  hasCam;
+    BYTE  savedCam[0xBC];
+    BYTE* camMgr;
+    BYTE  savedCamMgr[CAM_MGR_STRUCT_BYTES];
+    BYTE* pidPtrs[CAM_MGR_PID_COUNT];
+    BYTE  savedPids[CAM_MGR_PID_COUNT][CAM_MGR_PID_STRUCT_BYTES];
+};
+
+static void CaptureLaunchCameraState(SpaceLaunchCameraSnap& snap)
+{
+    memset(&snap, 0, sizeof(snap));
+    if (!g_exeBase) return;
+    snap.hasCam = SafeMemcpyPod(snap.savedCam, g_exeBase + CAMERA_RVA, sizeof(snap.savedCam));
+    BYTE* camMgr = nullptr;
+    if (!SafeReadPod((const BYTE* const*)(World() + WORLD_CAMERA_MGR_PTR_OFF), &camMgr) ||
+        !IsPointerLikeX64((U64)(uintptr_t)camMgr)) {
+        return;
+    }
+    if (!SafeMemcpyPod(snap.savedCamMgr, camMgr, CAM_MGR_STRUCT_BYTES)) return;
+    snap.camMgr = camMgr;
+    for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+        BYTE* pid = nullptr;
+        memcpy(&pid, snap.savedCamMgr + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*), sizeof(pid));
+        if (IsPointerLikeX64((U64)(uintptr_t)pid) &&
+            SafeMemcpyPod(snap.savedPids[i], pid, CAM_MGR_PID_STRUCT_BYTES)) {
+            snap.pidPtrs[i] = pid;
+        }
+    }
+}
+
+static void RestoreLaunchCameraState(const SpaceLaunchCameraSnap& snap)
+{
+    if (!g_exeBase) return;
+    if (snap.hasCam) {
+        SafeMemcpyPod(g_exeBase + CAMERA_RVA, snap.savedCam, sizeof(snap.savedCam));
+    }
+    if (!snap.camMgr) return;
+    SafeMemcpyPod(snap.camMgr, snap.savedCamMgr, CAM_MGR_STRUCT_BYTES);
+    for (int i = 0; i < CAM_MGR_PID_COUNT; ++i) {
+        if (!snap.pidPtrs[i]) continue;
+        BYTE* livePid = nullptr;
+        if (SafeReadPod((const BYTE* const*)(snap.camMgr + CAM_MGR_PID_PTRS_OFFSET + (size_t)i * sizeof(BYTE*)), &livePid) &&
+            livePid == snap.pidPtrs[i]) {
+            SafeMemcpyPod(livePid, snap.savedPids[i], CAM_MGR_PID_STRUCT_BYTES);
+        }
+    }
+}
+
+static void CallSpaceLaunchWithOptionalCamRestore(const GameCallSite& s, const U64* callArgs, bool preserveCamera)
+{
+    SpaceLaunchCameraSnap camSnap = {};
+    if (preserveCamera) CaptureLaunchCameraState(camSnap);
+    __try {
+        CallSite(s, callArgs);
+    } __finally {
+        if (preserveCamera) RestoreLaunchCameraState(camSnap);
+    }
+}
+
+static void ExecuteSpaceLaunchNow(const GameCallSite& s, const U64* a)
+{
+    const U64 veh = a[0];
+    const int targetOrbitIdx = (int)(unsigned)a[1];
+    if (!IsPointerLikeX64(veh)) return;
+    if (!CheckReplaySpaceVehicleOwner(veh)) {
+        Logf("republicmp  GAME CALL: %s skipped (foreign rocket owner)", s.name);
+        return;
+    }
+    U64 curBld = 0;
+    int32_t flightState = 0;
+    int32_t orbitIdx = -1;
+    if (!SafeReadPod((const U64*)(veh + VEH_CUR_BLD_OFFSET), &curBld) || !IsPointerLikeX64(curBld) ||
+        !SafeReadPod((const int32_t*)(veh + VEH_ROCKET_FLIGHT_STATE_OFFSET), &flightState) ||
+        !SafeReadPod((const int32_t*)(veh + VEH_ORBIT_INDEX_OFFSET), &orbitIdx)) {
+        Logf("republicmp  GAME CALL: %s skipped (rocket no longer on launch pad)", s.name);
+        return;
+    }
+    if (!Ref_IsSpaceLaunchPadBuilding(curBld)) {
+        Logf("republicmp  GAME CALL: %s skipped (curBld is not a space launch pad)", s.name);
+        return;
+    }
+    const int cmdOwner = TwoStates_GetCommandOwner();
+    const bool checkStateOwner = TwoStates_IsActive() && (cmdOwner == 1 || cmdOwner == 2);
+    if (checkStateOwner && TwoStates_GetBuildingOwnerSlot((const BYTE*)curBld) != cmdOwner) {
+        Logf("republicmp  GAME CALL: %s skipped (foreign launch pad owner)", s.name);
+        return;
+    }
+    if (flightState != 0 || orbitIdx != -1) {
+        Logf("republicmp  GAME CALL: %s skipped (rocket already launching/in orbit: state=%d, orbit=%d)",
+             s.name, flightState, orbitIdx);
+        return;
+    }
+    if (targetOrbitIdx != -1) {
+        size_t orbitCount = 0;
+        if (targetOrbitIdx < 0 || !ReadWorldOrbitCount(orbitCount) || (size_t)targetOrbitIdx >= orbitCount) {
+            Logf("republicmp  GAME CALL: %s skipped (invalid orbit index %d)", s.name, targetOrbitIdx);
+            return;
+        }
+        if (checkStateOwner && TwoStates_GetOrbitOwner(targetOrbitIdx) != cmdOwner) {
+            Logf("republicmp  GAME CALL: %s skipped (foreign target orbit %d)", s.name, targetOrbitIdx);
+            return;
+        }
+    }
+    if ((a[2] >> 32) == 1u) {
+        const uint32_t orbitType = (uint32_t)a[2];
+        const uint32_t orbitParams[4] = { (uint32_t)a[3], (uint32_t)a[4], (uint32_t)a[5], (uint32_t)a[6] };
+        SafeWritePod((uint32_t*)(curBld + BLD_LAUNCH_PAD_ORBIT_TYPE_OFF), orbitType);
+        SafeMemcpyPod((void*)(curBld + BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF), orbitParams, sizeof(orbitParams));
+    }
+    if (!g_exeBase || g_exeBase[s.target] == 0) return;
+
+    const int pinOwner = checkStateOwner
+        ? cmdOwner
+        : (TwoStates_IsActive() ? TwoStates_GetBuildingOwnerSlot((const BYTE*)curBld) : TwoStates_LocalState());
+    int32_t vehId = 0;
+    if (TwoStates_IsActive() && SafeReadPod((const int32_t*)(veh + VEH_ID_OFFSET), &vehId) && vehId >= 0) {
+        TwoStates_RegisterVehicleOwner(vehId, pinOwner);
+    }
+    size_t orbitCountBefore = 0;
+    ReadWorldOrbitCount(orbitCountBefore);
+
+    const bool preserveCamera = Commands_IsApplyingRemote();
+    U64 callArgs[MAX_ARGS] = { veh, (U64)(unsigned)targetOrbitIdx, 0, 0, 0, 0, 0 };
+    CallSpaceLaunchWithOptionalCamRestore(s, callArgs, preserveCamera);
+
+    size_t orbitCountAfter = 0;
+    if (TwoStates_IsActive() && ReadWorldOrbitCount(orbitCountAfter) && orbitCountAfter > orbitCountBefore) {
+        TwoStates_OnOrbitsCreated(orbitCountBefore, orbitCountAfter, pinOwner);
+    }
+}
+
+static void ExecuteSpaceOrbitAttachNow(const GameCallSite& s, const U64* a)
+{
+    const U64 craft = a[0];
+    const U64 station = a[1];
+    const int dockSlot = (int)(unsigned)a[2];
+    if (!IsPointerLikeX64(craft) || !IsPointerLikeX64(station) || craft == station || dockSlot < 0) return;
+    if (!CheckReplaySpaceVehicleOwner(craft) || !CheckReplaySpaceVehicleOwner(station)) {
+        Logf("republicmp  GAME CALL: %s skipped (foreign spacecraft or station owner)", s.name);
+        return;
+    }
+    int32_t craftOrbit = -1, stationOrbit = -2, flightState = 0;
+    U64 craftLink = 0, dockPartner = 0;
+    if (!SafeReadPod((const int32_t*)(craft + VEH_ORBIT_INDEX_OFFSET), &craftOrbit) ||
+        !SafeReadPod((const int32_t*)(station + VEH_ORBIT_INDEX_OFFSET), &stationOrbit) ||
+        !SafeReadPod((const int32_t*)(craft + VEH_ROCKET_FLIGHT_STATE_OFFSET), &flightState) ||
+        !SafeReadPod((const U64*)(craft + VEH_LINK_PTR_OFFSET), &craftLink) ||
+        !SafeReadPod((const U64*)(craft + VEH_SPACE_DOCK_PARTNER_OFFSET), &dockPartner)) {
+        return;
+    }
+    if (craftOrbit < 0 || craftOrbit != stationOrbit || craftLink != 0 || dockPartner != 0 || flightState != 1) {
+        Logf("republicmp  GAME CALL: %s skipped (orbit/flight mismatch or already docking/docked)", s.name);
+        return;
+    }
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        CallSite(s, a);
+    }
+}
+
+static void ExecuteSpaceOrbitDetachNow(const GameCallSite& s, const U64* a)
+{
+    const U64 craft = a[0];
+    if (!IsPointerLikeX64(craft)) return;
+    if (!CheckReplaySpaceVehicleOwner(craft)) {
+        Logf("republicmp  GAME CALL: %s skipped (foreign spacecraft owner)", s.name);
+        return;
+    }
+    U64 linkPtr = 0;
+    if (!SafeReadPod((const U64*)(craft + VEH_LINK_PTR_OFFSET), &linkPtr) || linkPtr == 0) {
+        Logf("republicmp  GAME CALL: %s skipped (spacecraft not linked/docked)", s.name);
+        return;
+    }
+    if (g_exeBase && g_exeBase[s.target] != 0) {
+        CallSite(s, a);
+    }
+}
+
 static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U64*& drag, U64& dragged)
 {
     U64 recoveryVeh = ExtractCarrierRecoveryVehicle(s, a);
@@ -1373,6 +1614,15 @@ static void ExecuteSpecialSiteNow(const GameCallSite& s, const U64* a, U64& r, U
         return;
     case CALL_DO_FIND_CONNECTIONS:
         ExecuteDoFindConnectionsNow(a);
+        return;
+    case CALL_SPACE_LAUNCH:
+        ExecuteSpaceLaunchNow(s, a);
+        return;
+    case CALL_SPACE_ORBIT_ATTACH:
+        ExecuteSpaceOrbitAttachNow(s, a);
+        return;
+    case CALL_SPACE_ORBIT_DETACH:
+        ExecuteSpaceOrbitDetachNow(s, a);
         return;
     default:
         break;
@@ -1486,6 +1736,21 @@ static bool CheckTwoStatesArgsAllowed(const GameCallMsg& m, const U64* args)
         if (IsAssignCoStartPlanSite(siteRva)) {
             const BYTE* office = ResolveAssignCoStartOffice();
             return CheckTwoStatesOfficeCallAllowed(m.target, office, (const BYTE*)args[1], 0);
+        }
+        if (kSites[m.index].special == CALL_SPACE_LAUNCH && args[0]) {
+            U64 curBld = 0;
+            if (SafeReadPod((const U64*)(args[0] + VEH_CUR_BLD_OFFSET), &curBld) && IsPointerLikeX64(curBld)) {
+                if (!TwoStates_CheckBuildingControlAllowed((const BYTE*)curBld,
+                        Tr("запуск ракеты с чужой стартовой площадки", "launching a rocket from a foreign launch pad"))) {
+                    return false;
+                }
+            }
+            const int targetOrbitIdx = (int)(unsigned)args[1];
+            if (targetOrbitIdx >= 0 && TwoStates_GetOrbitOwner(targetOrbitIdx) != TwoStates_LocalState()) {
+                TwoStates_AddToast(Tr("⛔ Нельзя запускать ракету на чужую орбиту!",
+                                      "⛔ Cannot launch a rocket into a foreign orbit!"), 3);
+                return false;
+            }
         }
     }
     for (int j = 0; j < MAX_ARGS; j++) {
@@ -2163,6 +2428,312 @@ static void EmitRelay20(BYTE* r, const BYTE prefix[6], void* to)
     memcpy(r + 12, &to, 8);
 }
 
+static void EmitAbsJump14(BYTE* r, void* to)
+{
+    r[0] = 0xFF;
+    r[1] = 0x25;
+    memset(r + 2, 0, 4);
+    memcpy(r + 6, &to, 8);
+}
+
+#pragma pack(push, 1)
+struct LsSpaceActionCmd {
+    RouteRef vehicle;
+    uint8_t  actionKind;
+    uint8_t  variant;
+    uint16_t reserved;
+};
+#pragma pack(pop)
+static_assert(sizeof(LsSpaceActionCmd) == sizeof(RouteRef) + 4u, "LsSpaceActionCmd size mismatch");
+
+static const BYTE kSpaceReentryExpect[22] = {
+    0x41, 0xC7, 0x87, 0x68, 0x1A, 0x00, 0x00, 0x77, 0xBE, 0x7F, 0x3F,
+    0x41, 0xC7, 0x87, 0x60, 0x17, 0x00, 0x00, 0xFE, 0xFF, 0xFF, 0xFF
+};
+
+static const BYTE kSpaceDeorbitAbortExpect[22] = {
+    0x41, 0x83, 0xBF, 0x6C, 0x1A, 0x00, 0x00, 0x01, 0x75, 0x1B,
+    0x41, 0xC7, 0x87, 0x68, 0x1A, 0x00, 0x00, 0x77, 0xBE, 0x7F, 0x3F, 0x41
+};
+
+static bool IsVehicleTrajectoryEmpty(U64 veh)
+{
+    U64 v[2] = {};
+    if (!SafeMemcpyPod(v, (const void*)(veh + VEH_WAYPOINTS_BEGIN_OFFSET), sizeof(v))) return false;
+    return v[0] == v[1];
+}
+
+static bool HasDockedChildren(U64 veh)
+{
+    U64 carried[2] = {};
+    if (!SafeMemcpyPod(carried, (const void*)(veh + VEH_CARRIED_BEGIN_OFFSET), sizeof(carried))) return true;
+    return carried[1] >= carried[0] && (carried[1] - carried[0]) >= 8u;
+}
+
+static bool HasSpaceReentryCapability(U64 veh)
+{
+    U64 vt = 0;
+    if (!SafeReadPod((const U64*)(veh + VEH_TYPE_PTR_OFFSET), &vt) || !IsPointerLikeX64(vt)) return false;
+    uint8_t reentryFlag = 0;
+    if (SafeReadPod((const uint8_t*)(vt + VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET), &reentryFlag) && reentryFlag != 0) {
+        return true;
+    }
+    // Multi-stage rockets store orbital spacecraft stages in [vt+0x9F60..0x9F68] (stride 0x2A8, stage vt at +0x100; 0x692C10).
+    U64 stages[2] = {};
+    if (!SafeMemcpyPod(stages, (const void*)(vt + VEH_TYPE_SPACE_STAGES_BEGIN_OFFSET), sizeof(stages)) ||
+        !IsPointerLikeX64(stages[0]) || stages[1] <= stages[0] ||
+        ((stages[1] - stages[0]) % VEH_TYPE_SPACE_STAGE_STRIDE) != 0) {
+        return false;
+    }
+    U64 count = (stages[1] - stages[0]) / VEH_TYPE_SPACE_STAGE_STRIDE;
+    if (count > 32u) count = 32u;
+    for (U64 i = 0; i < count; ++i) {
+        U64 stageVt = 0;
+        if (!SafeReadPod((const U64*)(stages[0] + i * VEH_TYPE_SPACE_STAGE_STRIDE + VEH_TYPE_SPACE_STAGE_VT_OFF), &stageVt) ||
+            !IsPointerLikeX64(stageVt)) {
+            continue;
+        }
+        uint8_t isShip = 0, isBigShip = 0, isStageReentry = 0;
+        SafeReadPod((const uint8_t*)(stageVt + VEH_TYPE_SPACECRAFT_FLAG_OFFSET), &isShip);
+        SafeReadPod((const uint8_t*)(stageVt + VEH_TYPE_SPACECRAFT_FLAG_OFFSET + 1u), &isBigShip);
+        if ((isShip || isBigShip) &&
+            SafeReadPod((const uint8_t*)(stageVt + VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET), &isStageReentry) &&
+            isStageReentry != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ExecuteSpaceDeorbitNow(U64 veh, uint8_t actionKind, int32_t flightState)
+{
+    if (flightState != 1) return false;
+    const uint32_t kDeorbitProgressBits = 0x3F7FBE77u; // 0.999f bit-exact
+    const int32_t targetOrbit = (actionKind == SPACE_ACT_REENTRY_TARGETED) ? -2 : -1;
+    if (!SafeWritePod((uint32_t*)(veh + VEH_ROCKET_PROGRESS_OFFSET), kDeorbitProgressBits) ||
+        !SafeWritePod((int32_t*)(veh + VEH_TARGET_ORBIT_INDEX_OFFSET), targetOrbit)) {
+        return false;
+    }
+    const SpaceHasReentryFn hasReentry = g_testSpaceHasReentryFn
+        ? g_testSpaceHasReentryFn
+        : ((g_exeBase && g_exeBase[FN_SPACE_HAS_REENTRY_RVA] != 0)
+               ? (SpaceHasReentryFn)(g_exeBase + FN_SPACE_HAS_REENTRY_RVA)
+               : nullptr);
+    const SpaceVehMutatorFn setupReentry = g_testSpaceSetupReentryFn
+        ? g_testSpaceSetupReentryFn
+        : ((g_exeBase && g_exeBase[FN_SPACE_SETUP_REENTRY_RVA] != 0)
+               ? (SpaceVehMutatorFn)(g_exeBase + FN_SPACE_SETUP_REENTRY_RVA)
+               : nullptr);
+    const SpaceVehMutatorFn setupDeorbit = g_testSpaceSetupDeorbitFn
+        ? g_testSpaceSetupDeorbitFn
+        : ((g_exeBase && g_exeBase[FN_SPACE_SETUP_DEORBIT_RVA] != 0)
+               ? (SpaceVehMutatorFn)(g_exeBase + FN_SPACE_SETUP_DEORBIT_RVA)
+               : nullptr);
+    if (hasReentry && hasReentry(veh) != 0 && setupReentry) setupReentry(veh);
+    if (setupDeorbit) setupDeorbit(veh);
+    return true;
+}
+
+static bool ExecuteSpaceActionNow(U64 veh, uint8_t actionKind, uint8_t variant)
+{
+    if (!IsPointerLikeX64(veh)) return false;
+    U64 vt = 0;
+    if (!SafeReadPod((const U64*)(veh + VEH_TYPE_PTR_OFFSET), &vt) || !Ref_IsSpaceVehicleType(vt)) return false;
+    U64 curBld = 0;
+    U64 parentPtr = 0;
+    U64 linkPtr = 0;
+    int32_t flightState = 0;
+    int32_t targetOrbitIdx = 0;
+    float progress = 0.0f;
+    // Match 0x813BB6..0x813BE0 + 0x81924F/0x819500: must be airborne/in-orbit (not on pad or carried),
+    // with no docked children (+0x488..+0x490), not docked (+0x4A0), and empty trajectory (+0x738).
+    if (!SafeReadPod((const U64*)(veh + VEH_CUR_BLD_OFFSET), &curBld) || curBld != 0) return false;
+    if (!SafeReadPod((const U64*)(veh + VEH_PARENT_PTR_OFFSET), &parentPtr) || parentPtr != 0) return false;
+    if (HasDockedChildren(veh)) return false;
+    if (!SafeReadPod((const U64*)(veh + VEH_LINK_PTR_OFFSET), &linkPtr) || linkPtr != 0) return false;
+    if (!IsVehicleTrajectoryEmpty(veh)) return false;
+    if (!SafeReadPod((const int32_t*)(veh + VEH_ROCKET_FLIGHT_STATE_OFFSET), &flightState) ||
+        !SafeReadPod((const int32_t*)(veh + VEH_TARGET_ORBIT_INDEX_OFFSET), &targetOrbitIdx) ||
+        !SafeReadPod((const float*)(veh + VEH_ROCKET_PROGRESS_OFFSET), &progress)) {
+        return false;
+    }
+    const bool activeTransferOrReentry = (!isfinite(progress) || progress < 1.0f || flightState == 2);
+    if (actionKind == SPACE_ACT_REENTRY_TARGETED) {
+        if (flightState != 1) return false;
+        // Match 0x816C40 & 0x819289: reject when already reentering (-2) OR already deorbiting (-1).
+        if (activeTransferOrReentry && (targetOrbitIdx == -2 || targetOrbitIdx == -1)) return false;
+        if (!HasSpaceReentryCapability(veh)) return false;
+        return ExecuteSpaceDeorbitNow(veh, actionKind, flightState);
+    }
+    if (actionKind == SPACE_ACT_DEORBIT) {
+        if (flightState != 1) return false;
+        if (activeTransferOrReentry && targetOrbitIdx == -1) return false;
+        return ExecuteSpaceDeorbitNow(veh, actionKind, flightState);
+    }
+    if (actionKind == SPACE_ACT_ABORT) {
+        if (flightState == 1 || flightState == 10 || flightState == 11) return false;
+        if (activeTransferOrReentry && targetOrbitIdx == -1) return false;
+        const int32_t abortState = 10 + (int32_t)(variant & 1u);
+        return SafeWritePod((int32_t*)(veh + VEH_ROCKET_FLIGHT_STATE_OFFSET), abortState);
+    }
+    return false;
+}
+
+static bool SafeExecuteSpaceActionNow(U64 veh, uint8_t actionKind, uint8_t variant)
+{
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        ok = ExecuteSpaceActionNow(veh, actionKind, variant);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static bool HandleSpaceAction(U64 veh, int siteKind, bool hasExplicitVariant, uint8_t explicitVariant)
+{
+    const bool lobbyActive = SaveSync_IsWaitingLobbyActive() ||
+                             (NativeMenu_IsHostOnNextLoad() && SaveSync_GetState() != SESSION_IDLE && SaveSync_IsWorldLoaded());
+    if (lobbyActive) {
+        SaveSync_NotifyWaitingLobbyActionBlocked();
+        return false;
+    }
+    if (!IsPointerLikeX64(veh)) return false;
+    int32_t flightState = 0;
+    if (!SafeReadPod((const int32_t*)(veh + VEH_ROCKET_FLIGHT_STATE_OFFSET), &flightState)) return false;
+    uint8_t actionKind = 0;
+    if (siteKind == SPACE_SITE_REENTRY_TARGETED) {
+        actionKind = SPACE_ACT_REENTRY_TARGETED;
+    } else if (siteKind == SPACE_SITE_DEORBIT_OR_ABORT) {
+        actionKind = (flightState == 1) ? (uint8_t)SPACE_ACT_DEORBIT : (uint8_t)SPACE_ACT_ABORT;
+    } else {
+        return false;
+    }
+    uint8_t variant = 0;
+    if (actionKind == SPACE_ACT_ABORT) {
+        uint32_t vehId = 0;
+        SafeReadPod((const uint32_t*)(veh + VEH_ID_OFFSET), &vehId);
+        variant = hasExplicitVariant ? (uint8_t)(explicitVariant & 1u)
+                                     : (uint8_t)(((unsigned)GetTickCount() ^ vehId) & 1u);
+    }
+    if (!Commands_TakeUi()) {
+        return SafeExecuteSpaceActionNow(veh, actionKind, variant);
+    }
+    if (TwoStates_IsActive() &&
+        !TwoStates_CheckVehicleControlAllowed(
+            (const BYTE*)veh,
+            Tr("управление чужой ракетой / космическим аппаратом", "controlling a foreign rocket / spacecraft"))) {
+        return false;
+    }
+    LsSpaceActionCmd cmd = {};
+    if (!Ref_Vehicle(veh, cmd.vehicle)) return false;
+    cmd.actionKind = actionKind;
+    cmd.variant = variant;
+    Commands_Submit(LS_CMD_SPACE_ACTION, &cmd, sizeof(cmd));
+    return true;
+}
+
+static void __fastcall H_SpaceAction(U64 veh, int siteKind)
+{
+    HandleSpaceAction(veh, siteKind, false, 0);
+}
+
+bool GameCalls_ApplySpaceActionCommand(const void* data, size_t size)
+{
+    if (!data || size != sizeof(LsSpaceActionCmd)) return false;
+    LsSpaceActionCmd cmd = {};
+    memcpy(&cmd, data, sizeof(cmd));
+    if (cmd.actionKind < SPACE_ACT_REENTRY_TARGETED || cmd.actionKind > SPACE_ACT_ABORT) return false;
+    const U64 veh = Ref_VehicleAt(cmd.vehicle);
+    if (!veh) {
+        Logf("republicmp  GAME CALL: space action (%u) - vehicle is gone", (unsigned)cmd.actionKind);
+        return true;
+    }
+    if (!CheckReplaySpaceVehicleOwner(veh)) {
+        Logf("republicmp  GAME CALL: space action (%u) refused (foreign vehicle owner)", (unsigned)cmd.actionKind);
+        return true;
+    }
+    const bool ok = SafeExecuteSpaceActionNow(veh, cmd.actionKind, cmd.variant);
+    Logf("republicmp  GAME CALL: space action (%u): %s", (unsigned)cmd.actionKind, ok ? "made" : "skipped");
+    return true;
+}
+
+bool GameCalls_CaptureSpaceActionForTest(unsigned long long veh, int siteKind, unsigned char abortVariant)
+{
+    return HandleSpaceAction(veh, siteKind, true, abortVariant);
+}
+
+void GameCalls_SetSpaceActionFnsForTest(unsigned char (*hasReentry)(unsigned long long),
+                                        void (*setupReentry)(unsigned long long),
+                                        void (*setupDeorbit)(unsigned long long))
+{
+    g_testSpaceHasReentryFn = hasReentry;
+    g_testSpaceSetupReentryFn = setupReentry;
+    g_testSpaceSetupDeorbitFn = setupDeorbit;
+}
+
+static bool ValidateSpaceActionSite(unsigned siteRva, const BYTE expect[22],
+                                    const BYTE* spaceRelay, const char* name)
+{
+    if (!g_exeBase || !spaceRelay) return false;
+    BYTE* at = g_exeBase + siteRva;
+    if (!SafeBytesMatch(at, expect, 22)) {
+        Logf("republicmp  GAME CALL: space site 0x%X (%s) differs - left alone", siteRva, name);
+        return false;
+    }
+    const long long callRel = (long long)spaceRelay - (long long)(at + 13);
+    const long long jmpRel = (long long)(g_exeBase + SITE_SPACE_VEH_WIN_EXIT_RVA) - (long long)(at + 18);
+    if (callRel < INT_MIN || callRel > INT_MAX || jmpRel < INT_MIN || jmpRel > INT_MAX) {
+        Logf("republicmp  GAME CALL: space site 0x%X (%s) relay out of range", siteRva, name);
+        return false;
+    }
+    return true;
+}
+
+static bool WriteSpaceActionSite(unsigned siteRva, uint32_t siteKind, const BYTE* spaceRelay)
+{
+    BYTE* at = g_exeBase + siteRva;
+    const long long callRel = (long long)spaceRelay - (long long)(at + 13);
+    const long long jmpRel = (long long)(g_exeBase + SITE_SPACE_VEH_WIN_EXIT_RVA) - (long long)(at + 18);
+    BYTE patch[22] = { 0x49, 0x8B, 0xCF, 0xBA }; // mov rcx, r15 ; mov edx, siteKind
+    memcpy(patch + 4, &siteKind, 4);
+    patch[8] = 0xE8; // call spaceRelay
+    const int callRel32 = (int)callRel;
+    memcpy(patch + 9, &callRel32, 4);
+    patch[13] = 0xE9; // jmp SITE_SPACE_VEH_WIN_EXIT_RVA
+    const int jmpRel32 = (int)jmpRel;
+    memcpy(patch + 14, &jmpRel32, 4);
+    memset(patch + 18, 0x90, 4);
+
+    DWORD prot = 0;
+    if (!VirtualProtect(at, sizeof(patch), PAGE_EXECUTE_READWRITE, &prot)) return false;
+    memcpy(at, patch, sizeof(patch));
+    VirtualProtect(at, sizeof(patch), prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), at, sizeof(patch));
+    return true;
+}
+
+static int InstallSpaceActionPatches(const BYTE* spaceRelay)
+{
+    if (!ValidateSpaceActionSite(SITE_SPACE_REENTRY_PATCH_RVA, kSpaceReentryExpect, spaceRelay, "reentry") ||
+        !ValidateSpaceActionSite(SITE_SPACE_DEORBIT_ABORT_PATCH_RVA, kSpaceDeorbitAbortExpect, spaceRelay, "deorbit/abort")) {
+        return 0;
+    }
+    int patched = 0;
+    if (WriteSpaceActionSite(SITE_SPACE_REENTRY_PATCH_RVA, SPACE_SITE_REENTRY_TARGETED, spaceRelay)) ++patched;
+    if (WriteSpaceActionSite(SITE_SPACE_DEORBIT_ABORT_PATCH_RVA, SPACE_SITE_DEORBIT_OR_ABORT, spaceRelay)) ++patched;
+    return patched;
+}
+
+bool GameCalls_InstallSpaceActionPatchesForTest(BYTE* testSpaceRelay)
+{
+    if (!g_exeBase || !testSpaceRelay) return false;
+    EmitAbsJump14(testSpaceRelay, (void*)&H_SpaceAction);
+    return InstallSpaceActionPatches(testSpaceRelay) == 2;
+}
+
 bool GameCalls_Install()
 {
     static const auto thunks = MakeThunks(std::make_index_sequence<SITE_COUNT>());
@@ -2171,14 +2742,14 @@ bool GameCalls_Install()
     static const BYTE kDepotUncouplePrefix[6] = { 0x4D, 0x89, 0xF8, 0x4D, 0x89, 0xF1 };
     static const BYTE kCancelCrimePrefix[6]   = { 0x4D, 0x89, 0xE0, 0x4D, 0x89, 0xF1 };
     static const BYTE kDoFindConnPrefix[6]    = { 0x4C, 0x89, 0xF2, 0x4D, 0x89, 0xE8 };
-    static_assert(SITE_COUNT * 32 <= 16384, "kSites relay allocation overflow");
+    static_assert((SITE_COUNT + 1) * 32 <= 16384, "kSites relay allocation overflow");
     BYTE* relay = AllocNear(g_exeBase, 16384);
     if (!relay) {
         Logf("republicmp  GAME CALL: no relay page near the executable - window buttons are not shared");
         return false;
     }
     DWORD old;
-    VirtualProtect(relay, SITE_COUNT * 32, PAGE_EXECUTE_READWRITE, &old);
+    VirtualProtect(relay, (SITE_COUNT + 1) * 32, PAGE_EXECUTE_READWRITE, &old);
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* r = relay + i * 32;
         void* to = (kSites[i].special == CALL_SET_FOR_BIO)
@@ -2201,12 +2772,13 @@ bool GameCalls_Install()
         } else if (kSites[i].special == CALL_DO_FIND_CONNECTIONS) {
             EmitRelay20(r, kDoFindConnPrefix, to);
         } else {
-            r[0] = 0xff; r[1] = 0x25; r[2] = r[3] = r[4] = r[5] = 0;
-            memcpy(r + 6, &to, 8);
+            EmitAbsJump14(r, to);
         }
     }
-    VirtualProtect(relay, SITE_COUNT * 32, PAGE_EXECUTE_READ, &old);
-    FlushInstructionCache(GetCurrentProcess(), relay, SITE_COUNT * 32);
+    BYTE* spaceRelay = relay + SITE_COUNT * 32;
+    EmitAbsJump14(spaceRelay, (void*)&H_SpaceAction);
+    VirtualProtect(relay, (SITE_COUNT + 1) * 32, PAGE_EXECUTE_READ, &old);
+    FlushInstructionCache(GetCurrentProcess(), relay, (SITE_COUNT + 1) * 32);
     int on = 0;
     for (size_t i = 0; i < SITE_COUNT; i++) {
         BYTE* at = g_exeBase + kSites[i].site;
@@ -2228,13 +2800,14 @@ bool GameCalls_Install()
         FlushInstructionCache(GetCurrentProcess(), at, 5);
         on++;
     }
+    const int spacePatched = InstallSpaceActionPatches(spaceRelay);
     if (g_exeBase && !InstallInlineHook(g_exeBase + RVA_OFFICE_QUEUE_REORDER, (void*)&H_OfficeQueueReorder,
                                         (void**)&g_origOfficeQueueReorder, kOfficeReorderExpect,
                                         sizeof(kOfficeReorderExpect), "republicmp office_queue_reorder")) {
         Logf("republicmp  GAME CALL: office_queue_reorder hook left uninstalled");
     }
-    Logf("republicmp  GAME CALL: %d of %d window call sites relayed", on, (int)SITE_COUNT);
-    return on == (int)SITE_COUNT;
+    Logf("republicmp  GAME CALL: %d of %d window call sites relayed (%d of 2 space action sites)", on, (int)SITE_COUNT, spacePatched);
+    return on == (int)SITE_COUNT && spacePatched == 2;
 }
 
 bool GameCalls_HasCallSiteForTest(unsigned atSiteRva, unsigned targetRoutineRva)

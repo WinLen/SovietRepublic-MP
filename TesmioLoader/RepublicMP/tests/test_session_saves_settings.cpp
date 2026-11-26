@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Thematic Test Suites: Session, ModSync, Waiting Lobby, Sound/Warning Isolation,
-// SettingsSync (Media/Prison/Orphanage/Alerts), and SaveSync / M9.3 Persistence.
-// Suites: #6, #8, #15, #36, #37, #45, #46, #47.
+// SettingsSync (Media/Prison/Orphanage/Alerts), SaveSync / M9.3 Persistence, and CrashUpload.
+// Suites: #6, #8, #15, #36, #37, #45, #46, #47, #74.
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
 #include "test_harness.h"
+#include "../third_party/miniz/miniz.h"
+#include "../third_party/miniz/miniz_zip.h"
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -2052,4 +2060,174 @@ bool Test_Stress_M9_3_Challenger2()
 {
     if (!H) { TsmBind(&g_mockHost); }
     return m9_3_c2::Test_Stress_M9_3_Challenger2();
+}
+
+// ---------------------------------------------------------------------------
+// Test 74: Crash & Desync Uploader (ZIP Bundle, Dedup, Settings, WinHTTP POST)
+// ---------------------------------------------------------------------------
+
+static bool SubTest_CrashUpload_BuildZipAndCap()
+{
+    char tmpGame[MAX_PATH] = {};
+    _snprintf_s(tmpGame, sizeof(tmpGame), _TRUNCATE, "%s\\crash_up_game", g_mockBaseDir);
+    CreateDirectoryA(tmpGame, nullptr);
+    char tmpBase[MAX_PATH] = {};
+    _snprintf_s(tmpBase, sizeof(tmpBase), _TRUNCATE, "%s\\crash_up_base", g_mockBaseDir);
+    CreateDirectoryA(tmpBase, nullptr);
+
+    auto writeFileStr = [](const char* dir, const char* name, const std::string& data) {
+        char path[MAX_PATH] = {};
+        _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\%s", dir, name);
+        std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
+        ofs.write(data.data(), static_cast<std::streamsize>(data.size()));
+    };
+
+    writeFileStr(tmpGame, "RepublicMP_LastCrash.log", "[CRASH] EXCEPTION 0xC0000005 at SOVIET64.exe+0x1234\r\n");
+    writeFileStr(tmpGame, "RepublicMP_Diagnostics.prev.log", "State=HOST_IN_GAME\r\nTick=4200\r\n");
+    writeFileStr(tmpBase, "tesmioloader.prev.log", "=== CRASH: fake loader fault ===\r\n");
+
+    CrashUploadMeta meta = {};
+    strncpy_s(meta.reason, "PREV_CRASH", _TRUNCATE);
+    strncpy_s(meta.role, "HOST", _TRUNCATE);
+    strncpy_s(meta.version, REPUBLICMP_VERSION, _TRUNCATE);
+    strncpy_s(meta.playerTag, "Test\"Player\\One", _TRUNCATE);
+    meta.tick = 4200;
+    meta.dllCrc = 0x12345678u;
+    meta.twoStatesMode = 1;
+
+    std::vector<unsigned char> zipData;
+    TEST_CHECK(CrashUpload_BuildReportZip(tmpGame, tmpBase, meta, zipData));
+    TEST_CHECK(!zipData.empty() && zipData.size() <= CRASH_UPLOAD_MAX_ZIP_BYTES);
+
+    mz_zip_archive rz = {};
+    TEST_CHECK(mz_zip_reader_init_mem(&rz, zipData.data(), zipData.size(), 0) != 0);
+    const mz_uint nFiles = mz_zip_reader_get_num_files(&rz);
+    TEST_CHECK(nFiles == 4);
+    TEST_CHECK(mz_zip_reader_locate_file(&rz, "report_info.json", nullptr, 0) >= 0);
+    TEST_CHECK(mz_zip_reader_locate_file(&rz, "RepublicMP_LastCrash.log", nullptr, 0) >= 0);
+    TEST_CHECK(mz_zip_reader_locate_file(&rz, "RepublicMP_Diagnostics.prev.log", nullptr, 0) >= 0);
+    TEST_CHECK(mz_zip_reader_locate_file(&rz, "tesmioloader.prev.log", nullptr, 0) >= 0);
+
+    size_t jsonSz = 0;
+    void* jsonPtr = mz_zip_reader_extract_file_to_heap(&rz, "report_info.json", &jsonSz, 0);
+    TEST_CHECK(jsonPtr != nullptr && jsonSz > 10);
+    std::string jsonStr(static_cast<const char*>(jsonPtr), jsonSz);
+    mz_free(jsonPtr);
+    mz_zip_reader_end(&rz);
+    TEST_CHECK(jsonStr.find("\"PREV_CRASH\"") != std::string::npos);
+    TEST_CHECK(jsonStr.find("Test\\\"Player\\\\One") != std::string::npos);
+
+    // Fingerprint dedup
+    uint64_t fp1 = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
+    TEST_CHECK(fp1 != 0);
+    TEST_CHECK(!CrashUpload_HasUploadedFingerprint(tmpGame, fp1));
+    CrashUpload_MarkFingerprintUploaded(tmpGame, fp1);
+    TEST_CHECK(CrashUpload_HasUploadedFingerprint(tmpGame, fp1));
+
+    Sleep(20);
+    writeFileStr(tmpGame, "RepublicMP_LastCrash.log", "[CRASH] SECOND CRASH MORE BYTES\r\n");
+    uint64_t fp2 = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
+    TEST_CHECK(fp2 != 0 && fp2 != fp1);
+    TEST_CHECK(!CrashUpload_HasUploadedFingerprint(tmpGame, fp2));
+    return true;
+}
+
+static bool SubTest_CrashUpload_SettingsAndHttpPost()
+{
+    bool origSetting = TwoStates_GetUploadCrashReports();
+    TwoStates_SetUploadCrashReports(false);
+    TEST_CHECK(!TwoStates_GetUploadCrashReports());
+    TwoStates_SetUploadCrashReports(true);
+    TEST_CHECK(TwoStates_GetUploadCrashReports());
+    TwoStates_SetUploadCrashReports(origSetting);
+
+    WSADATA wsa = {};
+    TEST_CHECK(WSAStartup(MAKEWORD(2, 2), &wsa) == 0);
+
+    SOCKET listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    TEST_CHECK(listenSock != INVALID_SOCKET);
+
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    TEST_CHECK(bind(listenSock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
+    socklen_t addrLen = static_cast<socklen_t>(sizeof(addr));
+    TEST_CHECK(getsockname(listenSock, reinterpret_cast<sockaddr*>(&addr), &addrLen) == 0);
+    TEST_CHECK(listen(listenSock, 4) == 0);
+
+    const unsigned short port = ntohs(addr.sin_port);
+    std::string capturedReq1, capturedReq2;
+
+    std::thread serverThread([&]() {
+        for (int iter = 0; iter < 2; ++iter) {
+            SOCKET cli = accept(listenSock, nullptr, nullptr);
+            if (cli == INVALID_SOCKET) break;
+            std::string raw;
+            char buf[2048];
+            int contentLen = 0;
+            size_t hdrEnd = std::string::npos;
+            for (;;) {
+                int r = recv(cli, buf, sizeof(buf), 0);
+                if (r <= 0) break;
+                raw.append(buf, static_cast<size_t>(r));
+                if (hdrEnd == std::string::npos) {
+                    hdrEnd = raw.find("\r\n\r\n");
+                    if (hdrEnd != std::string::npos) {
+                        const char* clPos = strstr(raw.c_str(), "Content-Length:");
+                        if (!clPos) clPos = strstr(raw.c_str(), "content-length:");
+                        if (clPos) contentLen = atoi(clPos + 15);
+                    }
+                }
+                if (hdrEnd != std::string::npos && raw.size() >= hdrEnd + 4 + static_cast<size_t>(contentLen)) {
+                    break;
+                }
+            }
+            const char* resp = (iter == 0)
+                ? "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
+                : "HTTP/1.1 403 Forbidden\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"error\":\"bad_key\"}";
+            send(cli, resp, static_cast<int>(strlen(resp)), 0);
+            shutdown(cli, SD_SEND);
+            closesocket(cli);
+            if (iter == 0) capturedReq1.swap(raw);
+            else capturedReq2.swap(raw);
+        }
+    });
+
+    char url[128] = {};
+    _snprintf_s(url, sizeof(url), _TRUNCATE, "http://127.0.0.1:%u/republicmp-logs/v1/upload", port);
+
+    CrashUploadMeta meta = {};
+    strncpy_s(meta.reason, "DESYNC", _TRUNCATE);
+    strncpy_s(meta.role, "CLIENT", _TRUNCATE);
+    strncpy_s(meta.version, "1.7.4", _TRUNCATE);
+    const unsigned char payload[] = { 'P', 'K', 0x03, 0x04, 'T', 'E', 'S', 'T' };
+
+    unsigned long httpCode = 0;
+    TEST_CHECK(CrashUpload_PostZipToUrl(url, "test_ingest_key", meta, payload, sizeof(payload), &httpCode));
+    TEST_CHECK(httpCode == 200);
+
+    httpCode = 0;
+    TEST_CHECK(!CrashUpload_PostZipToUrl(url, "wrong_key", meta, payload, sizeof(payload), &httpCode));
+    TEST_CHECK(httpCode == 403);
+
+    serverThread.join();
+    closesocket(listenSock);
+    WSACleanup();
+
+    TEST_CHECK(capturedReq1.find("POST /republicmp-logs/v1/upload ") != std::string::npos);
+    TEST_CHECK(capturedReq1.find("X-RepublicMP-Key: test_ingest_key") != std::string::npos);
+    TEST_CHECK(capturedReq1.find("X-RepublicMP-Reason: DESYNC") != std::string::npos);
+    TEST_CHECK(capturedReq1.find("X-RepublicMP-Version: 1.7.4") != std::string::npos);
+    TEST_CHECK(capturedReq1.find("X-RepublicMP-Role: CLIENT") != std::string::npos);
+    TEST_CHECK(capturedReq1.find("Content-Type: application/zip") != std::string::npos);
+    TEST_CHECK(capturedReq1.size() >= sizeof(payload) &&
+               memcmp(capturedReq1.data() + capturedReq1.size() - sizeof(payload), payload, sizeof(payload)) == 0);
+    return true;
+}
+
+bool Test_CrashUpload_ZipBundleDedupAndHttpPost()
+{
+    return SubTest_CrashUpload_BuildZipAndCap() &&
+           SubTest_CrashUpload_SettingsAndHttpPost();
 }

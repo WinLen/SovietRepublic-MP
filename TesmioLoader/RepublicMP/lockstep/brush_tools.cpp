@@ -3,6 +3,7 @@
 // read against the disassembly of 1.1.1.9).
 #include "brush_tools.h"
 #include "commands.h"
+#include "world_refs.h"
 #include "../session/two_states.h"
 #include "../session/save_sync.h"
 #include "../ui/native_menu.h"
@@ -380,11 +381,7 @@ static int RecordPlace(U64 record, char name[NAME_BYTES])
 
 static U64 RecordAt(int place, const char* name)
 {
-    BYTE* world = World();
-    U64 begin = *(U64*)(world + MENU_OFFSET), end = *(U64*)(world + MENU_OFFSET + 8);
-    if (place < 0 || !begin || end < begin || (U64)place >= (end - begin) / MENU_STRIDE) return 0;
-    U64 record = begin + (U64)place * MENU_STRIDE;
-    return strncmp((const char*)record, name, NAME_BYTES - 1) == 0 ? record : 0;
+    return Ref_FindBuildMenuRecord((U64)World(), place, name, NAME_BYTES);
 }
 
 // ---------------------------------------------------------------------------

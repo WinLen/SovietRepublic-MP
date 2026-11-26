@@ -371,11 +371,7 @@ bool HoverTools_ApplyCommand(const void* data, size_t size)
     U64 record = 0;
     RawPick pick;
     __try {
-        U64 begin = Q(world + MENU_OFFSET), end = Q(world + MENU_OFFSET + 8);
-        if (m.record >= 0 && begin && end >= begin && (U64)m.record < (end - begin) / MENU_STRIDE) {
-            record = begin + (U64)m.record * MENU_STRIDE;
-            if (strncmp((const char*)record, m.name, NAME_BYTES - 1) != 0) record = 0;
-        }
+        record = Ref_FindBuildMenuRecord(world, m.record, m.name, NAME_BYTES);
         if (!record) why = "the tool is not in this PC's build menu";
         else why = Resolve(world, m, pick);
     } __except (EXCEPTION_EXECUTE_HANDLER) {

@@ -202,6 +202,9 @@ static bool TextWord(int kind, unsigned offset)
 // +1950..+1a10, +1a54..+1a5c, +1a7c..+1a84, +1ad0..+1ad8)
 // must never be overwritten or reverted as UI switches.
 #define HALF_BYTES 0xC8
+static_assert(VEH_ROCKET_PROGRESS_OFFSET >= 0x19E8u && VEH_ROCKET_PROGRESS_OFFSET < 0x1AA8u &&
+              VEH_ROCKET_FLIGHT_STATE_OFFSET >= 0x19E8u && VEH_ROCKET_FLIGHT_STATE_OFFSET < 0x1AA8u,
+              "VEH_ROCKET_PROGRESS_OFFSET (0x1A68) and VEH_ROCKET_FLIGHT_STATE_OFFSET (0x1A6C) must stay excluded in ListWord");
 static bool ListWord(int kind, unsigned offset)
 {
     if (kind == KIND_VEHICLE) {
@@ -211,12 +214,21 @@ static bool ListWord(int kind, unsigned offset)
                (offset >= 0x5D8 && offset < 0x5F4) ||
                (offset >= 0x600 && offset < 0x608) ||
                (offset >= 0x638 && offset < 0x658) ||
+               (offset >= VEH_SPACE_DYN_664_BEGIN_OFF && offset < VEH_SPACE_DYN_664_END_OFF) ||
                (offset >= 0x680 && offset < 0x1740) ||
                (offset >= 0x1748 && offset < 0x1750) ||
+               (offset >= VEH_SPACE_ORBIT_DYNAMIC_BEGIN_OFF && offset < VEH_SPACE_ORBIT_DYNAMIC_END_OFF) ||
+               (offset >= VEH_SPACE_DYN_1774_BEGIN_OFF && offset < VEH_SPACE_DYN_1774_END_OFF) ||
                (offset >= 0x17B8 && offset < 0x1800) ||
+               (offset >= VEH_SPACE_DYN_1860_BEGIN_OFF && offset < VEH_SPACE_DYN_1860_END_OFF) ||
                (offset >= 0x1880 && offset < 0x1888) ||
+               (offset >= VEH_SPACE_DYN_1938_BEGIN_OFF && offset < VEH_SPACE_DYN_1938_END_OFF) ||
+               // Covers VEH_ROCKET_PROGRESS_OFFSET (0x1A68) and VEH_ROCKET_FLIGHT_STATE_OFFSET (0x1A6C).
                (offset >= 0x19E8 && offset < 0x1AA8) ||
+               (offset >= VEH_SPACE_STAGE_DYNAMIC_BEGIN_OFF && offset < VEH_SPACE_STAGE_DYNAMIC_END_OFF) ||
                (offset >= 0x1B18 && offset < 0x1B50) ||
+               (offset >= VEH_SPACE_DYN_1B50_BEGIN_OFF && offset < VEH_SPACE_DYN_1B50_END_OFF) ||
+               (offset >= VEH_SPACE_TIMER_DYNAMIC_BEGIN_OFF && offset < VEH_SPACE_TIMER_DYNAMIC_END_OFF) ||
                (offset >= 0x1BAC && offset < 0x1BB4) ||
                (offset >= 0x1BD4 && offset < 0x1BE0) ||
                (offset >= 0x1C28 && offset < 0x1C30);

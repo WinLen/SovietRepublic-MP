@@ -102,6 +102,10 @@ int main()
         { "Perf_SiteRandFlatTableAndSwitchInPlaceCompare (2A-2C: SiteRand 2048 Flat, KeyDown/SetEvent Cache, Switch In-Place & Backoff, Coalesced SEH)", &TestPerf_SiteRandFlatTableAndSwitchInPlaceCompare },
         { "Perf_TcpNoDelayAndSteamP2PRingBuffer (3A-3B: TCP_NODELAY, 16MB Power-of-2 Ring Buffer, Scratch Reuse, s_dataCv)", &TestPerf_TcpNoDelayAndSteamP2PRingBuffer },
         { "Perf_M6TsUiAndHeldFrameOptimizations (M6: CitLifespan Dirty Hook, AfterSubStep UI Cache, Hist Dirty Mask, Loan Fast-Path, HeldFrame Coalesced SEH)", &TestPerf_M6TsUiAndHeldFrameOptimizations },
+        { "SpaceProgramPhase2_DeterminismOrbitsSoftSyncMixedDlc (RNG Sites, hashSpace, SoftSync Exclusion, -119 VehicleType ScriptName, orbits.dta Zip)", &Test_SpaceProgramPhase2_DeterminismOrbitsSoftSyncMixedDlc },
+        { "SpaceProgramPhase3_MutatorsPadSwitchesAndCameraIsolation (4 Space kSites, Zero-Pre-Mutation Deorbit/Reentry/Abort, Pad 0xCD8/0xE34, VehicleSwitches, Tools/WORLD+0x14)", &Test_SpaceProgramPhase3_MutatorsPadSwitchesAndCameraIsolation },
+        { "SpaceProgramPhase4_TwoStatesSpaceRace (Milestones, $REQUIRE_MISSION, CommercialPayout, OrbitOwners, MissionControlUI, BorderUnion, Persistence)", &Test_SpaceProgramPhase4_TwoStatesSpaceRace },
+        { "CrashUpload_ZipBundleDedupAndHttpPost (ZIP, Dedup, Settings, WinHTTP POST)", &Test_CrashUpload_ZipBundleDedupAndHttpPost },
     };
 
     for (const auto& tc : kTests) {

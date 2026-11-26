@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic one-way copy of RepublicMP crash reports to Google Drive
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

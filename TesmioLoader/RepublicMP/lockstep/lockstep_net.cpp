@@ -7,6 +7,7 @@
 #include "../determinism/determinism.h"
 #include "../determinism/state_hash.h"
 #include "../world_sync/vehicles/vehicle_soft_sync.h"
+#include "../core/crash_upload.h"
 #include "../transport/network.h"
 #include <deque>
 #include <vector>
@@ -57,6 +58,7 @@ struct LsHeader { unsigned type; unsigned size; };
 struct LsGrant { unsigned long long tick; int speed; };
 struct LsCommandHead { unsigned long long afterTick; int kind; };
 struct LsHash { unsigned long long tick; StateSummary s; };
+static_assert(sizeof(LsHash) == 216u, "LsHash wire size must equal 8 + sizeof(StateSummary) == 216");
 struct LsState { int paused; int speed; };
 struct LsPing { ULONGLONG sentMs; unsigned char reply; };
 struct LsCursorLegacy { float x, y, z; float camX, camZ; unsigned char isPing; };
@@ -416,6 +418,7 @@ static void EvaluateStateSummaryDiff(const StateSummary& a, const StateSummary& 
     bool lineDiff     = (a.lines != b.lines || a.hashLines != b.hashLines);
     bool loanDiff     = (a.loans != b.loans || a.hashLoans != b.hashLoans);
     bool researchDiff = (a.hashResearch != b.hashResearch);
+    bool spaceDiff    = (a.hashSpace != b.hashSpace);
     moneyDiff    = (fabs(a.rub - b.rub) > 0.05 || fabs(a.usd - b.usd) > 0.05 ||
                     fabs(a.rubState[0] - b.rubState[0]) > 0.05 || fabs(a.rubState[1] - b.rubState[1]) > 0.05 ||
                     fabs(a.usdState[0] - b.usdState[0]) > 0.05 || fabs(a.usdState[1] - b.usdState[1]) > 0.05);
@@ -430,6 +433,7 @@ static void EvaluateStateSummaryDiff(const StateSummary& a, const StateSummary& 
     if (lineDiff)                   strcat_s(what, whatSize, "lines ");
     if (loanDiff)                   strcat_s(what, whatSize, "loans ");
     if (researchDiff)               strcat_s(what, whatSize, "research ");
+    if (spaceDiff)                  strcat_s(what, whatSize, "space ");
     if (fabs(a.rub - b.rub) > 1.0 || fabs(a.usd - b.usd) > 1.0 ||
         fabs(a.rubState[0] - b.rubState[0]) > 1.0 || fabs(a.rubState[1] - b.rubState[1]) > 1.0 ||
         fabs(a.usdState[0] - b.usdState[0]) > 1.0 || fabs(a.usdState[1] - b.usdState[1]) > 1.0) {
@@ -500,12 +504,13 @@ static void Compare(const LsHash& theirs)
     Logf("republicmp  LOCKSTEP:   money host(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f) vs player(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f)",
          a.rub, a.usd, a.rubState[0], a.rubState[1],
          b.rub, b.usd, b.rubState[0], b.rubState[1]);
-    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX)",
-         a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch,
-         b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch);
+    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX)",
+         a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch, a.hashSpace,
+         b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch, b.hashSpace);
     StateHash_LogDesyncBreakdown(what, theirs.tick);
     Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
     Determinism_DumpMoneyTrace(theirs.tick);
+    CrashUpload_NotifyDesyncAsync(g_desync, theirs.tick);
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
@@ -586,6 +591,7 @@ void LockstepNet_Poll()
             sscanf_s(g_desync, "the games differ after tick %llu", &tick);
             StateHash_LogDesyncBreakdown(g_desync, tick);
             LockstepNet_SendClientLogs("DESYNC");
+            CrashUpload_NotifyDesyncAsync(g_desync, tick);
             break;
         }
         }

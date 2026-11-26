@@ -53,6 +53,7 @@ void TwoStates_InvalidateMountCaches()
 {
     g_mountedResearchState = 0;
     g_mountedVehLicenseState = 0;
+    TwoStates_InvalidateSpaceMountCache();
 }
 
 uint64_t TwoStates_GetResearchMountGenForTest()        { return g_mountedResearchGen; }
@@ -81,8 +82,8 @@ static UnivResearchPanelFn o_univResearchPanel = nullptr;
 // University & Engine Research Vector Isolation (world + 0x1175C..0x11780)
 // ---------------------------------------------------------------------------
 
-static bool SafeReadStridedWorldVecHeader(const BYTE* world, size_t vecOffset, size_t elemStride, int maxCount,
-                                          BYTE** outBegin, int* outCount)
+bool SafeReadStridedWorldVecHeader(const BYTE* world, size_t vecOffset, size_t elemStride, int maxCount,
+                                   BYTE** outBegin, int* outCount)
 {
     if (!world || !outBegin || !outCount || elemStride == 0) return false;
     *outBegin = nullptr;
@@ -437,6 +438,7 @@ static bool WriteResearchSlicePodSeh(BYTE* world, const uint8_t* unlocks, BYTE* 
 void CaptureWorldResearchToSlice(const BYTE* world, StateEngineResearch* dst, int filterOwnerState)
 {
     if (!world || !dst) return;
+    SafeMemcpyPod(dst->spaceCargoUnlocks, world + WORLD_SPACE_CARGO_WEST_UNLOCK_OFF, sizeof(dst->spaceCargoUnlocks));
     BYTE* begin = nullptr;
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) {
@@ -493,6 +495,7 @@ void WriteSliceToWorldResearch(BYTE* world, StateEngineResearch* src)
     int count = 0;
     if (!SafeReadResearchVecHeader(world, &begin, &count)) {
         SafeMemcpyPod(world + WORLD_RESEARCH_UNLOCKS_OFFSET, src->unlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+        SafeMemcpyPod(world + WORLD_SPACE_CARGO_WEST_UNLOCK_OFF, src->spaceCargoUnlocks, sizeof(src->spaceCargoUnlocks));
         g_mountedResearchState = 0;
         return;
     }
@@ -523,6 +526,7 @@ void WriteSliceToWorldResearch(BYTE* world, StateEngineResearch* src)
     src->hasUnresolvedBldPtr = anyUnresolved;
 
     if (WriteResearchSlicePodSeh(world, src->unlocks, begin, n, src->items.data())) {
+        SafeMemcpyPod(world + WORLD_SPACE_CARGO_WEST_UNLOCK_OFF, src->spaceCargoUnlocks, sizeof(src->spaceCargoUnlocks));
         g_researchMountApplyCount++;
         g_mountedResearchWorld = world;
         g_mountedResearchBegin = begin;
@@ -538,6 +542,7 @@ void ResetEngineResearchSlices()
 {
     for (int s = 0; s < 2; ++s) {
         memset(g_engineResearch[s].unlocks, 0, sizeof(g_engineResearch[s].unlocks));
+        memset(g_engineResearch[s].spaceCargoUnlocks, 0, sizeof(g_engineResearch[s].spaceCargoUnlocks));
         g_engineResearch[s].items.clear();
         g_engineResearch[s].hasUnresolvedBldPtr = false;
         g_engineResearch[s].gen++;
@@ -566,6 +571,34 @@ static void Fnv1aMixBytes(unsigned long long& h, const void* data, size_t n)
     }
 }
 
+void TwoStates_RecomputeAndCaptureResearchForState(BYTE* world, int stateOwner)
+{
+    if (!world || (stateOwner != 1 && stateOwner != 2)) return;
+    StateEngineResearch& dst = g_engineResearch[stateOwner - 1];
+    BYTE* begin = nullptr;
+    int count = 0;
+    if (dst.initialized && g_mountedResearchState != stateOwner) {
+        WriteSliceToWorldResearch(world, &dst);
+    }
+    EnsureSpaceMilestonesInitialized(world);
+    TwoStates_MountSpaceMilestonesForState(world, stateOwner);
+    RecomputeEngineResearch(world);
+    SafeMemcpyPod(dst.unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
+    SafeMemcpyPod(dst.spaceCargoUnlocks, world + WORLD_SPACE_CARGO_WEST_UNLOCK_OFF, sizeof(dst.spaceCargoUnlocks));
+    if (SafeReadResearchVecHeader(world, &begin, &count)) {
+        const int n = (int)std::min((size_t)count, dst.items.size());
+        for (int i = 0; i < n; ++i) {
+            const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
+            SafeReadPod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, &dst.items[(size_t)i].available);
+        }
+    }
+    dst.loadedFromMeta = false;
+    dst.initialized = true;
+    dst.gen++;
+    g_mountedResearchState = 0;
+    SyncSummaryResearchFromSlice(stateOwner, dst);
+}
+
 void EnsureEngineResearchInitialized(BYTE* world)
 {
     if (!world) return;
@@ -581,6 +614,7 @@ void EnsureEngineResearchInitialized(BYTE* world)
     if (!g_engineResearch[0].initialized || !g_engineResearch[1].initialized) {
         HealWorldOrphanedNearCompleteResearch(world);
     }
+    EnsureSpaceMilestonesInitialized(world);
     for (int s = 0; s < 2; ++s) {
         if (!g_engineResearch[s].initialized) {
             CaptureWorldResearchToSlice(world, &g_engineResearch[s], s + 1);
@@ -606,17 +640,7 @@ void EnsureEngineResearchInitialized(BYTE* world)
         if (g_engineResearch[s].loadedFromMeta || healed) {
             g_mountedResearchState = 0;
             WriteSliceToWorldResearch(world, &g_engineResearch[s]);
-            RecomputeEngineResearch(world);
-            SafeMemcpyPod(g_engineResearch[s].unlocks, world + WORLD_RESEARCH_UNLOCKS_OFFSET, WORLD_RESEARCH_UNLOCKS_BYTES);
-            int n = (int)std::min((size_t)count, g_engineResearch[s].items.size());
-            for (int i = 0; i < n; ++i) {
-                const BYTE* item = begin + (size_t)i * RESEARCH_ITEM_STRIDE;
-                SafeReadPod(item + RESEARCH_ITEM_AVAILABLE_OFFSET, &g_engineResearch[s].items[(size_t)i].available);
-            }
-            g_engineResearch[s].loadedFromMeta = false;
-            g_engineResearch[s].gen++;
-            g_mountedResearchState = 0;
-            SyncSummaryResearchFromSlice(stateOwner, g_engineResearch[s]);
+            TwoStates_RecomputeAndCaptureResearchForState(world, stateOwner);
             needWriteToWorld = true;
         }
     }
@@ -624,6 +648,7 @@ void EnsureEngineResearchInitialized(BYTE* world)
         g_mountedResearchState = 0;
         int activeState = ResolveActiveResearchWorldState();
         WriteSliceToWorldResearch(world, &g_engineResearch[activeState - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, activeState);
     }
 }
 
@@ -661,6 +686,7 @@ static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[owner - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, owner);
     }
     bool econActive = (g_inSimStep && !TwoStates_IsInEconHook() && twoStates)
                           ? BeginEconAttribution(world, owner)
@@ -682,6 +708,7 @@ static __int64 __fastcall H_BldUnivStep(BYTE* world, BYTE* building, uintptr_t a
         CaptureWorldResearchToSlice(world, &g_engineResearch[owner - 1], owner);
         int restoreState = ResolveActiveResearchWorldState();
         WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, restoreState);
     }
     return r;
 }
@@ -719,6 +746,7 @@ static void __fastcall H_ResearchDailyUpdate(BYTE* world)
     EnsureEngineResearchInitialized(world);
     for (int s = 1; s <= 2; ++s) {
         WriteSliceToWorldResearch(world, &g_engineResearch[s - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, s);
         if (o_researchDailyUpdate) o_researchDailyUpdate(world);
         else ResearchDailyUpdateFallback(world);
         g_mountedResearchState = 0;
@@ -726,6 +754,7 @@ static void __fastcall H_ResearchDailyUpdate(BYTE* world)
     }
     int restoreState = ResolveActiveResearchWorldState();
     WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+    TwoStates_MountSpaceMilestonesForState(world, restoreState);
 }
 
 static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* window,
@@ -746,6 +775,7 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[bldOwner - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, bldOwner);
     } else if (Commands_Capturing() || Determinism_SessionRunning()) {
         HealWorldOrphanedNearCompleteResearch(world);
     }
@@ -797,6 +827,7 @@ static BYTE* __fastcall H_UnivResearchPanel(BYTE* world, BYTE* building, BYTE* w
     if (twoStates) {
         int restoreState = ResolveActiveResearchWorldState();
         WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, restoreState);
     }
     return ret;
 }
@@ -809,13 +840,17 @@ bool TwoStates_ApplyUnivResearchSelection(BYTE* world, BYTE* building, int owner
     if (twoStates) {
         EnsureEngineResearchInitialized(world);
         WriteSliceToWorldResearch(world, &g_engineResearch[state - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, state);
     }
     bool ok = ApplyEngineResearchSelectionAt(world, building, techIdx);
     g_mountedResearchState = 0;
-    if (twoStates && ok) {
-        CaptureWorldResearchToSlice(world, &g_engineResearch[state - 1], state);
+    if (twoStates) {
+        if (ok) {
+            CaptureWorldResearchToSlice(world, &g_engineResearch[state - 1], state);
+        }
         int restoreState = ResolveActiveResearchWorldState();
         WriteSliceToWorldResearch(world, &g_engineResearch[restoreState - 1]);
+        TwoStates_MountSpaceMilestonesForState(world, restoreState);
     }
     return ok;
 }
@@ -884,6 +919,7 @@ bool TwoStates_HashEngineResearch(unsigned long long* inOutHash)
     for (int s = 0; s < 2; ++s) {
         const StateEngineResearch& slice = g_engineResearch[s];
         Fnv1aMixBytes(h, slice.unlocks, WORLD_RESEARCH_UNLOCKS_BYTES);
+        Fnv1aMixBytes(h, slice.spaceCargoUnlocks, sizeof(slice.spaceCargoUnlocks));
         int limit = (int)std::min<size_t>(slice.items.size(), 256u);
         Fnv1aMixBytes(h, &limit, sizeof(limit));
         for (int i = 0; i < limit; ++i) {
@@ -1274,6 +1310,7 @@ void TwoStates_ResetResearch()
     memset(g_stateResearch, 0, sizeof(g_stateResearch));
     ResetEngineResearchSlices();
     ResetEngineVehLicenseSlices();
+    ResetSpaceStateSlices();
 }
 
 bool TwoStates_IsTechUnlocked(int stateOwner, int techId)

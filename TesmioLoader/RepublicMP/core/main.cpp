@@ -34,6 +34,7 @@
 #include "../session/updater.h"
 #include "../ui/native_menu.h"
 #include "diag_log.h"
+#include "crash_upload.h"
 #include "version.h"
 
 extern "C" __declspec(dllexport) unsigned TsmPluginApiVersion(void)
@@ -133,6 +134,7 @@ extern "C" __declspec(dllexport) int TsmPluginStart(void)
     LanDiscovery_Init();
     Updater_Init();
     DiagLog_LogStartupSummary();
+    CrashUpload_InitAndCheckPrevCrashAsync();
 
     HANDLE presentHook = CreateThread(nullptr, 0, PresentHookThread, nullptr, 0, nullptr);
     Logf("republicmp  present hook thread started: %d", presentHook != nullptr);

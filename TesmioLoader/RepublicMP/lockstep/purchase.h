@@ -41,8 +41,11 @@ struct PurchaseMsg {
     int trailerVariant[PURCHASE_MAX_TRAILERS];
     double usedAge, usedAge2;
     char scriptName[64];
+    unsigned targetTypeCheck;   // FNV of kind == 0xB target vehicle type name (mixed-DLC safe)
+    char targetScriptName[64];  // canonical scriptName of kind == 0xB target vehicle type
 };
 #pragma pack(pop)
+static_assert(sizeof(PurchaseMsg) == 284u, "PurchaseMsg wire layout size mismatch");
 
 void Purchase_Bind(const TsmHost* host);
 

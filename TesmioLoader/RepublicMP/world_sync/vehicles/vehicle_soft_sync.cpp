@@ -3,10 +3,12 @@
 #include "vehicle_soft_sync.h"
 #include "../../lockstep/commands.h"
 #include "../../lockstep/lockstep_net.h"
+#include "../../lockstep/world_refs.h"
 #include "../../determinism/held_frame.h"
 #include "../../session/two_states.h"
 #include "../../core/engine_rva.h"
 #include "../../core/diag_log.h"
+#include "../../core/safe_mem.h"
 #include <math.h>
 #include <memory>
 #include <string.h>
@@ -148,6 +150,78 @@ BYTE* VehicleSoftSync_ResolveEffectiveBld(const BYTE* v)
     if (!parent) parent = *(const BYTE* const*)(v + VEH_PARENT_PTR_OFFSET);
     if (parent && parent != v) return ResolveVehicleDirectBld(parent);
     return nullptr;
+}
+
+static bool HasValidWorldOrbits(const BYTE* w)
+{
+    if (!w || !IsPointerLikeX64((uint64_t)(uintptr_t)w)) return false;
+    const BYTE* ob = nullptr;
+    const BYTE* oe = nullptr;
+    if (!SafeReadPod((const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET), &ob) ||
+        !SafeReadPod((const BYTE* const*)(w + WORLD_ORBITS_VEC_OFFSET + 8), &oe)) {
+        return false;
+    }
+    return ob && oe > ob && IsPointerLikeX64((uint64_t)(uintptr_t)ob) &&
+           ((uintptr_t)(oe - ob) % ORBIT_SLOT_STRIDE) == 0;
+}
+
+static bool IsVehicleInSpaceFlightImpl(const BYTE* w, const BYTE* v, int depth)
+{
+    if (!v || !IsPointerLikeX64((uint64_t)(uintptr_t)v) || depth > 4) return false;
+    int32_t flightState = 0;
+    if (!SafeReadPod((const int32_t*)(v + VEH_ROCKET_FLIGHT_STATE_OFFSET), &flightState)) return false;
+    if (flightState != 0) return true;
+    const void* dockPartner = nullptr;
+    if (SafeReadPod((const void* const*)(v + VEH_SPACE_DOCK_PARTNER_OFFSET), &dockPartner) &&
+        dockPartner && IsPointerLikeX64((uint64_t)(uintptr_t)dockPartner)) {
+        return true;
+    }
+
+    const BYTE* linkVeh = nullptr;
+    SafeReadPod((const BYTE* const*)(v + VEH_LINK_PTR_OFFSET), &linkVeh);
+    if (linkVeh && linkVeh != v && IsVehicleInSpaceFlightImpl(w, linkVeh, depth + 1)) return true;
+    const BYTE* parentVeh = nullptr;
+    SafeReadPod((const BYTE* const*)(v + VEH_PARENT_PTR_OFFSET), &parentVeh);
+    if (parentVeh && parentVeh != v && IsVehicleInSpaceFlightImpl(w, parentVeh, depth + 1)) return true;
+
+    int32_t orbitIdx = -1;
+    int32_t targetOrbitIdx = -1;
+    float flightProgress = 1.0f;
+    SafeReadPod((const int32_t*)(v + VEH_ORBIT_INDEX_OFFSET), &orbitIdx);
+    SafeReadPod((const int32_t*)(v + VEH_TARGET_ORBIT_INDEX_OFFSET), &targetOrbitIdx);
+    SafeReadPod((const float*)(v + VEH_ROCKET_PROGRESS_OFFSET), &flightProgress);
+    // CreateVehicle (0x403FBD) initializes +0x1A68 = 1.0f for EVERY vehicle (trucks, trains, ships, planes).
+    // Active space transfer/deorbit/reentry counts down from 0.999f strictly inside (0.0f, 1.0f).
+    const bool activeFlightProgress = isfinite(flightProgress) && flightProgress > 1e-6f && flightProgress < (1.0f - 1e-5f);
+
+    const BYTE* vt = nullptr;
+    SafeReadPod((const BYTE* const*)(v + VEH_TYPE_PTR_OFFSET), &vt);
+    if (Ref_IsSpaceVehicleType((U64)(uintptr_t)vt)) {
+        if (orbitIdx >= 0 || targetOrbitIdx != -1 || activeFlightProgress) return true;
+        const BYTE* curBld = nullptr;
+        SafeReadPod((const BYTE* const*)(v + VEH_CUR_BLD_OFFSET), &curBld);
+        if (Ref_IsSpaceLaunchPadBuilding((U64)(uintptr_t)curBld)) return true;
+        // Ground transport of $SPACE_SHIP container on a truck (parentVeh != 0) or $SPACE_ROCKET
+        // rail wagon behind a locomotive (linkVeh != 0): carrier already verified NOT in space flight.
+        if (parentVeh != nullptr || linkVeh != nullptr) return false;
+        // Standalone pad rocket or landed reentry capsule: protect from SoftSync mutation.
+        return true;
+    }
+
+    if ((targetOrbitIdx == -2 || activeFlightProgress) && HasValidWorldOrbits(w)) {
+        return true;
+    }
+    return false;
+}
+
+static bool IsVehicleInSpaceFlight(const BYTE* w, const BYTE* v)
+{
+    return IsVehicleInSpaceFlightImpl(w, v, 0);
+}
+
+bool VehicleSoftSync_IsVehicleInSpaceFlightForTest(const BYTE* w, const BYTE* v)
+{
+    return IsVehicleInSpaceFlight(w, v);
 }
 
 static unsigned HashResourceName(const char* s)
@@ -451,7 +525,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                     scanned++;
                     g_rollingCursor = (idx + 1) % total;
                     BYTE* v = begin[idx];
-                    if (!v) continue;
+                    if (!v || IsVehicleInSpaceFlight(w, v)) continue;
                     float speed = *(float*)(v + VEH_SPEED_OFFSET);
                     BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
                     bool isStationaryParked = (speed == 0.0f && effBld != nullptr);
@@ -473,7 +547,7 @@ static bool BuildBatch(VehicleSoftSyncMsg& msg, VehicleSoftSyncTreasury& tr,
                     for (size_t p = 0; p < total && msg.count < SOFT_SYNC_BATCH_MAX; p++) {
                         size_t idx = (startCursor + p) % total;
                         BYTE* v = begin[idx];
-                        if (!v) continue;
+                        if (!v || IsVehicleInSpaceFlight(w, v)) continue;
                         float speed = *(float*)(v + VEH_SPEED_OFFSET);
                         BYTE* effBld = VehicleSoftSync_ResolveEffectiveBld(v);
                         bool isStationaryParked = (speed == 0.0f && effBld != nullptr);
@@ -867,9 +941,10 @@ static void TranslateAttachedVehicleVector(BYTE* v, unsigned beginOff, unsigned 
     BYTE* const* cBegin = *(BYTE* const* const*)(v + beginOff);
     BYTE* const* cEnd = *(BYTE* const* const*)(v + endOff);
     if (!cBegin || cEnd <= cBegin || (cEnd - cBegin) > 16) return;
+    const BYTE* w = g_exeBase ? (g_exeBase + WORLD_RVA) : nullptr;
     for (BYTE* const* it = cBegin; it < cEnd; ++it) {
         BYTE* child = *it;
-        if (child && child != v) {
+        if (child && child != v && !IsVehicleInSpaceFlight(w, child)) {
             ApplySingleVehicleTranslation(child, dx, dy, dz, smoothBlend);
         }
     }
@@ -890,6 +965,7 @@ void VehicleSoftSync_TranslateWithChildrenForTest(BYTE* v, float dx, float dy, f
 
 static void SyncSingleVehicleEntry(const BYTE* w, BYTE* v, const VehicleSoftSyncEntry& e, float& batchMaxDriftSq)
 {
+    if (IsVehicleInSpaceFlight(w, v)) return;
     g_vssDiag.vehiclesSynced++;
     if (isfinite(e.fuel) && e.fuel >= 0.0f) *(float*)(v + VEH_FUEL_OFFSET) = e.fuel;
     if (isfinite(e.speed) && e.speed >= 0.0f) *(float*)(v + VEH_SPEED_OFFSET) = e.speed;

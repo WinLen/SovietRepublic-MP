@@ -1234,13 +1234,15 @@ static bool SubTest_T2_R5_DlcRoadFiltering_Boundaries()
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, -1, nullptr));
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 999999, nullptr));
 
-    // 5. DLC check disabled override
+    // 5. Road DLC filtering remains symmetric even when dlc_check join-refusal checkbox is disabled
     SaveSync_SetDlcCheck(false);
     TEST_CHECK(!SaveSync_GetDlcCheck());
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 20, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 20, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 505, nullptr)); // dlc5 unshared
     SaveSync_SetDlcCheck(true);
     TEST_CHECK(SaveSync_GetDlcCheck());
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 20, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 505, nullptr));
 
     SaveSync_SetTestSessionState(SESSION_IDLE);
     return true;

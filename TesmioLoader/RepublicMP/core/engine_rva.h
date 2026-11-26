@@ -73,7 +73,7 @@
 #define WORLD_MAP_EDITOR_MODE_OFFSET      0x10438u
 #endif
 static_assert(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10438u,
-              "WORLD_MAP_EDITOR_MODE_OFFSET must match 1.1.1.13 map editor toggle (0x309EBA / 0x31ED66)");
+              "WORLD_MAP_EDITOR_MODE_OFFSET must match v1.2.0.9 map editor toggle");
 #ifndef WORLD_CAMERA_MGR_PTR_OFF
 #define WORLD_CAMERA_MGR_PTR_OFF    0x0040
 #endif
@@ -108,7 +108,7 @@ static_assert(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10438u,
 #define CAM_MGR_PID_COUNT           7
 #endif
 #ifndef CAM_MGR_PID_STRUCT_BYTES
-#define CAM_MGR_PID_STRUCT_BYTES    0x38u
+#define CAM_MGR_PID_STRUCT_BYTES    0x78u
 #endif
 #ifndef CAM_MGR_TRANS_STEP_OFFSET
 #define CAM_MGR_TRANS_STEP_OFFSET   0x16C
@@ -126,7 +126,7 @@ static_assert(WORLD_MAP_EDITOR_MODE_OFFSET == 0x10438u,
 #define FOLLOW_WIN_VEHICLE_PTR_OFF  0x060
 #endif
 #ifndef CIT_RIDING_VEHICLE_PTR_OFF
-#define CIT_RIDING_VEHICLE_PTR_OFF  0x660
+#define CIT_RIDING_VEHICLE_PTR_OFF  0x060
 #endif
 #ifndef RVA_CAMERA_MGR_UPDATE
 #define RVA_CAMERA_MGR_UPDATE       0x16DE0
@@ -582,7 +582,7 @@ static_assert(WORLD_SYSTAB_SUBPAGE_OFFSET == WORLD_SYSTAB_TAB_PTR_OFFSET + 0x0Cu
               RVA_CITIZEN_FOOT_ARRIVE < RVA_CITIZEN_VEHICLE_ALIGHT &&
               RVA_CITIZEN_EVAL_NEEDS < RVA_CITIZEN_CAN_MOVE_TO_BLD &&
               RVA_CITIZEN_CAN_MOVE_TO_BLD < RVA_CITIZEN_MOVE_TO_BLD,
-              "Tourism & Crime building/citizen step RVAs and WORLD_SYSTAB_TAB_PTR_OFFSET (+0xC650) must match 1.1.1.9 layout");
+              "Tourism & Crime building/citizen step RVAs and WORLD_SYSTAB_TAB_PTR_OFFSET (+0xC6F0) must match v1.2.0.9 layout");
 
 enum SovietLoanCurrency {
     LOAN_CURRENCY_USD = 1,
@@ -771,9 +771,6 @@ struct SovietStatResEntry {
 #ifndef VEH_TYPE_PASSENGER_CAP_OFF
 #define VEH_TYPE_PASSENGER_CAP_OFF  0x148
 #endif
-#ifndef VEH_TYPE_CATEGORY_OFFSET
-#define VEH_TYPE_CATEGORY_OFFSET    0x2B8
-#endif
 #ifndef WORLD_WESTERN_BORDER_BLD_OFF
 #define WORLD_WESTERN_BORDER_BLD_OFF 0x11B98
 #endif
@@ -794,9 +791,6 @@ struct SovietStatResEntry {
 #endif
 #ifndef RVA_VEH_REBUILD_CARGO_SUM
 #define RVA_VEH_REBUILD_CARGO_SUM   0x6F3220
-#endif
-#ifndef RVA_VEH_ADD_STOP_CARGO_RES
-#define RVA_VEH_ADD_STOP_CARGO_RES  0x6F3760
 #endif
 #ifndef RVA_VEH_RELEASE
 #define RVA_VEH_RELEASE             0x6F9320
@@ -1115,7 +1109,7 @@ static_assert(RVA_SPAWN_CITIZEN == 0x864B80 &&
               BLD_CITIZENS_END_OFF == BLD_CITIZENS_BEGIN_OFF + 8 &&
               WORLD_STAT_CURRENT_OFFSET + STAT_IMMIGRANT_SPEND_OFF == 0x11608 &&
               WORLD_STAT_CURRENT_OFFSET + STAT_CITIZEN_COUNTS_OFF + 12 == 0x1161C,
-              "Invite citizens (0x6F8CC0 -> 0x823470) offsets must match 1.1.1.9 layout");
+              "Invite citizens (0x734FDE -> 0x864B80) offsets must match v1.2.0.9 layout");
 static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
               VEH_STOP_RECORD_STRIDE == 0x198 &&
               VEH_STOP_HALF_STRIDE * 2 + 8 == VEH_STOP_RECORD_STRIDE,
@@ -1214,7 +1208,7 @@ static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
 #endif
 
 static_assert(CAMERA_EYE_RVA == CAMERA_RVA + CAMERA_POS_OFFSET,
-              "CAMERA_EYE_RVA (0x9E9D10) must equal CAMERA_RVA (0x9E9C90) + CAMERA_POS_OFFSET (0x80)");
+              "CAMERA_EYE_RVA (0xA33DD0) must equal CAMERA_RVA (0xA33D50) + CAMERA_POS_OFFSET (0x80)");
 static_assert(WORLD_OPEN_WINDOWS_END_OFFSET == WORLD_OPEN_WINDOWS_BEGIN_OFFSET + 8 &&
               WORLD_OPEN_WINDOWS_BEGIN_RVA == WORLD_RVA + WORLD_OPEN_WINDOWS_BEGIN_OFFSET &&
               WORLD_OPEN_WINDOWS_END_RVA == WORLD_OPEN_WINDOWS_BEGIN_RVA + 8 &&
@@ -1222,15 +1216,15 @@ static_assert(WORLD_OPEN_WINDOWS_END_OFFSET == WORLD_OPEN_WINDOWS_BEGIN_OFFSET +
               FN_CURRENCY_DENOMINATION_RVA == 0x318460u &&
               WINDOW_POPUP_TYPE_OFFSET == 0x34u &&
               WINDOW_POPUP_TYPE_DENOMINATION == 0x13,
-              "WORLD_OPEN_WINDOWS_BEGIN/END_RVA (0x9E19D0/0x9E19D8) and currency denomination RVAs/offsets must match 1.1.1.13 layout");
+              "WORLD_OPEN_WINDOWS_BEGIN/END_RVA (0xA2BA80/0xA2BA88) and currency denomination RVAs/offsets must match v1.2.0.9 layout");
 static_assert(WORLD_NOTIF_POPUPS_END_OFFSET == WORLD_NOTIF_POPUPS_BEGIN_OFFSET + 8 &&
               WORLD_BRUSH_SOUNDS_END_OFFSET == WORLD_BRUSH_SOUNDS_BEGIN_OFFSET + 8 &&
               BRUSH_SOUND_ACTIVE_OFFSET == BRUSH_SOUND_VOL_OFFSET + 4 &&
               BRUSH_SOUND_REC_SIZE == 0x110u,
-              "Notification popups (+0xD208..+0xD210) and brush loop sound records (+0xD488..+0xD490, 0x110 stride) must match 1.1.1.9 layout");
+              "Notification popups (+0xD2A8..+0xD2B0) and brush loop sound records (+0xD528..+0xD530, 0x110 stride) must match v1.2.0.9 layout");
 static_assert(WORLD_WARNING_TIMER_OFFSET == WORLD_WARNING_TEXT_OFFSET + WORLD_WARNING_TEXT_BYTES &&
               NOTIF_MSG_POS_Z_OFFSET == NOTIF_MSG_POS_X_OFFSET + 8,
-              "Warning banner timer (+0xF5A0) must follow 0x2000-byte warning text (+0xD5A0), and notification pos Z (+0x4208) must be 8 bytes after pos X (+0x4200)");
+              "Warning banner timer (+0xF640) must follow 0x2000-byte warning text (+0xD640), and notification pos Z (+0x4208) must be 8 bytes after pos X (+0x4200)");
 
 // ---------------------------------------------------------------------------
 // Building Resource Purchase (Manual One-Time Buy & Auto-Purchase) Constants
@@ -1306,7 +1300,7 @@ static_assert(BLD_EXPORT_MODE_OFFSET == BLD_AUTO_BUY_MODE_OFFSET + 4 &&
               SITE_MANUAL_BUY_SKIP_RVA == SITE_MANUAL_BUY_AFTER_RVA + 7u &&
               SITE_AUTO_BUY_APPLY_AFTER_RVA == SITE_BLD_AUTO_BUY_APPLY_RVA + 5u &&
               SITE_AUTO_BUY_APPLY_SKIP_RVA == SITE_AUTO_BUY_APPLY_AFTER_RVA + 7u,
-              "Building resource purchase offsets (+0x9E8/+0x9EC, +0x58/+0x5C, 0x174D60/0x174E60) and auto-buy skip RVAs must match 1.1.1.13 layout");
+              "Building resource purchase offsets and auto-buy skip RVAs must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // C3D Material IAT RVAs (SOVIET64.exe Import Address Table for C3DDLL64.dll)
@@ -1355,7 +1349,7 @@ static_assert(RVA_IAT_RESTORE_ORIGINAL_VALUES == 0x8B25A0, "RVA_IAT_RESTORE_ORIG
 #define RESEARCH_ITEM_INITIAL_OFFSET        0x50u
 #endif
 #ifndef RESEARCH_ITEM_REQ_WORK_OFFSET
-#define RESEARCH_ITEM_REQ_WORK_OFFSET       0x54u
+#define RESEARCH_ITEM_REQ_WORK_OFFSET       0x5Cu
 #endif
 #ifndef RESEARCH_ITEM_AVAILABLE_OFFSET
 #define RESEARCH_ITEM_AVAILABLE_OFFSET      0x11Cu
@@ -1436,13 +1430,13 @@ static_assert(WORLD_RESEARCH_VEC_END_OFFSET == WORLD_RESEARCH_VEC_BEGIN_OFFSET +
 static_assert(RVA_UNASSIGN_CONSTRUCTION_OFFICE == RVA_ASSIGN_CONSTRUCTION_OFFICE + 0x6D0u &&
               RVA_CALLER_OFFICE_ROAD_SCAN < RVA_ASSIGN_CONSTRUCTION_OFFICE &&
               SITE_CONSTRUCT_TOOL_ASSIGN_NET_RVA == SITE_CONSTRUCT_TOOL_START_PLAN_RVA + 0x2Du,
-              "Construction Office assignment RVAs (0x161C90, 0x162360, 0x14119B, 0x1D9FFD/0x1DA02A) must match 1.1.1.9 layout");
+              "Construction Office assignment RVAs must match v1.2.0.9 layout");
 
 static_assert(VEH_TYPE_SCRIPT_NAME_OFFSET == 0x200u &&
               VEH_TYPE_CATEGORY_OFFSET == 0x2B8u &&
               VEH_TYPE_HAS_LICENCE_OFFSET == 0x9CD8u &&
               VEH_TYPE_HAS_LICENCE_OFFSET < WORLD_VEHICLE_TYPE_STRIDE,
-              "VEHICLE_TYPE license & script offsets (+0x200, +0x2B8, +0x9CD8, stride 0xA0C8) must match v1.2.0.8");
+              "VEHICLE_TYPE license & script offsets (+0x200, +0x2B8, +0x9CD8, stride 0xA0C8) must match v1.2.0.9");
 
 
 // ---------------------------------------------------------------------------
@@ -1499,7 +1493,7 @@ static_assert(CITY_DELETE_RVA == CITY_CREATE_RVA + 0x170u &&
               CITY_REASSIGN_BLDS_RVA == CITY_CREATE_RVA + 0xB00u &&
               BLD_CITIZEN_FILTER_END == BLD_CITIZEN_FILTER_AT + 0x10u &&
               VEH_NAME_END_OFFSET == 0x18Cu,
-              "City creation/rename RVAs and building/vehicle name/filter offsets must match 1.1.1.9 layout");
+              "City creation/rename RVAs and building/vehicle name/filter offsets must match v1.2.0.9 layout");
 static_assert(WORLD_TRACKER_BLOCK_OFFSET + WORLD_TRACKER_BLOCK_SIZE == WORLD_LOANS_OFFSET &&
               WORLD_TRACKER_HEALTH_CUR_CNT_OFF == WORLD_TRACKER_HEALTH_CUR_SUM_OFF + 12 * sizeof(float) &&
               WORLD_TRACKER_HEALTH_OLD_SUM_OFF == WORLD_TRACKER_HEALTH_CUR_CNT_OFF + 12 * sizeof(int32_t) &&
@@ -1642,7 +1636,7 @@ static_assert(RVA_MINIMAP_DRAW_BUTTONS == RVA_MINIMAP_DRAW_CONTENT + 0x20C0u &&
               HUD_QUAD_POS_X_RVA == HUD_QUAD_SIZE_X_RVA + 8u &&
               HUD_QUAD_COLOR_RVA == HUD_QUAD_SIZE_X_RVA + 0x24u &&
               RVA_IAT_HUD_DRAW_QUAD == RVA_IAT_HUD_HIT_TEST_QUAD + 0x10u,
-              "Minimap DrawContent/DrawButtons RVAs (0x4BDE80, 0x4BFF40), camera texture and C3D_HUD quad offsets must match 1.1.1.9 layout");
+              "Minimap DrawContent/DrawButtons RVAs, camera texture and C3D_HUD quad offsets must match v1.2.0.9 layout");
 
 // Building working range & auto-search settings (FUN_1401edc40 / FUN_140581080 / FUN_14074e040)
 #ifndef BLD_RECONSTRUCT_THRESHOLDS_OFFSET
@@ -1666,7 +1660,7 @@ static_assert(BLD_RECONSTRUCT_THRESHOLDS_OFFSET == 0xE50u &&
               BLD_AUTOSEARCH_FLAGS_OFFSET == 0x11BCu &&
               BLD_AUTOSEARCH_WIRES_OFFSET == BLD_AUTOSEARCH_FLAGS_OFFSET + 8u &&
               BLD_COLLECT_FLAGS_OFFSET == 0x1271u,
-              "Building search range and auto-search flag offsets must match 1.1.1.9 BUILDING layout");
+              "Building search range and auto-search flag offsets must match v1.2.0.9 BUILDING layout");
 
 // Building TV/Radio studio, Upbringing/Rehabilitation, staff loyalty, and notification alert offsets
 #ifndef WORLD_STUDIOS_BEGIN_OFFSET
@@ -1718,10 +1712,10 @@ static_assert(WORLD_STUDIOS_BEGIN_OFFSET == 0xD2D0u &&
               BLD_ALERT_FINISHED_OFFSET == 0x0E10u &&
               BLD_POLLUTION_ALERT_TOGGLE_OFFSET == 0x0DFCu &&
               BLD_POLLUTION_ALERT_THRESH_OFFSET == 0x0E3Cu,
-              "Studio broadcast, upbringing sliders, staff loyalty, and alert checkbox offsets must match 1.1.1.9 layout");
+              "Studio broadcast, upbringing sliders, staff loyalty, and alert checkbox offsets must match v1.2.0.9 layout");
 
 static_assert(CAM_MGR_PID_PTRS_OFFSET + CAM_MGR_PID_COUNT * sizeof(void*) == 0x150u &&
-              CAM_MGR_PID_STRUCT_BYTES == 0x38u &&
+              CAM_MGR_PID_STRUCT_BYTES == 0x78u &&
               VEH_CORNER_TURN_ANGLE_OFFSET == VEH_CORNER_CUT_APPLIED_OFFSET + 4u &&
               VEH_TRAIL_BUFFER_OFFSET == VEH_TRAIL_DIST_ACCUM_OFFSET + 4u &&
               VEH_TRAIL_BUFFER_OFFSET + VEH_TRAIL_ENTRY_COUNT * VEH_TRAIL_ENTRY_STRIDE == VEH_AXLE_FRONT_POS_OFFSET &&
@@ -1729,7 +1723,7 @@ static_assert(CAM_MGR_PID_PTRS_OFFSET + CAM_MGR_PID_COUNT * sizeof(void*) == 0x1
               BLD_BAY_POINT_STRIDE == 0x20u &&
               RVA_VEH_ARRIVAL_STEP == 0x7025B0 &&
               RVA_VEH_ASSIGN_BAY_PATH == 0x6E6AB0,
-              "Camera manager PID pointers (+0xF8..+0x128) and vehicle trail buffer/axle offsets (+0x1168..+0x130C) must match 1.1.1.9 layout");
+              "Camera manager PID pointers (+0x118..+0x148, 0x78B each) and vehicle trail buffer/axle offsets must match v1.2.0.9 layout");
 
 // Building animated sub-mesh (oil pumpjack / excavator / mine hoist / wind turbine / factory rotor) offsets
 #ifndef BLD_CONSTRUCTION_SITE_OFFSET
@@ -1767,7 +1761,7 @@ static_assert(BLD_CONSTRUCTION_SITE_OFFSET == 0x628u &&
               MESH_ANIM_CTRL_OFFSET == 0x1B0u &&
               ANIM_CTRL_MAX_FRAMES_OFFSET == 0x09Cu &&
               BLD_PASS_BUCKET_COUNTER_RVA == 0x9E03B8u,
-              "Building animated sub-mesh (+0x5E0/+0x5F0), type speed (+0x428), and mesh anim controller (+0x1B0/+0x9C) offsets must match 1.1.1.9 layout");
+              "Building animated sub-mesh (+0x5E0/+0x5F0), type speed (+0x428), and mesh anim controller (+0x1B0/+0x9C) offsets must match v1.2.0.9 layout");
 
 // Building per-type free / total count limit table (world + 0x58, BUILDING::TYPE + 0x208, 0x5F3180 / 0x5F3220 / 0x7AC6B7)
 #ifndef WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET
@@ -1798,7 +1792,7 @@ static_assert(WORLD_BLD_COUNT_LIMIT_VEC_PTR_OFFSET == 0x0080u &&
               RVA_BLD_COUNT_LIMIT_TOOLTIP == 0x7EA697u &&
               RVA_BLD_COUNT_LIMIT_TOOLTIP_FOUND == RVA_BLD_COUNT_LIMIT_TOOLTIP + 0x93u &&
               RVA_BLD_COUNT_LIMIT_TOOLTIP_SKIP == RVA_BLD_COUNT_LIMIT_TOOLTIP + 0x299u,
-              "Building count limit table pointer (+0x58), type limit (+0x208), and check/get/tooltip RVAs (0x5F3180/0x5F3220/0x7AC6B7) must match 1.1.1.13 layout");
+              "Building count limit table pointer (+0x80), type limit (+0x208), and check/get/tooltip RVAs must match v1.2.0.9 layout");
 
 // Distribution office, technical services, waste/transfer copy tools, carrier mechanism & storage slot RVAs
 #ifndef RVA_VEC_CARGO_ENTRY_PUSH_BACK
@@ -1948,7 +1942,7 @@ static_assert(VEH_CARRIED_END_OFFSET == VEH_CARRIED_BEGIN_OFFSET + 8u &&
               SITE_FACTORY_REPLACE_MACHINES_2_RVA == 0x7B3937u &&
               SITE_LINES_LIST_ASSIGN_VEHICLE_RVA == 0x379610u &&
               RVA_LINES_ASSIGN_VEHICLE == 0x4BDF90u,
-              "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, auto replacement RVA, and building copy tool RVAs must match 1.1.1.9 layout");
+              "Carrier mechanism, workplace vehicle list, rail path/waypoint RVAs, auto replacement RVA, and building copy tool RVAs must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // R3 Medium Bugs (#5 Recall Personal Cars, #7 Factory Queue Worker Limit)
@@ -2003,7 +1997,7 @@ static_assert(RVA_DETACH_PERSONAL_CAR == 0x873370u &&
               BLD_FACTORY_MAX_WORKERS_OFFSET == 0x0DF0u &&
               BLD_FACTORY_QUEUE_END_OFFSET == BLD_FACTORY_QUEUE_BEGIN_OFFSET + 8u &&
               FACTORY_QUEUE_ENTRY_STRIDE == 0x48u,
-              "M2 personal car recall (#5) and factory queue worker limit (#7) RVAs and offsets must match 1.1.1.13 layout");
+              "M2 personal car recall (#5) and factory queue worker limit (#7) RVAs and offsets must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // R1 Second-Pass Audit Fixes (BioWaste Container Split/Merge & SetForBio)
@@ -2052,7 +2046,7 @@ static_assert(BLD_STORAGE_OFFSET == 0x970u &&
               BLD_BIO_TRANSFER_LOG0_OFFSET == 0x1308u &&
               BLD_BIO_TRANSFER_LOG1_OFFSET == BLD_BIO_TRANSFER_LOG0_OFFSET + 4u &&
               FLT_BIO_SCALE_130C_RVA == 0x952064u,
-              "M3 R1-1A/1B waste container & SetForBio RVAs/offsets must match 1.1.1.13 layout");
+              "M3 R1-1A/1B waste container & SetForBio RVAs/offsets must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // Firestation Dispatch & Assign-CO Click Mutators (SOVIET64.exe v1.1.1.13)
@@ -2131,7 +2125,7 @@ static_assert(FN_FIRE_DISPATCH_RVA == 0x273440u &&
               SITE_ASSIGN_CO_RECT_RAIL_ASSIGN_RVA == 0x611D05u &&
               SITE_ASSIGN_CO_SINGLE_UNASSIGN_RVA == 0x611E05u &&
               SITE_ASSIGN_CO_RECT_UNASSIGN_RVA == 0x611ED6u,
-              "Firestation dispatch & assign_co click mutator RVAs/offsets must match 1.1.1.13 layout");
+              "Firestation dispatch & assign_co click mutator RVAs/offsets must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // Audit-7 Sync Fixes (SOVIET64.exe v1.1.1.13)
@@ -2407,7 +2401,7 @@ static_assert(FN_DISCARD_VEH_CARGO_RVA == 0x6F2F30u &&
               SITE_GAME_RULES_REBUILD_1_RVA == 0x355D4Cu &&
               SITE_GAME_RULES_REBUILD_2_RVA == 0x35921Cu &&
               SITE_GAME_RULES_REBUILD_3_RVA == 0x83F47Cu,
-              "Audit-7 sync fix RVAs and offsets must match 1.1.1.13 layout");
+              "Audit-7 sync fix RVAs and offsets must match v1.2.0.9 layout");
 
 // ---------------------------------------------------------------------------
 // Hotfix v1.7.1: Crash B (Filling worker UAF), Client Exit-to-Menu, Crash A (Signal block)
@@ -2490,7 +2484,7 @@ static_assert(VEC_FILLING_VEHICLES_BEGIN_RVA == 0xA31800u &&
               SIGNAL_BLOCK_NODE_PTR_OFFSET == 0x08u &&
               SIGNAL_BLOCK_KIND_OFFSET == 0x14u &&
               SIGNAL_BLOCK_KIND_SKIP == 0x0Au,
-              "Hotfix v1.7.1 RVAs and struct offsets must match SOVIET64.exe 1.1.1.13 disassembly");
+              "Hotfix v1.7.1 RVAs and struct offsets must match SOVIET64.exe v1.2.0.9 disassembly");
 
 // Rail Construction Office (RCO) & Rail Construction Fixes (v1.1.1.13)
 // Site CO-enable (0x160570) & Site Suspend/Cancel (0x161440) UI caller return RVAs (call + 5)
@@ -2574,7 +2568,324 @@ static_assert(BLD_STOPPED_OFFSET == 0x879u &&
               RVA_CALLER_RAIL_CHAIN_ASSIGN < RVA_ASSIGN_CONSTRUCTION_OFFICE &&
               BLD_CAT_RAIL_CO == 28u && BLD_CAT_DEMOLISH_CO == 106u &&
               BLD_IS_DEMOLITION_SITE_OFFSET == BLD_IS_PLANNED_OFF,
-              "RCO/Rail construction RVAs and offsets must match SOVIET64.exe 1.1.1.13 disassembly");
+              "RCO/Rail construction RVAs and offsets must match SOVIET64.exe v1.2.0.9 disassembly");
+
+// Space Program DLC (dlc5) offsets & RVAs (v1.2.0.9, PE 6B05A574)
+#ifndef WORLD_ACTIVE_ORBIT_VIEW_OFFSET
+#define WORLD_ACTIVE_ORBIT_VIEW_OFFSET      0x0014u // Local UI selected orbit index - NEVER hash
+#endif
+#ifndef WORLD_ORBIT_CLOCK_OFFSET
+#define WORLD_ORBIT_CLOCK_OFFSET            0x0018u // float global orbital clock (orbits.dta header)
+#endif
+#ifndef WORLD_ORBITS_VEC_OFFSET
+#define WORLD_ORBITS_VEC_OFFSET             0x0020u // std::vector<ORBIT_SLOT> (+0x20 begin, +0x28 end)
+#endif
+#ifndef ORBIT_SLOT_STRIDE
+#define ORBIT_SLOT_STRIDE                   0x0060u // sizeof(ORBIT_SLOT) == 96 bytes (flat POD in orbits.dta)
+#endif
+#ifndef ORBIT_SLOT_TYPE_OFFSET
+#define ORBIT_SLOT_TYPE_OFFSET              0x0028u // int32_t orbit type/direction (from pad+0xCD8)
+#endif
+#ifndef ORBIT_SLOT_START_CLOCK_OFFSET
+#define ORBIT_SLOT_START_CLOCK_OFFSET       0x0044u // float orbit start clock (synced in LoadOrbits)
+#endif
+#ifndef VEH_ORBIT_INDEX_OFFSET
+#define VEH_ORBIT_INDEX_OFFSET              0x175Cu // int32_t m_iVehicleOrbitIndex (-1 when not on orbit)
+#endif
+#ifndef VEH_TARGET_ORBIT_INDEX_OFFSET
+#define VEH_TARGET_ORBIT_INDEX_OFFSET       0x1760u // int32_t m_iTargetOrbitIndex (-1 deorbit, -2 reentry, >=0 target orbit)
+#endif
+#ifndef VEH_SPACE_DOCK_PARTNER_OFFSET
+#define VEH_SPACE_DOCK_PARTNER_OFFSET       0x1768u // Vehicle* docked/approaching orbital station
+#endif
+#ifndef VEH_SPACE_DOCK_SLOT_OFFSET
+#define VEH_SPACE_DOCK_SLOT_OFFSET          0x1770u // int32_t docking port index (-1 when undocked)
+#endif
+#ifndef VEH_SPACE_DOCK_APPROACH_FLAG_OFF
+#define VEH_SPACE_DOCK_APPROACH_FLAG_OFF    0x17B4u // uint8_t orbital docking approach flag (cleared by 0x693D40 at 0x693E1F)
+#endif
+#ifndef VEH_ROCKET_PROGRESS_OFFSET
+#define VEH_ROCKET_PROGRESS_OFFSET          0x1A68u // float rocket flight progress (0.0f..1.0f, 0.999f on deorbit/abort)
+#endif
+#ifndef VEH_ROCKET_FLIGHT_STATE_OFFSET
+#define VEH_ROCKET_FLIGHT_STATE_OFFSET      0x1A6Cu // int32_t HorseFast (0=ground, 1=launch/orbit, 2=reentry, 10/11=abort)
+#endif
+#ifndef VEH_TYPE_ROCKET_FLAG_OFFSET
+#define VEH_TYPE_ROCKET_FLAG_OFFSET         0x0294u // uint8_t $SPACE_ROCKET (+0x295 $SPACE_ROCKET_BIG)
+#endif
+#ifndef VEH_TYPE_ROCKETPART_FLAG_OFFSET
+#define VEH_TYPE_ROCKETPART_FLAG_OFFSET     0x0296u // uint8_t $SPACE_ROCKETPART (+0x297 $SPACE_ROCKETPART_BIG)
+#endif
+#ifndef VEH_TYPE_SPACECRAFT_FLAG_OFFSET
+#define VEH_TYPE_SPACECRAFT_FLAG_OFFSET     0x0298u // uint8_t $SPACE_SHIP (+0x299 $SPACE_SHIP_BIG)
+#endif
+#ifndef VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET
+#define VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET  0x029Au // uint8_t $SPACE_SHIP_REENTRY (also sets +0x298)
+#endif
+#ifndef VEH_TYPE_SPACE_STAGES_BEGIN_OFFSET
+#define VEH_TYPE_SPACE_STAGES_BEGIN_OFFSET  0x9F60u // std::vector<RocketStage> (+0x9F60 begin, +0x9F68 end, stride 0x2A8, stage vt at +0x100)
+#endif
+#ifndef VEH_TYPE_SPACE_STAGE_STRIDE
+#define VEH_TYPE_SPACE_STAGE_STRIDE         0x02A8u
+#endif
+#ifndef VEH_TYPE_SPACE_STAGE_VT_OFF
+#define VEH_TYPE_SPACE_STAGE_VT_OFF         0x0100u
+#endif
+#ifndef VEH_TYPE_BUILT_IN_PROD_OFFSET
+#define VEH_TYPE_BUILT_IN_PROD_OFFSET       0x9CE4u // int32_t $VEHICLE_BUILT_IN_PRODUCTION_LINE
+#endif
+#ifndef VEH_TYPE_SPACE_ORBIT_OFFSET
+#define VEH_TYPE_SPACE_ORBIT_OFFSET         0x9CE8u // int32_t $VEHICLE_SPACE_REACHED_ORBIT
+#endif
+#ifndef VEH_TYPE_SPACE_REENTRY_OFFSET
+#define VEH_TYPE_SPACE_REENTRY_OFFSET       0x9CECu // int32_t $VEHICLE_SPACE_REENTRY_LANDED
+#endif
+#ifndef RVA_ORBIT_SIM_STEP
+#define RVA_ORBIT_SIM_STEP                  0x41D240u
+#endif
+#ifndef RVA_SAVE_ORBITS
+#define RVA_SAVE_ORBITS                     0x41DC60u
+#endif
+#ifndef RVA_LOAD_ORBITS
+#define RVA_LOAD_ORBITS                     0x41DD60u
+#endif
+#ifndef RVA_SPACE_MC_RAND1_RET
+#define RVA_SPACE_MC_RAND1_RET              0x791F28u // 0x791F22 + 6 crt!rand in Mission Control UI
+#endif
+#ifndef RVA_SPACE_MC_RAND2_RET
+#define RVA_SPACE_MC_RAND2_RET              0x791F4Du // 0x791F47 + 6 crt!rand in Mission Control UI
+#endif
+#ifndef RVA_SPACE_EXHAUST_RAND_RET
+#define RVA_SPACE_EXHAUST_RAND_RET          0x698098u // 0x698092 + 6 C3DRandom_Int in rocket exhaust particles
+#endif
+#ifndef RVA_SPACE_SOUND_RAND1_RET
+#define RVA_SPACE_SOUND_RAND1_RET           0x6901E5u // 0x6901DF + 6 C3DRandom_Float in rocket 3D sound playback
+#endif
+#ifndef RVA_SPACE_SOUND_RAND2_RET
+#define RVA_SPACE_SOUND_RAND2_RET           0x691C5Du // 0x691C57 + 6 C3DRandom_Float in rocket 3D sound playback
+#endif
+#ifndef RVA_SPACE_SOUND_RAND3_RET
+#define RVA_SPACE_SOUND_RAND3_RET           0x695EAEu // 0x695EA8 + 6 C3DRandom_Float in rocket 3D sound playback
+#endif
+
+// Space Program (dlc5) Launch Pad orbit config & vehicle dynamic exclusions (v1.2.0.9)
+#ifndef BLD_CAT_POLLUTION_MONITOR
+#define BLD_CAT_POLLUTION_MONITOR           0x24u     // Pollution monitoring station (uses +0x0E3C for alert threshold)
+#endif
+#ifndef BLD_CAT_SPACE_LAUNCH_PAD
+#define BLD_CAT_SPACE_LAUNCH_PAD            0x2Fu     // Launch Pad category at BUILDING::TYPE+0x368 ($TYPE_AIRPLANE_PARKING)
+#endif
+#ifndef BLD_TYPE_SUBTYPE_OFF
+#define BLD_TYPE_SUBTYPE_OFF                0x036Cu   // int32_t BUILDING::TYPE subtype (0x2D small pad, 0x30 Proton pad in 0x78EA94)
+#endif
+#ifndef BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL
+#define BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL  0x2Du     // Small rocket launch pad subtype at BUILDING::TYPE+0x36C
+#endif
+#ifndef BLD_SUBTYPE_SPACE_LAUNCH_PAD_BIG
+#define BLD_SUBTYPE_SPACE_LAUNCH_PAD_BIG    0x30u     // Heavy (Proton) rocket launch pad subtype at BUILDING::TYPE+0x36C
+#endif
+#ifndef BLD_LAUNCH_PAD_ORBIT_TYPE_OFF
+#define BLD_LAUNCH_PAD_ORBIT_TYPE_OFF       0x0CD8u   // int32_t orbit type/direction on Launch Pad (overlaps BLD_CITIZEN_FILTER_AT)
+#endif
+#ifndef BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF
+#define BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF 0x0E34u // 4 floats: 0xE34, 0xE38, 0xE3C, 0xE40 (orbit inclination/phase/apoapsis/periapsis)
+#endif
+#ifndef BLD_LAUNCH_PAD_ORBIT_PARAMS_END_OFF
+#define BLD_LAUNCH_PAD_ORBIT_PARAMS_END_OFF 0x0E44u
+#endif
+#ifndef VEH_SPACE_DYN_664_BEGIN_OFF
+#define VEH_SPACE_DYN_664_BEGIN_OFF         0x0664u   // float orbital dwell timer (increments in orbit; Reentry unlocks at >= 60.0f)
+#endif
+#ifndef VEH_SPACE_DYN_664_END_OFF
+#define VEH_SPACE_DYN_664_END_OFF           0x0668u
+#endif
+#ifndef VEH_SPACE_ORBIT_DYNAMIC_BEGIN_OFF
+#define VEH_SPACE_ORBIT_DYNAMIC_BEGIN_OFF   0x175Cu   // +0x175C..+0x1770 orbitIdx, targetOrbitIdx, dockPartner ptr, dockSlot
+#endif
+#ifndef VEH_SPACE_ORBIT_DYNAMIC_END_OFF
+#define VEH_SPACE_ORBIT_DYNAMIC_END_OFF     0x1774u
+#endif
+#ifndef VEH_SPACE_DYN_1774_BEGIN_OFF
+#define VEH_SPACE_DYN_1774_BEGIN_OFF        0x1774u   // +0x1774..+0x17B8 dynamic orbital docking / approach kinematics
+#endif
+#ifndef VEH_SPACE_DYN_1774_END_OFF
+#define VEH_SPACE_DYN_1774_END_OFF          0x17B8u
+#endif
+#ifndef VEH_SPACE_DYN_1860_BEGIN_OFF
+#define VEH_SPACE_DYN_1860_BEGIN_OFF        0x1860u   // +0x1860..+0x1868 dynamic space propulsion/state
+#endif
+#ifndef VEH_SPACE_DYN_1860_END_OFF
+#define VEH_SPACE_DYN_1860_END_OFF          0x1868u
+#endif
+#ifndef VEH_SPACE_DYN_1938_BEGIN_OFF
+#define VEH_SPACE_DYN_1938_BEGIN_OFF        0x1938u   // +0x1938..+0x1940 dynamic space telemetry/render state
+#endif
+#ifndef VEH_SPACE_DYN_1938_END_OFF
+#define VEH_SPACE_DYN_1938_END_OFF          0x1940u
+#endif
+#ifndef VEH_SPACE_STAGE_DYNAMIC_BEGIN_OFF
+#define VEH_SPACE_STAGE_DYNAMIC_BEGIN_OFF   0x1AD8u   // +0x1AD8/+0x1AF0 stage vectors, +0x1B08 counters, +0x1B10 exhaust timer
+#endif
+#ifndef VEH_SPACE_STAGE_DYNAMIC_END_OFF
+#define VEH_SPACE_STAGE_DYNAMIC_END_OFF     0x1B18u
+#endif
+#ifndef VEH_SPACE_DYN_1B50_BEGIN_OFF
+#define VEH_SPACE_DYN_1B50_BEGIN_OFF        0x1B50u   // +0x1B50..+0x1B78 dynamic space reentry/parachute/stage timers
+#endif
+#ifndef VEH_SPACE_DYN_1B50_END_OFF
+#define VEH_SPACE_DYN_1B50_END_OFF          0x1B78u
+#endif
+#ifndef VEH_SPACE_TIMER_DYNAMIC_BEGIN_OFF
+#define VEH_SPACE_TIMER_DYNAMIC_BEGIN_OFF   0x1B78u   // rocket failure / burnup / stage simulation timers
+#endif
+#ifndef VEH_SPACE_TIMER_DYNAMIC_END_OFF
+#define VEH_SPACE_TIMER_DYNAMIC_END_OFF     0x1B98u
+#endif
+
+// Space Program (dlc5) Mutator routines & UI call/patch sites (v1.2.0.9)
+#ifndef SITE_TOOL_ORBITAL_ATTACH_RVA
+#define SITE_TOOL_ORBITAL_ATTACH_RVA        0x332D05u // call 0x2D2B30 in Late dispatch for "orbital_attach"
+#endif
+#ifndef FN_TOOL_ORBITAL_ATTACH_RVA
+#define FN_TOOL_ORBITAL_ATTACH_RVA          0x2D2B30u // orbital_attach tool handler
+#endif
+#ifndef FN_SPACE_LAUNCH_ROCKET_RVA
+#define FN_SPACE_LAUNCH_ROCKET_RVA          0x698720u // void __fastcall(Vehicle* rcx, int targetOrbitIdx edx)
+#endif
+#ifndef FN_SPACE_ORBIT_ATTACH_RVA
+#define FN_SPACE_ORBIT_ATTACH_RVA           0x693B00u // void __fastcall(Vehicle* spacecraft rcx, Vehicle* station rdx, int dockSlot r8d)
+#endif
+#ifndef FN_SPACE_ORBIT_DETACH_RVA
+#define FN_SPACE_ORBIT_DETACH_RVA           0x693D40u // void __fastcall(Vehicle* spacecraft rcx)
+#endif
+#ifndef FN_SPACE_HAS_REENTRY_RVA
+#define FN_SPACE_HAS_REENTRY_RVA            0x694920u // bool __fastcall(Vehicle* rcx): true if another vehicle shares orbitIdx
+#endif
+#ifndef FN_SPACE_SETUP_REENTRY_RVA
+#define FN_SPACE_SETUP_REENTRY_RVA          0x694710u // void __fastcall(Vehicle* rcx)
+#endif
+#ifndef FN_SPACE_SETUP_DEORBIT_RVA
+#define FN_SPACE_SETUP_DEORBIT_RVA          0x694310u // void __fastcall(Vehicle* rcx)
+#endif
+#ifndef SITE_SPACE_LAUNCH_NEW_ORBIT_RVA
+#define SITE_SPACE_LAUNCH_NEW_ORBIT_RVA     0x78FEEBu // call 0x698720 (Launch Pad new/configured orbit)
+#endif
+#ifndef SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA
+#define SITE_SPACE_LAUNCH_CATCH_ORBIT_RVA   0x79031Au // call 0x698720 (Launch Pad catch/existing orbit)
+#endif
+#ifndef SITE_SPACE_ORBIT_ATTACH_RVA
+#define SITE_SPACE_ORBIT_ATTACH_RVA         0x2D31DFu // call 0x693B00 (orbital_attach tool)
+#endif
+#ifndef SITE_SPACE_ORBIT_DETACH_RVA
+#define SITE_SPACE_ORBIT_DETACH_RVA         0x817674u // call 0x693D40 (Vehicle window undock button)
+#endif
+#ifndef SITE_SPACE_REENTRY_PATCH_RVA
+#define SITE_SPACE_REENTRY_PATCH_RVA        0x819293u // 22B pre-mutation block in Vehicle window button 0x0A
+#endif
+#ifndef SITE_SPACE_DEORBIT_ABORT_PATCH_RVA
+#define SITE_SPACE_DEORBIT_ABORT_PATCH_RVA  0x819544u // 22B entry of Deorbit/Abort block in Vehicle window button 0x0D
+#endif
+#ifndef SITE_SPACE_VEH_WIN_EXIT_RVA
+#define SITE_SPACE_VEH_WIN_EXIT_RVA         0x819815u // Vehicle window switch-case break target
+#endif
+
+// Space Program (dlc5) Phase 4 Two-States Space Race RVAs & offsets (v1.2.0.9)
+#ifndef WORLD_SPACE_CARGO_WEST_UNLOCK_OFF
+#define WORLD_SPACE_CARGO_WEST_UNLOCK_OFF   0x11BA8u  // uint8_t written by 0x314920 (spacecargo_west)
+#endif
+#ifndef WORLD_SPACE_CARGO_EAST_UNLOCK_OFF
+#define WORLD_SPACE_CARGO_EAST_UNLOCK_OFF   0x11BA9u  // uint8_t written by 0x314920 (spacecargo_east)
+#endif
+#ifndef WORLD_MISSION_CONTROL_BLD_PTR_OFF
+#define WORLD_MISSION_CONTROL_BLD_PTR_OFF   0x11BB0u  // Building* global cached Mission Control (0x1BA1EE / 0x17ECD0)
+#endif
+#ifndef BLD_CAT_MISSION_CONTROL
+#define BLD_CAT_MISSION_CONTROL             0x30u
+#endif
+#ifndef BLD_SUBTYPE_MISSION_CONTROL
+#define BLD_SUBTYPE_MISSION_CONTROL         0x2Du
+#endif
+#ifndef STAT_VEHICLES_EXPORT_USD_OFF
+#define STAT_VEHICLES_EXPORT_USD_OFF        0x190u    // float $Vehicles_ExportUSD inside $STAT_CURRENT (WORLD+0x11558)
+#endif
+#ifndef STAT_VEHICLES_EXPORT_RUB_OFF
+#define STAT_VEHICLES_EXPORT_RUB_OFF        0x194u    // float $Vehicles_ExportRUB inside $STAT_CURRENT (WORLD+0x1155C)
+#endif
+#ifndef WINDOW_POPUP_TYPE_SPACE_PAYOUT
+#define WINDOW_POPUP_TYPE_SPACE_PAYOUT      0x27      // 0x7242F0(WORLD, kind=4, 0, subkind=4, 0, 0x27, stringId=0, 0, 0)
+#endif
+#ifndef RVA_PROD_LINE_STEP
+#define RVA_PROD_LINE_STEP                  0x1E42C0u // void __fastcall(BYTE* world, BYTE* building) (cat 0x28 rocket/veh factories)
+#endif
+#ifndef RVA_CREATE_VEHICLE
+#define RVA_CREATE_VEHICLE                  0x403E60u // BYTE* __fastcall(WORLD*, VT*, BLD*, ...) (arg7 byte = factoryBuilt -> +0x9CE4)
+#endif
+#ifndef RVA_SPACE_VEH_ORBIT_STEP
+#define RVA_SPACE_VEH_ORBIT_STEP            0x695AC0u // void __fastcall(BYTE* veh) (+0x9CE8, commercial export payout, split orbit)
+#endif
+#ifndef RVA_SPACE_VEH_REENTRY_STEP
+#define RVA_SPACE_VEH_REENTRY_STEP          0x692790u // void __fastcall(BYTE* veh) (+0x9CEC landing milestone)
+#endif
+#ifndef RVA_REMOVE_ORBIT
+#define RVA_REMOVE_ORBIT                    0x41DAB0u // void __fastcall(BYTE* world, int orbitIdx) (all 6 orbit erase callers)
+#endif
+#ifndef RVA_SPAWN_SPACE_CARGO_AT_BORDER
+#define RVA_SPAWN_SPACE_CARGO_AT_BORDER     0x314A60u // void __fastcall(BYTE* world) (competitive space_cargo_* border spawn)
+#endif
+#ifndef RVA_MISSION_CONTROL_WINDOW
+#define RVA_MISSION_CONTROL_WINDOW          0x78DB70u // void __fastcall(BYTE* world, BYTE* window) (Mission Control UI)
+#endif
+#ifndef RVA_TOP_BAR_HUD_DRAW
+#define RVA_TOP_BAR_HUD_DRAW                0x094020u // void __fastcall(BYTE* world) (top HUD space shortcut -> [WORLD+0x11BB0])
+#endif
+
+static_assert(WORLD_ORBIT_CLOCK_OFFSET == 0x18u &&
+              WORLD_ORBITS_VEC_OFFSET == 0x20u &&
+              ORBIT_SLOT_STRIDE == 0x60u &&
+              ORBIT_SLOT_TYPE_OFFSET + 4u <= ORBIT_SLOT_STRIDE &&
+              ORBIT_SLOT_START_CLOCK_OFFSET + 4u <= ORBIT_SLOT_STRIDE &&
+              VEH_TARGET_ORBIT_INDEX_OFFSET == VEH_ORBIT_INDEX_OFFSET + 4u &&
+              VEH_SPACE_DOCK_PARTNER_OFFSET == VEH_ORBIT_INDEX_OFFSET + 12u &&
+              VEH_SPACE_DOCK_SLOT_OFFSET == VEH_SPACE_DOCK_PARTNER_OFFSET + 8u &&
+              VEH_ROCKET_FLIGHT_STATE_OFFSET == VEH_ROCKET_PROGRESS_OFFSET + 4u &&
+              VEH_TYPE_ROCKET_FLAG_OFFSET == 0x0294u &&
+              VEH_TYPE_ROCKETPART_FLAG_OFFSET == 0x0296u &&
+              VEH_TYPE_SPACECRAFT_FLAG_OFFSET == 0x0298u &&
+              VEH_TYPE_SPACE_REENTRY_FLAG_OFFSET == 0x029Au &&
+              VEH_TYPE_SPACE_ORBIT_OFFSET == VEH_TYPE_BUILT_IN_PROD_OFFSET + 4u &&
+              VEH_TYPE_SPACE_REENTRY_OFFSET == VEH_TYPE_SPACE_ORBIT_OFFSET + 4u &&
+              RVA_SPACE_MC_RAND1_RET < RVA_SPACE_MC_RAND2_RET &&
+              RVA_SPACE_SOUND_RAND1_RET < RVA_SPACE_SOUND_RAND2_RET &&
+              RVA_SPACE_SOUND_RAND2_RET < RVA_SPACE_SOUND_RAND3_RET &&
+              BLD_CAT_SPACE_LAUNCH_PAD == 0x2Fu &&
+              BLD_TYPE_SUBTYPE_OFF == 0x036Cu &&
+              BLD_SUBTYPE_SPACE_LAUNCH_PAD_SMALL == 0x2Du &&
+              BLD_SUBTYPE_SPACE_LAUNCH_PAD_BIG == 0x30u &&
+              BLD_LAUNCH_PAD_ORBIT_PARAMS_END_OFF == BLD_LAUNCH_PAD_ORBIT_PARAMS_BEGIN_OFF + 16u &&
+              VEH_SPACE_ORBIT_DYNAMIC_BEGIN_OFF == VEH_ORBIT_INDEX_OFFSET &&
+              VEH_SPACE_ORBIT_DYNAMIC_END_OFF == VEH_SPACE_DOCK_SLOT_OFFSET + 4u &&
+              VEH_SPACE_DYN_1774_BEGIN_OFF == VEH_SPACE_ORBIT_DYNAMIC_END_OFF &&
+              VEH_SPACE_DOCK_APPROACH_FLAG_OFF >= VEH_SPACE_DYN_1774_BEGIN_OFF &&
+              VEH_SPACE_DOCK_APPROACH_FLAG_OFF < VEH_SPACE_DYN_1774_END_OFF &&
+              VEH_SPACE_STAGE_DYNAMIC_BEGIN_OFF < VEH_SPACE_STAGE_DYNAMIC_END_OFF &&
+              VEH_SPACE_DYN_1B50_END_OFF == VEH_SPACE_TIMER_DYNAMIC_BEGIN_OFF &&
+              VEH_SPACE_TIMER_DYNAMIC_BEGIN_OFF < VEH_SPACE_TIMER_DYNAMIC_END_OFF &&
+              SITE_SPACE_REENTRY_PATCH_RVA < SITE_SPACE_DEORBIT_ABORT_PATCH_RVA &&
+              SITE_SPACE_DEORBIT_ABORT_PATCH_RVA < SITE_SPACE_VEH_WIN_EXIT_RVA &&
+              RESEARCH_ITEM_REQ_WORK_OFFSET == 0x5Cu &&
+              CIT_RIDING_VEHICLE_PTR_OFF == 0x060 &&
+              WORLD_SPACE_CARGO_EAST_UNLOCK_OFF == WORLD_SPACE_CARGO_WEST_UNLOCK_OFF + 1u &&
+              WORLD_MISSION_CONTROL_BLD_PTR_OFF == 0x11BB0u &&
+              STAT_VEHICLES_EXPORT_RUB_OFF == STAT_VEHICLES_EXPORT_USD_OFF + 4u &&
+              RVA_TOP_BAR_HUD_DRAW < RVA_PROD_LINE_STEP &&
+              RVA_PROD_LINE_STEP < RVA_SPAWN_SPACE_CARGO_AT_BORDER &&
+              RVA_SPAWN_SPACE_CARGO_AT_BORDER < RVA_CREATE_VEHICLE &&
+              RVA_CREATE_VEHICLE < RVA_REMOVE_ORBIT &&
+              RVA_REMOVE_ORBIT < RVA_SPACE_VEH_REENTRY_STEP &&
+              RVA_SPACE_VEH_REENTRY_STEP < RVA_SPACE_VEH_ORBIT_STEP &&
+              RVA_SPACE_VEH_ORBIT_STEP < RVA_MISSION_CONTROL_WINDOW,
+              "Space Program (dlc5) v1.2.0.9 RVAs and offsets must remain consistent");
+
 
 
 

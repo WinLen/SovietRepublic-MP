@@ -1,4 +1,4 @@
-[h1]☭ RepublicMP v1.7.4 — Кооперативный мультиплеер (RU / EN)[/h1]
+[h1]☭ RepublicMP v1.8.0 — Кооперативный мультиплеер (RU / EN)[/h1]
 
 Кооперативный мод с синхронизацией [b]Lockstep[/b], входом через [b]Steam P2P в 1 клик[/b] и [b]автопоиском по локальной сети (LAN / Radmin VPN / Hamachi / ZeroTier, работает без Steam)[/b], интеграцией в [b]нативное меню игры[/b] (поддержка [b]v1.2.0.9[/b]), режимом [b]«Два государства на одной карте»[/b], [b]авто-синхронизацией модов Workshop[/b] и [b]60–144+ FPS интерполяцией[/b]!
 
@@ -9,17 +9,17 @@
   1. [b]Одно государство[/b] — общий бюджет и совместное строительство всей республики.
   2. [b]Два государства на одной карте (Западная и Восточная ССР)[/b] — деление карты ([i]X < 0[/i] и [i]X > 0[/i]) с общей погранзоной ([i]150 / 250 / 500 / 1000 м[/i]) и разметкой на миникарте:
      • [b]Раздельная казна и банк:[/b] свои рубли/доллары (100% каждому или 50/50), переводы ([b]50 000 РУБ / $[/b]) и раздельные кредиты, инфляция и статистика.
-     • [b]Изолированные исследования, экономика и население:[/b] независимые деревья исследований, лицензии техники, лимиты бесплатных зданий, общежития, здоровье/лояльность граждан, склады и авто-закупки.
+     • [b]Изолированные исследования, космос и население:[/b] свои деревья исследований, лицензии, лимиты зданий, [b]Космическая гонка (dlc5)[/b] (раздельные орбиты, запуски, вехи, ЦУП и выплаты), здоровье/лояльность, склады и авто-закупки.
 [*] [b]Полная синхронизация и плавность 60–144+ FPS:[/b]
   • Плавное движение авто, поездов, вагонов, прицепов, колёс, камер и локальная анимация зданий.
   • Ползунки колесом мыши, автозамена техники, очереди заводов, путевые точки, фильтры мусора, распределители, СКБ/РСУ, соединение сегментов.
-  • 3D-камеры обоих игроков и все скорости игры ([b]>[/b], [b]>>[/b], [b]>>>[/b]), изоляция чужих звуков.
+  • 3D-камеры обоих игроков и все скорости игры ([b]>[/b], [b]>>[/b], [b]>>>[/b]), изоляция чужих звуков; тумблер отчётов о вылетах в Настройках.
 [*] [b]Авто-синхронизация модов Workshop, DLC и автосейвы:[/b]
   • Режимы [b]«Моды: Хоста»[/b] / [b]«Из сейва»[/b] с докачкой до упаковки сейва. Детерминированные автосейвы каждые 10 мин ([i]coop_autosave[/i]), ZIP64/UTF-8 сейвы, банк [i]save_coop[/i], прыжок ([b]F6[/b]), граница ([b]F7[/b]), маяки ([b]Alt + ЛКМ[/b]).
 [/list]
 
 [h2]🚀 Установка и запуск (RU):[/h2]
-1. Подпишитесь на мод в Steam Workshop (оба игрока, [b]v1.7.4[/b]).
+1. Подпишитесь на мод в Steam Workshop (оба игрока, [b]v1.8.0[/b]).
 2. Откройте папку мода (`Steam\steamapps\workshop\content\784150\3823543010\`) и [b]один раз[/b] запустите [b]START-COOP.bat[/b] (скопирует `dinput8.dll` и иконки в папку игры `SovietRepublic\`).
 3. Далее запускайте игру кнопкой [b]«Играть»[/b] в Steam — обновления подхватываются автоматически!
 4. [b]Хост:[/b] `КООПЕРАТИВ` -> `Создать сервер` -> `Продолжить кооп` / `Кооп-сохранения` / `Импорт одиночного` / `Новая своя игра` (локальный/VPN IP с кнопкой копирования виден в лобби и панели).
@@ -27,7 +27,7 @@
 
 [hr][/hr]
 
-[h1]🇬🇧 RepublicMP v1.7.4 — Co-op Multiplayer for Workers & Resources[/h1]
+[h1]🇬🇧 RepublicMP v1.8.0 — Co-op Multiplayer for Workers & Resources[/h1]
 
 Deterministic ([b]Lockstep[/b]) co-op mod with [b]1-click Steam P2P & Steam-free LAN auto-discovery[/b] (LAN / Radmin VPN / Hamachi / ZeroTier), native UI (game [b]v1.2.0.9[/b]), [b]"Two States on One Map"[/b], [b]Workshop mod sync[/b], and [b]60–144+ FPS interpolation[/b]!
 
@@ -38,17 +38,17 @@ Deterministic ([b]Lockstep[/b]) co-op mod with [b]1-click Steam P2P & Steam-free
   1. [b]One State[/b] — shared treasury and joint construction.
   2. [b]Two States on One Map (Western & Eastern SSR)[/b] — splits map ([i]X < 0[/i] / [i]X > 0[/i]) with a Shared Border Zone ([i]150–1000 m[/i]) and minimap territory overlay:
      • [b]Separate Treasuries & Banking:[/b] own RUB/USD (100% or 50/50), transfers ([b]50,000[/b]), independent loans, inflation, and economy stats.
-     • [b]Isolated Research, Economy & Citizens:[/b] independent research trees, vehicle licenses, free-building limits, hostels, health/loyalty trackers, and warehouses.
+     • [b]Isolated Research, Space & Citizens:[/b] independent research trees, licenses, building limits, [b]Space Race (dlc5)[/b] (per-state orbits, launches, milestones, Mission Control & payouts), health/loyalty, warehouses.
 [*] [b]Full Sync & Smooth 60–144+ FPS:[/b]
   • Smooth vehicles, trains, trailers, wheels, follow cameras, and full-FPS building animations.
   • Syncs mouse-wheel sliders, vehicle auto-replace, factory queues, waypoints, waste filters, distribution/tech offices, and join-segments.
-  • Saved 3D cameras per player, all speeds ([b]>[/b], [b]>>[/b], [b]>>>[/b]), remote sound isolation.
+  • Saved 3D cameras per player, all speeds ([b]>[/b], [b]>>[/b], [b]>>>[/b]), sound isolation, crash-log toggle in Settings.
 [*] [b]Workshop Mod Sync, DLC Guard & Autosaves:[/b]
   • Pre-save mod sync with 1-click download/restart. Deterministic 10-min autosaves ([i]coop_autosave[/i]), ZIP64/UTF-8 saves, [i]save_coop[/i] bank, [b]F6[/b]/[b]F7[/b]/[b]Alt+LMB[/b].
 [/list]
 
 [h2]🚀 Installation & Launch (EN):[/h2]
-1. Subscribe to this Workshop mod (both players, [b]v1.7.4[/b]).
+1. Subscribe to this Workshop mod (both players, [b]v1.8.0[/b]).
 2. Open (`Steam\steamapps\workshop\content\784150\3823543010\`) and run [b]START-COOP.bat[/b] [b]once[/b] (installs `dinput8.dll` and icons into `SovietRepublic\`).
 3. Launch via [b]"Play"[/b] in Steam — Workshop updates load automatically!
 4. [b]Host:[/b] `CO-OP` -> `Host Server` -> `Continue Co-op` / `Co-op Saves` / `Import Singleplayer` / `New Custom Game` (local/VPN IP + Copy IP shown in lobby & sidebar).

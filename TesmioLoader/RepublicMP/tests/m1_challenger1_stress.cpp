@@ -482,8 +482,8 @@ static bool Adversarial_R5_DlcRoadFilteringStress()
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 31, nullptr)); // Blocked (DLC3)
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 32, nullptr));
 
-    // 3. Boundary tests for ranges (199, 200..299, 300..399, 400..499, 500)
-    printf("      [R5 Stress] Boundary check: Ranges 200s, 300s, 400s, 500 ...\n"); fflush(stdout);
+    // 3. Boundary tests for ranges (199, 200..299, 300..399, 400..499, 500..599, 600)
+    printf("      [R5 Stress] Boundary check: Ranges 200s, 300s, 400s, 500s, 600 ...\n"); fflush(stdout);
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 199, nullptr));
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 200, nullptr)); // Blocked (DLC2)
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 299, nullptr)); // Blocked (DLC2)
@@ -492,28 +492,34 @@ static bool Adversarial_R5_DlcRoadFilteringStress()
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 400, nullptr));  // Allowed (DLC4 shared)
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 401, nullptr));  // Allowed (DLC4 shared)
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 499, nullptr));  // Allowed (DLC4 shared)
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 500, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 500, nullptr)); // Blocked (DLC5 unshared)
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 599, nullptr)); // Blocked (DLC5 unshared)
+    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 600, nullptr));
 
     // 4. Boundary string tokens
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc2/roads/mud_path.ini"));
     TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc3/roads/cobblestone.ini"));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc5/roads/space_pad_road.ini"));
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "dlc4/roads/highway.ini"));
     TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "road_asphalt_main"));
 
-    // 5. Test control via SaveSync_SetDlcCheck(false)
-    printf("      [R5 Stress] Toggling SaveSync_SetDlcCheck(false) ...\n"); fflush(stdout);
+    // 5. Symmetric enforcement: SaveSync_SetDlcCheck(false) only governs join refusal;
+    // unshared DLC roads MUST remain blocked on both peers to prevent asymmetric desync.
+    printf("      [R5 Stress] Symmetric enforcement with SaveSync_SetDlcCheck(false) ...\n"); fflush(stdout);
     SaveSync_SetDlcCheck(false);
     TEST_CHECK(SaveSync_GetDlcCheck() == false);
 
-    // All previously blocked types must now be allowed
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 20, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 21, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 30, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 31, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 200, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 300, nullptr));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc2/roads/mud_path.ini"));
-    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc3/roads/cobblestone.ini"));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 20, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 21, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 30, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 31, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 200, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 300, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 500, nullptr));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc2/roads/mud_path.ini"));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc3/roads/cobblestone.ini"));
+    TEST_CHECK(!SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 1, "media_soviet/dlc5/roads/space_pad_road.ini"));
+    TEST_CHECK(SaveSync_CheckRoadDlcAllowed(ROAD_SYNC_CATEGORY_ROAD, 400, nullptr));  // DLC4 still shared
 
     // 6. Toggle back to true
     printf("      [R5 Stress] Restoring SaveSync_SetDlcCheck(true) ...\n"); fflush(stdout);
@@ -533,9 +539,8 @@ static bool Adversarial_R5_DlcRoadFilteringStress()
     TEST_CHECK(!RoadSync_ApplyCommandSegment(segMsg));
 
     SaveSync_SetDlcCheck(false);
-    // When DLC check is disabled, ApplyCommandSegment passes the DLC filter stage
-    // (it reaches manager check and rejects due to null manager, rather than DLC block)
-    TEST_CHECK(!RoadSync_ApplyCommandSegment(segMsg)); // manager is null in mock world
+    // Symmetric DLC filter still blocks DLC3 segment even when dlc_check is false
+    TEST_CHECK(!RoadSync_ApplyCommandSegment(segMsg));
 
     SaveSync_SetDlcCheck(true);
     SaveSync_SetTestSessionState(SESSION_IDLE);

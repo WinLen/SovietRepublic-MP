@@ -2732,9 +2732,6 @@ void RoadSync_CancelLocalDrag()
 
 bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName)
 {
-    if (!SaveSync_GetDlcCheck())
-        return true;
-
     SessionState st = SaveSync_GetState();
     if (st == SESSION_IDLE && !Determinism_SessionRunning() && !IsDualTestbed())
         return true;
@@ -2761,6 +2758,9 @@ bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName
         } else if (strstr(toolName, "dlc4") || strstr(toolName, "world_map")) {
             requiredDlcMask = (1u << 3);
             strncpy_s(dlcBuf, "DLC4", _TRUNCATE);
+        } else if (strstr(toolName, "dlc5") || strstr(toolName, "space_")) {
+            requiredDlcMask = (1u << 4);
+            strncpy_s(dlcBuf, "DLC5", _TRUNCATE);
         }
     }
 
@@ -2773,6 +2773,9 @@ bool SaveSync_CheckRoadDlcAllowed(int category, int typeId, const char* toolName
     } else if (typeId >= 400 && typeId < 500) {
         requiredDlcMask |= (1u << 3);
         if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC4", _TRUNCATE);
+    } else if (typeId >= 500 && typeId < 600) {
+        requiredDlcMask |= (1u << 4);
+        if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC5", _TRUNCATE);
     } else if (typeId == 20 || typeId == 21) {
         requiredDlcMask |= (1u << 1);
         if (!dlcBuf[0]) strncpy_s(dlcBuf, "DLC2", _TRUNCATE);
@@ -3672,7 +3675,7 @@ static bool CheckShiftCancelClicked(__int64 world, const BYTE* press, float* out
 {
     __try {
         const BYTE* w = (const BYTE*)world;
-        if (w[0xfbc] || w[0xfbe] || w[0xfc3] || *press == 0)
+        if (w[TOOL_GUARD1_OFFSET] || w[TOOL_GUARD2_OFFSET] || w[TOOL_GUARD3_OFFSET] || *press == 0)
             return false;
         *outCx = *(const float*)(world + WORLD_CURSOR_OFFSET);
         *outCz = *(const float*)(world + WORLD_CURSOR_OFFSET + 8);

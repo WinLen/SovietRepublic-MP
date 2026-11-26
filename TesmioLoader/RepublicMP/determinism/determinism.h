@@ -156,6 +156,7 @@ void Determinism_ClearFillingWorkQueues(unsigned char* exeBase = nullptr);
 // Phase 2C regression test hooks (flat SiteRand table, H_getKeyDown cache, H_setEvent fast-path).
 void Determinism_SetSeedForTest(unsigned long long seed);
 int Determinism_SiteRandForTest(unsigned siteRva);
+bool Determinism_IsPresentationSiteForTest(unsigned siteRva);
 void Determinism_GetSiteTableStatsForTest(bool privateTable, unsigned* outFlatCount, size_t* outOverflowCount);
 bool Determinism_IsKeyDownSuppressedForTest(const void* retAddr, bool* outCacheHit = nullptr);
 bool Determinism_SetEventFastPathForTest(HANDLE h, bool* outMatchedFilling, bool* outUsedFastSkip);

@@ -6,6 +6,7 @@
 #include "world_refs.h"
 #include "../core/engine_rva.h"
 #include "../core/safe_mem.h"
+#include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../ui/lang.h"
 #include <algorithm>
@@ -281,11 +282,14 @@ static const char* Encode(int kind, const RouteRef& ref, const RouteRef& targetR
             continue;
         }
         for (size_t k = 0; k < v.size(); k += kVecElem[i]) {
-            BYTE tag;
-            unsigned index;
-            if (!Ref_DefPtr(*(const U64*)&v[k], tag, index)) return "a resource or vehicle type is unknown";
-            w.u8(tag);
-            w.u32(index);
+            U64 defPtr = *(const U64*)&v[k];
+            BYTE defEnc[136];
+            size_t defLen = 0;
+            if (!Ref_EncodeDefPtrBytes(defPtr, defEnc, sizeof(defEnc), defLen))
+                return "a resource or vehicle type is unknown";
+            if ((defEnc[0] == 2u || defEnc[0] == 5u) && !SaveSync_CheckVehicleDlcAllowed((const void*)defPtr))
+                return "a vehicle type is from an unshared DLC";
+            w.raw(defEnc, defLen);
             if (kVecElem[i] == 16) w.u64(*(const U64*)&v[k + 8]);
         }
     }
@@ -460,10 +464,11 @@ static const char* Decode(Reader& in, Half& h)
             continue;
         }
         for (unsigned k = 0; k < n && in.ok; k++) {
-            BYTE tag = in.u8();
-            unsigned index = in.u32();
             U64 p = 0;
-            if (in.ok && !Ref_DefPtrAt(tag, index, p)) return "a resource or vehicle type is not here";
+            if (!Ref_DecodeDefPtrBytes(in.p, in.n, in.at, p)) {
+                in.ok = false;
+                return "a resource or vehicle type is not here";
+            }
             memcpy(&v[(size_t)k * kVecElem[i]], &p, 8);
             if (kVecElem[i] == 16) {
                 U64 value = in.u64();
@@ -578,10 +583,13 @@ bool CargoSettings_ApplyCommand(const void* data, size_t size)
     if (!Ready()) why = "a game routine differs";
     else if (!object) why = kind == KIND_STOP ? "the vehicle is gone" : "the building is gone";
     else if (kind == KIND_STOP && RecordCount(kind, object) != records) why = "its records differ here";
+    else if ((why = Decode(in, h)) != nullptr) {
+        // Decode failed: never create a building link, write metadata, or refresh the line.
+    }
     else if (kind == KIND_LINK && !ResolveOrCreateBuildingLink(object, targetBld, linkActive, recTail190, record, resolvedRecord))
         why = "its records differ here";
     else if (!(at = HalfAt(kind, object, resolvedRecord, half))) why = "the record cannot be read";
-    else if (!(why = Decode(in, h)) && !Replace(at, h)) why = "the game's half copy faulted";
+    else if (!Replace(at, h)) why = "the game's half copy faulted";
     else {
         WriteRecordMeta(kind, object, resolvedRecord, linkActive, recTail190);
         if (kind == KIND_STOP && !Refresh(object)) why = "the line refresh faulted";
