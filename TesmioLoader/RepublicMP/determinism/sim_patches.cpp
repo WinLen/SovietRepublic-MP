@@ -1140,12 +1140,18 @@ static volatile LONG g_renderWaitTimeouts = 0;
 // SimPatches_WaitRender): the frame loop rescales the game timer there, and
 // the interface on the render thread reads it (PowerTime) for its own
 // countdowns. The wait here then returns at once; it stays for safety.
-void SimPatches_WaitRender(bool recordTelemetry)
+static void WaitRenderEvent(bool recordTelemetry)
 {
-    if (!g_on) return;
-    BYTE* renderer = *(BYTE**)(g_exeBase + RENDERER_RVA);
-    HANDLE finished = renderer ? *(HANDLE*)(renderer + RENDERER_FINISHED) : nullptr;
-    if (!finished) return;
+    if (!g_exeBase) return;
+    BYTE* renderer = nullptr;
+    if (!SafeReadPod((BYTE* const*)(g_exeBase + RENDERER_RVA), &renderer) || !renderer ||
+        !IsPointerLikeX64((uintptr_t)renderer)) {
+        return;
+    }
+    HANDLE finished = nullptr;
+    if (!SafeReadPod((HANDLE const*)(renderer + RENDERER_FINISHED), &finished) || !finished) {
+        return;
+    }
     const bool shouldRecord = recordTelemetry && (WaitForSingleObject(finished, 0) == WAIT_TIMEOUT);
     const int64_t waitT0 = shouldRecord ? DiagPerf_Now() : 0;
     if (WaitForSingleObject(finished, RENDER_WAIT_MS) == WAIT_TIMEOUT) {
@@ -1160,8 +1166,23 @@ void SimPatches_WaitRender(bool recordTelemetry)
     }
 }
 
+void SimPatches_WaitRender(bool recordTelemetry)
+{
+    if (!g_on) return;
+    WaitRenderEvent(recordTelemetry);
+}
+
+void SimPatches_WaitRenderForHookInstall(void)
+{
+    WaitRenderEvent(false);
+}
+
 static void DetFrameLock(LPCRITICAL_SECTION cs)
 {
+    if (TwoStates_HasPendingSessionHooksInstall()) {
+        SimPatches_WaitRenderForHookInstall();
+        TwoStates_InstallPendingSessionHooksOnMainThread();
+    }
     SimPatches_WaitRender(false);
     (*(EnterCsFn*)(g_exeBase + FRAME_LOCK_IMPORT))(cs);
 }

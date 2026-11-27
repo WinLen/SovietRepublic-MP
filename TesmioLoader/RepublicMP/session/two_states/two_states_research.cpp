@@ -1421,16 +1421,13 @@ bool TwoStates_ApplyResearchCommand(const LsResearchCommand& cmd)
 
 int TwoStates_InstallResearchHooks()
 {
-    if (!g_exeBase) return 0;
-    int ok = 0;
-    ok += InstallInlineHook(g_exeBase + RVA_BLD_UNIV_STEP, (void*)&H_BldUnivStep,
-                            (void**)&o_bldUnivStep, kBldUnivStepExpect,
-                            sizeof(kBldUnivStepExpect), "republicmp two_states bld_univ_step");
-    ok += InstallInlineHook(g_exeBase + RVA_RESEARCH_DAILY_UPDATE, (void*)&H_ResearchDailyUpdate,
-                            (void**)&o_researchDailyUpdate, kResearchDailyUpdateExpect,
-                            sizeof(kResearchDailyUpdateExpect), "republicmp two_states research_daily_update");
-    ok += InstallInlineHook(g_exeBase + RVA_UNIV_RESEARCH_PANEL, (void*)&H_UnivResearchPanel,
-                            (void**)&o_univResearchPanel, kUnivResearchPanelExpect,
-                            sizeof(kUnivResearchPanelExpect), "republicmp two_states univ_research_panel");
-    return ok;
+    const TwoStatesInlineHookSpec kSpecs[3] = {
+        { RVA_BLD_UNIV_STEP, (void*)&H_BldUnivStep, (void**)&o_bldUnivStep,
+          kBldUnivStepExpect, sizeof(kBldUnivStepExpect), "republicmp two_states bld_univ_step" },
+        { RVA_RESEARCH_DAILY_UPDATE, (void*)&H_ResearchDailyUpdate, (void**)&o_researchDailyUpdate,
+          kResearchDailyUpdateExpect, sizeof(kResearchDailyUpdateExpect), "republicmp two_states research_daily_update" },
+        { RVA_UNIV_RESEARCH_PANEL, (void*)&H_UnivResearchPanel, (void**)&o_univResearchPanel,
+          kUnivResearchPanelExpect, sizeof(kUnivResearchPanelExpect), "republicmp two_states univ_research_panel" },
+    };
+    return TwoStates_InstallInlineHookTable(kSpecs, 3);
 }

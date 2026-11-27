@@ -17,6 +17,7 @@
 #include "../../world_sync/buildings/build_sync.h"
 #include "../../world_sync/networks/road_sync.h"
 #include "../../determinism/determinism.h"
+#include "../../determinism/sim_patches.h"
 #include "../../ui/lang.h"
 #include "../../ui/native_menu.h"
 #include "../../ui/sync_block.h"
@@ -260,14 +261,28 @@ void TwoStates_BindOverlay(const TsmHost* host);     // two_states_overlay.cpp
 void TwoStates_BindPersistence(const TsmHost* host); // two_states_persistence.cpp
 void TwoStates_BindSpace(const TsmHost* host);       // two_states_space.cpp
 
-int TwoStates_InstallTerrainIatHooks();  // two_states_sim_hooks.cpp (returns 0..4)
-int TwoStates_InstallEconHooks();        // two_states_econ.cpp
-int TwoStates_InstallSimHooks();         // two_states_sim_hooks.cpp
-int TwoStates_InstallResearchHooks();    // two_states_research.cpp
-int TwoStates_InstallOverlayHooks();     // two_states_overlay.cpp
-int TwoStates_InstallPersistenceHooks(); // two_states_persistence.cpp
-int TwoStates_InstallSpaceHooks();       // two_states_space.cpp
-bool TwoStates_AreEconHooksInstalled();  // two_states_econ.cpp
+struct TwoStatesInlineHookSpec {
+    uintptr_t   rva;
+    void*       hook;
+    void**      orig;
+    const BYTE* expect;
+    size_t      expectLen;
+    const char* name;
+};
+
+int TwoStates_InstallInlineHookTable(const TwoStatesInlineHookSpec* specs, size_t count);
+int TwoStates_InstallTerrainIatHooks();     // two_states_sim_hooks.cpp (returns 0..4)
+int TwoStates_InstallEconHooks();           // two_states_econ.cpp
+int TwoStates_InstallSimHooks();            // two_states_sim_hooks.cpp
+int TwoStates_InstallResearchHooks();       // two_states_research.cpp
+void TwoStates_InitTerrainHeightFn();       // two_states_overlay.cpp
+int TwoStates_InstallOverlayHooks();        // two_states_overlay.cpp
+int TwoStates_InstallPersistenceHooks();    // two_states_persistence.cpp
+int TwoStates_InstallSpaceHooks();          // two_states_space.cpp
+bool TwoStates_AreEconHooksInstalled();     // two_states_econ.cpp
+bool TwoStates_ArePersistenceHooksInstalled(); // two_states_persistence.cpp
+bool TwoStates_ShouldBlockUnloadedWorldAccess(bool persistenceHooksInstalled, bool econHooksInstalled, bool worldLoaded);
+bool TwoStates_IsUnloadedRealGameWorld();
 
 // ---------------------------------------------------------------------------
 // Thread-Local Econ / Ledger State Accessors (implemented in two_states_econ.cpp)

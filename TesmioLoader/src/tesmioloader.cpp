@@ -255,6 +255,11 @@ static bool InstallInlineHook(void* target, void* detour, void** trampolineOut,
         return false;
     }
 
+    FlushInstructionCache(GetCurrentProcess(), tramp, stolen + 14);
+    // Publish trampoline before overwriting target entry so no in-flight detour observes null.
+    if (trampolineOut) *trampolineOut = tramp;
+    MemoryBarrier();
+
     BYTE* p = (BYTE*)target;
     p[0] = 0xFF; p[1] = 0x25;
     *(DWORD*)(p + 2) = 0;
@@ -264,7 +269,6 @@ static bool InstallInlineHook(void* target, void* detour, void** trampolineOut,
     VirtualProtect(target, stolen, prot, &prot);
     FlushInstructionCache(GetCurrentProcess(), target, stolen);
 
-    *trampolineOut = tramp;
     Logf("hook ok      %-22s target=%p tramp=%p (%zu bytes stolen)", label, target, tramp, stolen);
     return true;
 }

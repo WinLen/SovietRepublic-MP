@@ -53,6 +53,10 @@ volatile DWORD g_cmdThread = 0;
 int g_cmdOwner = 1;
 bool g_beforeLoadPrepared = false;
 
+static std::atomic<bool> g_sessionHooksRequested{false};
+static std::atomic<bool> g_sessionHooksInstalled{false};
+static std::atomic<int>  g_sessionHooksInstalledCount{0};
+
 static int g_cmdBuildingsBefore = 0;
 static int g_cmdConstructionsBefore = 0;
 static int g_cmdVehiclesBefore = 0;
@@ -630,24 +634,129 @@ int TwoStates_ResolveCitizenOwnerForTest(const BYTE* citizen)
 // Installation
 // ---------------------------------------------------------------------------
 
+int TwoStates_InstallInlineHookTable(const TwoStatesInlineHookSpec* specs, size_t count)
+{
+    if (!g_exeBase || !specs) return 0;
+    int ok = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const TwoStatesInlineHookSpec& s = specs[i];
+        ok += InstallInlineHook(g_exeBase + s.rva, s.hook, s.orig, s.expect, s.expectLen, s.name);
+    }
+    return ok;
+}
+
 bool TwoStates_Install()
 {
     EnsureOwnerLock();
     TwoStates_LoadSettings();
     TwoStates_MountSaveBank(false);
+    TwoStates_InitTerrainHeightFn();
 
     int ok = TwoStates_InstallTerrainIatHooks();
-    int econOk = 0;
-    econOk += TwoStates_InstallEconHooks();
-    econOk += TwoStates_InstallSimHooks();
-    econOk += TwoStates_InstallResearchHooks();
-    econOk += TwoStates_InstallOverlayHooks();
-    econOk += TwoStates_InstallSpaceHooks();
     int saveOk = TwoStates_InstallPersistenceHooks();
 
-    Logf("republicmp  TWO_STATES: terrain boundary hooks (%d/4), economy/loan/stats/research/minimap/space hooks (%d/75), master_save=%d, heightFn=%p",
-         ok, econOk, saveOk, (void*)g_collisionTerrainHeight);
+    Logf("republicmp  TWO_STATES: startup hooks ready (terrain=%d/4, master_save=%d, 75 session hooks deferred for clean singleplayer, heightFn=%p)",
+         ok, saveOk, (void*)g_collisionTerrainHeight);
     return ok == 4;
+}
+
+void TwoStates_RequestSessionHooksInstall()
+{
+    if (g_sessionHooksInstalled.load(std::memory_order_acquire) ||
+        g_sessionHooksRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    if (!g_sessionHooksInstalled.load(std::memory_order_acquire)) {
+        g_sessionHooksRequested.store(true, std::memory_order_release);
+    }
+    LeaveCriticalSection(&g_ownerLock);
+}
+
+void TwoStates_CancelPendingSessionHooksInstall()
+{
+    if (g_sessionHooksInstalled.load(std::memory_order_acquire) ||
+        !g_sessionHooksRequested.load(std::memory_order_acquire)) {
+        return;
+    }
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    if (!g_sessionHooksInstalled.load(std::memory_order_acquire)) {
+        g_sessionHooksRequested.store(false, std::memory_order_release);
+    }
+    LeaveCriticalSection(&g_ownerLock);
+}
+
+bool TwoStates_HasPendingSessionHooksInstall()
+{
+    return g_sessionHooksRequested.load(std::memory_order_acquire) &&
+           !g_sessionHooksInstalled.load(std::memory_order_acquire);
+}
+
+bool TwoStates_AreSessionHooksInstalled()
+{
+    return g_sessionHooksInstalled.load(std::memory_order_acquire);
+}
+
+bool TwoStates_IsWorldLoadPrepared()
+{
+    return g_beforeLoadPrepared;
+}
+
+bool TwoStates_ShouldBlockUnloadedWorldAccess(bool persistenceHooksInstalled, bool econHooksInstalled, bool worldLoaded)
+{
+    return (persistenceHooksInstalled || econHooksInstalled) && !worldLoaded;
+}
+
+bool TwoStates_ShouldBlockUnloadedWorldAccessForTest(bool persistenceHooksInstalled, bool econHooksInstalled, bool worldLoaded)
+{
+    return TwoStates_ShouldBlockUnloadedWorldAccess(persistenceHooksInstalled, econHooksInstalled, worldLoaded);
+}
+
+bool TwoStates_IsUnloadedRealGameWorld()
+{
+    return TwoStates_ShouldBlockUnloadedWorldAccess(
+        TwoStates_ArePersistenceHooksInstalled(),
+        TwoStates_AreEconHooksInstalled(),
+        SaveSync_IsWorldLoaded());
+}
+
+int TwoStates_InstallPendingSessionHooksOnMainThread()
+{
+    if (!g_exeBase) return 0;
+    if (!TwoStates_HasPendingSessionHooksInstall()) {
+        return g_sessionHooksInstalledCount.load(std::memory_order_acquire);
+    }
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    int econOk = g_sessionHooksInstalledCount.load(std::memory_order_acquire);
+    if (g_exeBase != nullptr &&
+        g_sessionHooksRequested.load(std::memory_order_acquire) &&
+        !g_sessionHooksInstalled.load(std::memory_order_acquire)) {
+        econOk = 0;
+        econOk += TwoStates_InstallEconHooks();
+        econOk += TwoStates_InstallSimHooks();
+        econOk += TwoStates_InstallResearchHooks();
+        econOk += TwoStates_InstallOverlayHooks();
+        econOk += TwoStates_InstallSpaceHooks();
+        g_sessionHooksInstalledCount.store(econOk, std::memory_order_release);
+        g_sessionHooksInstalled.store(true, std::memory_order_release);
+        g_sessionHooksRequested.store(false, std::memory_order_release);
+        Logf("republicmp  TWO_STATES: lazy co-op session hooks installed (%d/75)", econOk);
+    }
+    LeaveCriticalSection(&g_ownerLock);
+    return econOk;
+}
+
+void TwoStates_ResetLazyHooksStateForTest()
+{
+    EnsureOwnerLock();
+    EnterCriticalSection(&g_ownerLock);
+    g_sessionHooksRequested.store(false, std::memory_order_release);
+    g_sessionHooksInstalled.store(false, std::memory_order_release);
+    g_sessionHooksInstalledCount.store(0, std::memory_order_release);
+    LeaveCriticalSection(&g_ownerLock);
 }
 
 // ---------------------------------------------------------------------------
@@ -829,6 +938,7 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
 {
     EnsureOwnerLock();
     TwoStates_RestoreUiMoneySwap();
+    TwoStates_RequestSessionHooksInstall();
 
     g_isHost = isHost;
     g_sessionMode = (mode == COOP_MODE_TWO_STATES) ? COOP_MODE_TWO_STATES : COOP_MODE_ONE_STATE;
@@ -861,7 +971,7 @@ void TwoStates_OnSessionJoined(bool isHost, int mode, float borderHalfWidth, boo
                 *WorldDollars() = g_stateUsd[0] + g_stateUsd[1];
             }
             if (g_exeBase && !g_beforeLoadPrepared && !Determinism_WorldLoading() &&
-                (!TwoStates_AreEconHooksInstalled() || SaveSync_IsWorldLoaded())) {
+                !TwoStates_IsUnloadedRealGameWorld()) {
                 EnsureStateEconInitialized(g_exeBase + WORLD_RVA);
                 EnsureSpaceMilestonesInitialized(g_exeBase + WORLD_RVA);
                 EnsureEngineResearchInitialized(g_exeBase + WORLD_RVA);
@@ -971,6 +1081,7 @@ void TwoStates_OnSessionEnded()
     g_netTradeUsd[0] = g_netTradeUsd[1] = 0.0;
 
     TwoStates_MountSaveBank(false);
+    TwoStates_CancelPendingSessionHooksInstall();
     NativeMenu_ClearHostOnNextLoad();
     TwoStates_ResetResearch();
     ModSync_EndSession();

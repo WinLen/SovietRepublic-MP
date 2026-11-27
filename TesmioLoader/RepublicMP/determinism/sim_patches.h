@@ -73,6 +73,8 @@ int SimPatches_LastPopulation();
 // Main thread, at the start of a frame (determinism.cpp's timer Start hook):
 // while the patches are on, waits for the render thread's frame to finish.
 void SimPatches_WaitRender(bool recordTelemetry = true);
+// Unconditional render-quiesce wait on Main Thread before lazy co-op inline hook patching.
+void SimPatches_WaitRenderForHookInstall(void);
 // After loading: retain private vector storage, discard entries from the previous city.
 void SimPatches_ResetSearches();
 

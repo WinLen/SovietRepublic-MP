@@ -20,3 +20,4 @@ void ImGuiHook_NewFrameAndRender();
 // Test helpers for unit tests in tests/test_main.cpp.
 void ImGuiHook_UpdateWindowTitleForTest(HWND hwnd);
 void ImGuiHook_ResetTitleTrackingForTest();
+bool ImGuiHook_ShouldFastExitOnDestroyDuringLoad(bool worldLoadPrepared, bool determinismLoading);

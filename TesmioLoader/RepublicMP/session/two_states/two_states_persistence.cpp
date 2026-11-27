@@ -472,6 +472,9 @@ static bool MoveOrMergeDir(const std::filesystem::path& src, const std::filesyst
 
 bool TwoStates_MountSaveBank(bool wantCoop)
 {
+    if (!wantCoop) {
+        TwoStates_CancelPendingSessionHooksInstall();
+    }
     char exeDir[MAX_PATH] = {};
     if (!GetExeDir(exeDir, sizeof(exeDir))) return false;
 
@@ -1949,6 +1952,16 @@ void TwoStates_BeforeAnyWorldLoad()
     bool isSessionLoad = Determinism_WorldLoading() || SaveSync_GetState() != SESSION_IDLE;
     bool wantCoopHost = (NativeMenu_IsHostOnNextLoad() || g_importingSpSave) && !isSessionLoad;
 
+    if (!TwoStates_AreSessionHooksInstalled() &&
+        (isSessionLoad || wantCoopHost || TwoStates_IsCoopBankMounted() ||
+         TwoStates_HasPendingSessionHooksInstall())) {
+        TwoStates_RequestSessionHooksInstall();
+        if (TwoStates_HasPendingSessionHooksInstall()) {
+            SimPatches_WaitRenderForHookInstall();
+            TwoStates_InstallPendingSessionHooksOnMainThread();
+        }
+    }
+
     BYTE terrainFlag = 0;
     char saveRel[128] = {};
     if (!SafeReadPendingLoadInfo(&terrainFlag, saveRel, sizeof(saveRel))) {
@@ -2453,4 +2466,9 @@ int TwoStates_InstallPersistenceHooks()
     if (!g_exeBase) return 0;
     return InstallInlineHook(g_exeBase + RVA_MASTER_SAVE, (void*)&H_MasterSave, (void**)&o_masterSave,
                              kMasterSaveExpect, sizeof(kMasterSaveExpect), "republicmp two_states master_save");
+}
+
+bool TwoStates_ArePersistenceHooksInstalled()
+{
+    return o_masterSave != nullptr;
 }

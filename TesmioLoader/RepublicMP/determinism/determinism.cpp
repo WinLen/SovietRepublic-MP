@@ -284,6 +284,11 @@ static std::atomic<int64_t> g_afterLateEndQpc{0};
 // the game speed right after. The render thread must not be reading it then.
 static void H_timerStart(void* timer)
 {
+    if ((BYTE*)timer == g_exeBase + GAME_TIMER_RVA && TwoStates_HasPendingSessionHooksInstall()) {
+        // Frame loop start runs before DetFrameLock acquires renderer + 0x80 (avoids AB-BA with render thread).
+        SimPatches_WaitRenderForHookInstall();
+        TwoStates_InstallPendingSessionHooksOnMainThread();
+    }
     if (g_active && (BYTE*)timer == g_exeBase + GAME_TIMER_RVA) {
         if (!Determinism_WorldLoading()) {
             const int64_t prevAfterLate = g_afterLateEndQpc.exchange(0, std::memory_order_relaxed);

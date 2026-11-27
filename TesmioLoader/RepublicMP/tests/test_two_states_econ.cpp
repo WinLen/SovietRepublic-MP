@@ -10,6 +10,163 @@
 // Test 4: TwoStates Territory Zones, Ownership, Economy Attribution & Invariant #10
 // ---------------------------------------------------------------------------
 
+static bool RunLazyHooksAndLoadAbortSubTest()
+{
+    static std::vector<void*> s_hookTargets;
+    static int s_installCalls = 0;
+    s_hookTargets.clear();
+    s_installCalls = 0;
+
+    struct HookCaptureGuard {
+        int (*orig)(void*, void*, void**, const unsigned char*, size_t, const char*);
+        int savedMode;
+        float savedHalfWidth;
+        bool savedExpandBorders;
+        bool savedFullCap;
+        bool savedShow3D;
+        bool savedShowMinimap;
+        bool savedSendLogs;
+        bool savedUploadCrashes;
+        char savedJoinAddr[128];
+        explicit HookCaptureGuard(int (*cap)(void*, void*, void**, const unsigned char*, size_t, const char*))
+            : orig(g_mockHost.installInlineHook)
+            , savedMode(TwoStates_GetMode())
+            , savedHalfWidth(TwoStates_GetBorderHalfWidth())
+            , savedExpandBorders(TwoStates_GetExpandBorders())
+            , savedFullCap(TwoStates_GetFullStartingCapital())
+            , savedShow3D(TwoStates_GetShow3DBorder())
+            , savedShowMinimap(TwoStates_GetShowMinimapBorders())
+            , savedSendLogs(TwoStates_GetSendClientLogs())
+            , savedUploadCrashes(TwoStates_GetUploadCrashReports())
+        {
+            const char* addr = TwoStates_GetSavedJoinAddress();
+            snprintf(savedJoinAddr, sizeof(savedJoinAddr), "%s", addr ? addr : "");
+            g_mockHost.installInlineHook = cap;
+            TwoStates_Bind(&g_mockHost);
+        }
+        ~HookCaptureGuard()
+        {
+            g_mockHost.installInlineHook = orig;
+            TwoStates_Bind(&g_mockHost);
+            TwoStates_ResetLazyHooksStateForTest();
+            TwoStates_OnSessionEnded();
+            TwoStates_MountSaveBank(false);
+            TwoStates_OnAnyWorldLoaded(false);
+            TwoStates_SetMode(savedMode);
+            TwoStates_SetBorderHalfWidth(savedHalfWidth);
+            TwoStates_SetExpandBorders(savedExpandBorders);
+            TwoStates_SetFullStartingCapital(savedFullCap);
+            TwoStates_SetShow3DBorder(savedShow3D);
+            TwoStates_SetShowMinimapBorders(savedShowMinimap);
+            TwoStates_SetSendClientLogs(savedSendLogs);
+            TwoStates_SetUploadCrashReports(savedUploadCrashes);
+            TwoStates_SetSavedJoinAddress(savedJoinAddr);
+        }
+    } captureGuard([](void* target, void*, void**, const unsigned char*, size_t, const char*) -> int {
+        ++s_installCalls;
+        s_hookTargets.push_back(target);
+        return 1;
+    });
+
+    auto hasTarget = [&](uintptr_t rva) {
+        void* ptr = (void*)(g_mockExeBuffer + rva);
+        return std::find(s_hookTargets.begin(), s_hookTargets.end(), ptr) != s_hookTargets.end();
+    };
+
+    // Unloaded real-game guard predicate & mid-load WM_DESTROY fast-exit predicate
+    TEST_CHECK(TwoStates_ShouldBlockUnloadedWorldAccessForTest(true, false, false));
+    TEST_CHECK(TwoStates_ShouldBlockUnloadedWorldAccessForTest(false, true, false));
+    TEST_CHECK(TwoStates_ShouldBlockUnloadedWorldAccessForTest(true, true, false));
+    TEST_CHECK(!TwoStates_ShouldBlockUnloadedWorldAccessForTest(true, true, true));
+    TEST_CHECK(!TwoStates_ShouldBlockUnloadedWorldAccessForTest(false, false, false));
+    TEST_CHECK(!ImGuiHook_ShouldFastExitOnDestroyDuringLoad(false, false));
+    TEST_CHECK(ImGuiHook_ShouldFastExitOnDestroyDuringLoad(true, false));
+    TEST_CHECK(ImGuiHook_ShouldFastExitOnDestroyDuringLoad(false, true));
+    TEST_CHECK(ImGuiHook_ShouldFastExitOnDestroyDuringLoad(true, true));
+
+    TwoStates_ResetLazyHooksStateForTest();
+    ResetMockWorldMemory();
+    TwoStates_MountSaveBank(false);
+    TwoStates_Install();
+    TEST_CHECK(s_installCalls == 1);
+    TEST_CHECK(!hasTarget(RVA_GET_MAX_AVAILABLE_BORROW));
+    TEST_CHECK(!hasTarget(RVA_CITIZEN_CAN_MOVE_TO_BLD));
+    TEST_CHECK(!TwoStates_AreSessionHooksInstalled());
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+    TEST_CHECK(!TwoStates_IsWorldLoadPrepared());
+    TEST_CHECK(!SaveSync_IsWorldLoaded());
+
+    // Browsing Co-op save bank and backing out must NOT arm or leak lazy session hooks into SP
+    TwoStates_MountSaveBank(true);
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+    TEST_CHECK(s_installCalls == 1);
+    TwoStates_MountSaveBank(false);
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+
+    // SaveSync_StartHost when !SaveSync_IsWorldLoaded() must NOT arm lazy hooks
+    SaveSync_StartHost();
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+    TEST_CHECK(!TwoStates_AreSessionHooksInstalled());
+    TEST_CHECK(s_installCalls == 1);
+
+    // Aborting/failing a co-op join cancels a pending request before any hooks patch
+    TwoStates_RequestSessionHooksInstall();
+    TEST_CHECK(TwoStates_HasPendingSessionHooksInstall());
+    TwoStates_OnSessionEnded();
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+    TEST_CHECK(!TwoStates_AreSessionHooksInstalled());
+    TEST_CHECK(s_installCalls == 1);
+
+    // Singleplayer load: zero session hooks installed, g_beforeLoadPrepared transitions cleanly
+    TwoStates_OnAnyWorldLoaded(false);
+    TEST_CHECK(!TwoStates_IsWorldLoadPrepared());
+    TwoStates_BeforeAnyWorldLoad();
+    TEST_CHECK(TwoStates_IsWorldLoadPrepared());
+    TEST_CHECK(s_installCalls == 1);
+    TEST_CHECK(!TwoStates_AreSessionHooksInstalled());
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+    TwoStates_OnAnyWorldLoaded(false);
+    TEST_CHECK(!TwoStates_IsWorldLoadPrepared());
+
+    // InstallPendingSessionHooksOnMainThread with g_exeBase == nullptr must NOT latch installed=true
+    {
+        struct NullExeBindGuard {
+            TsmHost nullHost;
+            NullExeBindGuard() : nullHost(g_mockHost)
+            {
+                nullHost.exeBase = nullptr;
+                TwoStates_Bind(&nullHost);
+            }
+            ~NullExeBindGuard() { TwoStates_Bind(&g_mockHost); }
+        } nullBindGuard;
+
+        TwoStates_RequestSessionHooksInstall();
+        TEST_CHECK(TwoStates_HasPendingSessionHooksInstall());
+        TEST_CHECK(TwoStates_InstallPendingSessionHooksOnMainThread() == 0);
+        TEST_CHECK(!TwoStates_AreSessionHooksInstalled());
+        TEST_CHECK(TwoStates_HasPendingSessionHooksInstall());
+        TEST_CHECK(s_installCalls == 1);
+    }
+
+    // Main-Thread quiescent install patches all heavy session hooks once and is idempotent
+    int installedNow = TwoStates_InstallPendingSessionHooksOnMainThread();
+    TEST_CHECK(installedNow >= 64);
+    TEST_CHECK(s_installCalls >= 65);
+    TEST_CHECK(TwoStates_AreSessionHooksInstalled());
+    TEST_CHECK(!TwoStates_HasPendingSessionHooksInstall());
+
+    TEST_CHECK(hasTarget(RVA_GET_MAX_AVAILABLE_BORROW));
+    TEST_CHECK(hasTarget(RVA_CITIZEN_CAN_MOVE_TO_BLD));
+    TEST_CHECK(hasTarget(RVA_MINIMAP_DRAW_CONTENT));
+    TEST_CHECK(hasTarget(RVA_PROD_LINE_STEP));
+    TEST_CHECK(hasTarget(RVA_TOP_BAR_HUD_DRAW));
+
+    const int countAfterFirst = s_installCalls;
+    TEST_CHECK(TwoStates_InstallPendingSessionHooksOnMainThread() == installedNow);
+    TEST_CHECK(s_installCalls == countAfterFirst);
+    return true;
+}
+
 static __int64 MockPlanStartFn(__int64 network, unsigned char /*dollars*/, unsigned char /*rubles*/, __int64 /*count*/, __int64 /*group*/)
 {
     __int64* begin = *(__int64**)(network + 0x2B0);
@@ -225,6 +382,8 @@ bool Test_TwoStates_ZonesAndEconomy()
 
     RoadSync_SetPlannedSegmentOwnerForTest((__int64)segBorder.data(), 0);
     TwoStates_OnSessionEnded();
+
+    TEST_CHECK(RunLazyHooksAndLoadAbortSubTest());
     return true;
 }
 

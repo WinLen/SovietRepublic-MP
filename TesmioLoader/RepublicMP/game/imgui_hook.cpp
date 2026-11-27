@@ -8,6 +8,7 @@
 #include "../session/save_sync.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
+#include "../determinism/determinism.h"
 #include "../transport/lan_discovery.h"
 #include "../transport/steam_p2p.h"
 #include "present_hook.h"
@@ -308,9 +309,17 @@ static bool HandleTestbedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lP
     return false;
 }
 
+bool ImGuiHook_ShouldFastExitOnDestroyDuringLoad(bool worldLoadPrepared, bool determinismLoading)
+{
+    return worldLoadPrepared || determinismLoading;
+}
+
 static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_DESTROY && hwnd == g_hwnd) {
+        const bool loadPrepared = TwoStates_IsWorldLoadPrepared();
+        const bool detLoading = Determinism_WorldLoading();
+        const bool closingMidWorldLoad = ImGuiHook_ShouldFastExitOnDestroyDuringLoad(loadPrepared, detLoading);
         LanDiscovery_BeginProcessShutdown();
         SaveSync_Shutdown(2000);
         LanDiscovery_Shutdown();
@@ -318,9 +327,17 @@ static LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         if (g_initialized) {
             ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
         }
-        return g_originalWndProc
+        LRESULT res = g_originalWndProc
             ? CallWindowProc(g_originalWndProc, hwnd, msg, wParam, lParam)
             : DefWindowProcW(hwnd, msg, wParam, lParam);
+        if (closingMidWorldLoad) {
+            DiagLog_Printf(
+                "SHUTDOWN",
+                "Window destroyed while world load is in progress (loadPrepared=%d detLoading=%d) - terminating process cleanly to prevent C3DDLL64 null-device crash",
+                (int)loadPrepared, (int)detLoading);
+            TerminateProcess(GetCurrentProcess(), 0);
+        }
+        return res;
     }
 
     if (IsDualTestbedActive()) {

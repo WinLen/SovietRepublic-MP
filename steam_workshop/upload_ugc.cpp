@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Polish: fixed false-positive PREV_CRASH uploads after clean session leave to menu, aligned loader prev-log detection with CrashUpload fingerprinting, and logged true newest segment in DESYNC_DUMP[net] on large maps (>256 segments); 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
+                "v%s (Protocol %d) - Singleplayer isolation & crash fix: deferred all 75 Two-States co-op hooks until co-op load/host with render quiesce & trampoline barrier ordering, prevented menu browsing/aborted joins from leaking hooks into SP, and fixed C3DDLL64 null-device crash when closing the window mid-world-load; 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

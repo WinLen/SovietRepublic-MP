@@ -1430,18 +1430,32 @@ void TwoStates_DrawOverlay()
 // Overlay Hook Installer
 // ---------------------------------------------------------------------------
 
-int TwoStates_InstallOverlayHooks()
+void TwoStates_InitTerrainHeightFn()
 {
-    if (g_engine) {
+    if (!g_collisionTerrainHeight && g_engine) {
         g_collisionTerrainHeight = (CollisionTerrainHeightFn)GetProcAddress(
             g_engine, "?CollisionTerrainHeightOverPoint@C3D_TERRAIN@@QEAAMVC3DVECTOR3@@@Z");
     }
-    int overlayOk = 0;
-    overlayOk += InstallInlineHook(g_exeBase + RVA_MINIMAP_DRAW_CONTENT, (void*)&H_MinimapDrawContent,
-                                   (void**)&o_minimapDrawContent, kMinimapDrawContentExpect,
-                                   sizeof(kMinimapDrawContentExpect), "republicmp two_states minimap_draw_content");
-    overlayOk += InstallInlineHook(g_exeBase + RVA_MINIMAP_DRAW_BUTTONS, (void*)&H_MinimapDrawButtons,
-                                   (void**)&o_minimapDrawButtons, kMinimapDrawButtonsExpect,
-                                   sizeof(kMinimapDrawButtonsExpect), "republicmp two_states minimap_draw_buttons");
-    return overlayOk;
+}
+
+int TwoStates_InstallOverlayHooks()
+{
+    TwoStates_InitTerrainHeightFn();
+    if (!g_exeBase) return 0;
+    int ok = 0;
+    ok += InstallInlineHook(
+        g_exeBase + RVA_MINIMAP_DRAW_CONTENT,
+        reinterpret_cast<void*>(&H_MinimapDrawContent),
+        reinterpret_cast<void**>(&o_minimapDrawContent),
+        kMinimapDrawContentExpect,
+        sizeof(kMinimapDrawContentExpect),
+        "republicmp two_states minimap_draw_content");
+    ok += InstallInlineHook(
+        g_exeBase + RVA_MINIMAP_DRAW_BUTTONS,
+        reinterpret_cast<void*>(&H_MinimapDrawButtons),
+        reinterpret_cast<void**>(&o_minimapDrawButtons),
+        kMinimapDrawButtonsExpect,
+        sizeof(kMinimapDrawButtonsExpect),
+        "republicmp two_states minimap_draw_buttons");
+    return ok;
 }

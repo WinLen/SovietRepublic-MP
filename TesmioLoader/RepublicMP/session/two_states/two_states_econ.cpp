@@ -4333,7 +4333,7 @@ void TwoStates_UiBegin()
     }
     if (!g_exeBase || g_inSimStep || g_inCommand || TwoStates_IsSaveInProgress() ||
         g_beforeLoadPrepared || Determinism_WorldLoading() ||
-        (o_statRecordClear && !SaveSync_IsWorldLoaded()) ||
+        TwoStates_IsUnloadedRealGameWorld() ||
         Determinism_GetFramePhase() != 0) {
         LeaveCriticalSection(&g_moneySwapLock);
         return;
@@ -4453,6 +4453,7 @@ float TwoStates_InvokeVehicleRefuelHookForTest(BYTE* vehicle, TwoStatesVehicleRe
 
 int TwoStates_InstallEconHooks()
 {
+    if (!g_exeBase) return 0;
     void* stubStatClear   = TwoStates_BuildRegPreservingRelayStub((void*)&H_StatRecordClear, false, true);
     void* stubMaxBorrow   = TwoStates_BuildRegPreservingRelayStub((void*)&H_GetMaxAvailableBorrow, true, false);
     void* stubLoanDay     = TwoStates_BuildRegPreservingRelayStub((void*)&H_StepOneLoanDay, false, false);

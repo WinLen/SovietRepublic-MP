@@ -1130,19 +1130,9 @@ int TwoStates_GetSpaceActiveOwner()
     return t_spaceActiveOwner;
 }
 
-struct SpaceHookSpec {
-    unsigned    rva;
-    void*       hook;
-    void**      orig;
-    const BYTE* expect;
-    size_t      expectLen;
-    const char* name;
-};
-
 int TwoStates_InstallSpaceHooks()
 {
-    if (!g_exeBase) return 0;
-    const SpaceHookSpec kSpecs[] = {
+    const TwoStatesInlineHookSpec kSpecs[] = {
         { RVA_PROD_LINE_STEP, (void*)&H_ProdLineStep, (void**)&o_prodLineStep,
           kProdLineStepExpect, sizeof(kProdLineStepExpect), "republicmp two_states prod_line_step" },
         { RVA_CREATE_VEHICLE, (void*)&H_CreateVehicle, (void**)&o_createVehicle,
@@ -1160,12 +1150,7 @@ int TwoStates_InstallSpaceHooks()
         { RVA_TOP_BAR_HUD_DRAW, (void*)&H_TopBarHudDraw, (void**)&o_topBarHudDraw,
           kTopBarHudDrawExpect, sizeof(kTopBarHudDrawExpect), "republicmp two_states top_bar_hud_draw" },
     };
-    int ok = 0;
-    for (const SpaceHookSpec& spec : kSpecs) {
-        ok += InstallInlineHook(g_exeBase + spec.rva, spec.hook, spec.orig,
-                                spec.expect, spec.expectLen, spec.name);
-    }
-    return ok;
+    return TwoStates_InstallInlineHookTable(kSpecs, sizeof(kSpecs) / sizeof(kSpecs[0]));
 }
 
 void TwoStates_ResetSpaceForTest()

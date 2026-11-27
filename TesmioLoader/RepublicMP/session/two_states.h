@@ -63,6 +63,14 @@ struct StateTrackerSlice {
 
 void TwoStates_Bind(const TsmHost* host);
 bool TwoStates_Install();
+void TwoStates_RequestSessionHooksInstall();
+void TwoStates_CancelPendingSessionHooksInstall();
+bool TwoStates_HasPendingSessionHooksInstall();
+bool TwoStates_AreSessionHooksInstalled();
+int  TwoStates_InstallPendingSessionHooksOnMainThread();
+bool TwoStates_IsWorldLoadPrepared();
+bool TwoStates_ShouldBlockUnloadedWorldAccessForTest(bool persistenceHooksInstalled, bool econHooksInstalled, bool worldLoaded);
+void TwoStates_ResetLazyHooksStateForTest();
 
 // Host choice before starting a session (propagated to the client in SessionHello).
 void TwoStates_SetMode(int mode);

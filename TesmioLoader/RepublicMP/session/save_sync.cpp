@@ -2304,6 +2304,7 @@ void SaveSync_StartHost()
     g_resyncing = false;
     g_sessionStartTick = GetTickCount64();
     SetSessionError("");
+    TwoStates_RequestSessionHooksInstall();
     SetState(SESSION_HOST_LISTENING);
     SaveSync_EnforceWaitingLobbyHold();
     TwoStates_CaptureLobbyBaseMoney();
