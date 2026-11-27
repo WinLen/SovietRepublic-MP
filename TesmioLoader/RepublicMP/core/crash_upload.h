@@ -40,6 +40,7 @@ struct CrashUploadMeta {
 // Pure / testable helpers
 bool CrashUpload_BuildReportZip(const char* gameDir, const char* baseDir,
                                 const CrashUploadMeta& meta, std::vector<unsigned char>& outZip);
+uint64_t CrashUpload_ComputeFingerprintForFlags(const char* gameDir, const char* baseDir, unsigned int flags);
 uint64_t CrashUpload_ComputePrevCrashFingerprint(const char* gameDir, const char* baseDir);
 bool CrashUpload_HasUploadedFingerprint(const char* gameDir, uint64_t fp);
 void CrashUpload_MarkFingerprintUploaded(const char* gameDir, uint64_t fp);

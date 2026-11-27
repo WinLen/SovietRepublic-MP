@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Full Space Program DLC (dlc5) Co-op & Two-States Space Race (Phases 2-4: rockets, orbits, milestones, Mission Control UI, commercial payouts, reentry/deorbit) + auto crash/desync report uploader; 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
+                "v%s (Protocol %d) - Hotfix: fixed critical crash at 0x87DCC9 (residential education/loyalty move-in filters in SP and MP), added per-network breakdown to DESYNC logs, and fixed CrashUpload dedup after clean sessions; 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

@@ -4,6 +4,8 @@
 #include "test_harness.h"
 #include <atomic>
 #include <limits>
+#include <stdarg.h>
+#include <string>
 #include <thread>
 
 // ---------------------------------------------------------------------------
@@ -1210,6 +1212,37 @@ static bool SubTest_M9_4_Challenger1_StateHash14Networks()
         segObj[SEG_TYPE_OFFSET] = 1;
         *(short*)(segObj.data() + SEG_DIRECTION_OFFSET) = 0;
         *(BYTE**)(world + off) = nullptr;
+    }
+
+    // Verify per-network DESYNC_DUMP[net] breakdown logging on networks mismatch
+    {
+        static std::string s_capturedNetLog;
+        s_capturedNetLog.clear();
+        struct LogCaptureGuard {
+            void (*orig)(const char*, ...);
+            explicit LogCaptureGuard(void (*capture)(const char*, ...)) : orig(g_mockHost.log)
+            {
+                g_mockHost.log = capture;
+            }
+            ~LogCaptureGuard() { g_mockHost.log = orig; }
+        } captureGuard([](const char* fmt, ...) {
+            if (!fmt) return;
+            char buf[512] = {};
+            va_list ap;
+            va_start(ap, fmt);
+            vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
+            va_end(ap);
+            s_capturedNetLog.append(buf);
+            s_capturedNetLog.push_back('\n');
+        });
+
+        *(BYTE**)(world + 0xF840) = netMgr.data();
+        StateHash_LogDesyncBreakdown("networks ", 6780);
+        *(BYTE**)(world + 0xF840) = nullptr;
+
+        TEST_CHECK(s_capturedNetLog.find("DESYNC_DUMP[net] t=6780 i=0 off=0xF840 name=ROAD nodes=1 segs=1 ") != std::string::npos);
+        TEST_CHECK(s_capturedNetLog.find("last=(1,0)") != std::string::npos);
+        TEST_CHECK(s_capturedNetLog.find("DESYNC_DUMP[net] t=6780 i=13 off=0xFB90 name=WATERPIPE nodes=-1 segs=-1") != std::string::npos);
     }
     return true;
 }

@@ -125,31 +125,65 @@ static void HashConstructions(BYTE* w, StateSummary* out)
     }
 }
 
-static void HashNetworks(BYTE* w, StateSummary* out)
+struct NetworkHashDesc {
+    unsigned int worldOff;
+    const char*  name;
+};
+
+static const NetworkHashDesc kNetworkDescs[14] = {
+    { 0xF840u, "ROAD"        },
+    { 0xF848u, "SECOND_ROAD" },
+    { 0xF8A0u, "CONVEYOR"    },
+    { 0xF8F8u, "PIPE"        },
+    { 0xF950u, "FENCE"       },
+    { 0xF9A8u, "RAIL"        },
+    { 0xFA08u, "PEDESTRIAN"  },
+    { 0xFA60u, "FACTORYCONN" },
+    { 0xFAB8u, "POWER_HIGH"  },
+    { 0xFAC0u, "POWER_LOW"   },
+    { 0xFAD0u, "AIRROAD"     },
+    { 0xFAE0u, "CABLEWAY"    },
+    { 0xFB38u, "HEATPIPE"    },
+    { 0xFB90u, "WATERPIPE"   }
+};
+
+static void HashSingleNetworkMgr(BYTE* mgr, unsigned long long& h, long long& outNodes, long long& outSegs,
+                                 int& outLastType, int& outLastDir)
 {
-    static const unsigned int kNetworks[14] = {
-        0xF840, 0xF848, 0xF8A0, 0xF8F8, 0xF950, 0xF9A8, 0xFA08,
-        0xFA60, 0xFAB8, 0xFAC0, 0xFAD0, 0xFAE0, 0xFB38, 0xFB90
-    };
-    for (unsigned int off : kNetworks) {
-        BYTE* mgr = *(BYTE**)(w + off);
-        if (!mgr) { MixInt(out->hashNetworks, -1); continue; }
-        long long nNodes = Count(mgr + NET_NODES_OFFSET, 8);
-        long long nSegs  = Count(mgr + MGR_SEGMENTS_BEGIN_OFFSET, 8);
-        MixInt(out->hashNetworks, (int)nNodes);
-        MixInt(out->hashNetworks, (int)nSegs);
-        if (nSegs > 0) {
-            BYTE** segList = *(BYTE***)(mgr + MGR_SEGMENTS_BEGIN_OFFSET);
-            if (segList) {
-                long long limit = (nSegs > 256) ? 256 : nSegs;
-                for (long long s = 0; s < limit; s++) {
-                    BYTE* seg = segList[s];
-                    if (!seg) { MixInt(out->hashNetworks, -1); continue; }
-                    MixInt(out->hashNetworks, *(int*)(seg + SEG_TYPE_OFFSET));
-                    MixInt(out->hashNetworks, *(int*)(seg + SEG_DIRECTION_OFFSET));
-                }
+    outNodes = -1;
+    outSegs = -1;
+    outLastType = -1;
+    outLastDir = -1;
+    if (!mgr) { MixInt(h, -1); return; }
+    outNodes = Count(mgr + NET_NODES_OFFSET, 8);
+    outSegs  = Count(mgr + MGR_SEGMENTS_BEGIN_OFFSET, 8);
+    MixInt(h, (int)outNodes);
+    MixInt(h, (int)outSegs);
+    if (outSegs > 0) {
+        BYTE** segList = *(BYTE***)(mgr + MGR_SEGMENTS_BEGIN_OFFSET);
+        if (segList) {
+            long long limit = (outSegs > 256) ? 256 : outSegs;
+            for (long long s = 0; s < limit; s++) {
+                BYTE* seg = segList[s];
+                if (!seg) { MixInt(h, -1); continue; }
+                int segType = *(int*)(seg + SEG_TYPE_OFFSET);
+                int segDir = *(int*)(seg + SEG_DIRECTION_OFFSET);
+                MixInt(h, segType);
+                MixInt(h, segDir);
+                outLastType = segType;
+                outLastDir = segDir;
             }
         }
+    }
+}
+
+static void HashNetworks(BYTE* w, StateSummary* out)
+{
+    long long nNodes = 0, nSegs = 0;
+    int lastType = 0, lastDir = 0;
+    for (const NetworkHashDesc& desc : kNetworkDescs) {
+        BYTE* mgr = *(BYTE**)(w + desc.worldOff);
+        HashSingleNetworkMgr(mgr, out->hashNetworks, nNodes, nSegs, lastType, lastDir);
     }
 }
 
@@ -821,12 +855,44 @@ static void LogDesyncSpace(BYTE* w, unsigned long long tick)
     }
 }
 
+static void LogDesyncNetworks(BYTE* w, unsigned long long tick)
+{
+    for (int i = 0; i < (int)(sizeof(kNetworkDescs) / sizeof(kNetworkDescs[0])); ++i) {
+        const NetworkHashDesc& desc = kNetworkDescs[i];
+        unsigned long long netH = 0xcbf29ce484222325ull;
+        long long nodes = -1, segs = -1;
+        int lastType = -1, lastDir = -1;
+        bool ok = false;
+        DiagLog_BeginSafeSeh();
+        __try {
+            BYTE* mgr = *(BYTE**)(w + desc.worldOff);
+            if (!mgr || IsPointerLikeX64((uint64_t)(uintptr_t)mgr)) {
+                HashSingleNetworkMgr(mgr, netH, nodes, segs, lastType, lastDir);
+                ok = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            ok = false;
+        }
+        DiagLog_EndSafeSeh();
+        if (ok) {
+            Logf("republicmp  DESYNC_DUMP[net] t=%llu i=%d off=0x%X name=%s nodes=%lld segs=%lld h=%016llX last=(%d,%d)",
+                 tick, i, desc.worldOff, desc.name, nodes, segs, netH, lastType, lastDir);
+        } else {
+            Logf("republicmp  DESYNC_DUMP[net] t=%llu i=%d off=0x%X name=%s fault=1",
+                 tick, i, desc.worldOff, desc.name);
+        }
+    }
+}
+
 void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick)
 {
     if (!g_exeBase || !H || !H->log) return;
     BYTE* w = g_exeBase + WORLD_RVA;
     if (!what || strstr(what, "veh") != nullptr) {
         LogDesyncVehicles(w, tick);
+    }
+    if (!what || strstr(what, "networks") != nullptr) {
+        LogDesyncNetworks(w, tick);
     }
     if (what && (strstr(what, "bld") != nullptr || strstr(what, "buildings") != nullptr)) {
         LogDesyncBuildingsOrConstructions(w, WORLD_BUILDINGS_OFFSET, "bld", 256, true, tick);

@@ -779,47 +779,60 @@ const char* DiagLog_GetLoaderBaseDir(void)
     return (g_origHost && g_origHost->baseDir) ? g_origHost->baseDir : "";
 }
 
-bool DiagLog_DetectPrevCrashOrDesync(void)
+unsigned int DiagLog_DetectPrevCrashFlagsForDir(const char* gameDir, const char* baseDir)
 {
-    if (!g_gameDir[0]) return false;
+    if (!gameDir || !gameDir[0]) return 0;
 
-    bool hadCrashInLoader = false;
-    if (g_origHost && g_origHost->baseDir && g_origHost->baseDir[0]) {
-        const char* kLoaderLogs[2] = { "tesmioloader.prev.log", "tesmioloader.log" };
-        for (int i = 0; i < 2 && !hadCrashInLoader; ++i) {
-            char loaderLogPath[MAX_PATH] = {};
-            _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\%s", g_origHost->baseDir, kLoaderLogs[i]);
-            std::vector<unsigned char> loaderTail;
-            DiagLog_ReadFileTail(loaderLogPath, 64 * 1024, loaderTail);
-            if (!loaderTail.empty()) {
-                loaderTail.push_back(0);
-                if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
-                    strstr((const char*)loaderTail.data(), "FAULT ") != nullptr)
-                    hadCrashInLoader = true;
+    unsigned int flags = 0;
+    const char* loaderDir = (baseDir && baseDir[0]) ? baseDir : gameDir;
+    const char* kLoaderLogs[2] = { "tesmioloader.prev.log", "tesmioloader.log" };
+    for (int i = 0; i < 2 && (flags & DIAG_PREV_CRASH_LOADER_PREV) == 0; ++i) {
+        char loaderLogPath[MAX_PATH] = {};
+        _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\%s", loaderDir, kLoaderLogs[i]);
+        std::vector<unsigned char> loaderTail;
+        DiagLog_ReadFileTail(loaderLogPath, 64 * 1024, loaderTail);
+        if (!loaderTail.empty()) {
+            loaderTail.push_back(0);
+            if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
+                strstr((const char*)loaderTail.data(), "FAULT ") != nullptr) {
+                flags |= DIAG_PREV_CRASH_LOADER_PREV;
             }
         }
     }
 
     char crashLogPath[MAX_PATH] = {};
-    _snprintf_s(crashLogPath, sizeof(crashLogPath), _TRUNCATE, "%s\\RepublicMP_LastCrash.log", g_gameDir);
-    bool hasLastCrashFile = (GetFileAttributesA(crashLogPath) != INVALID_FILE_ATTRIBUTES);
+    _snprintf_s(crashLogPath, sizeof(crashLogPath), _TRUNCATE, "%s\\RepublicMP_LastCrash.log", gameDir);
+    WIN32_FILE_ATTRIBUTE_DATA crashAttr = {};
+    if (GetFileAttributesExA(crashLogPath, GetFileExInfoStandard, &crashAttr) != FALSE &&
+        (crashAttr.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+        (crashAttr.nFileSizeHigh != 0 || crashAttr.nFileSizeLow != 0)) {
+        flags |= DIAG_PREV_CRASH_LAST_FILE;
+    }
 
     char prevPath[MAX_PATH] = {};
-    _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", g_gameDir);
+    _snprintf_s(prevPath, sizeof(prevPath), _TRUNCATE, "%s\\RepublicMP_Diagnostics.prev.log", gameDir);
     std::vector<unsigned char> tail;
     DiagLog_ReadFileTail(prevPath, 128 * 1024, tail);
-    bool hadCrashInDiagPrev = false;
-    bool abnormalInGameExit = false;
     if (!tail.empty()) {
         tail.push_back(0);
         const char* text = (const char*)tail.data();
-        hadCrashInDiagPrev = (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr);
-        abnormalInGameExit = ((strstr(text, "State=CLIENT_IN_GAME") != nullptr ||
-                               strstr(text, "State=HOST_IN_GAME") != nullptr) &&
-                              strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
+        const bool hadCrashInDiagPrev =
+            (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr);
+        const bool abnormalInGameExit =
+            ((strstr(text, "State=CLIENT_IN_GAME") != nullptr ||
+              strstr(text, "State=HOST_IN_GAME") != nullptr) &&
+             strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
+        if (hadCrashInDiagPrev || abnormalInGameExit) {
+            flags |= DIAG_PREV_CRASH_DIAG_PREV;
+        }
     }
 
-    return hadCrashInDiagPrev || hadCrashInLoader || abnormalInGameExit || hasLastCrashFile;
+    return flags;
+}
+
+bool DiagLog_DetectPrevCrashOrDesync(void)
+{
+    return DiagLog_DetectPrevCrashFlagsForDir(g_gameDir, DiagLog_GetLoaderBaseDir()) != 0;
 }
 
 bool DiagLog_HasPrevCrashOrDesyncLog(void)

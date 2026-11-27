@@ -1210,6 +1210,67 @@ static bool TestEconStats_BatchConstructionAndDemographics()
 
     TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldEast.data(), citPtrs[0]));
     TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+
+    // Verify native 0x87DCC0 (RVA_CITIZEN_CAN_MOVE_TO_BLD) filter parity (no 0x87DCC9 hook jump-back crash):
+    // Master block (+0x1414), education filters (+0x1415..+0x1417), and loyalty buckets (+0x1418..+0x141B).
+    {
+        float savedEdu = *(float*)(citPtrs[0] + 0xA8);
+        float savedLoy = *(float*)(citPtrs[0] + 0xE4);
+
+        bldWestApt[0x1414] = 1;
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1414] = 0;
+
+        *(float*)(citPtrs[0] + 0xA8) = 0.75f; // edu == 0
+        bldWestApt[0x1415] = 1;
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xA8) = 1.50f; // edu == 1
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1415] = 0;
+
+        bldWestApt[0x1416] = 1;
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xA8) = 2.10f; // edu == 2
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1416] = 0;
+
+        bldWestApt[0x1417] = 1;
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xA8) = 1.25f;
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1417] = 0;
+
+        bldWestApt[0x1418] = 1; // bucket 0: loy < 0.25f
+        *(float*)(citPtrs[0] + 0xE4) = 0.24f;
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xE4) = 0.25f; // boundary -> bucket 1
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1418] = 0;
+
+        bldWestApt[0x1419] = 1; // bucket 1: 0.25f <= loy < 0.50f
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xE4) = 0.50f; // boundary -> bucket 2
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x1419] = 0;
+
+        bldWestApt[0x141A] = 1; // bucket 2: 0.50f <= loy < 0.75f
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xE4) = 0.75f; // boundary -> bucket 3
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x141A] = 0;
+
+        bldWestApt[0x141B] = 1; // bucket 3: loy >= 0.75f or NaN
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xE4) = std::numeric_limits<float>::quiet_NaN();
+        TEST_CHECK(!TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        *(float*)(citPtrs[0] + 0xE4) = 0.50f;
+        TEST_CHECK(TwoStates_CitizenCanMoveToBldForTest(world, bldWestApt.data(), citPtrs[0]));
+        bldWestApt[0x141B] = 0;
+
+        *(float*)(citPtrs[0] + 0xA8) = savedEdu;
+        *(float*)(citPtrs[0] + 0xE4) = savedLoy;
+    }
+
     TwoStates_CitizenMoveToBldForTest(world, citPtrs[0], bldEast.data());
     TEST_CHECK(*(BYTE**)(citPtrs[0] + CIT_HOME_BUILDING_OFFSET) == bldWest.data());
 

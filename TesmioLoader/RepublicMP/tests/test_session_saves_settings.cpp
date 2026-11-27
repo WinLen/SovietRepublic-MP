@@ -2086,6 +2086,9 @@ static bool SubTest_CrashUpload_BuildZipAndCap()
     writeFileStr(tmpGame, "RepublicMP_Diagnostics.prev.log", "State=HOST_IN_GAME\r\nTick=4200\r\n");
     writeFileStr(tmpBase, "tesmioloader.prev.log", "=== CRASH: fake loader fault ===\r\n");
 
+    const unsigned int fullFlags = DiagLog_DetectPrevCrashFlagsForDir(tmpGame, tmpBase);
+    TEST_CHECK(fullFlags == (DIAG_PREV_CRASH_LAST_FILE | DIAG_PREV_CRASH_DIAG_PREV | DIAG_PREV_CRASH_LOADER_PREV));
+
     CrashUploadMeta meta = {};
     strncpy_s(meta.reason, "PREV_CRASH", _TRUNCATE);
     strncpy_s(meta.role, "HOST", _TRUNCATE);
@@ -2117,17 +2120,30 @@ static bool SubTest_CrashUpload_BuildZipAndCap()
     TEST_CHECK(jsonStr.find("\"PREV_CRASH\"") != std::string::npos);
     TEST_CHECK(jsonStr.find("Test\\\"Player\\\\One") != std::string::npos);
 
-    // Fingerprint dedup
+    // Fingerprint dedup (including clean-session restart with leftover LastCrash.log)
     uint64_t fp1 = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
-    TEST_CHECK(fp1 != 0);
+    uint64_t fpLastOnly = CrashUpload_ComputeFingerprintForFlags(tmpGame, tmpBase, DIAG_PREV_CRASH_LAST_FILE);
+    TEST_CHECK(fp1 != 0 && fpLastOnly != 0 && fp1 != fpLastOnly);
     TEST_CHECK(!CrashUpload_HasUploadedFingerprint(tmpGame, fp1));
     CrashUpload_MarkFingerprintUploaded(tmpGame, fp1);
+    CrashUpload_MarkFingerprintUploaded(tmpGame, fpLastOnly);
     TEST_CHECK(CrashUpload_HasUploadedFingerprint(tmpGame, fp1));
+    TEST_CHECK(CrashUpload_HasUploadedFingerprint(tmpGame, fpLastOnly));
+
+    Sleep(20);
+    // Clean session ran after the crash -> Diagnostics.prev.log & tesmioloader.prev.log rotated without crash,
+    // while RepublicMP_LastCrash.log stays on disk: must NOT re-upload!
+    writeFileStr(tmpGame, "RepublicMP_Diagnostics.prev.log", "State=IDLE\r\n=== RepublicMP Diagnostics Shutting Down ===\r\n");
+    writeFileStr(tmpBase, "tesmioloader.prev.log", "[11:43:00] clean exit\r\n");
+    TEST_CHECK(DiagLog_DetectPrevCrashFlagsForDir(tmpGame, tmpBase) == DIAG_PREV_CRASH_LAST_FILE);
+    uint64_t fpCleanRestart = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
+    TEST_CHECK(fpCleanRestart == fpLastOnly);
+    TEST_CHECK(CrashUpload_HasUploadedFingerprint(tmpGame, fpCleanRestart));
 
     Sleep(20);
     writeFileStr(tmpGame, "RepublicMP_LastCrash.log", "[CRASH] SECOND CRASH MORE BYTES\r\n");
     uint64_t fp2 = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
-    TEST_CHECK(fp2 != 0 && fp2 != fp1);
+    TEST_CHECK(fp2 != 0 && fp2 != fp1 && fp2 != fpLastOnly);
     TEST_CHECK(!CrashUpload_HasUploadedFingerprint(tmpGame, fp2));
     return true;
 }

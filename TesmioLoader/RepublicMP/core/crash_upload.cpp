@@ -256,6 +256,7 @@ struct UploadWorkerJob {
     std::string uploadUrl;
     CrashUploadMeta meta;
     uint64_t prevFingerprint;
+    uint64_t lastCrashOnlyFingerprint;
     bool hasPrevFingerprint;
 };
 
@@ -274,8 +275,14 @@ DWORD WINAPI CrashUploadWorkerProc(LPVOID param)
             unsigned long status = 0;
             bool ok = CrashUpload_PostZipToUrl(job->uploadUrl.c_str(), REPUBLICMP_CRASH_INGEST_KEY,
                                                job->meta, zipData.data(), zipData.size(), &status);
-            if (ok && job->hasPrevFingerprint && job->prevFingerprint != 0) {
-                CrashUpload_MarkFingerprintUploaded(job->gameDir.c_str(), job->prevFingerprint);
+            if (ok && job->hasPrevFingerprint) {
+                if (job->prevFingerprint != 0) {
+                    CrashUpload_MarkFingerprintUploaded(job->gameDir.c_str(), job->prevFingerprint);
+                }
+                if (job->lastCrashOnlyFingerprint != 0 &&
+                    job->lastCrashOnlyFingerprint != job->prevFingerprint) {
+                    CrashUpload_MarkFingerprintUploaded(job->gameDir.c_str(), job->lastCrashOnlyFingerprint);
+                }
             }
             DiagLog_Printf("CRASH_UP", "Upload %s (reason=%s, role=%s, zip=%u B, http=%lu)",
                            ok ? "succeeded" : "skipped/failed",
@@ -324,40 +331,59 @@ bool CrashUpload_BuildReportZip(const char* gameDir, const char* baseDir,
     return false;
 }
 
-uint64_t CrashUpload_ComputePrevCrashFingerprint(const char* gameDir, const char* baseDir)
+uint64_t CrashUpload_ComputeFingerprintForFlags(const char* gameDir, const char* baseDir, unsigned int flags)
 {
-    if (!gameDir || !gameDir[0]) return 0;
+    if (!gameDir || !gameDir[0] || flags == 0) return 0;
 
-    static const char* const kFingerprintFiles[3] = {
-        "RepublicMP_LastCrash.log",
-        "RepublicMP_Diagnostics.prev.log",
-        "tesmioloader.prev.log"
+    struct FingerprintSpec {
+        unsigned int flagBit;
+        const char*  fileName;
+        const char*  fallbackFileName;
+        bool         useLoaderDir;
+    };
+    static const FingerprintSpec kSpecs[3] = {
+        { DIAG_PREV_CRASH_LAST_FILE,   "RepublicMP_LastCrash.log",        nullptr,            false },
+        { DIAG_PREV_CRASH_DIAG_PREV,   "RepublicMP_Diagnostics.prev.log", nullptr,            false },
+        { DIAG_PREV_CRASH_LOADER_PREV, "tesmioloader.prev.log",           "tesmioloader.log", true  }
     };
 
     uint64_t h = 14695981039346656037ULL;
     bool anyFound = false;
 
-    for (int i = 0; i < 3; ++i) {
-        char full[MAX_PATH] = {};
-        WIN32_FILE_ATTRIBUTE_DATA fad = {};
-        _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", gameDir, kFingerprintFiles[i]);
-        bool found = TryGetFileStat(full, fad);
-        if (!found && i == 2 && baseDir && baseDir[0]) {
-            _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", baseDir, kFingerprintFiles[i]);
-            found = TryGetFileStat(full, fad);
-        }
-        if (!found) continue;
-        if (fad.nFileSizeHigh == 0 && fad.nFileSizeLow == 0) continue;
+    for (const FingerprintSpec& spec : kSpecs) {
+        if ((flags & spec.flagBit) == 0) continue;
+        const char* primaryDir = (spec.useLoaderDir && baseDir && baseDir[0]) ? baseDir : gameDir;
+        const char* names[2] = { spec.fileName, spec.fallbackFileName };
+        for (int n = 0; n < 2; ++n) {
+            if (!names[n]) continue;
+            char full[MAX_PATH] = {};
+            WIN32_FILE_ATTRIBUTE_DATA fad = {};
+            _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", primaryDir, names[n]);
+            bool found = TryGetFileStat(full, fad);
+            if (!found && spec.useLoaderDir && primaryDir != gameDir) {
+                _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", gameDir, names[n]);
+                found = TryGetFileStat(full, fad);
+            }
+            if (!found || (fad.nFileSizeHigh == 0 && fad.nFileSizeLow == 0)) continue;
 
-        anyFound = true;
-        Fnv1aMixBytes(h, kFingerprintFiles[i], strlen(kFingerprintFiles[i]));
-        Fnv1aMixBytes(h, &fad.nFileSizeHigh, sizeof(fad.nFileSizeHigh));
-        Fnv1aMixBytes(h, &fad.nFileSizeLow, sizeof(fad.nFileSizeLow));
-        Fnv1aMixBytes(h, &fad.ftLastWriteTime, sizeof(fad.ftLastWriteTime));
+            anyFound = true;
+            Fnv1aMixBytes(h, spec.fileName, strlen(spec.fileName));
+            Fnv1aMixBytes(h, &fad.nFileSizeHigh, sizeof(fad.nFileSizeHigh));
+            Fnv1aMixBytes(h, &fad.nFileSizeLow, sizeof(fad.nFileSizeLow));
+            Fnv1aMixBytes(h, &fad.ftLastWriteTime, sizeof(fad.ftLastWriteTime));
+            break;
+        }
     }
 
     if (!anyFound) return 0;
     return h != 0 ? h : 1ULL;
+}
+
+uint64_t CrashUpload_ComputePrevCrashFingerprint(const char* gameDir, const char* baseDir)
+{
+    const unsigned int flags = DiagLog_DetectPrevCrashFlagsForDir(gameDir, baseDir);
+    if (flags == 0) return 0;
+    return CrashUpload_ComputeFingerprintForFlags(gameDir, baseDir, flags);
 }
 
 bool CrashUpload_HasUploadedFingerprint(const char* gameDir, uint64_t fp)
@@ -368,9 +394,12 @@ bool CrashUpload_HasUploadedFingerprint(const char* gameDir, uint64_t fp)
     if (fopen_s(&f, marker.c_str(), "r") != 0 || !f) return false;
     char line[64] = {};
     bool matched = false;
-    if (fgets(line, sizeof(line), f)) {
-        uint64_t saved = static_cast<uint64_t>(_strtoui64(line, nullptr, 16));
-        matched = (saved == fp);
+    for (int i = 0; i < 8 && fgets(line, sizeof(line), f); ++i) {
+        const uint64_t saved = static_cast<uint64_t>(_strtoui64(line, nullptr, 16));
+        if (saved != 0 && saved == fp) {
+            matched = true;
+            break;
+        }
     }
     fclose(f);
     return matched;
@@ -380,9 +409,28 @@ void CrashUpload_MarkFingerprintUploaded(const char* gameDir, uint64_t fp)
 {
     if (!gameDir || !gameDir[0] || fp == 0) return;
     std::string marker = ResolveMarkerPath(gameDir);
+    std::vector<uint64_t> history;
+    FILE* rf = nullptr;
+    if (fopen_s(&rf, marker.c_str(), "r") == 0 && rf) {
+        char line[64] = {};
+        for (int i = 0; i < 8 && fgets(line, sizeof(line), rf); ++i) {
+            const uint64_t saved = static_cast<uint64_t>(_strtoui64(line, nullptr, 16));
+            if (saved != 0 && saved != fp) {
+                history.push_back(saved);
+            }
+        }
+        fclose(rf);
+    }
+    while (history.size() > 3) {
+        history.erase(history.begin());
+    }
+    history.push_back(fp);
+
     FILE* f = nullptr;
     if (fopen_s(&f, marker.c_str(), "w") != 0 || !f) return;
-    fprintf(f, "%016llX\n", static_cast<unsigned long long>(fp));
+    for (uint64_t v : history) {
+        fprintf(f, "%016llX\n", static_cast<unsigned long long>(v));
+    }
     fclose(f);
 }
 
@@ -480,6 +528,8 @@ void CrashUpload_InitAndCheckPrevCrashAsync(void)
     job->baseDir = baseDir ? baseDir : "";
     job->uploadUrl = ResolveActiveUploadUrl();
     job->prevFingerprint = fp;
+    job->lastCrashOnlyFingerprint =
+        CrashUpload_ComputeFingerprintForFlags(gameDir, baseDir, DIAG_PREV_CRASH_LAST_FILE);
     job->hasPrevFingerprint = true;
 
     strncpy_s(job->meta.reason, "PREV_CRASH", _TRUNCATE);

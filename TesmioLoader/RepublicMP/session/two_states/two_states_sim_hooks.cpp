@@ -143,7 +143,6 @@ typedef void (__fastcall* CitizenBirthFn)(BYTE* world, BYTE* citizen, uintptr_t 
 typedef unsigned char (__fastcall* CitizenStarveStepFn)(BYTE* world, BYTE* citizen);
 typedef void (__fastcall* CitizenRemoveFn)(BYTE* world, BYTE* citizen, unsigned char a3, unsigned char a4, uintptr_t a5, uintptr_t a6);
 typedef void (__fastcall* CitizenEvalNeedsFn)(BYTE* world, BYTE* citizen);
-typedef unsigned char (__fastcall* CitizenCanMoveToBldFn)(BYTE* world, BYTE* targetBld, BYTE* citizen);
 typedef void (__fastcall* CitizenMoveToBldFn)(BYTE* world, BYTE* citizen, BYTE* targetBld);
 
 static CitHomeStepFn o_citHomeStep = nullptr;
@@ -154,7 +153,6 @@ static CitizenBirthFn o_citizenBirth = nullptr;
 static CitizenStarveStepFn o_citizenStarveStep = nullptr;
 static CitizenRemoveFn o_citizenRemove = nullptr;
 static CitizenEvalNeedsFn o_citizenEvalNeeds = nullptr;
-static CitizenCanMoveToBldFn o_citizenCanMoveToBld = nullptr;
 static CitizenMoveToBldFn o_citizenMoveToBld = nullptr;
 static CourtAssignFn o_courtAssign = nullptr;
 static PrisonAssignFn o_prisonAssign = nullptr;
@@ -533,12 +531,59 @@ static bool IsCrossStateCitizenRelocation(const BYTE* citizen, const BYTE* targe
     return (bldOwner == 1 || bldOwner == 2) && (citOwner != bldOwner);
 }
 
-static unsigned char __fastcall H_CitizenCanMoveToBld(BYTE* world, BYTE* targetBld, BYTE* citizen)
+// Exact native implementation of SOVIET64.exe 0x87DCC0 (RVA_CITIZEN_CAN_MOVE_TO_BLD).
+// Never call the original trampoline here: 0x87DCC9 is a shared `xor al, al; ret`
+// inside the overwritten 14-byte hook prologue jumped back to by 7 conditional branches.
+static unsigned char EvaluateNativeCitizenCanMoveToBld(const BYTE* targetBld, const BYTE* citizen)
+{
+    if (!targetBld || !citizen) return 1;
+    if (!IsPointerLikeX64((uintptr_t)targetBld) || !IsPointerLikeX64((uintptr_t)citizen)) return 1;
+    if (*(const uint8_t*)(targetBld + 0x1414) == 1) return 0;
+
+    const float eduF = *(const float*)(citizen + 0xA8);
+    const int edu = isfinite(eduF) ? static_cast<int>(eduF) : -1;
+    if (*(const uint8_t*)(targetBld + 0x1417) == 1 && edu == 2) return 0;
+    if (*(const uint8_t*)(targetBld + 0x1416) == 1 && edu == 1) return 0;
+    if (*(const uint8_t*)(targetBld + 0x1415) == 1 && edu == 0) return 0;
+
+    const uint8_t blockLoy0 = *(const uint8_t*)(targetBld + 0x1418);
+    const uint8_t blockLoy1 = *(const uint8_t*)(targetBld + 0x1419);
+    const uint8_t blockLoy2 = *(const uint8_t*)(targetBld + 0x141A);
+    const uint8_t blockLoy3 = *(const uint8_t*)(targetBld + 0x141B);
+    if (blockLoy0 || blockLoy1 || blockLoy2 || blockLoy3) {
+        const float loy = *(const float*)(citizen + 0xE4);
+        int bucket = 3;
+        if (0.25f > loy) {
+            bucket = 0;
+        } else if (0.5f > loy) {
+            bucket = 1;
+        } else if (0.75f > loy) {
+            bucket = 2;
+        }
+        if ((blockLoy0 == 1 && bucket == 0) ||
+            (blockLoy1 == 1 && bucket == 1) ||
+            (blockLoy2 == 1 && bucket == 2) ||
+            (blockLoy3 == 1 && bucket == 3)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static unsigned char __fastcall H_CitizenCanMoveToBld(BYTE* /*world*/, BYTE* targetBld, BYTE* citizen)
 {
     if (IsCrossStateCitizenRelocation(citizen, targetBld)) {
         return 0;
     }
-    return o_citizenCanMoveToBld ? o_citizenCanMoveToBld(world, targetBld, citizen) : 1;
+    unsigned char allowed = 1;
+    DiagLog_BeginSafeSeh();
+    __try {
+        allowed = EvaluateNativeCitizenCanMoveToBld(targetBld, citizen);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        allowed = 1;
+    }
+    DiagLog_EndSafeSeh();
+    return allowed;
 }
 
 static void __fastcall H_CitizenMoveToBld(BYTE* world, BYTE* citizen, BYTE* targetBld)
@@ -1614,8 +1659,9 @@ int TwoStates_InstallSimHooks()
     simOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_EVAL_NEEDS, (void*)&H_CitizenEvalNeeds,
                                (void**)&o_citizenEvalNeeds, kCitizenEvalNeedsExpect,
                                sizeof(kCitizenEvalNeedsExpect), "republicmp two_states citizen_eval_needs");
+    void* unusedCanMoveOrig = nullptr;
     simOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_CAN_MOVE_TO_BLD, stubCanMoveBld,
-                               (void**)&o_citizenCanMoveToBld, kCitizenCanMoveToBldExpect,
+                               &unusedCanMoveOrig, kCitizenCanMoveToBldExpect,
                                sizeof(kCitizenCanMoveToBldExpect), "republicmp two_states citizen_can_move_to_bld");
     simOk += InstallInlineHook(g_exeBase + RVA_CITIZEN_MOVE_TO_BLD, stubMoveToBld,
                                (void**)&o_citizenMoveToBld, kCitizenMoveToBldExpect,
