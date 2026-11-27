@@ -338,13 +338,12 @@ uint64_t CrashUpload_ComputeFingerprintForFlags(const char* gameDir, const char*
     struct FingerprintSpec {
         unsigned int flagBit;
         const char*  fileName;
-        const char*  fallbackFileName;
         bool         useLoaderDir;
     };
     static const FingerprintSpec kSpecs[3] = {
-        { DIAG_PREV_CRASH_LAST_FILE,   "RepublicMP_LastCrash.log",        nullptr,            false },
-        { DIAG_PREV_CRASH_DIAG_PREV,   "RepublicMP_Diagnostics.prev.log", nullptr,            false },
-        { DIAG_PREV_CRASH_LOADER_PREV, "tesmioloader.prev.log",           "tesmioloader.log", true  }
+        { DIAG_PREV_CRASH_LAST_FILE,   "RepublicMP_LastCrash.log",        false },
+        { DIAG_PREV_CRASH_DIAG_PREV,   "RepublicMP_Diagnostics.prev.log", false },
+        { DIAG_PREV_CRASH_LOADER_PREV, "tesmioloader.prev.log",           true  }
     };
 
     uint64_t h = 14695981039346656037ULL;
@@ -353,26 +352,21 @@ uint64_t CrashUpload_ComputeFingerprintForFlags(const char* gameDir, const char*
     for (const FingerprintSpec& spec : kSpecs) {
         if ((flags & spec.flagBit) == 0) continue;
         const char* primaryDir = (spec.useLoaderDir && baseDir && baseDir[0]) ? baseDir : gameDir;
-        const char* names[2] = { spec.fileName, spec.fallbackFileName };
-        for (int n = 0; n < 2; ++n) {
-            if (!names[n]) continue;
-            char full[MAX_PATH] = {};
-            WIN32_FILE_ATTRIBUTE_DATA fad = {};
-            _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", primaryDir, names[n]);
-            bool found = TryGetFileStat(full, fad);
-            if (!found && spec.useLoaderDir && primaryDir != gameDir) {
-                _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", gameDir, names[n]);
-                found = TryGetFileStat(full, fad);
-            }
-            if (!found || (fad.nFileSizeHigh == 0 && fad.nFileSizeLow == 0)) continue;
-
-            anyFound = true;
-            Fnv1aMixBytes(h, spec.fileName, strlen(spec.fileName));
-            Fnv1aMixBytes(h, &fad.nFileSizeHigh, sizeof(fad.nFileSizeHigh));
-            Fnv1aMixBytes(h, &fad.nFileSizeLow, sizeof(fad.nFileSizeLow));
-            Fnv1aMixBytes(h, &fad.ftLastWriteTime, sizeof(fad.ftLastWriteTime));
-            break;
+        char full[MAX_PATH] = {};
+        WIN32_FILE_ATTRIBUTE_DATA fad = {};
+        _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", primaryDir, spec.fileName);
+        bool found = TryGetFileStat(full, fad);
+        if (!found && spec.useLoaderDir && primaryDir != gameDir) {
+            _snprintf_s(full, sizeof(full), _TRUNCATE, "%s\\%s", gameDir, spec.fileName);
+            found = TryGetFileStat(full, fad);
         }
+        if (!found || (fad.nFileSizeHigh == 0 && fad.nFileSizeLow == 0)) continue;
+
+        anyFound = true;
+        Fnv1aMixBytes(h, spec.fileName, strlen(spec.fileName));
+        Fnv1aMixBytes(h, &fad.nFileSizeHigh, sizeof(fad.nFileSizeHigh));
+        Fnv1aMixBytes(h, &fad.nFileSizeLow, sizeof(fad.nFileSizeLow));
+        Fnv1aMixBytes(h, &fad.ftLastWriteTime, sizeof(fad.ftLastWriteTime));
     }
 
     if (!anyFound) return 0;

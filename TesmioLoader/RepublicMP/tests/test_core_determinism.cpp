@@ -1243,6 +1243,22 @@ static bool SubTest_M9_4_Challenger1_StateHash14Networks()
         TEST_CHECK(s_capturedNetLog.find("DESYNC_DUMP[net] t=6780 i=0 off=0xF840 name=ROAD nodes=1 segs=1 ") != std::string::npos);
         TEST_CHECK(s_capturedNetLog.find("last=(1,0)") != std::string::npos);
         TEST_CHECK(s_capturedNetLog.find("DESYNC_DUMP[net] t=6780 i=13 off=0xFB90 name=WATERPIPE nodes=-1 segs=-1") != std::string::npos);
+
+        // Verify large-map breakdown (>256 segments) reports the true newest segList[nSegs - 1]
+        std::vector<BYTE> segLast(0x200, 0);
+        segLast[SEG_TYPE_OFFSET] = 9;
+        *(short*)(segLast.data() + SEG_DIRECTION_OFFSET) = 2;
+        std::vector<BYTE*> largeSegVec(260, segObj.data());
+        largeSegVec[259] = segLast.data();
+        WriteMockVectorHeader(netMgr.data() + MGR_SEGMENTS_BEGIN_OFFSET, largeSegVec);
+
+        s_capturedNetLog.clear();
+        *(BYTE**)(world + 0xF840) = netMgr.data();
+        StateHash_LogDesyncBreakdown("networks ", 6781);
+        *(BYTE**)(world + 0xF840) = nullptr;
+
+        TEST_CHECK(s_capturedNetLog.find("DESYNC_DUMP[net] t=6781 i=0 off=0xF840 name=ROAD nodes=1 segs=260 ") != std::string::npos);
+        TEST_CHECK(s_capturedNetLog.find("last=(9,2)") != std::string::npos);
     }
     return true;
 }

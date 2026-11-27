@@ -784,20 +784,21 @@ unsigned int DiagLog_DetectPrevCrashFlagsForDir(const char* gameDir, const char*
     if (!gameDir || !gameDir[0]) return 0;
 
     unsigned int flags = 0;
-    const char* loaderDir = (baseDir && baseDir[0]) ? baseDir : gameDir;
-    const char* kLoaderLogs[2] = { "tesmioloader.prev.log", "tesmioloader.log" };
-    for (int i = 0; i < 2 && (flags & DIAG_PREV_CRASH_LOADER_PREV) == 0; ++i) {
+    const char* loaderDirs[2] = { (baseDir && baseDir[0]) ? baseDir : nullptr, gameDir };
+    for (int i = 0; i < 2; ++i) {
+        if (!loaderDirs[i]) continue;
+        if (i == 1 && loaderDirs[0] && _stricmp(loaderDirs[0], loaderDirs[1]) == 0) continue;
         char loaderLogPath[MAX_PATH] = {};
-        _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\%s", loaderDir, kLoaderLogs[i]);
+        _snprintf_s(loaderLogPath, sizeof(loaderLogPath), _TRUNCATE, "%s\\tesmioloader.prev.log", loaderDirs[i]);
         std::vector<unsigned char> loaderTail;
         DiagLog_ReadFileTail(loaderLogPath, 64 * 1024, loaderTail);
-        if (!loaderTail.empty()) {
-            loaderTail.push_back(0);
-            if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
-                strstr((const char*)loaderTail.data(), "FAULT ") != nullptr) {
-                flags |= DIAG_PREV_CRASH_LOADER_PREV;
-            }
+        if (loaderTail.empty()) continue;
+        loaderTail.push_back(0);
+        if (strstr((const char*)loaderTail.data(), "=== CRASH:") != nullptr ||
+            strstr((const char*)loaderTail.data(), "FAULT ") != nullptr) {
+            flags |= DIAG_PREV_CRASH_LOADER_PREV;
         }
+        break;
     }
 
     char crashLogPath[MAX_PATH] = {};
@@ -818,10 +819,15 @@ unsigned int DiagLog_DetectPrevCrashFlagsForDir(const char* gameDir, const char*
         const char* text = (const char*)tail.data();
         const bool hadCrashInDiagPrev =
             (strstr(text, "[CRASH  ]") != nullptr || strstr(text, "DESYNC - ") != nullptr);
+        const char* lastState = nullptr;
+        for (const char* p = strstr(text, "State="); p != nullptr; p = strstr(p + 6, "State=")) {
+            lastState = p;
+        }
+        const bool endedInGame = (lastState != nullptr) &&
+            (strncmp(lastState, "State=CLIENT_IN_GAME", 20) == 0 ||
+             strncmp(lastState, "State=HOST_IN_GAME", 18) == 0);
         const bool abnormalInGameExit =
-            ((strstr(text, "State=CLIENT_IN_GAME") != nullptr ||
-              strstr(text, "State=HOST_IN_GAME") != nullptr) &&
-             strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
+            endedInGame && (strstr(text, "=== RepublicMP Diagnostics Shutting Down ===") == nullptr);
         if (hadCrashInDiagPrev || abnormalInGameExit) {
             flags |= DIAG_PREV_CRASH_DIAG_PREV;
         }

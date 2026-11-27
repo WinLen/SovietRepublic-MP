@@ -2133,8 +2133,11 @@ static bool SubTest_CrashUpload_BuildZipAndCap()
     Sleep(20);
     // Clean session ran after the crash -> Diagnostics.prev.log & tesmioloader.prev.log rotated without crash,
     // while RepublicMP_LastCrash.log stays on disk: must NOT re-upload!
-    writeFileStr(tmpGame, "RepublicMP_Diagnostics.prev.log", "State=IDLE\r\n=== RepublicMP Diagnostics Shutting Down ===\r\n");
+    // Also verify clean session leave to State=IDLE (without Shutting Down line) + FAULT in live tesmioloader.log
+    // do not trigger DIAG_PREV_CRASH_DIAG_PREV or DIAG_PREV_CRASH_LOADER_PREV.
+    writeFileStr(tmpGame, "RepublicMP_Diagnostics.prev.log", "State=HOST_IN_GAME\r\nState=IDLE\r\n");
     writeFileStr(tmpBase, "tesmioloader.prev.log", "[11:43:00] clean exit\r\n");
+    writeFileStr(tmpBase, "tesmioloader.log", "FAULT live run noise\r\n");
     TEST_CHECK(DiagLog_DetectPrevCrashFlagsForDir(tmpGame, tmpBase) == DIAG_PREV_CRASH_LAST_FILE);
     uint64_t fpCleanRestart = CrashUpload_ComputePrevCrashFingerprint(tmpGame, tmpBase);
     TEST_CHECK(fpCleanRestart == fpLastOnly);

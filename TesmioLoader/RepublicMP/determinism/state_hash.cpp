@@ -170,8 +170,11 @@ static void HashSingleNetworkMgr(BYTE* mgr, unsigned long long& h, long long& ou
                 int segDir = *(int*)(seg + SEG_DIRECTION_OFFSET);
                 MixInt(h, segType);
                 MixInt(h, segDir);
-                outLastType = segType;
-                outLastDir = segDir;
+            }
+            BYTE* lastSeg = segList[outSegs - 1];
+            if (lastSeg) {
+                outLastType = *(int*)(lastSeg + SEG_TYPE_OFFSET);
+                outLastDir = *(int*)(lastSeg + SEG_DIRECTION_OFFSET);
             }
         }
     }
