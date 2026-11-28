@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Lockstep: vehicle purchases as commands (by SoylentGreed).
 //
-// The purchase window's routine 80cc60 (window kinds 1, 2, 5, 6, 7; drawn and
+// The purchase window's routine 84d720 (window kinds 1, 2, 5, 6, 7, 0xb; drawn and
 // clicked from the interface on the render thread) buys only after its Buy
-// press, read at 810943 from C3D_INPUT::GetMouseLeftPress. In a lockstep
+// press, read at 852b02 from C3D_INPUT::GetMouseLeftPress. In a lockstep
 // session that press reads "not pressed" on the clicking PC; what the window
-// had at the press (the caller's registers: world r12, type r13, window r14,
-// another button bl, prices xmm12 rubles / xmm13 dollars, availability xmm10)
+// had at the press (world r14, window [rsp+0x68]/rsi, type [rsp+0x70]/r12,
+// another button bl, prices xmm9 rubles / xmm10 dollars, availability xmm8,
+// container row [rsp+0x7c], root parent +0x6c8, used market world +0x78)
 // becomes a purchase command, and at the boundary every PC replays the Buy
 // branch with the game's own routines (3e3f40 depot slot, 3e4a00 vehicle,
 // 3fd5d0 coupling, 33f0 slot list, 2ab810 slot done, the licence and factory
@@ -61,6 +62,9 @@ bool Purchase_SubmitAutoReplaceClear(BYTE* targetType);
 
 // Test helper: invokes ReplayAutoReplace directly (bypasses RoutinesOk() table cache in unit tests).
 bool Purchase_ApplyAutoReplaceForTest(const PurchaseMsg& m);
+
+// Test helper: runs Capture() against a mock caller CONTEXT and stack frame (returns 0=PASS, 1=TAKE, 2=REFUSE).
+int Purchase_CaptureForTest(const CONTEXT* caller, PurchaseMsg* outMsg, const char** outWhy, BYTE** outType);
 
 // Canonical scriptName resolution: scans WORLD_VEHICLE_TYPES_OFFSET (+0x12840)
 // and returns pointer to the VehicleType whose scriptName (+0x200) matches `scriptName`.

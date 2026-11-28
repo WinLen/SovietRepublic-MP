@@ -49,6 +49,162 @@ static bool SubTest_PowerHighAndLateToolStubRegressions()
     return true;
 }
 
+static bool SubTest_PurchaseV1209CaptureRegressions()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    // 3 mock buildings: [0] depot/customs, [1] customsRub, [2] customsUsd
+    std::vector<BYTE> depot(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> cRub(BUILDING_STRUCT_BYTES, 0);
+    std::vector<BYTE> cUsd(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(depot.data() + 0) = 101;
+    *(int*)(cRub.data() + 0)  = 102;
+    *(int*)(cUsd.data() + 0)  = 103;
+    std::vector<BYTE*> blds = { depot.data(), cRub.data(), cUsd.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, blds);
+
+    // 2 vehicle types: [0] container (cat=9), [1] vanilla truck (cat=1)
+    std::vector<BYTE> vtypes(2u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* vtCont = vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vtTruck = vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE;
+    strcpy_s((char*)(vtCont + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/container_iso.ini");
+    strcpy_s((char*)(vtTruck + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/skoda_706_rth.ini");
+    *(unsigned*)(vtCont + VEH_TYPE_CATEGORY_OFFSET) = 9u;
+    *(unsigned*)(vtTruck + VEH_TYPE_CATEGORY_OFFSET) = 1u;
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    // Used vehicle market at world + 0x78 (cat 1 record = 0x28 bytes)
+    std::vector<BYTE> market(0xC0, 0);
+    std::vector<BYTE> usedRec(0x28, 0);
+    *(BYTE**)(usedRec.data() + 0) = vtTruck;
+    *(double*)(usedRec.data() + 8) = 4.25;
+    *(double*)(usedRec.data() + 16) = 9.5;
+    *(BYTE**)(market.data() + 0x00) = usedRec.data();
+    *(BYTE**)(market.data() + 0x08) = usedRec.data() + usedRec.size();
+    *(BYTE**)(world + 0x78) = market.data();
+
+    // Container resource table at world + 0xC350 and lookup vector at world + 0x12928
+    std::vector<BYTE> resPool(0x380, 0);
+    *(BYTE**)(world + 0xC350) = resPool.data();
+    *(BYTE**)(world + 0xC358) = resPool.data() + resPool.size();
+    std::vector<BYTE*> rowPtrs = { resPool.data() };
+    WriteMockVectorHeader(world + 0x12928, rowPtrs);
+
+    // Root + child window linked through WINDOW_PARENT_OFFSET (+0x6C8)
+    std::vector<BYTE> rootWin(0x700, 0);
+    std::vector<BYTE> subWin(0x700, 0);
+    *(BYTE**)(rootWin.data() + 0x2C0) = cRub.data();
+    *(BYTE**)(rootWin.data() + 0x2C8) = cUsd.data();
+    subWin[0x20] = 1; // hover
+    *(unsigned*)(subWin.data() + 0x23C) = 1u; // RUB purchase
+    *(BYTE**)(subWin.data() + 0x240) = depot.data();
+    *(unsigned*)(subWin.data() + 0x248) = 14u; // USED_TARGET
+    subWin[0x2B8] = 1; // refill
+    *(BYTE**)(subWin.data() + 0x6C8) = rootWin.data();
+
+    // Mock v1.2.0.9 stack frame at [rsp+0x68]=win, [rsp+0x70]=type, [rsp+0x7C]=row
+    std::vector<BYTE> mockStack(0x100, 0);
+    *(BYTE**)(mockStack.data() + 0x68) = subWin.data();
+    *(BYTE**)(mockStack.data() + 0x70) = vtTruck;
+    *(int*)(mockStack.data() + 0x7C) = 0;
+
+    CONTEXT ctx = {};
+    ctx.Rsp = (DWORD64)(uintptr_t)mockStack.data();
+    ctx.R14 = (DWORD64)(uintptr_t)world;
+    ctx.R12 = (DWORD64)(uintptr_t)vtTruck;
+    ctx.Rsi = (DWORD64)(uintptr_t)subWin.data();
+    ctx.R13 = 0xDEADBEEFULL; // stale v1.1.1.9 register MUST be ignored
+    ctx.Rbx = 0ULL;
+    const double rub = 12345.0;
+    const double usd = 6789.0;
+    const float avail = 0.25f;
+    memcpy(&ctx.Xmm9, &rub, sizeof(rub));
+    memcpy(&ctx.Xmm10, &usd, sizeof(usd));
+    memcpy(&ctx.Xmm8, &avail, sizeof(avail));
+
+    PurchaseMsg msg = {};
+    const char* why = "";
+    BYTE* outType = nullptr;
+    TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, &outType) == 1);
+    TEST_CHECK(outType == vtTruck);
+    TEST_CHECK(msg.kind == 1u && msg.typeIndex == 1u);
+    TEST_CHECK(msg.depot.place == 0 && msg.depot.id == 101);
+    TEST_CHECK(msg.customsRub.place == 1 && msg.customsRub.id == 102);
+    TEST_CHECK(msg.customsUsd.place == 2 && msg.customsUsd.id == 103);
+    TEST_CHECK(msg.rubles == 12345.0 && msg.dollars == 6789.0 && msg.avail == 0.25f);
+    TEST_CHECK(msg.refill == 1 && msg.used == 1);
+    TEST_CHECK_NEAR(msg.usedAge, 4.25, 1e-9);
+    TEST_CHECK_NEAR(msg.usedAge2, 9.5, 1e-9);
+
+    // Container category == 9 reads row from [rsp+0x7C]
+    *(BYTE**)(mockStack.data() + 0x70) = vtCont;
+    ctx.R12 = (DWORD64)(uintptr_t)vtCont;
+    *(unsigned*)(subWin.data() + 0x248) = 0u;
+    TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, &outType) == 1);
+    TEST_CHECK(outType == vtCont && msg.resIndex == 0);
+
+    // kind == 0xB auto-replace resolves both newType ([rsp+0x70]) and targetType (*win+0x240)
+    BYTE* targetEntry = vtCont;
+    *(unsigned*)(subWin.data() + 0x23C) = 0xBu;
+    *(BYTE**)(subWin.data() + 0x240) = (BYTE*)&targetEntry;
+    *(BYTE**)(mockStack.data() + 0x70) = vtTruck;
+    ctx.R13 = 0ULL;
+    TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, &outType) == 1);
+    TEST_CHECK(outType == vtTruck && msg.kind == 0xBu && msg.typeIndex == 1u && msg.resIndex == 0);
+
+    // Wrong world register (R14 != world) refuses with "registers"
+    ctx.R14 = 0ULL;
+    TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, &outType) == 2);
+    TEST_CHECK(strcmp(why, "registers") == 0);
+
+    // End-to-end Purchase_OnPress: uses capturedType (NOT stale R13=0) for SaveSync_CheckVehicleDlcAllowed
+    static const struct { unsigned rva; unsigned char b[16]; } kPurchaseSigs[] = {
+        { 0x4033A0, { 0x44,0x89,0x4c,0x24,0x20,0x53,0x56,0x41,0x54,0x41,0x55,0x41,0x56,0x48,0x83,0xec } },
+        { 0x64FA50, { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57 } },
+        { 0x7A76D0, { 0x48,0x85,0xd2,0x0f,0x84,0xee,0x01,0x00,0x00,0x48,0x89,0x5c,0x24,0x20,0x57,0x48 } },
+        { 0x403E60, { 0x48,0x8b,0xc4,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8b,0xec,0x48 } },
+        { 0x420960, { 0x44,0x89,0x4c,0x24,0x20,0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x54,0x24,0x10,0x48 } },
+        { 0x003430, { 0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x30,0x48,0x8b,0xfa,0x48,0x8b,0xf1 } },
+        { 0x2C7380, { 0x48,0x85,0xd2,0x0f,0x84,0xef,0x05,0x00,0x00,0x4c,0x8b,0xdc,0x4d,0x89,0x43,0x18 } },
+        { 0x054960, { 0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x41,0x08,0x48,0x8b } },
+        { 0x409EB0, { 0x40,0x55,0x56,0x57,0x48,0x8d,0xac,0x24,0x70,0xff,0xff,0xff,0x48,0x81,0xec,0x90 } },
+        { 0x409930, { 0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48 } },
+        { 0x0E42F0, { 0x48,0x83,0xec,0x28,0x4c,0x8b,0x49,0x10,0x4c,0x8b,0xc1,0x48,0x8b,0x51,0x08,0x49 } },
+        { 0x68A0B0, { 0x48,0x85,0xd2,0x0f,0x84,0x26,0x01,0x00,0x00,0x57,0x48,0x83,0xec,0x20,0x66,0x0f } },
+        { 0x688650, { 0x48,0x85,0xd2,0x0f,0x84,0xde,0x00,0x00,0x00,0x53,0x48,0x83,0xec,0x20,0x48,0x8b } },
+        { 0x63C410, { 0x48,0x85,0xd2,0x0f,0x84,0xf0,0x00,0x00,0x00,0x57,0x48,0x83,0xec,0x20,0x8b,0x82 } },
+    };
+    for (const auto& s : kPurchaseSigs) {
+        memcpy(g_mockExeBuffer + s.rva, s.b, sizeof(s.b));
+    }
+    strcpy_s((char*)(vtTruck + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "dlc2/vehicles/biomes_truck.ini");
+    *(unsigned*)(subWin.data() + 0x23C) = 1u;
+    *(BYTE**)(subWin.data() + 0x240) = depot.data();
+    *(unsigned*)(subWin.data() + 0x248) = 0u;
+    *(BYTE**)(mockStack.data() + 0x70) = vtTruck;
+    ctx.R14 = (DWORD64)(uintptr_t)world;
+    ctx.R12 = (DWORD64)(uintptr_t)vtTruck;
+    ctx.R13 = 0ULL;
+    ctx.Rip = (DWORD64)(uintptr_t)(g_mockExeBuffer + 0x852B08u);
+    SaveSync_SetTestSessionState(SESSION_HOST_IN_GAME, true, "");
+    SaveSync_SetTestDlcLists("dlc1,dlc2", "dlc1"); // dlc2 unshared -> blocked!
+    Commands_SetSession(COMMANDS_HOST);
+    Purchase_ResetDiagStatsForTest();
+    TEST_CHECK(!Purchase_OnPress(true, &ctx));
+    VehicleSyncDiagStats diag = {};
+    Purchase_GetDiagStats(&diag);
+    TEST_CHECK(diag.purchasesAttempted == 1 && diag.purchasesBlockedDlc == 1);
+    Commands_SetSession(COMMANDS_OFF);
+    SaveSync_SetTestDlcLists("", "");
+    SaveSync_SetTestSessionState(SESSION_IDLE, false, "");
+    Purchase_ResetDiagStatsForTest();
+
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool SubTest_Sub4GbHeapPointersAndDepotCheck()
 {
     // Allocate a block below 4 GB (high 32 bits == 0) to simulate Windows x64 sub-4 GB heap addresses.
@@ -416,6 +572,7 @@ bool Test_RvaAndSafeMem()
     }
 
     if (!SubTest_PowerHighAndLateToolStubRegressions()) return false;
+    if (!SubTest_PurchaseV1209CaptureRegressions()) return false;
 
     return true;
 }

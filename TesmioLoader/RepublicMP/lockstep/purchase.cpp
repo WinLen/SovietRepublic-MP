@@ -87,12 +87,13 @@ void Purchase_Bind(const TsmHost* host)
 #define DOLLARS_OFFSET 0x5A8
 #define TOTAL_DOLLARS_OFFSET 0x11550 // month totals, floats
 #define TOTAL_RUBLES_OFFSET 0x11554
-#define MARKET_OFFSET 0x50             // used-vehicle market: ten vectors of 0x28-byte records
+#define MARKET_OFFSET 0x78             // used-vehicle market (v1.2.0.9): ten vectors of 0x28-byte records
+#define WINDOW_PARENT_OFFSET 0x6C8     // parent window chain (0x7A78D0 GetRootWindow)
 #define USED_TARGET 14
 #define USED_RECORD 0x28
 #define VARIANT_COUNT 0x20
 #define MAX_TRAILERS 16
-#define WINDOW_BYTES 0x600
+#define WINDOW_BYTES 0x700
 
 // The routines the replay calls; narrow arguments travel in full slots, as the branch passes them.
 typedef unsigned char (*SlotFn)(BYTE* world, BYTE* depot, BYTE* type, unsigned __int64 zero, int* slot);              // 3e3f40
@@ -304,16 +305,67 @@ static bool WriteVariants(BYTE* type, const PurchaseMsg& m)
 // The press: "pass" (not a purchase), "take" (made a command), or a refusal.
 enum PressOutcome { PRESS_PASS, PRESS_TAKE, PRESS_REFUSE };
 
-static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
+static PressOutcome CaptureAutoReplace(BYTE* world, BYTE* window, BYTE* type, PurchaseMsg& m, const char** why)
+{
+    BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
+    BYTE* typesEnd = *(BYTE**)(world + TYPES_OFFSET + 8);
+    if (!types || !type || type < types || type >= typesEnd || (type - types) % TYPE_STRIDE) {
+        *why = "type";
+        return PRESS_REFUSE;
+    }
+    BYTE* targetEntry = *(BYTE**)(window + 0x240);
+    BYTE* targetType = targetEntry ? *(BYTE**)targetEntry : nullptr;
+    m.kind = 0xB;
+    m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
+    m.typeCheck = TypeCheck(type);
+    Ref_ReadVehicleTypeScriptName((U64)type, m.scriptName, sizeof(m.scriptName));
+    if (targetType && types && targetType >= types && targetType < typesEnd && ((targetType - types) % TYPE_STRIDE) == 0) {
+        m.resIndex = (int)((targetType - types) / TYPE_STRIDE);
+        m.targetTypeCheck = TypeCheck(targetType);
+        Ref_ReadVehicleTypeScriptName((U64)targetType, m.targetScriptName, sizeof(m.targetScriptName));
+    } else {
+        m.resIndex = -1;
+    }
+    return PRESS_TAKE;
+}
+
+static void CaptureContainerResource(BYTE* world, const CONTEXT* c, PurchaseMsg& m)
+{
+    int row = c->Rsp ? *(int*)(c->Rsp + 0x7C) : -1;
+    BYTE** rbeg = *(BYTE***)(world + 0x12928);
+    BYTE** rend = *(BYTE***)(world + 0x12930);
+    if (row >= 0 && rbeg && row < (int)(rend - rbeg)) {
+        BYTE* res = rbeg[row];
+        BYTE* cbeg = *(BYTE**)(world + 0xC350);
+        BYTE* cend = *(BYTE**)(world + 0xC358);
+        if (res && cbeg && res >= cbeg && res < cend && (res - cbeg) % 0x380 == 0)
+            m.resIndex = (int)((res - cbeg) / 0x380);
+    }
+}
+
+static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why, BYTE** outType = nullptr)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
-    BYTE* type = (BYTE*)c->R13;
-    BYTE* window = (BYTE*)c->R14;
     memset(&m, 0, sizeof(m));
     m.resIndex = -1;
     *why = "";
+    if (outType) *outType = nullptr;
+    if (!c) {
+        *why = "registers";
+        return PRESS_REFUSE;
+    }
     __try {
-        if ((BYTE*)c->R12 != world || !window) {
+        // SOVIET64.exe v1.2.0.9 (0x84D720 @ BUY_PRESS_SITE 0x852B02):
+        //   r14         = world (0x84D7C5)
+        //   [rsp+0x68]  = purchase window (fallback rsi at 0x8526F6..0x852B30)
+        //   [rsp+0x70]  = vehicle/item type (fallback r12 at 0x852623)
+        //   bl          = disabled/blocked flag (0x852B1F)
+        //   xmm9 / xmm10 = rubles / dollars (double, 0x852D19 / 0x852D07)
+        //   xmm8        = avail float (0x852C6A)
+        //   [rsp+0x7C]  = container resource row (int, 0x852DF1)
+        BYTE* window = c->Rsp ? *(BYTE**)(c->Rsp + 0x68) : (BYTE*)c->Rsi;
+        BYTE* type = c->Rsp ? *(BYTE**)(c->Rsp + 0x70) : (BYTE*)c->R12;
+        if ((BYTE*)c->R14 != world || !window) {
             *why = "registers";
             return PRESS_REFUSE;
         }
@@ -326,26 +378,9 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         // are not vehicle/blueprint purchases.
         if (kind == 9 || kind == 10 || kind == 0xC || kind == 0xD) return PRESS_PASS;
         if (kind == 0xB) {
-            BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
-            BYTE* typesEnd = *(BYTE**)(world + TYPES_OFFSET + 8);
-            if (!types || !type || type < types || type >= typesEnd || (type - types) % TYPE_STRIDE) {
-                *why = "type";
-                return PRESS_REFUSE;
-            }
-            BYTE* targetEntry = *(BYTE**)(window + 0x240);
-            BYTE* targetType = targetEntry ? *(BYTE**)targetEntry : nullptr;
-            m.kind = kind;
-            m.typeIndex = (unsigned)((type - types) / TYPE_STRIDE);
-            m.typeCheck = TypeCheck(type);
-            Ref_ReadVehicleTypeScriptName((U64)type, m.scriptName, sizeof(m.scriptName));
-            if (targetType && types && targetType >= types && targetType < typesEnd && ((targetType - types) % TYPE_STRIDE) == 0) {
-                m.resIndex = (int)((targetType - types) / TYPE_STRIDE);
-                m.targetTypeCheck = TypeCheck(targetType);
-                Ref_ReadVehicleTypeScriptName((U64)targetType, m.targetScriptName, sizeof(m.targetScriptName));
-            } else {
-                m.resIndex = -1;
-            }
-            return PRESS_TAKE;
+            PressOutcome ar = CaptureAutoReplace(world, window, type, m, why);
+            if (ar == PRESS_TAKE && outType) *outType = type;
+            return ar;
         }
         if (kind != 1 && kind != 2 && kind != 5 && kind != 6 && kind != 7) {
             *why = "window kind";
@@ -367,17 +402,17 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         }
         double dollars, rubles;
         float avail;
-        memcpy(&rubles, &c->Xmm12, 8);  // taken from +588
-        memcpy(&dollars, &c->Xmm13, 8); // taken from +580
-        memcpy(&avail, &c->Xmm10, 4);
+        memcpy(&rubles, &c->Xmm9, 8);
+        memcpy(&dollars, &c->Xmm10, 8);
+        memcpy(&avail, &c->Xmm8, 4);
         if (!Finite(dollars) || !Finite(rubles) || !isfinite(avail)) {
             *why = "prices";
             return PRESS_REFUSE;
         }
-        // The customs-house refill works on the root window (parents through +5c8).
+        // The customs-house refill works on the root window (parents through +0x6c8).
         BYTE* root = window;
         for (int i = 0; i < 16; i++) {
-            BYTE* up = *(BYTE**)(root + 0x5C8);
+            BYTE* up = *(BYTE**)(root + WINDOW_PARENT_OFFSET);
             if (!up) break;
             root = up;
         }
@@ -392,18 +427,7 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
         m.rubles = rubles;
         m.dollars = dollars;
         m.avail = avail;
-        if (*(unsigned*)(type + 0x2B8) == 9) {
-            int row = *(int*)(c->Rbp - 0x78);
-            BYTE** rbeg = *(BYTE***)(world + 0x12928);
-            BYTE** rend = *(BYTE***)(world + 0x12930);
-            if (row >= 0 && rbeg && row < (int)(rend - rbeg)) {
-                BYTE* res = rbeg[row];
-                BYTE* cbeg = *(BYTE**)(world + 0xC350);
-                BYTE* cend = *(BYTE**)(world + 0xC358);
-                if (res && cbeg && res >= cbeg && res < cend && (res - cbeg) % 0x380 == 0)
-                    m.resIndex = (int)((res - cbeg) / 0x380);
-            }
-        }
+        if (*(unsigned*)(type + 0x2B8) == 9) CaptureContainerResource(world, c, m);
         if (m.depot.place < 0) {
             *why = "depot not in the building list";
             return PRESS_REFUSE;
@@ -416,6 +440,7 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why)
             m.used = 1;
             UsedFind(world, type, &m.usedAge, &m.usedAge2);
         }
+        if (outType) *outType = type;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         *why = "fault";
         return PRESS_REFUSE;
@@ -437,11 +462,12 @@ static void NotifyVehicleDlcBlocked()
 
 bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
 {
-    if (!pressed || !Commands_TakeLocal()) return pressed;
-    if (caller->Rip != (DWORD64)(g_exeBase + PRESS_RETURN_RVA)) return pressed;
+    if (!pressed || !Commands_TakeUi()) return pressed;
+    if (!caller || caller->Rip != (DWORD64)(g_exeBase + PRESS_RETURN_RVA)) return pressed;
     PurchaseMsg m;
     const char* why = "";
-    PressOutcome o = Capture(caller, m, &why);
+    BYTE* capturedType = nullptr;
+    PressOutcome o = Capture(caller, m, &why, &capturedType);
     if (o == PRESS_PASS) return pressed;
     if (o == PRESS_TAKE && !RoutinesOk()) {
         o = PRESS_REFUSE;
@@ -449,7 +475,7 @@ bool Purchase_OnPress(bool pressed, const CONTEXT* caller)
     }
     if (o == PRESS_TAKE) {
         InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesAttempted);
-        const void* vehType = caller ? (const void*)caller->R13 : nullptr;
+        const void* vehType = capturedType;
         if (!SaveSync_CheckVehicleDlcAllowed(vehType)) {
             NotifyVehicleDlcBlocked();
             return false;
@@ -1034,4 +1060,16 @@ bool Purchase_ApplyAutoReplaceForTest(const PurchaseMsg& m)
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+int Purchase_CaptureForTest(const CONTEXT* caller, PurchaseMsg* outMsg, const char** outWhy, BYTE** outType)
+{
+    PurchaseMsg local = {};
+    const char* localWhy = "";
+    BYTE* localType = nullptr;
+    PressOutcome o = Capture(caller, local, &localWhy, &localType);
+    if (outMsg) *outMsg = local;
+    if (outWhy) *outWhy = localWhy;
+    if (outType) *outType = localType;
+    return static_cast<int>(o);
 }
