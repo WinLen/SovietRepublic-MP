@@ -365,6 +365,57 @@ static bool SubTest_V171_SteamFriendsAndJoinMenu()
     return true;
 }
 
+static bool SubTest_V171_AckBoundaryPreservesTrailingMsg(const std::string& srcPath,
+                                                         unsigned long long expectedSize)
+{
+    struct PackedStepMsg {
+        int32_t code;
+        int32_t step;
+        int32_t percent;
+        char text[64];
+    };
+    static_assert(sizeof(PackedStepMsg) == 76, "SessionMsg wire layout must be 76 bytes");
+
+    PackedStepMsg expectedMsg = {};
+    expectedMsg.code = 0; // MSG_STEP
+    expectedMsg.step = 5;
+    expectedMsg.percent = 0;
+    strncpy_s(expectedMsg.text, "unpacking", _TRUNCATE);
+
+    uint64_t wireFirst8 = 0;
+    memcpy(&wireFirst8, &expectedMsg, sizeof(wireFirst8));
+    TEST_CHECK(wireFirst8 == 21474836480ULL);
+
+    SOCKET srv = INVALID_SOCKET, cli = INVALID_SOCKET;
+    TEST_CHECK(V171_MakeLoopbackSocketPair(&srv, &cli));
+
+    bool recvOk = false;
+    std::thread recvThread([&]() {
+        unsigned long long hdrSize = 0;
+        if (!NetworkRecvExact(cli, &hdrSize, sizeof(hdrSize)) || hdrSize != expectedSize) return;
+        std::vector<uint8_t> discard(static_cast<size_t>(expectedSize));
+        if (expectedSize > 0 && !NetworkRecvExact(cli, discard.data(), discard.size())) return;
+
+        std::vector<uint8_t> coalesced(sizeof(uint64_t) + sizeof(PackedStepMsg));
+        const uint64_t finalAck = static_cast<uint64_t>(expectedSize);
+        memcpy(coalesced.data(), &finalAck, sizeof(finalAck));
+        memcpy(coalesced.data() + sizeof(finalAck), &expectedMsg, sizeof(expectedMsg));
+        recvOk = NetworkSendExact(cli, coalesced.data(), coalesced.size());
+    });
+
+    const bool sendOk = NetworkSendFileAckPaced(srv, srcPath.c_str(), nullptr, nullptr, nullptr, 65536u, 5000u);
+    PackedStepMsg gotMsg = {};
+    const bool msgOk = sendOk && NetworkRecvExact(srv, &gotMsg, sizeof(gotMsg));
+    recvThread.join();
+    closesocket(srv);
+    closesocket(cli);
+
+    TEST_CHECK(sendOk && recvOk && msgOk);
+    TEST_CHECK(gotMsg.code == 0 && gotMsg.step == 5 && gotMsg.percent == 0);
+    TEST_CHECK(memcmp(&gotMsg, &expectedMsg, sizeof(expectedMsg)) == 0);
+    return true;
+}
+
 static bool SubTest_V171_SpeedMeterAndAckTransfer()
 {
     // Part A: SaveTransferSpeedMeter unit tests
@@ -519,6 +570,22 @@ static bool SubTest_V171_SpeedMeterAndAckTransfer()
         TEST_CHECK(!sendOk && !recvOk);
         TEST_CHECK(!std::filesystem::exists(canDst, ec));
     }
+
+    // Part E: Coalesced final ACK + MSG_STEP(5) must stop at finalAck without reading MSG_STEP as an ACK
+    const std::string coalescedSrc = (tmpDir / "coalesced_src.bin").string();
+    constexpr size_t kCoalescedBytes = 4096u;
+    {
+        std::vector<uint8_t> smallData(kCoalescedBytes, 0x5Au);
+        FILE* f = nullptr;
+        fopen_s(&f, coalescedSrc.c_str(), "wb");
+        TEST_CHECK(f != nullptr);
+        if (f) {
+            TEST_CHECK(fwrite(smallData.data(), 1, smallData.size(), f) == smallData.size());
+            fclose(f);
+        }
+    }
+    TEST_CHECK(SubTest_V171_AckBoundaryPreservesTrailingMsg(coalescedSrc, kCoalescedBytes));
+    TEST_CHECK(SubTest_V171_AckBoundaryPreservesTrailingMsg(zeroSrc, 0ULL));
 
     std::filesystem::remove_all(tmpDir, ec);
     return true;

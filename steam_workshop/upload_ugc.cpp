@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Fixed SOVIET64.exe v1.2.0.9 vehicle/customs purchase capture registers & stack slots (R14/[Rsp+0x68]/[Rsp+0x70]/[Rsp+0x7C]/Xmm9/Xmm10/Xmm8), root window parent (+0x6C8), used-vehicle market (+0x78), Commands_TakeUi(), and real capturedType DLC guard in Purchase_OnPress; full verification clean",
+                "v%s (Protocol %d) - Fixed RoutinesOk() self-collision with H_CreateVehicle at 0x403E60 (0x403E6F) restoring vehicle purchases on v1.2.0.9, and fixed DrainSenderAcks() over-reading coalesced MSG_STEP(5) after final ACK (invalid ACK 21474836480) causing save-transfer disconnects.",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());

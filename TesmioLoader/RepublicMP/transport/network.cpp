@@ -704,6 +704,7 @@ static bool DrainSenderAcks(SOCKET sock, unsigned long long fileSize,
 {
     DWORD pollMs = initialWaitMs;
     for (;;) {
+        if (*finalAckReceived) return true;
         const int pollRes = NetworkPollReadableBytes(sock, pollMs, sizeof(uint64_t));
         pollMs = 0;
         if (pollRes < 0) return false;
@@ -720,11 +721,12 @@ static bool DrainSenderAcks(SOCKET sock, unsigned long long fileSize,
                 *ackedTotal = ackBytes;
                 if (onProgress) onProgress(*ackedTotal, fileSize, userData);
             }
+            *lastAckTick = GetTickCount64();
             if (ackBytes == fileSize) {
                 *finalAckReceived = true;
                 if (fileSize == 0 && onProgress) onProgress(0, 0, userData);
+                return true;
             }
-            *lastAckTick = GetTickCount64();
         }
     }
 }
