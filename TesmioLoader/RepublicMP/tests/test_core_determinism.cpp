@@ -12,6 +12,43 @@
 // Test 1: RVA Invariants, POD SEH Memory Helpers & Thread-Safe InitOnce Locks
 // ---------------------------------------------------------------------------
 
+static bool SubTest_PowerHighAndLateToolStubRegressions()
+{
+    // 1. All 14 category wrappers are non-zero, pairwise distinct, and match SOVIET64.exe v1.2.0.9.
+    static const unsigned int kExpectedWrappers[ROAD_SYNC_CATEGORY_COUNT] = {
+        0x3EF150u, 0x3CFEC0u, 0x3D0310u, 0x3D3290u, 0x3F3790u, 0x3F5910u, 0x3D2880u,
+        0x3D77E0u, 0x3D9F30u, 0x3CDC90u, 0x3EB000u, 0x3E8190u, 0x3F5ED0u, 0x3EE750u,
+    };
+    unsigned int seenWrappers[ROAD_SYNC_CATEGORY_COUNT] = {};
+    for (int c = 0; c < ROAD_SYNC_CATEGORY_COUNT; ++c) {
+        const unsigned int rva = RoadSync_GetCategoryWrapperRvaForTest(c);
+        TEST_CHECK(rva != 0u);
+        TEST_CHECK(rva == kExpectedWrappers[c]);
+        for (int j = 0; j < c; ++j) {
+            TEST_CHECK(seenWrappers[j] != rva);
+        }
+        seenWrappers[c] = rva;
+    }
+    TEST_CHECK(RoadSync_GetCategoryWrapperRvaForTest(-1) == 0u);
+    TEST_CHECK(RoadSync_GetCategoryWrapperRvaForTest(ROAD_SYNC_CATEGORY_COUNT) == 0u);
+
+    // 2. kToolCalls table has zero duplicates and covers all 186 Late tool dispatch sites.
+    TEST_CHECK(SimPatches_AllToolCallSitesUniqueForTest());
+    TEST_CHECK(SimPatches_GetToolCallCountForTest() == 186u);
+
+    static const unsigned kAddedToolSites[][2] = {
+        { 0x3318ECu, 0x3EE750u }, { 0x331B04u, 0x3EF150u }, { 0x331C30u, 0x3EF150u }, { 0x33208Du, 0x43C3E0u },
+        { 0x3321C9u, 0x3CFEC0u }, { 0x3321EFu, 0x3CFEC0u }, { 0x332322u, 0x3D0310u }, { 0x3325F1u, 0x3D77E0u },
+        { 0x33263Fu, 0x3D77E0u }, { 0x332666u, 0x3D77E0u }, { 0x33268Du, 0x3D77E0u }, { 0x3326B4u, 0x3D77E0u },
+        { 0x332727u, 0x3D77E0u }, { 0x3327C0u, 0x3D9F30u }, { 0x33285Au, 0x3D9F30u }, { 0x332DB7u, 0x1EF1D0u },
+        { 0x332DD7u, 0x1F5AE0u }, { 0x333334u, 0x6168F0u },
+    };
+    for (const auto& pair : kAddedToolSites) {
+        TEST_CHECK(SimPatches_HasToolCallForTest(pair[0], pair[1]));
+    }
+    return true;
+}
+
 static bool SubTest_Sub4GbHeapPointersAndDepotCheck()
 {
     // Allocate a block below 4 GB (high 32 bits == 0) to simulate Windows x64 sub-4 GB heap addresses.
@@ -377,6 +414,8 @@ bool Test_RvaAndSafeMem()
         TEST_CHECK(strstr(mainLine, "nan") == nullptr && strstr(mainLine, "inf") == nullptr);
         TEST_CHECK(strstr(rndLine, "nan") == nullptr && strstr(rndLine, "inf") == nullptr);
     }
+
+    if (!SubTest_PowerHighAndLateToolStubRegressions()) return false;
 
     return true;
 }

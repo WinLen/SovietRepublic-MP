@@ -992,10 +992,18 @@ void HookedRoadCommit(__int64 manager,
     }
     uintptr_t retRva = (uintptr_t)_ReturnAddress() - (uintptr_t)g_exeBase;
     bool fromToolWrapper = (retRva >= 0x3CB060 && retRva < 0x3F70D0);
-    if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeLocal() && !RoadSync_IsApplyingSegment() &&
-        !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0 &&
-        TakeCommitAsCommand(manager, category))
-        return;
+    if (category >= 0 && p2 == 0 && p3 == 0 && fromToolWrapper && Commands_TakeUi() && !RoadSync_IsApplyingSegment() &&
+        !DemolishHook_InDemolish() && InterlockedCompareExchange(&g_buildingPlacementDepth, 0, 0) == 0) {
+        if (Determinism_InStepFrame()) {
+            static volatile LONG s_unwrappedCommitWarn = 0;
+            if (InterlockedIncrement(&s_unwrappedCommitWarn) <= 10) {
+                Logf("republicmp  ROAD_COMMIT: WARNING unwrapped tool wrapper commit at retRva=0x%llX (cat=%d) during step frame - still intercepted for lockstep",
+                     (unsigned long long)retRva, category);
+            }
+        }
+        if (TakeCommitAsCommand(manager, category))
+            return;
+    }
     // With the determinism layer on (lockstep, probe) the replay channels are
     // not used: what the simulation commits itself is not captured for them.
     if (Determinism_IsActive()) {

@@ -176,14 +176,20 @@ static RoadSyncCategoryInfo g_categories[ROAD_SYNC_CATEGORY_COUNT] = {
 };
 
 static const unsigned int g_categoryWrapperRva[ROAD_SYNC_CATEGORY_COUNT] = {
-    0x3EF150, 0x3D0310, 0x3CFEC0, 0x3D3290, 0x3F3790, 0x3F5910, 0x3D2880,
-    0x3D9F30, 0x3D77E0, 0x3CDC90, 0x3EB000, 0x3E8190, 0x3F5ED0, 0x3EE750,
+    0x3EF150, 0x3CFEC0, 0x3D0310, 0x3D3290, 0x3F3790, 0x3F5910, 0x3D2880,
+    0x3D77E0, 0x3D9F30, 0x3CDC90, 0x3EB000, 0x3E8190, 0x3F5ED0, 0x3EE750,
 };
 
 const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category)
 {
     if (category < 0 || category >= ROAD_SYNC_CATEGORY_COUNT) return nullptr;
     return &g_categories[category];
+}
+
+unsigned int RoadSync_GetCategoryWrapperRvaForTest(int category)
+{
+    if (category < 0 || category >= ROAD_SYNC_CATEGORY_COUNT) return 0;
+    return g_categoryWrapperRva[category];
 }
 
 int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager)

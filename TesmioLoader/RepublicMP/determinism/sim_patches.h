@@ -101,3 +101,5 @@ bool SimPatches_ShouldIncludeMeshlessStorageInVisible(bool nodeVisible, unsigned
 bool SimPatches_IsSignalSegmentSafe(const void* segPtr);
 bool SimPatches_TestHookedUpdateSignalBlock(void* world, void* segPtr);
 bool SimPatches_HasToolCallForTest(unsigned siteRva, unsigned targetRva);
+size_t SimPatches_GetToolCallCountForTest();
+bool SimPatches_AllToolCallSitesUniqueForTest();

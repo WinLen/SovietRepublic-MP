@@ -87,6 +87,7 @@ struct RoadSyncCategoryInfo {
 
 // nullptr for an out-of-range category.
 const RoadSyncCategoryInfo* RoadSync_GetCategoryInfo(int category);
+unsigned int RoadSync_GetCategoryWrapperRvaForTest(int category);
 
 // Category whose manager object is `manager`, or -1 (also for disabled ones).
 int RoadSync_CategoryForManager(__int64 thisPtr, __int64 manager);

@@ -10,7 +10,7 @@
 #pragma once
 
 #ifndef REPUBLICMP_VERSION
-#define REPUBLICMP_VERSION "1.8.3"
+#define REPUBLICMP_VERSION "1.8.4"
 #endif
 
 #define REPUBLICMP_WIDE2(x) L##x

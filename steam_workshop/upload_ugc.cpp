@@ -578,7 +578,7 @@ int main(int argc, char** argv)
 
     char defaultNote[512];
     _snprintf_s(defaultNote, sizeof(defaultNote), _TRUNCATE,
-                "v%s (Protocol %d) - Singleplayer isolation & crash fix: deferred all 75 Two-States co-op hooks until co-op load/host with render quiesce & trampoline barrier ordering, prevented menu browsing/aborted joins from leaking hooks into SP, and fixed C3DDLL64 null-device crash when closing the window mid-world-load; 74/74 test suites + MSVC /analyze + clang-tidy + ub-mode clean",
+                "v%s (Protocol %d) - Fixed POWER_HIGH/POWER_LOW/PIPE/WATERPIPE desync & replay: deduplicated and completed sim_patches kToolCalls to all 186 Late tool sites (18 missing variants incl. eletric_high2/4-7/uhigh2, pipe/waterpipe, roads, HoverTools_Junction), fixed swapped road_sync category wrappers, and added Commands_TakeUi() defense-in-depth in HookedRoadCommit; 74/74 tests + MSVC /analyze + clang-tidy + ub-mode clean",
                 REPUBLICMP_VERSION, (int)REPUBLICMP_PROTOCOL);
 
     printf("[UGC] Submitting content (%s)...\n", contentDir.c_str());
