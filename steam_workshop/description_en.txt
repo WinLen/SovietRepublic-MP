@@ -1,6 +1,6 @@
-[h1]☭ RepublicMP v1.8.6 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
+[h1]☭ RepublicMP v1.8.7 — Co-op Multiplayer for Workers & Resources: Soviet Republic[/h1]
 
-[b]What's new in v1.8.6:[/b] Fixed vehicle purchase refusal on v1.2.0.9 (`0x403E60` self-collision with `TwoStates` `H_CreateVehicle` inline hook, moved to `0x403E6F`), and fixed save-transfer connection loss (`invalid ACK 21474836480` caused by `DrainSenderAcks` reading coalesced `MSG_STEP(5)` bytes right after `finalAck`).
+[b]What's new in v1.8.7:[/b] Fixed vehicle purchase audio (x64 `PlaySound2D` 5th-arg ABI + native per-category sounds for vehicles, containers, licenses, blueprints, and auto-replace), expanded desync diagnostics (`cit`/`bld`/`con` breakdown + `1/3` mismatch summary, `g_desync` thread-safety), and added automated `SOVIET64.exe` binary/IAT/hook/register contract verification.
 
 Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b]1-click Steam P2P and Steam-free LAN auto-discovery[/b] (physical LAN, Radmin VPN, Hamachi, ZeroTier — works even without Steam running), seamless integration into the [b]native game UI[/b] (with game [b]v1.2.0.9[/b] support), the [b]"Two States on One Map"[/b] mode, [b]automatic Steam Workshop mod synchronization[/b], and butter-smooth [b]60–144+ FPS vehicle & camera interpolation[/b]!
 
@@ -25,7 +25,7 @@ Full-featured deterministic ([b]Lockstep[/b]) co-op multiplayer mod featuring [b
 [/list]
 
 [h2]🚀 Installation & Launch Rules:[/h2]
-[b]Important:[/b] Both players must run the same game version ([b]v1.2.0.9[/b]) and [b]RepublicMP v1.8.6[/b].
+[b]Important:[/b] Both players must run the same game version ([b]v1.2.0.9[/b]) and [b]RepublicMP v1.8.7[/b].
 
 [b]Method 1 — Via Steam Workshop (Recommended):[/b]
 1. Subscribe to this mod on Steam Workshop (both players).

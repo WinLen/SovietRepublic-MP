@@ -6,6 +6,7 @@
 #include "ui_common.h"
 #include "../core/version.h"
 #include "../core/diag_log.h"
+#include "../core/engine_rva.h"
 #include "../session/save_sync.h"
 #include "../session/two_states.h"
 #include "../session/mod_sync.h"
@@ -42,10 +43,6 @@
 #define IMPORT_MOUSE_POS_RVA    0x8B1908
 #define IMPORT_DRAW_TEXT_RVA    0x8B1920
 #define IMPORT_GUI_YOFF_RVA     0x8B1CA8
-#define IMPORT_HAS_SOUND_RVA    0x8B1D58
-#define IMPORT_GET_SOUND_RVA    0x8B1D60
-#define IMPORT_PLAY_SOUND_RVA   0x8B22E8
-#define SND_CLICK_NAME_RVA      0x8BB3C8
 #define FMT_WSTR_RVA            0x8FD6E0  // L"%ls"
 #define GUI_SCALE_RVA           0x9DC08C
 #define FONT_REGULAR_RVA        0x9DF338
@@ -58,10 +55,7 @@
 #define GUI_POS_Y_RVA           0xA08304
 #define GUI_POS_Z_RVA           0xA08308
 #define GUI_COLOR_RGBA_RVA      0xA0831C
-#define SOUND_MUTE_BYTE_RVA     0xA1EF5C
 #define BTN_FRAME_TEX_RVA       0xA29F78
-#define SOUND_ENGINE_PTR_RVA    0xA2ECC8
-#define SOUND_MGR_RVA           0xA2ECD0
 #define MIDDLEPOINT_OBJ_RVA     0xA34D90
 #define TEX_BIND_ARG_RVA        0xA34DC8
 #define WINDOW_FOCUS_BYTE_RVA   0x9DC089

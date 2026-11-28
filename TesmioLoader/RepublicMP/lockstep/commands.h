@@ -147,7 +147,7 @@ bool Commands_IsApplyingRemote();
 void Commands_BeginRemoteReplayScope();
 void Commands_EndRemoteReplayScope();
 
-bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5);
+bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, const char* tag);
 bool Commands_OnPlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5);
 long long Commands_OnCreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
                                       int popupType, int stringId, long long p8, long long p9);

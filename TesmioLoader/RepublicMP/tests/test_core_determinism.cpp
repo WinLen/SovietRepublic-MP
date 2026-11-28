@@ -210,6 +210,112 @@ static bool SubTest_PurchaseV1209CaptureRegressions()
     return true;
 }
 
+static std::string g_capturePricesLogBuf;
+static void CapturePricesLogSink(const char* fmt, ...)
+{
+    if (!fmt) return;
+    char buf[512] = {};
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    g_capturePricesLogBuf.append(buf);
+    g_capturePricesLogBuf.push_back('\n');
+}
+
+static bool SubTest_PurchaseCapturePricesEdgeCases()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> depot(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(depot.data() + 0) = 301;
+    std::vector<BYTE*> blds = { depot.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, blds);
+
+    std::vector<BYTE> vtypes(WORLD_VEHICLE_TYPE_STRIDE, 0);
+    strcpy_s((char*)(vtypes.data() + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/tatra_148.ini");
+    *(unsigned*)(vtypes.data() + VEH_TYPE_CATEGORY_OFFSET) = 1u;
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+
+    std::vector<BYTE> win(0x700, 0);
+    win[0x20] = 1;
+    *(BYTE**)(win.data() + 0x240) = depot.data();
+
+    std::vector<BYTE> mockStack(0x100, 0);
+    *(BYTE**)(mockStack.data() + 0x68) = win.data();
+    *(BYTE**)(mockStack.data() + 0x70) = vtypes.data();
+
+    CONTEXT ctx = {};
+    ctx.Rsp = (DWORD64)(uintptr_t)mockStack.data();
+    ctx.R14 = (DWORD64)(uintptr_t)world;
+    ctx.R12 = (DWORD64)(uintptr_t)vtypes.data();
+    ctx.Rsi = (DWORD64)(uintptr_t)win.data();
+    const double rub = 25000.0;
+    const double usd = 0.0;
+    memcpy(&ctx.Xmm9, &rub, sizeof(rub));
+    memcpy(&ctx.Xmm10, &usd, sizeof(usd));
+
+    g_mockHost.log = &CapturePricesLogSink;
+    const float badAvails[3] = {
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity()
+    };
+
+    // kinds 5/6/7 (licence & factory blueprint) must NOT refuse on uninitialized/non-finite xmm8 (avail)
+    const unsigned blueprintKinds[3] = { 5u, 6u, 7u };
+    for (unsigned k : blueprintKinds) {
+        *(unsigned*)(win.data() + 0x23C) = k;
+        for (float badAvail : badAvails) {
+            memcpy(&ctx.Xmm8, &badAvail, sizeof(badAvail));
+            PurchaseMsg msg = {};
+            const char* why = "";
+            g_capturePricesLogBuf.clear();
+            TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, nullptr) == 1);
+            TEST_CHECK(msg.kind == k && msg.avail == 0.0f);
+        }
+    }
+
+    // kinds 1/2 (vehicle purchases) MUST still refuse non-finite avail and log exact values
+    const unsigned vehKinds[2] = { 1u, 2u };
+    for (unsigned k : vehKinds) {
+        *(unsigned*)(win.data() + 0x23C) = k;
+        for (int idx = 0; idx < 2; ++idx) {
+            memcpy(&ctx.Xmm8, &badAvails[idx], sizeof(float));
+            PurchaseMsg msg = {};
+            const char* why = "";
+            g_capturePricesLogBuf.clear();
+            TEST_CHECK(Purchase_CaptureForTest(&ctx, &msg, &why, nullptr) == 2);
+            TEST_CHECK(strcmp(why, "prices") == 0);
+            char expectedPrefix[64] = {};
+            _snprintf_s(expectedPrefix, sizeof(expectedPrefix), _TRUNCATE, "refused prices (kind=%u ", k);
+            TEST_CHECK(g_capturePricesLogBuf.find(expectedPrefix) != std::string::npos);
+            TEST_CHECK(g_capturePricesLogBuf.find("rub=25000") != std::string::npos);
+            TEST_CHECK(g_capturePricesLogBuf.find("avail=") != std::string::npos);
+        }
+    }
+
+    // Invalid rubles/dollars on kind 5 still refuses with "prices" and logs exact values
+    *(unsigned*)(win.data() + 0x23C) = 5u;
+    const float validAvail = 0.0f;
+    memcpy(&ctx.Xmm8, &validAvail, sizeof(validAvail));
+    const double negRub = -50.0;
+    memcpy(&ctx.Xmm9, &negRub, sizeof(negRub));
+    PurchaseMsg msgBad = {};
+    const char* whyBad = "";
+    g_capturePricesLogBuf.clear();
+    TEST_CHECK(Purchase_CaptureForTest(&ctx, &msgBad, &whyBad, nullptr) == 2);
+    TEST_CHECK(strcmp(whyBad, "prices") == 0);
+    TEST_CHECK(g_capturePricesLogBuf.find("refused prices (kind=5 rub=-50 usd=0 ") != std::string::npos);
+
+    g_mockHost.log = &MockHost_Log;
+    g_capturePricesLogBuf.clear();
+    ResetMockWorldMemory();
+    return true;
+}
+
 static bool SubTest_Sub4GbHeapPointersAndDepotCheck()
 {
     // Allocate a block below 4 GB (high 32 bits == 0) to simulate Windows x64 sub-4 GB heap addresses.
@@ -578,6 +684,7 @@ bool Test_RvaAndSafeMem()
 
     if (!SubTest_PowerHighAndLateToolStubRegressions()) return false;
     if (!SubTest_PurchaseV1209CaptureRegressions()) return false;
+    if (!SubTest_PurchaseCapturePricesEdgeCases()) return false;
 
     return true;
 }

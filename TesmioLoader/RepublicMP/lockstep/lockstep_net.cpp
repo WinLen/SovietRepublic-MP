@@ -264,12 +264,17 @@ static DWORD WINAPI RecvThread(LPVOID lpParam)
             continue;
         }
         if (h.type == LS_DESYNC) {
-            size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
-            memcpy(g_desync, m.data.data(), n);
-            g_desync[n] = 0;
-            Logf("republicmp  LOCKSTEP: the host reports - %s", g_desync);
+            char desyncBuf[256] = "";
+            const size_t n = m.data.size() < sizeof(g_desync) - 1 ? m.data.size() : sizeof(g_desync) - 1;
+            Locks();
+            EnterCriticalSection(&g_inLock);
+            for (size_t i = 0; i < n; ++i) g_desync[i] = static_cast<char>(m.data[i]);
+            g_desync[n] = '\0';
+            strncpy_s(desyncBuf, sizeof(desyncBuf), g_desync, _TRUNCATE);
+            LeaveCriticalSection(&g_inLock);
+            Logf("republicmp  LOCKSTEP: the host reports - %s", desyncBuf);
             unsigned long long tick = 0;
-            if (sscanf_s(g_desync, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
+            if (sscanf_s(desyncBuf, "the games differ after tick %llu", &tick) == 1) Determinism_DumpMoneyTrace(tick);
             // Fall through to g_inbox so the game thread logs per-object DESYNC breakdown and uploads Client logs safely.
         }
         if (h.type == LS_BYE) {
@@ -392,7 +397,23 @@ void LockstepNet_Close()
 
 bool LockstepNet_IsConnected() { return g_connected; }
 bool LockstepNet_IsHost() { return g_isHost; }
-const char* LockstepNet_Desync() { return g_desync; }
+static bool IsDesynced()
+{
+    Locks();
+    EnterCriticalSection(&g_inLock);
+    const bool d = (g_desync[0] != '\0');
+    LeaveCriticalSection(&g_inLock);
+    return d;
+}
+const char* LockstepNet_Desync()
+{
+    Locks();
+    static thread_local char t_desyncCopy[256] = "";
+    EnterCriticalSection(&g_inLock);
+    strncpy_s(t_desyncCopy, sizeof(t_desyncCopy), g_desync, _TRUNCATE);
+    LeaveCriticalSection(&g_inLock);
+    return t_desyncCopy;
+}
 unsigned long long LockstepNet_LastMatchedTick() { return g_lastMatched; }
 
 // ---------------------------------------------------------------------------
@@ -453,18 +474,22 @@ bool LockstepNet_CompareSummaryForTest(const StateSummary& a, const StateSummary
     return outWhat[0] != '\0';
 }
 
-static void Compare(const LsHash& theirs)
+static void LogDesyncSummaryLines(const StateSummary& a, const StateSummary& b)
 {
-    if (g_desync[0]) return;
-    const OwnHash* mine = nullptr;
-    for (const OwnHash& h : g_ownHashes)
-        if (h.valid && h.tick == theirs.tick) mine = &h;
-    if (!mine) {
-        if (g_playerHashCount < LS_HASH_KEEP) g_playerHashes[g_playerHashCount++] = theirs;
-        return;
-    }
-    const StateSummary& a = mine->s;
-    const StateSummary& b = theirs.s;
+    Logf("republicmp  LOCKSTEP:   counts host(bld=%d con=%d veh=%d cit=%d line=%d loan=%d) vs player(bld=%d con=%d veh=%d cit=%d line=%d loan=%d)",
+         a.buildings, a.constructions, a.vehicles, a.citizens, a.lines, a.loans,
+         b.buildings, b.constructions, b.vehicles, b.citizens, b.lines, b.loans);
+    Logf("republicmp  LOCKSTEP:   money host(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f) vs player(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f)",
+         a.rub, a.usd, a.rubState[0], a.rubState[1],
+         b.rub, b.usd, b.rubState[0], b.rubState[1]);
+    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX cit=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX cit=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX)",
+         a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashCitizens, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch, a.hashSpace,
+         b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashCitizens, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch, b.hashSpace);
+}
+
+static void CompareSummaryPair(unsigned long long tick, const StateSummary& a, const StateSummary& b)
+{
+    if (IsDesynced()) return;
 
     char what[256] = "";
     bool bldSoftDiff = false, conSoftDiff = false, vehLogicalDiff = false, vehPosDiff = false, citSoftDiff = false, moneyDiff = false;
@@ -472,10 +497,10 @@ static void Compare(const LsHash& theirs)
 
     if (bldSoftDiff || conSoftDiff || vehLogicalDiff || vehPosDiff || citSoftDiff || moneyDiff) {
         VehicleSoftSync_RequestImmediate();
-        if (theirs.tick >= g_lastSoftDriftLogTick + 300) {
-            g_lastSoftDriftLogTick = theirs.tick;
+        if (tick >= g_lastSoftDriftLogTick + 300) {
+            g_lastSoftDriftLogTick = tick;
             Logf("republicmp  SOFT_SYNC: tick %llu in-transit drift (bldSoft=%d conSoft=%d vehLogic=%d vehPos=%d citSoft=%d money=%d, buildings %d/%d con %d/%d vehicles %d/%d cargo %.2f/%.2f citizens %d/%d age %.1f/%.1f rub %.2f/%.2f) - healing via LS_CMD_VEHICLE_SOFT_SYNC",
-                 theirs.tick, (int)bldSoftDiff, (int)conSoftDiff, (int)vehLogicalDiff, (int)vehPosDiff, (int)citSoftDiff, (int)moneyDiff,
+                 tick, (int)bldSoftDiff, (int)conSoftDiff, (int)vehLogicalDiff, (int)vehPosDiff, (int)citSoftDiff, (int)moneyDiff,
                  a.buildings, b.buildings, a.constructions, b.constructions, a.vehicles, b.vehicles, a.cargoTotal, b.cargoTotal,
                  a.citizens, b.citizens, a.ageTotal, b.ageTotal, a.rub, b.rub);
         }
@@ -483,34 +508,63 @@ static void Compare(const LsHash& theirs)
 
     if (!what[0]) {
         g_hardMismatchCount = 0;
-        g_lastMatched = theirs.tick;
+        g_lastMatched = tick;
         return;
     }
 
     VehicleSoftSync_RequestImmediate();
     if (++g_hardMismatchCount < 3) {
         Logf("republicmp  LOCKSTEP: transient %sdifference after tick %llu (%d/3) - awaiting soft sync convergence (prod %.2f/%.2f storage %.2f/%.2f cargo %.2f/%.2f rub %.2f/%.2f usd %.2f/%.2f)",
-             what, theirs.tick, g_hardMismatchCount,
+             what, tick, g_hardMismatchCount,
              a.productionTotal, b.productionTotal, a.storageTotal, b.storageTotal,
              a.cargoTotal, b.cargoTotal, a.rub, b.rub, a.usd, b.usd);
+        if (g_hardMismatchCount == 1) {
+            LogDesyncSummaryLines(a, b);
+        }
         return;
     }
 
-    _snprintf_s(g_desync, sizeof(g_desync), _TRUNCATE, "the games differ after tick %llu: %s", theirs.tick, what);
-    Logf("republicmp  LOCKSTEP: DESYNC - %s", g_desync);
-    Logf("republicmp  LOCKSTEP:   counts host(bld=%d con=%d veh=%d cit=%d line=%d loan=%d) vs player(bld=%d con=%d veh=%d cit=%d line=%d loan=%d)",
-         a.buildings, a.constructions, a.vehicles, a.citizens, a.lines, a.loans,
-         b.buildings, b.constructions, b.vehicles, b.citizens, b.lines, b.loans);
-    Logf("republicmp  LOCKSTEP:   money host(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f) vs player(rub=%.2f usd=%.2f W_rub=%.2f E_rub=%.2f)",
-         a.rub, a.usd, a.rubState[0], a.rubState[1],
-         b.rub, b.usd, b.rubState[0], b.rubState[1]);
-    Logf("republicmp  LOCKSTEP:   hashes host(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX) vs player(clk=%016llX bld=%016llX con=%016llX veh=%016llX net=%016llX line=%016llX loan=%016llX res=%016llX spc=%016llX)",
-         a.hashClock, a.hashBuildings, a.hashConstructions, a.hashVehicles, a.hashNetworks, a.hashLines, a.hashLoans, a.hashResearch, a.hashSpace,
-         b.hashClock, b.hashBuildings, b.hashConstructions, b.hashVehicles, b.hashNetworks, b.hashLines, b.hashLoans, b.hashResearch, b.hashSpace);
-    StateHash_LogDesyncBreakdown(what, theirs.tick);
-    Send(LS_DESYNC, g_desync, strlen(g_desync)); // the player shows it too
-    Determinism_DumpMoneyTrace(theirs.tick);
-    CrashUpload_NotifyDesyncAsync(g_desync, theirs.tick);
+    char desyncBuf[256] = "";
+    _snprintf_s(desyncBuf, sizeof(desyncBuf), _TRUNCATE, "the games differ after tick %llu: %s", tick, what);
+    Locks();
+    EnterCriticalSection(&g_inLock);
+    memcpy(g_desync, desyncBuf, sizeof(g_desync));
+    LeaveCriticalSection(&g_inLock);
+    Logf("republicmp  LOCKSTEP: DESYNC - %s", desyncBuf);
+    LogDesyncSummaryLines(a, b);
+    StateHash_LogDesyncBreakdown(what, tick);
+    Send(LS_DESYNC, desyncBuf, strlen(desyncBuf)); // the player shows it too
+    Determinism_DumpMoneyTrace(tick);
+    CrashUpload_NotifyDesyncAsync(desyncBuf, tick);
+}
+
+static void Compare(const LsHash& theirs)
+{
+    if (IsDesynced()) return;
+    const OwnHash* mine = nullptr;
+    for (const OwnHash& h : g_ownHashes)
+        if (h.valid && h.tick == theirs.tick) mine = &h;
+    if (!mine) {
+        if (g_playerHashCount < LS_HASH_KEEP) g_playerHashes[g_playerHashCount++] = theirs;
+        return;
+    }
+    CompareSummaryPair(theirs.tick, mine->s, theirs.s);
+}
+
+void LockstepNet_ResetCompareForTest()
+{
+    Locks();
+    EnterCriticalSection(&g_inLock);
+    g_desync[0] = '\0';
+    LeaveCriticalSection(&g_inLock);
+    g_hardMismatchCount = 0;
+    g_lastMatched = 0;
+    g_lastSoftDriftLogTick = 0;
+}
+
+void LockstepNet_CompareSummariesForTest(unsigned long long tick, const StateSummary& hostSum, const StateSummary& playerSum)
+{
+    CompareSummaryPair(tick, hostSum, playerSum);
 }
 
 void LockstepNet_StateAfter(unsigned long long tick, const StateSummary& s)
@@ -587,11 +641,15 @@ void LockstepNet_Poll()
             }
             break;
         case LS_DESYNC: {
+            char desyncBuf[256] = "";
+            size_t copyLen = n < sizeof(desyncBuf) - 1 ? n : sizeof(desyncBuf) - 1;
+            if (copyLen > 0) memcpy(desyncBuf, p, copyLen);
+            desyncBuf[copyLen] = '\0';
             unsigned long long tick = 0;
-            sscanf_s(g_desync, "the games differ after tick %llu", &tick);
-            StateHash_LogDesyncBreakdown(g_desync, tick);
+            sscanf_s(desyncBuf, "the games differ after tick %llu", &tick);
+            StateHash_LogDesyncBreakdown(desyncBuf, tick);
             LockstepNet_SendClientLogs("DESYNC");
-            CrashUpload_NotifyDesyncAsync(g_desync, tick);
+            CrashUpload_NotifyDesyncAsync(desyncBuf, tick);
             break;
         }
         }

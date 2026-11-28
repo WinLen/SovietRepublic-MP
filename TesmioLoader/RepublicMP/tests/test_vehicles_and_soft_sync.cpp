@@ -1035,18 +1035,6 @@ bool Test_VehicleCargoAndScheduleSync()
 // Challenger M4 Stress Test Suite: Adversarial Verification of R3, R10, R11, R17
 // ---------------------------------------------------------------------------
 
-#ifndef IMPORT_HAS_SOUND_RVA
-#define IMPORT_HAS_SOUND_RVA    0x86CD10
-#endif
-#ifndef IMPORT_GET_SOUND_RVA
-#define IMPORT_GET_SOUND_RVA    0x86CD18
-#endif
-#ifndef SOUND_ENGINE_PTR_RVA
-#define SOUND_ENGINE_PTR_RVA    0xA2ECC8
-#endif
-#ifndef SOUND_MGR_RVA
-#define SOUND_MGR_RVA           0xA2ECD0
-#endif
 #ifndef M4_BUILDINGS_BEGIN_RVA
 #define M4_BUILDINGS_BEGIN_RVA  0xA30AD8
 #define M4_BUILDINGS_END_RVA    0xA30AE0
@@ -2006,6 +1994,336 @@ static bool SubTest_T63_OrderIndependentHashAndFastBldSoftSync()
     return true;
 }
 
+static bool g_mockSoundAllowKey = true;
+static bool g_mockSoundAllowPurchaseFallback = true;
+static bool g_mockSoundAllowGuiClickFallback = true;
+static const char* g_mockSoundExpectedKey = nullptr;
+
+static bool __fastcall MockSound_HasValue(void* cfg, const char* key)
+{
+    (void)cfg;
+    if (!key) return false;
+    if (g_mockSoundExpectedKey && strcmp(key, g_mockSoundExpectedKey) == 0) return g_mockSoundAllowKey;
+    if (strcmp(key, "purchase_vehicle") == 0) return g_mockSoundAllowPurchaseFallback;
+    if (strcmp(key, "gui_click") == 0) return g_mockSoundAllowGuiClickFallback;
+    return false;
+}
+
+static const char* __fastcall MockSound_GetValue(void* cfg, const char* key)
+{
+    (void)cfg;
+    if (!key) return "";
+    if (strcmp(key, "building_purchase_vehicle_plane_prop") == 0) return "sounds/plane_prop.wav";
+    if (strcmp(key, "building_purchase_vehicle_plane_jet") == 0) return "sounds/plane_jet.wav";
+    if (strcmp(key, "building_purchase_vehicle_train_electric") == 0) return "sounds/train_elec.wav";
+    if (strcmp(key, "building_purchase_vehicle_train_diesel") == 0) return "sounds/train_diesel.wav";
+    if (strcmp(key, "purchase_vehicle") == 0) return "sounds/purchase_default.wav";
+    if (strcmp(key, "gui_click") == 0) return "sounds/gui_click.wav";
+    if (strcmp(key, "ui_click_fallback") == 0) return "sounds/snd_click_rva.wav";
+    return "sounds/other.wav";
+}
+
+static bool SubTest_PurchaseSoundSelectionAndAbi()
+{
+    // 1. Pure sound key matrix (0x852EE5..0x85302E)
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(0xBu, 8, false, true, false), "gui_click") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(0xCu, 6, false, false, false), "gui_click") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(0xDu, 1, false, false, true), "gui_click") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 6, false, false, false), "building_purchase_vehicle_ship") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 7, false, false, false), "building_purchase_vehicle_cableway") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 10, false, false, false), "building_purchase_vehicle_helicopter") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 8, false, true, false), "building_purchase_vehicle_plane_prop") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 8, false, false, false), "building_purchase_vehicle_plane_jet") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 4, true, false, false), "building_purchase_vehicle_train_electric") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 4, false, false, false), "building_purchase_vehicle_train_diesel") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(2u, 5, true, false, false), "building_purchase_vehicle_train_electric") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(2u, 5, false, false, false), "building_purchase_vehicle_train_diesel") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 3, false, false, false), "building_purchase_vehicle_train_tram") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 1, false, false, true), "building_purchase_vehicle_train_diesel") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(1u, 1, false, false, false), "purchase_vehicle") == 0);
+    TEST_CHECK(strcmp(Purchase_SelectSoundKey(5u, 1, false, false, false), "purchase_vehicle") == 0);
+
+    // 2. Commands_OnPlaySound2D preserves full 64-bit const char* tag pointer (> 4 GB)
+    ResetMockWorldMemory();
+    g_mockHost.patchIat = &MockHost_PatchIatForCommands;
+    g_mockHost.installInlineHook = &MockHost_InstallInlineHookForCommands;
+    TEST_CHECK(Commands_InstallHooks());
+    g_mockHost.patchIat = &MockHost_PatchIat;
+    g_mockHost.installInlineHook = &MockHost_InstallInlineHook;
+
+    void* highTagMem = VirtualAlloc((LPVOID)0x200000055ULL, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    const char* highTag = highTagMem ? (const char*)highTagMem : "high_tag";
+    if (highTagMem) {
+        strcpy_s((char*)highTagMem, 32, "tag_above_4gb");
+        TEST_CHECK(((uintptr_t)highTag >> 32) != 0ULL);
+    }
+    g_mockPlaySound2DCalls = 0;
+    g_mockLastPlaySound2DTag = nullptr;
+    TEST_CHECK(Commands_OnPlaySound2D((void*)0x1111, "sounds/abi.wav", 1, 1.0f, highTag));
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+    TEST_CHECK(g_mockLastPlaySound2DTag == highTag);
+    TEST_CHECK(g_mockLastPlaySound2DLoop == 1);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/abi.wav") == 0);
+    if (highTagMem) VirtualFree(highTagMem, 0, MEM_RELEASE);
+
+    // 3. PlayPurchaseSoundSafe configurator lookup + fallback chain + nullptr tag
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+    *(uint8_t*)(g_mockExeBuffer + SOUND_MUTE_BYTE_RVA) = 0;
+    *(void**)(g_mockExeBuffer + SOUND_ENGINE_PTR_RVA) = (void*)0x12340000ULL;
+    *(uintptr_t*)(g_mockExeBuffer + IMPORT_HAS_SOUND_RVA) = (uintptr_t)&MockSound_HasValue;
+    *(uintptr_t*)(g_mockExeBuffer + IMPORT_GET_SOUND_RVA) = (uintptr_t)&MockSound_GetValue;
+    *(uintptr_t*)(g_mockExeBuffer + IMPORT_PLAY_SOUND_RVA) = (uintptr_t)&Commands_OnPlaySound2D;
+
+    std::vector<BYTE> vtypes(3u * WORLD_VEHICLE_TYPE_STRIDE, 0);
+    BYTE* vtPlane = vtypes.data() + 0u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vtElec  = vtypes.data() + 1u * WORLD_VEHICLE_TYPE_STRIDE;
+    BYTE* vtTruck = vtypes.data() + 2u * WORLD_VEHICLE_TYPE_STRIDE;
+    *(unsigned*)(vtPlane + VEH_TYPE_CATEGORY_OFFSET) = 8u;
+    *(unsigned*)(vtElec + VEH_TYPE_CATEGORY_OFFSET) = 4u;
+    vtElec[VEH_TYPE_ELECTRIC_OFFSET] = 1;
+    *(unsigned*)(vtTruck + VEH_TYPE_CATEGORY_OFFSET) = 1u;
+    strcpy_s((char*)(vtTruck + VEH_TYPE_SCRIPT_NAME_OFFSET), 64, "vehicles/skoda_706.ini");
+
+    BYTE propData[24] = {};
+    *(BYTE**)(vtPlane + VEH_TYPE_PROP_VEC_OFFSET) = propData;
+    *(BYTE**)(vtPlane + VEH_TYPE_PROP_VEC_OFFSET + 8) = propData + 24;
+
+    g_mockSoundExpectedKey = "building_purchase_vehicle_plane_prop";
+    g_mockSoundAllowKey = true;
+    g_mockSoundAllowPurchaseFallback = true;
+    g_mockSoundAllowGuiClickFallback = true;
+    g_mockPlaySound2DCalls = 0;
+    g_mockLastPlaySound2DTag = (const char*)0x1;
+    Purchase_PlaySoundForTest(world, 1u, vtPlane);
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/plane_prop.wav") == 0);
+    TEST_CHECK(g_mockLastPlaySound2DTag == nullptr && g_mockLastPlaySound2DLoop == 1);
+
+    // Fallback: <12 bytes in plane prop vector must be treated as jet, not prop
+    *(BYTE**)(vtPlane + VEH_TYPE_PROP_VEC_OFFSET + 8) = propData + 8;
+    g_mockSoundExpectedKey = "building_purchase_vehicle_plane_jet";
+    g_mockSoundAllowKey = true;
+    Purchase_PlaySoundForTest(world, 1u, vtPlane);
+    TEST_CHECK(g_mockPlaySound2DCalls == 2);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/plane_jet.wav") == 0);
+
+    // Fallback: key missing -> "purchase_vehicle"
+    *(BYTE**)(vtPlane + VEH_TYPE_PROP_VEC_OFFSET + 8) = propData; // jet plane
+    g_mockSoundExpectedKey = "building_purchase_vehicle_plane_jet";
+    g_mockSoundAllowKey = false;
+    Purchase_PlaySoundForTest(world, 1u, vtPlane);
+    TEST_CHECK(g_mockPlaySound2DCalls == 3);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/purchase_default.wav") == 0);
+
+    // Fallback: both key & "purchase_vehicle" missing -> "gui_click"
+    g_mockSoundAllowPurchaseFallback = false;
+    Purchase_PlaySoundForTest(world, 1u, vtElec);
+    TEST_CHECK(g_mockPlaySound2DCalls == 4);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/gui_click.wav") == 0);
+
+    // Fallback: all 3 missing -> SND_CLICK_NAME_RVA
+    g_mockSoundAllowGuiClickFallback = false;
+    strcpy_s((char*)(g_mockExeBuffer + SND_CLICK_NAME_RVA), 32, "ui_click_fallback");
+    g_mockSoundExpectedKey = "ui_click_fallback";
+    g_mockSoundAllowKey = true;
+    Purchase_PlaySoundForTest(world, 1u, vtTruck);
+    TEST_CHECK(g_mockPlaySound2DCalls == 5);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/snd_click_rva.wav") == 0);
+
+    // Tram tag resolution via WORLD_TAGS_BEGIN_OFFSET (0x128A0, stride 0x44)
+    g_mockSoundAllowPurchaseFallback = true;
+    g_mockSoundAllowGuiClickFallback = true;
+    std::vector<BYTE> worldTags(2u * WORLD_TAG_ENTRY_STRIDE, 0);
+    strcpy_s((char*)(worldTags.data() + 0u * WORLD_TAG_ENTRY_STRIDE), 16, "cargo");
+    strcpy_s((char*)(worldTags.data() + 1u * WORLD_TAG_ENTRY_STRIDE), 16, "tram");
+    *(BYTE**)(world + WORLD_TAGS_BEGIN_OFFSET) = worldTags.data();
+    *(BYTE**)(world + WORLD_TAGS_BEGIN_OFFSET + 8) = worldTags.data() + worldTags.size();
+    int32_t truckTags[2] = { 0, 1 };
+    *(int32_t**)(vtTruck + VEH_TYPE_TAGS_OFFSET) = truckTags;
+    *(int32_t**)(vtTruck + VEH_TYPE_TAGS_OFFSET + 8) = truckTags + 2;
+    g_mockSoundExpectedKey = "building_purchase_vehicle_train_diesel";
+    Purchase_PlaySoundForTest(world, 1u, vtTruck);
+    TEST_CHECK(g_mockPlaySound2DCalls == 6);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/train_diesel.wav") == 0);
+    *(int32_t**)(vtTruck + VEH_TYPE_TAGS_OFFSET + 8) = truckTags + 1; // only "cargo"
+    g_mockSoundExpectedKey = "purchase_vehicle";
+    Purchase_PlaySoundForTest(world, 1u, vtTruck);
+    TEST_CHECK(g_mockPlaySound2DCalls == 7);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/purchase_default.wav") == 0);
+
+    // 4. Single-point Replay() plays sound on kind 5 (licence) & kind 0xB (auto-replace) when !res, mutes remotely
+    g_mockSoundAllowKey = true;
+    g_mockSoundAllowPurchaseFallback = true;
+    std::vector<BYTE> depot(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(depot.data() + 0) = 55;
+    std::vector<BYTE*> blds = { depot.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, blds);
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET) = vtypes.data();
+    *(BYTE**)(world + WORLD_VEHICLE_TYPES_OFFSET + 8) = vtypes.data() + vtypes.size();
+    *(int*)(g_mockExeBuffer + 0xA32150) = -1; // CAMPAIGN_RVA = -1
+    *(double*)(world + 0x5B0) = 100000.0;     // RUBLES_OFFSET
+    *(double*)(world + 0x5A8) = 100000.0;     // DOLLARS_OFFSET
+
+    PurchaseMsg licMsg = {};
+    licMsg.kind = 5u;
+    licMsg.typeIndex = 2u;
+    strcpy_s(licMsg.scriptName, "vehicles/skoda_706.ini");
+    licMsg.depot = { 0, 55 };
+    licMsg.rubles = 100.0;
+    licMsg.resIndex = -1;
+
+    g_mockSoundExpectedKey = "purchase_vehicle";
+    g_mockPlaySound2DCalls = 0;
+    TEST_CHECK(Purchase_ReplayForTest(licMsg));
+    TEST_CHECK(vtTruck[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/purchase_default.wav") == 0);
+
+    // Refused licence replay (already held) plays NO sound
+    TEST_CHECK(!Purchase_ReplayForTest(licMsg));
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+
+    // Remote replay scope mutes sound while still mutating state
+    vtTruck[VEH_TYPE_HAS_LICENCE_OFFSET] = 0;
+    Commands_BeginRemoteReplayScope();
+    TEST_CHECK(Purchase_ReplayForTest(licMsg));
+    TEST_CHECK(vtTruck[VEH_TYPE_HAS_LICENCE_OFFSET] == 1);
+    TEST_CHECK(g_mockPlaySound2DCalls == 1);
+    Commands_EndRemoteReplayScope();
+
+    // Auto-replace (kind 0xB) plays gui_click via Replay()
+    BYTE arMgr[64] = {};
+    *(BYTE**)(world + WORLD_AUTO_REPLACE_MGR_OFFSET) = arMgr;
+    g_mockExeBuffer[RVA_SET_AUTO_REPLACE] = 0xC3;
+    PurchaseMsg arMsg = {};
+    arMsg.kind = 0xBu;
+    arMsg.used = 2;
+    arMsg.typeIndex = 2u;
+    strcpy_s(arMsg.scriptName, "vehicles/skoda_706.ini");
+    arMsg.resIndex = -1;
+    TEST_CHECK(Purchase_ReplayForTest(arMsg));
+    TEST_CHECK(g_mockPlaySound2DCalls == 2);
+    TEST_CHECK(strcmp(g_mockLastPlaySound2DName, "sounds/gui_click.wav") == 0);
+
+    ResetMockWorldMemory();
+    return true;
+}
+
+static std::string g_desyncDiagLogBuf;
+static void DesyncDiagLogSink(const char* fmt, ...)
+{
+    if (!fmt) return;
+    char buf[1024] = {};
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    g_desyncDiagLogBuf.append(buf);
+    g_desyncDiagLogBuf.push_back('\n');
+}
+
+static bool SubTest_DesyncCitizenAndBuildingBreakdown()
+{
+    ResetMockWorldMemory();
+    BYTE* world = g_mockExeBuffer + WORLD_RVA;
+
+    std::vector<BYTE> btype0(0x400, 0), btype1(0x400, 0);
+    *(int*)(btype0.data() + BLD_TYPE_CAT_OFF) = 0x14;
+    *(int*)(btype1.data() + BLD_TYPE_CAT_OFF) = 0x28;
+
+    std::vector<BYTE> b0(BUILDING_STRUCT_BYTES, 0), b1(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(b0.data() + 0) = 101;
+    *(BYTE**)(b0.data() + 0x318) = btype0.data();
+    *(float*)(b0.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+
+    *(int*)(b1.data() + 0) = 202;
+    *(BYTE**)(b1.data() + 0x318) = btype1.data();
+    *(float*)(b1.data() + BLD_PROGRESS_OFFSET) = 1.0f;
+
+    struct StorEntry { const char* res; float amt; float pad; };
+    std::vector<StorEntry> slot0Entries = { { "gravel", 10.5f, 0.0f }, { "empty", 0.0f, 0.0f } };
+    std::vector<StorEntry> slot1Entries = { { "steel", 3.25f, 0.0f } };
+    std::vector<BYTE> b1Slots(2u * BLD_STORAGE_SLOT_SIZE, 0);
+    *(BYTE**)(b1Slots.data() + 0x00) = (BYTE*)slot0Entries.data();
+    *(BYTE**)(b1Slots.data() + 0x08) = (BYTE*)(slot0Entries.data() + slot0Entries.size());
+    *(BYTE**)(b1Slots.data() + BLD_STORAGE_SLOT_SIZE + 0x00) = (BYTE*)slot1Entries.data();
+    *(BYTE**)(b1Slots.data() + BLD_STORAGE_SLOT_SIZE + 0x08) = (BYTE*)(slot1Entries.data() + slot1Entries.size());
+    *(BYTE**)(b1.data() + BLD_STORAGE_OFFSET) = b1Slots.data();
+    *(BYTE**)(b1.data() + BLD_STORAGE_OFFSET + 8) = b1Slots.data() + b1Slots.size();
+
+    std::vector<BYTE*> bldVec = { b0.data(), b1.data() };
+    WriteMockVectorHeader(world + WORLD_BUILDINGS_OFFSET, bldVec);
+
+    std::vector<BYTE> con0(BUILDING_STRUCT_BYTES, 0);
+    *(int*)(con0.data() + 0) = 303;
+    *(BYTE**)(con0.data() + 0x318) = btype1.data();
+    *(float*)(con0.data() + BLD_PROGRESS_OFFSET) = 0.45f;
+    std::vector<BYTE*> conVec = { con0.data() };
+    WriteMockVectorHeader(world + WORLD_CONSTRUCTIONS_OFFSET, conVec);
+
+    // 28 citizens: 0..16 living+home, 17..21 living+homeless (5), 22..27 foreign (6) -> tail is 4..27
+    std::vector<std::vector<BYTE>> cits(28, std::vector<BYTE>(0x800, 0));
+    std::vector<BYTE*> citPtrs;
+    for (int i = 0; i < 28; ++i) {
+        BYTE* c = cits[i].data();
+        *(float*)(c + CIT_AGE_OFFSET) = 20.0f + (float)i * 0.5f;
+        *(float*)(c + CIT_POS_OFFSET + 0) = 10.0f;
+        *(float*)(c + CIT_POS_OFFSET + 4) = 2.0f;
+        *(float*)(c + CIT_POS_OFFSET + 8) = -30.0f;
+        if (i < 17) {
+            *(BYTE**)(c + CIT_HOME_BUILDING_OFFSET) = b0.data();
+            *(BYTE**)(c + CIT_CUR_BLD_OFFSET) = b1.data();
+            *(BYTE**)(c + CIT_DEST_BLD_OFFSET) = b0.data();
+            *(BYTE*)(c + CIT_DORM_FLAG_OFFSET) = (i == 4) ? 1 : 0;
+        } else if (i < 22) {
+            *(BYTE**)(c + CIT_HOME_BUILDING_OFFSET) = nullptr;
+            *(BYTE**)(c + CIT_CUR_BLD_OFFSET) = b1.data();
+            *(BYTE**)(c + CIT_DEST_BLD_OFFSET) = nullptr;
+        } else {
+            *(BYTE**)(c + CIT_HOME_BUILDING_OFFSET) = nullptr;
+            if (i % 2 == 0) *(int*)(c + CIT_INFANT_FLAG_OFFSET) = 1;
+            else *(int*)(c + CIT_UNBORN_FLAG_OFFSET) = 2;
+        }
+        citPtrs.push_back(c);
+    }
+    WriteMockVectorHeader(world + WORLD_CITIZENS_OFFSET, citPtrs);
+
+    StateHash_Bind(&g_mockHost);
+    LockstepNet_Bind(&g_mockHost);
+    g_mockHost.log = &DesyncDiagLogSink;
+    g_desyncDiagLogBuf.clear();
+    StateHash_LogDesyncBreakdown("citizens-state bld-storage con-progress ", 4321);
+
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[cit_sum] t=4321 total=28 living=22 foreign=6 homeless=5") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[cit] t=4321 i=4 home=101 bld=202 dst=101 age=22.00 flags=(0,0,1) pos=(10.00,2.00,-30.00)") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[cit] t=4321 i=27 home=-1 bld=-1 dst=-1 age=33.50 flags=(0,2,0) pos=(10.00,2.00,-30.00)") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[cit] t=4321 i=3 ") == std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[bld] t=4321 i=1 id=202 cat=40 ") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("DESYNC_DUMP[con] t=4321 i=0 id=303 cat=40 prog=0.4500 ") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("stor=[gravel=10.500,steel=3.250]") != std::string::npos);
+
+    // Also verify LockstepNet logs counts & hashes (including cit=) on 1/3 mismatch
+    LockstepNet_ResetCompareForTest();
+    StateSummary a = {}, b = {};
+    a.buildings = b.buildings = 2;
+    a.citizens = b.citizens = 28;
+    a.hashCitizens = 0x1122334455667788ULL;
+    b.hashCitizens = 0x99AABBCCDDEEFF00ULL;
+    g_desyncDiagLogBuf.clear();
+    LockstepNet_CompareSummariesForTest(120, a, b);
+    TEST_CHECK(g_desyncDiagLogBuf.find("(1/3)") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("LOCKSTEP:   counts host(") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("LOCKSTEP:   hashes host(") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("cit=1122334455667788") != std::string::npos);
+    TEST_CHECK(g_desyncDiagLogBuf.find("cit=99AABBCCDDEEFF00") != std::string::npos);
+    LockstepNet_ResetCompareForTest();
+
+    g_mockHost.log = &MockHost_Log;
+    g_desyncDiagLogBuf.clear();
+    ResetMockWorldMemory();
+    return true;
+}
+
 bool Test_RcoRefuelHeldFrameAndSoftSyncFixes()
 {
     printf("    [T63-1: H_VehicleRefuel float ABI preservation & TwoStates econ] ...\n"); fflush(stdout);
@@ -2019,6 +2337,12 @@ bool Test_RcoRefuelHeldFrameAndSoftSyncFixes()
 
     printf("    [T63-4: Order-independent MixEntries hash & fast 16-bld soft-sync sweep] ...\n"); fflush(stdout);
     if (!SubTest_T63_OrderIndependentHashAndFastBldSoftSync()) return false;
+
+    printf("    [T63-5: Purchase sound selection matrix & PlaySound2D x64 ABI] ...\n"); fflush(stdout);
+    if (!SubTest_PurchaseSoundSelectionAndAbi()) return false;
+
+    printf("    [T63-6: Desync citizen & building-storage breakdown + 1/3 summary] ...\n"); fflush(stdout);
+    if (!SubTest_DesyncCitizenAndBuildingBreakdown()) return false;
 
     ResetMockWorldMemory();
     return true;

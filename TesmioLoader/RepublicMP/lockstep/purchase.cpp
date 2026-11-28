@@ -407,7 +407,10 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why, 
         memcpy(&rubles, &c->Xmm9, 8);
         memcpy(&dollars, &c->Xmm10, 8);
         memcpy(&avail, &c->Xmm8, 4);
-        if (!Finite(dollars) || !Finite(rubles) || !isfinite(avail)) {
+        const bool checkAvail = (kind == 1 || kind == 2);
+        if (!Finite(dollars) || !Finite(rubles) || (checkAvail && !isfinite(avail))) {
+            Logf("republicmp  PURCHASE: refused prices (kind=%u rub=%.6g usd=%.6g avail=%.6g)",
+                 kind, rubles, dollars, avail);
             *why = "prices";
             return PRESS_REFUSE;
         }
@@ -428,7 +431,7 @@ static PressOutcome Capture(const CONTEXT* c, PurchaseMsg& m, const char** why, 
         m.customsUsd = RefOf(world, *(BYTE**)(root + 0x2C8));
         m.rubles = rubles;
         m.dollars = dollars;
-        m.avail = avail;
+        m.avail = checkAvail ? avail : 0.0f;
         if (*(unsigned*)(type + 0x2B8) == 9) CaptureContainerResource(world, c, m);
         if (m.depot.place < 0) {
             *why = "depot not in the building list";
@@ -806,17 +809,119 @@ static const char* ValidateVehiclePurchase(BYTE* world, const PurchaseMsg& m, BY
     return nullptr;
 }
 
-#define IMPORT_HAS_SOUND_RVA    0x8B1D58
-#define IMPORT_GET_SOUND_RVA    0x8B1D60
-#define IMPORT_PLAY_SOUND_RVA   0x8B22E8
-#define SND_CLICK_NAME_RVA      0x8BB3C8
-#define SOUND_MUTE_BYTE_RVA     0xA1EF5C
-#define SOUND_ENGINE_PTR_RVA    0xA2ECC8
-#define SOUND_MGR_RVA           0xA2ECD0
-
-static void PlayPurchaseSoundSafe()
+const char* Purchase_SelectSoundKey(unsigned kind, unsigned cat, bool isElectricRail,
+                                    bool isPropPlane, bool isTramTagged)
 {
-    if (!g_exeBase) return;
+    if (kind == 0xBu || kind == 0xCu || kind == 0xDu) {
+        return "gui_click";
+    }
+    switch (cat) {
+    case 6:  return "building_purchase_vehicle_ship";
+    case 7:  return "building_purchase_vehicle_cableway";
+    case 10: return "building_purchase_vehicle_helicopter";
+    case 8:  return isPropPlane ? "building_purchase_vehicle_plane_prop"
+                                : "building_purchase_vehicle_plane_jet";
+    case 4:
+    case 5:  return isElectricRail ? "building_purchase_vehicle_train_electric"
+                                   : "building_purchase_vehicle_train_diesel";
+    case 3:  return "building_purchase_vehicle_train_tram";
+    default: return isTramTagged ? "building_purchase_vehicle_train_diesel"
+                                 : "purchase_vehicle";
+    }
+}
+
+static int FindTagIdFallback(const BYTE* world, const char* tagName)
+{
+    if (!world || !tagName || !tagName[0]) return -1;
+    const BYTE* beg = *(const BYTE* const*)(world + WORLD_TAGS_BEGIN_OFFSET);
+    const BYTE* end = *(const BYTE* const*)(world + WORLD_TAGS_BEGIN_OFFSET + 8);
+    if (!beg || end <= beg || !IsPointerLikeX64((uint64_t)(uintptr_t)beg)) return -1;
+    const ptrdiff_t bytes = end - beg;
+    if ((bytes % WORLD_TAG_ENTRY_STRIDE) != 0) return -1;
+    const int count = (bytes / (ptrdiff_t)WORLD_TAG_ENTRY_STRIDE > 4096)
+        ? 4096
+        : (int)(bytes / (ptrdiff_t)WORLD_TAG_ENTRY_STRIDE);
+    for (int i = 0; i < count; ++i) {
+        const char* entry = (const char*)(beg + (size_t)i * WORLD_TAG_ENTRY_STRIDE);
+        if (strncmp(entry, tagName, WORLD_TAG_ENTRY_STRIDE) == 0) return i;
+    }
+    return -1;
+}
+
+static void ResolveVehicleSoundFlags(BYTE* world, unsigned kind, BYTE* type,
+                                     unsigned& outCat, bool& outElectric,
+                                     bool& outPropPlane, bool& outTramTagged)
+{
+    outCat = 0;
+    outElectric = false;
+    outPropPlane = false;
+    outTramTagged = false;
+    if (!type) return;
+    outCat = *(const unsigned*)(type + VEH_TYPE_CATEGORY_OFFSET);
+    if (kind == 0xBu || kind == 0xCu || kind == 0xDu) return;
+    if (outCat == 4 || outCat == 5) {
+        outElectric = (*(const uint8_t*)(type + VEH_TYPE_ELECTRIC_OFFSET) != 0);
+        return;
+    }
+    if (outCat == 8) {
+        static const unsigned char kHasPlanePropsBytes[8] = {
+            0x48, 0x8B, 0x51, 0x08, 0x48, 0xB8, 0xAB, 0xAA
+        };
+        if (SafeBytesMatch(g_exeBase + RVA_HAS_PLANE_PROPS, kHasPlanePropsBytes, sizeof(kHasPlanePropsBytes))) {
+            typedef size_t (__fastcall* HasPlanePropsFn)(const BYTE*);
+            outPropPlane = (((HasPlanePropsFn)(g_exeBase + RVA_HAS_PLANE_PROPS))(type + VEH_TYPE_PROP_VEC_OFFSET) != 0);
+        } else {
+            const BYTE* propBeg = *(const BYTE* const*)(type + VEH_TYPE_PROP_VEC_OFFSET);
+            const BYTE* propEnd = *(const BYTE* const*)(type + VEH_TYPE_PROP_VEC_OFFSET + 8);
+            outPropPlane = (propBeg && propEnd > propBeg &&
+                            IsPointerLikeX64((uint64_t)(uintptr_t)propBeg) &&
+                            (size_t)(propEnd - propBeg) >= 12u);
+        }
+        return;
+    }
+    if (outCat != 3 && outCat != 6 && outCat != 7 && outCat != 10 && world) {
+        static const unsigned char kFindTagIdBytes[8] = {
+            0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x7C
+        };
+        int tramId = -1;
+        if (SafeBytesMatch(g_exeBase + RVA_FIND_TAG_ID, kFindTagIdBytes, sizeof(kFindTagIdBytes))) {
+            typedef int (__fastcall* FindTagIdFn)(BYTE*, const char*);
+            tramId = ((FindTagIdFn)(g_exeBase + RVA_FIND_TAG_ID))(world, "tram");
+        } else {
+            tramId = FindTagIdFallback(world, "tram");
+        }
+        if (tramId >= 0) {
+            const int32_t* tb = *(const int32_t* const*)(type + VEH_TYPE_TAGS_OFFSET);
+            const int32_t* te = *(const int32_t* const*)(type + VEH_TYPE_TAGS_OFFSET + 8);
+            if (tb && te > tb && IsPointerLikeX64((uint64_t)(uintptr_t)tb) &&
+                (((uintptr_t)te - (uintptr_t)tb) % sizeof(int32_t)) == 0 &&
+                ((size_t)(te - tb) <= 1024u)) {
+                for (const int32_t* it = tb; it < te; ++it) {
+                    if (*it == tramId) {
+                        outTramTagged = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static const char* LookupConfigSoundPath(void* soundCfg, uintptr_t hasSndAddr, uintptr_t getSndAddr, const char* key)
+{
+    if (!soundCfg || !hasSndAddr || !getSndAddr || !key || !key[0]) return nullptr;
+    typedef bool (__fastcall* FnHasSound)(void*, const char*);
+    typedef const char* (__fastcall* FnGetSound)(void*, const char*);
+    if (((FnHasSound)hasSndAddr)(soundCfg, key)) {
+        const char* p = ((FnGetSound)getSndAddr)(soundCfg, key);
+        if (p && p[0]) return p;
+    }
+    return nullptr;
+}
+
+static void PlayPurchaseSoundSafe(BYTE* world, unsigned kind, BYTE* type)
+{
+    if (!g_exeBase || Commands_IsApplyingRemote()) return;
     DiagLog_BeginSafeSeh();
     __try {
         if (*(BYTE*)(g_exeBase + SOUND_MUTE_BYTE_RVA) == 0 && *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA) != nullptr) {
@@ -826,21 +931,28 @@ static void PlayPurchaseSoundSafe()
             void* soundEngine = *(void**)(g_exeBase + SOUND_ENGINE_PTR_RVA);
             void* soundCfg = (void*)(g_exeBase + SOUND_MGR_RVA);
             if (soundEngine && playSndAddr) {
-                typedef bool (*FnHasSound)(void*, const char*);
-                typedef const char* (*FnGetSound)(void*, const char*);
-                typedef void (*FnPlaySound2D)(void*, const char*, bool, float, void*);
-                const char* sndPath = nullptr;
-                if (hasSndAddr && getSndAddr && ((FnHasSound)hasSndAddr)(soundCfg, "gui_click")) {
-                    sndPath = ((FnGetSound)getSndAddr)(soundCfg, "gui_click");
+                unsigned cat = 0;
+                bool isElectricRail = false;
+                bool isPropPlane = false;
+                bool isTramTagged = false;
+                ResolveVehicleSoundFlags(world, kind, type, cat, isElectricRail, isPropPlane, isTramTagged);
+                const char* key = Purchase_SelectSoundKey(kind, cat, isElectricRail, isPropPlane, isTramTagged);
+                const char* sndPath = LookupConfigSoundPath(soundCfg, hasSndAddr, getSndAddr, key);
+                if (!sndPath && strcmp(key, "purchase_vehicle") != 0) {
+                    sndPath = LookupConfigSoundPath(soundCfg, hasSndAddr, getSndAddr, "purchase_vehicle");
                 }
-                if ((!sndPath || !sndPath[0]) && hasSndAddr && getSndAddr) {
+                if (!sndPath && strcmp(key, "gui_click") != 0) {
+                    sndPath = LookupConfigSoundPath(soundCfg, hasSndAddr, getSndAddr, "gui_click");
+                }
+                if (!sndPath) {
                     const char* clickName = (const char*)(g_exeBase + SND_CLICK_NAME_RVA);
-                    if (clickName && ((FnHasSound)hasSndAddr)(soundCfg, clickName)) {
-                        sndPath = ((FnGetSound)getSndAddr)(soundCfg, clickName);
+                    if (clickName && clickName[0]) {
+                        sndPath = LookupConfigSoundPath(soundCfg, hasSndAddr, getSndAddr, clickName);
                     }
                 }
                 if (sndPath && sndPath[0]) {
-                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, true, 1.0f, nullptr);
+                    typedef bool (__fastcall* FnPlaySound2D)(void*, const char*, unsigned char, float, const char*);
+                    ((FnPlaySound2D)playSndAddr)(soundEngine, sndPath, 1, 1.0f, nullptr);
                 }
             }
         }
@@ -894,7 +1006,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
                 }
             }
             slotDone(world, depot, *(BYTE**)(depot + 0x970) + (__int64)slot * 0xE0);
-            PlayPurchaseSoundSafe();
             return nullptr;
         }
         BYTE* v = create(world, type, depot, 1, trailers ? 0 : minusOne, 0, 0, (unsigned)slot, 0, 1, 0);
@@ -904,7 +1015,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
         SpawnTrailersInSlot(world, type, depot, v, trailers, (unsigned)slot);
         if (customsDepot && m.used && v) ApplyUsedMarketStep(market, type, m, v);
         slotDone(world, depot, *(BYTE**)(depot + 0x970) + (__int64)slot * 0xE0);
-        PlayPurchaseSoundSafe();
         return nullptr;
     }
     if (realistic && (cat == 1 || cat - 4 <= 1) && slot < 0) return "refused (no slot)";
@@ -923,7 +1033,6 @@ static const char* ReplayVehicle(BYTE* world, const PurchaseMsg& m, BYTE* type, 
     }
     if (m.used && v) ApplyUsedMarketStep(market, type, m, v);
     if (realistic && v) RouteRealisticVehicleDelivery(world, m, depot, customs, slot, v);
-    PlayPurchaseSoundSafe();
     return nullptr;
 }
 
@@ -973,54 +1082,62 @@ static const char* Replay(const PurchaseMsg& m)
 {
     BYTE* world = g_exeBase + WORLD_RVA;
     __try {
-        if (m.kind == 0xB) return ReplayAutoReplace(world, m);
-        if (m.kind != 1 && m.kind != 2 && m.kind != 5 && m.kind != 6 && m.kind != 7) {
-            return "invalid window kind";
-        }
-        BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
-        BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
-        if (!type) {
-            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameResolveFails);
-            DiagLog_Printf("VEH_REP", "FAILED to resolve vehicle type: NetIdx=%u, Check=0x%08X, Script='%s'",
-                           m.typeIndex, m.typeCheck, m.scriptName);
-            return "the vehicle type is not in this PC's list";
-        }
-        unsigned localIdx = types ? (unsigned)((type - types) / TYPE_STRIDE) : m.typeIndex;
-        if (localIdx != m.typeIndex) {
-            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameRemapped);
-            DiagLog_Printf("VEH_REP", "Remapped vehicle type: NetIdx=%u -> LocalIdx=%u (Script='%s')",
-                           m.typeIndex, localIdx, m.scriptName);
-        }
-        BYTE* depot = BuildingAt(world, m.depot);
-        if (!depot) return "the depot differs";
-        if (TwoStates_IsActive() && TwoStates_GetCommandOwner() != 0) {
-            float dx = *(const float*)(depot + OBJ_POS_OFFSET);
-            float dz = *(const float*)(depot + OBJ_POS_OFFSET + 8);
-            int depotOwner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(dx, dz), dx, dz);
-            if (depotOwner != TwoStates_GetCommandOwner()) return "refused (foreign building)";
-        }
-        if (!WriteVariants(type, m)) return "the trailers differ";
-        int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
         const char* res = nullptr;
-        if (m.kind >= 5) {
-            res = ReplayBlueprint(world, m, type, depot, campaign);
+        BYTE* soundType = nullptr;
+        if (m.kind == 0xB) {
+            res = ReplayAutoReplace(world, m);
         } else {
-            res = ReplayVehicle(world, m, type, depot, BuildingAt(world, m.customsRub), BuildingAt(world, m.customsUsd),
-                                campaign);
+            if (m.kind != 1 && m.kind != 2 && m.kind != 5 && m.kind != 6 && m.kind != 7) {
+                return "invalid window kind";
+            }
+            BYTE* types = *(BYTE**)(world + TYPES_OFFSET);
+            BYTE* type = TypeFor(world, m.typeIndex, m.typeCheck, m.scriptName);
+            if (!type) {
+                InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameResolveFails);
+                DiagLog_Printf("VEH_REP", "FAILED to resolve vehicle type: NetIdx=%u, Check=0x%08X, Script='%s'",
+                               m.typeIndex, m.typeCheck, m.scriptName);
+                return "the vehicle type is not in this PC's list";
+            }
+            soundType = type;
+            unsigned localIdx = types ? (unsigned)((type - types) / TYPE_STRIDE) : m.typeIndex;
+            if (localIdx != m.typeIndex) {
+                InterlockedIncrement64((volatile LONG64*)&g_vehDiag.scriptNameRemapped);
+                DiagLog_Printf("VEH_REP", "Remapped vehicle type: NetIdx=%u -> LocalIdx=%u (Script='%s')",
+                               m.typeIndex, localIdx, m.scriptName);
+            }
+            BYTE* depot = BuildingAt(world, m.depot);
+            if (!depot) return "the depot differs";
+            if (TwoStates_IsActive() && TwoStates_GetCommandOwner() != 0) {
+                float dx = *(const float*)(depot + OBJ_POS_OFFSET);
+                float dz = *(const float*)(depot + OBJ_POS_OFFSET + 8);
+                int depotOwner = TwoStates_GetBuildingOwner(TwoStates_BuildingPosKey(dx, dz), dx, dz);
+                if (depotOwner != TwoStates_GetCommandOwner()) return "refused (foreign building)";
+            }
+            if (!WriteVariants(type, m)) return "the trailers differ";
+            int campaign = *(int*)(g_exeBase + CAMPAIGN_RVA);
+            if (m.kind >= 5) {
+                res = ReplayBlueprint(world, m, type, depot, campaign);
+            } else {
+                res = ReplayVehicle(world, m, type, depot, BuildingAt(world, m.customsRub), BuildingAt(world, m.customsUsd),
+                                    campaign);
+            }
+            unsigned cat = *(unsigned*)(type + 0x2B8);
+            if (!res) {
+                InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesMade);
+                if (cat == 1 || cat == 2) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRoad);
+                else if (cat >= 3 && cat <= 5) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRail);
+                else if (cat == 6) InterlockedIncrement((volatile LONG*)&g_vehDiag.countWater);
+                else if (cat == 8 || cat == 10) InterlockedIncrement((volatile LONG*)&g_vehDiag.countAir);
+                else InterlockedIncrement((volatile LONG*)&g_vehDiag.countSpecial);
+            } else {
+                InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMoneyOrDepot);
+            }
+            DiagLog_Printf("VEH_REP", "Replay Result: Script='%s' | NetIdx=%u -> LocalIdx=%u | Category=%s | Depot=#%d | Status=%s",
+                           m.scriptName, m.typeIndex, localIdx, VehicleCategoryName(cat), m.depot.place, res ? res : "MADE");
         }
-        unsigned cat = *(unsigned*)(type + 0x2B8);
         if (!res) {
-            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesMade);
-            if (cat == 1 || cat == 2) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRoad);
-            else if (cat >= 3 && cat <= 5) InterlockedIncrement((volatile LONG*)&g_vehDiag.countRail);
-            else if (cat == 6) InterlockedIncrement((volatile LONG*)&g_vehDiag.countWater);
-            else if (cat == 8 || cat == 10) InterlockedIncrement((volatile LONG*)&g_vehDiag.countAir);
-            else InterlockedIncrement((volatile LONG*)&g_vehDiag.countSpecial);
-        } else {
-            InterlockedIncrement64((volatile LONG64*)&g_vehDiag.purchasesBlockedMoneyOrDepot);
+            PlayPurchaseSoundSafe(world, m.kind, soundType);
         }
-        DiagLog_Printf("VEH_REP", "Replay Result: Script='%s' | NetIdx=%u -> LocalIdx=%u | Category=%s | Depot=#%d | Status=%s",
-                       m.scriptName, m.typeIndex, localIdx, VehicleCategoryName(cat), m.depot.place, res ? res : "MADE");
         return res;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "fault";
@@ -1074,4 +1191,18 @@ int Purchase_CaptureForTest(const CONTEXT* caller, PurchaseMsg* outMsg, const ch
     if (outWhy) *outWhy = localWhy;
     if (outType) *outType = localType;
     return static_cast<int>(o);
+}
+
+void Purchase_PlaySoundForTest(BYTE* world, unsigned kind, BYTE* type)
+{
+    PlayPurchaseSoundSafe(world, kind, type);
+}
+
+bool Purchase_ReplayForTest(const PurchaseMsg& m)
+{
+    if (!g_exeBase) return false;
+    PurchaseMsg clean = m;
+    clean.scriptName[sizeof(clean.scriptName) - 1] = '\0';
+    clean.targetScriptName[sizeof(clean.targetScriptName) - 1] = '\0';
+    return Replay(clean) == nullptr;
 }

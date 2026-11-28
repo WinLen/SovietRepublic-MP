@@ -940,6 +940,15 @@ struct SovietStatResEntry {
 #ifndef CIT_UNBORN_FLAG_OFFSET
 #define CIT_UNBORN_FLAG_OFFSET      0x748
 #endif
+#ifndef CIT_CUR_BLD_OFFSET
+#define CIT_CUR_BLD_OFFSET          0x58
+#endif
+#ifndef CIT_DEST_BLD_OFFSET
+#define CIT_DEST_BLD_OFFSET         0x690
+#endif
+#ifndef CIT_DORM_FLAG_OFFSET
+#define CIT_DORM_FLAG_OFFSET        0x2D
+#endif
 
 // Invariant #16: Manager preview state starts at +0x408, std::vector<RoadSyncPoint> starts at +0x410.
 #ifndef MANAGER_RESET_STATE_OFFSET
@@ -1119,14 +1128,50 @@ static_assert(WORLD_SOVIET_BORDER_BLD_OFF == WORLD_WESTERN_BORDER_BLD_OFF + 8 &&
 // Remote Command Sound, Warning Banner & Notification Popup Isolation Constants
 // ---------------------------------------------------------------------------
 
+#ifndef IMPORT_HAS_SOUND_RVA
+#define IMPORT_HAS_SOUND_RVA            0x8B1D58
+#endif
+#ifndef IMPORT_GET_SOUND_RVA
+#define IMPORT_GET_SOUND_RVA            0x8B1D60
+#endif
 #ifndef IMPORT_PLAY_SOUND_RVA
 #define IMPORT_PLAY_SOUND_RVA           0x8B22E8
 #endif
 #ifndef IMPORT_PLAY_SOUND_3D_RVA
 #define IMPORT_PLAY_SOUND_3D_RVA        0x8B1C20u
 #endif
+#ifndef SND_CLICK_NAME_RVA
+#define SND_CLICK_NAME_RVA              0x8BB3C8
+#endif
 #ifndef SOUND_MUTE_BYTE_RVA
 #define SOUND_MUTE_BYTE_RVA             0xA1EF5C
+#endif
+#ifndef SOUND_ENGINE_PTR_RVA
+#define SOUND_ENGINE_PTR_RVA            0xA2ECC8
+#endif
+#ifndef SOUND_MGR_RVA
+#define SOUND_MGR_RVA                   0xA2ECD0
+#endif
+#ifndef RVA_HAS_PLANE_PROPS
+#define RVA_HAS_PLANE_PROPS             0x0319A0u
+#endif
+#ifndef RVA_FIND_TAG_ID
+#define RVA_FIND_TAG_ID                 0x277950u
+#endif
+#ifndef VEH_TYPE_ELECTRIC_OFFSET
+#define VEH_TYPE_ELECTRIC_OFFSET        0x86D0u
+#endif
+#ifndef VEH_TYPE_PROP_VEC_OFFSET
+#define VEH_TYPE_PROP_VEC_OFFSET        0x7B08u
+#endif
+#ifndef VEH_TYPE_TAGS_OFFSET
+#define VEH_TYPE_TAGS_OFFSET            0x9708u
+#endif
+#ifndef WORLD_TAGS_BEGIN_OFFSET
+#define WORLD_TAGS_BEGIN_OFFSET         0x128A0u
+#endif
+#ifndef WORLD_TAG_ENTRY_STRIDE
+#define WORLD_TAG_ENTRY_STRIDE          0x44u
 #endif
 #ifndef CAMERA_EYE_RVA
 #define CAMERA_EYE_RVA                  0xA33DD0u
@@ -2885,6 +2930,23 @@ static_assert(WORLD_ORBIT_CLOCK_OFFSET == 0x18u &&
               RVA_SPACE_VEH_REENTRY_STEP < RVA_SPACE_VEH_ORBIT_STEP &&
               RVA_SPACE_VEH_ORBIT_STEP < RVA_MISSION_CONTROL_WINDOW,
               "Space Program (dlc5) v1.2.0.9 RVAs and offsets must remain consistent");
+
+static_assert(FN_UI_PLAY_SOUND_RVA == 0x422E60u &&
+              RVA_HAS_PLANE_PROPS == 0x0319A0u &&
+              RVA_FIND_TAG_ID == 0x277950u &&
+              VEH_TYPE_ELECTRIC_OFFSET == 0x86D0u &&
+              VEH_TYPE_PROP_VEC_OFFSET == 0x7B08u &&
+              VEH_TYPE_TAGS_OFFSET == 0x9708u &&
+              WORLD_TAGS_BEGIN_OFFSET == 0x128A0u &&
+              WORLD_TAG_ENTRY_STRIDE == 0x44u &&
+              IMPORT_HAS_SOUND_RVA == 0x8B1D58 &&
+              IMPORT_GET_SOUND_RVA == 0x8B1D60 &&
+              SOUND_ENGINE_PTR_RVA == 0xA2ECC8 &&
+              SOUND_MGR_RVA == 0xA2ECD0 &&
+              CIT_CUR_BLD_OFFSET == 0x58 &&
+              CIT_DEST_BLD_OFFSET == 0x690 &&
+              CIT_DORM_FLAG_OFFSET == 0x2D,
+              "Purchase sound & citizen desync v1.2.0.9 RVAs/offsets must match SOVIET64.exe");
 
 
 

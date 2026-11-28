@@ -114,6 +114,8 @@ PartnerCursorInfo LockstepNet_GetPartnerCursor();
 
 // Test helper: evaluates state summary differences and builds the mismatch descriptor.
 bool LockstepNet_CompareSummaryForTest(const StateSummary& a, const StateSummary& b, char* outWhat, size_t whatSize);
+void LockstepNet_ResetCompareForTest();
+void LockstepNet_CompareSummariesForTest(unsigned long long tick, const StateSummary& hostSum, const StateSummary& playerSum);
 
 // Sends the client's compressed log bundle to the Host (on DESYNC, DISCONNECT, or CRASH).
 void LockstepNet_SendClientLogs(const char* reason);

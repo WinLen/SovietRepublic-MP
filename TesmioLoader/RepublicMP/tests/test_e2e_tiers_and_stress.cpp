@@ -554,23 +554,23 @@ static bool SubTest_T1_R11_VehiclePurchaseSound()
     g_mockPlaySound2DCalls = 0;
 
     // 1. Road vehicle purchase sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "gui_click", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "gui_click", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     // 2. Rail locomotive purchase sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_train", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_train", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 2);
 
     // 3. Ship purchase sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_ship", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_ship", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 3);
 
     // 4. Plane purchase sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_plane", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_plane", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 4);
 
     // 5. Heli purchase sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_heli", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_heli", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 5);
 
     return true;
@@ -1475,16 +1475,16 @@ static bool SubTest_T2_R11_VehiclePurchaseSound_Boundaries()
     g_mockPlaySound2DCalls = 0;
 
     // 1. Purchase with rubles plays sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_rub", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_rub", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     // 2. Purchase with dollars plays sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_usd", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "buy_usd", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 2);
 
     // 3. 10 rapid purchases play without crash
     for (int i = 0; i < 10; ++i) {
-        Commands_OnPlaySound2D(nullptr, "click", 0, 1.0f, 0);
+        Commands_OnPlaySound2D(nullptr, "click", 0, 1.0f, nullptr);
     }
     TEST_CHECK(g_mockPlaySound2DCalls == 12);
 
@@ -1967,7 +1967,7 @@ static bool SubTest_T3_Cross_6_VehicleSmoothingWithPurchaseAudio()
     g_mockPlaySound2DCalls = 0;
 
     // Vehicle delivery plays sound
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "gui_click", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "gui_click", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     // Delivered bus moves with 35 passengers
@@ -2097,7 +2097,7 @@ static bool SubTest_T4_Scenario_1_IndustrialCorridor()
 
     // Step 2: Buy train with sound
     g_mockPlaySound2DCalls = 0;
-    Commands_OnPlaySound2D(nullptr, "buy_train", 0, 1.0f, 0);
+    Commands_OnPlaySound2D(nullptr, "buy_train", 0, 1.0f, nullptr);
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     // Step 3 & 4: Export steel at State 1 customs by State 2 vehicle

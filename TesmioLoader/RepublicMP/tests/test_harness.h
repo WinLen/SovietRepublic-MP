@@ -166,8 +166,12 @@ extern int g_mockPlaySound2DCalls;
 extern int g_mockPlaySound3DCalls;
 extern int g_mockCreatePopupCalls;
 extern int g_mockRebuildNotifCalls;
+extern char g_mockLastPlaySound2DName[128];
+extern const char* g_mockLastPlaySound2DTag;
+extern unsigned char g_mockLastPlaySound2DLoop;
+extern float g_mockLastPlaySound2DVol;
 
-bool __fastcall MockOrig_PlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5);
+bool __fastcall MockOrig_PlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, const char* tag);
 bool __fastcall MockOrig_PlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5);
 long long __fastcall MockOrig_CreatePopupWindow(long long world, int kind, long long ptr, int subkind, long long p5,
                                                int popupType, int stringId, long long p8, long long p9);

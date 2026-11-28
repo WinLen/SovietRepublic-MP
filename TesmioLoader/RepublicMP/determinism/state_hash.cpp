@@ -13,9 +13,6 @@
 #define BLD_INDEX_OFFSET 0x00
 #define VEH_INDEX_OFFSET VEH_ID_OFFSET
 
-#define CIT_HOME_OFFSET 0x20
-#define CIT_AGE_OFFSET 0xD4
-#define CIT_POS_OFFSET 0x620
 #define CIT_PLACED_AGE 1.0f // a citizen in their first year may not be placed yet
 
 #define ENTRY_SIZE 0x10        // {Resource*, float amount, float}
@@ -51,11 +48,13 @@ static inline void MixName(unsigned long long& h, const char* s)
 
 static inline long long Count(BYTE* vec, long long elemSize)
 {
+    if (!vec || elemSize <= 0) return 0;
     BYTE* b = *(BYTE**)vec;
     BYTE* e = *(BYTE**)(vec + 8);
-    if (!b || e < b) return 0;
-    long long n = (e - b) / elemSize;
-    return n > MAX_OBJECTS ? 0 : n;
+    if (!b || (uintptr_t)e <= (uintptr_t)b) return 0;
+    const uintptr_t diff = (uintptr_t)e - (uintptr_t)b;
+    const unsigned long long n = (unsigned long long)(diff / (uintptr_t)elemSize);
+    return (n > (unsigned long long)MAX_OBJECTS) ? 0 : (long long)n;
 }
 
 static inline unsigned long long Mix64Finalizer(unsigned long long x)
@@ -474,7 +473,7 @@ bool StateHash_Compute(StateSummary* out)
             for (long long i = 0; i < nc; i++) {
                 BYTE* c = cl[i];
                 if (!c) { MixInt(out->hashCitizens, -1); continue; }
-                BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
+                BYTE* home = *(BYTE**)(c + CIT_HOME_BUILDING_OFFSET);
                 MixInt(out->hashCitizens, home ? *(int*)(home + BLD_INDEX_OFFSET) : -1);
                 float age = *(float*)(c + CIT_AGE_OFFSET);
                 MixFloat(out->hashCitizens, age);
@@ -500,9 +499,7 @@ bool StateHash_Compute(StateSummary* out)
 // Per-object records (probe)
 // ---------------------------------------------------------------------------
 
-#define BLD_TYPE_OFFSET 0x318
 #define BLD_POS_OFFSET 0x3A0
-#define TYPE_CATEGORY_OFFSET 0x368
 
 static long long ListCount(int listOffset)
 {
@@ -530,7 +527,7 @@ static bool FillBuildings(BuildingRecord* out, long long n)
             if (!b) { r.index = -1; r.category = -2; continue; }
             r.index = *(int*)(b + BLD_INDEX_OFFSET);
             BYTE* type = *(BYTE**)(b + BLD_TYPE_OFFSET);
-            r.category = type ? *(int*)(type + TYPE_CATEGORY_OFFSET) : -1;
+            r.category = type ? *(int*)(type + BLD_TYPE_CAT_OFF) : -1;
             memcpy(r.pos, b + BLD_POS_OFFSET, 12);
             r.progress = *(float*)(b + BLD_PROGRESS_OFFSET);
             r.produced = *(float*)(b + BLD_PRODUCED_OFFSET);
@@ -570,7 +567,7 @@ static bool FillCitizens(CitizenRecord* out, long long n)
             memset(&r, 0, sizeof(r));
             BYTE* c = cl[i];
             if (!c) { r.home = -2; continue; }
-            BYTE* home = *(BYTE**)(c + CIT_HOME_OFFSET);
+            BYTE* home = *(BYTE**)(c + CIT_HOME_BUILDING_OFFSET);
             r.home = home ? *(int*)(home + BLD_INDEX_OFFSET) : -1;
             r.age = *(float*)(c + CIT_AGE_OFFSET);
             if (home && r.age >= CIT_PLACED_AGE) memcpy(r.pos, c + CIT_POS_OFFSET, 12); // not placed yet: left 0
@@ -647,11 +644,34 @@ struct DesyncVehInfo {
 
 struct DesyncBldInfo {
     int id;
+    int category;
     float progress;
     float produced;
     long long workers;
     unsigned long long storageHash;
     double storageSum;
+    char storDetail[128];
+};
+
+struct DesyncCitRow {
+    long long idx;
+    int homeId;
+    int curBldId;
+    int destBldId;
+    float age;
+    int flag71C;
+    int flag748;
+    unsigned dorm;
+    float pos[3];
+};
+
+struct DesyncCitSnapshot {
+    long long total;
+    long long living;
+    long long foreign;
+    long long homeless;
+    int tailCount;
+    DesyncCitRow tail[24];
 };
 
 static int SafeReadBldIndexPtr(const BYTE* ptr)
@@ -659,21 +679,20 @@ static int SafeReadBldIndexPtr(const BYTE* ptr)
     return IsPointerLikeX64((uint64_t)(uintptr_t)ptr) ? *(const int*)(ptr + BLD_INDEX_OFFSET) : -1;
 }
 
-static void FormatCargoDetail(BYTE* vec, char* out, size_t outSize)
+static void AppendStorageEntries(BYTE* vec, char* out, size_t outSize,
+                                 size_t& pos, int& shown, int maxShown, bool skipZero)
 {
-    if (!out || outSize == 0) return;
-    out[0] = '\0';
+    if (!vec || !out || outSize == 0 || shown >= maxShown) return;
     long long n = Count(vec, ENTRY_SIZE);
     if (n <= 0) return;
     if (n > MAX_ENTRIES) n = MAX_ENTRIES;
     BYTE* e = *(BYTE**)vec;
-    if (!e) return;
-    size_t pos = 0;
-    int shown = 0;
-    for (long long i = 0; i < n && shown < 6; i++, e += ENTRY_SIZE) {
+    if (!e || !IsPointerLikeX64((uint64_t)(uintptr_t)e)) return;
+    for (long long i = 0; i < n && shown < maxShown; i++, e += ENTRY_SIZE) {
         if (pos + 8 >= outSize) break;
         const char* res = *(const char**)e;
         float amount = *(float*)(e + ENTRY_AMOUNT_OFFSET);
+        if (skipZero && (!isfinite(amount) || fabsf(amount) <= 1e-4f)) continue;
         char nameBuf[24] = "?";
         uintptr_t addr = (uintptr_t)res;
         if (addr >= 0x10000ull && addr < 0x800000000000ull) {
@@ -695,6 +714,15 @@ static void FormatCargoDetail(BYTE* vec, char* out, size_t outSize)
     }
 }
 
+static void FormatCargoDetail(BYTE* vec, char* out, size_t outSize)
+{
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+    size_t pos = 0;
+    int shown = 0;
+    AppendStorageEntries(vec, out, outSize, pos, shown, 6, false);
+}
+
 static bool ReadDesyncVehRow(BYTE* w, long long idx, DesyncVehInfo* out)
 {
     memset(out, 0, sizeof(*out));
@@ -708,8 +736,8 @@ static bool ReadDesyncVehRow(BYTE* w, long long idx, DesyncVehInfo* out)
         if (v && IsPointerLikeX64((uint64_t)(uintptr_t)v)) {
             out->id = *(const unsigned*)(v + VEH_INDEX_OFFSET);
             out->sched = *(const int*)(v + VEH_SCHED_IDX_OFFSET);
-            out->curBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + 0x4F0));
-            out->bayBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + 0x528));
+            out->curBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + VEH_CUR_BLD_OFFSET));
+            out->bayBld = SafeReadBldIndexPtr(*(const BYTE* const*)(v + VEH_BAY_TARGET_BLD_OFFSET));
             out->cargoCount = Count(v + VEH_CARGO_OFFSET, ENTRY_SIZE);
             out->cargoHash = 0xcbf29ce484222325ull;
             MixEntries(out->cargoHash, v + VEH_CARGO_OFFSET, out->cargoSum);
@@ -728,6 +756,7 @@ static bool ReadDesyncBldRow(BYTE* w, int listOff, long long idx, DesyncBldInfo*
 {
     memset(out, 0, sizeof(*out));
     out->id = -1;
+    out->category = -1;
     bool ok = false;
     DiagLog_BeginSafeSeh();
     __try {
@@ -735,6 +764,10 @@ static bool ReadDesyncBldRow(BYTE* w, int listOff, long long idx, DesyncBldInfo*
         BYTE* b = bl ? bl[idx] : nullptr;
         if (b && IsPointerLikeX64((uint64_t)(uintptr_t)b)) {
             out->id = *(const int*)(b + BLD_INDEX_OFFSET);
+            const BYTE* btype = *(const BYTE* const*)(b + BLD_TYPE_OFFSET);
+            if (IsPointerLikeX64((uint64_t)(uintptr_t)btype)) {
+                out->category = *(const int*)(btype + BLD_TYPE_CAT_OFF);
+            }
             out->progress = *(const float*)(b + BLD_PROGRESS_OFFSET);
             out->produced = *(const float*)(b + BLD_PRODUCED_OFFSET);
             out->workers = Count(b + BLD_WORKERS_OFFSET, 8);
@@ -742,8 +775,15 @@ static bool ReadDesyncBldRow(BYTE* w, int listOff, long long idx, DesyncBldInfo*
             BYTE* slots = *(BYTE**)(b + BLD_STORAGE_OFFSET);
             long long ns = Count(b + BLD_STORAGE_OFFSET, BLD_STORAGE_SLOT_SIZE);
             if (ns > 64) ns = 64;
-            for (long long s = 0; s < ns; s++) {
-                MixEntries(out->storageHash, slots + s * BLD_STORAGE_SLOT_SIZE, out->storageSum);
+            size_t storPos = 0;
+            int storShown = 0;
+            if (slots && IsPointerLikeX64((uint64_t)(uintptr_t)slots)) {
+                for (long long s = 0; s < ns; s++) {
+                    BYTE* slotVec = slots + s * BLD_STORAGE_SLOT_SIZE;
+                    MixEntries(out->storageHash, slotVec, out->storageSum);
+                    AppendStorageEntries(slotVec, out->storDetail, sizeof(out->storDetail),
+                                         storPos, storShown, 8, true);
+                }
             }
             ok = true;
         }
@@ -781,9 +821,72 @@ static void LogDesyncBuildingsOrConstructions(BYTE* w, int listOff, const char* 
         if (onlyActive && info.storageHash == seed && info.progress >= 0.9999f && info.produced == 0.0f) {
             continue;
         }
-        Logf("republicmp  DESYNC_DUMP[%s] t=%llu i=%lld id=%d prog=%.4f prod=%.2f wrk=%lld storH=%016llX storSum=%.3f",
-             tag, tick, i, info.id, info.progress, info.produced, info.workers,
-             info.storageHash, info.storageSum);
+        Logf("republicmp  DESYNC_DUMP[%s] t=%llu i=%lld id=%d cat=%d prog=%.4f prod=%.2f wrk=%lld storH=%016llX storSum=%.3f stor=[%s]",
+             tag, tick, i, info.id, info.category, info.progress, info.produced, info.workers,
+             info.storageHash, info.storageSum, info.storDetail);
+    }
+}
+
+static bool ReadDesyncCitizensSnapshot(BYTE* w, DesyncCitSnapshot* out)
+{
+    if (!w || !out) return false;
+    memset(out, 0, sizeof(*out));
+    bool ok = false;
+    DiagLog_BeginSafeSeh();
+    __try {
+        long long nc = Count(w + WORLD_CITIZENS_OFFSET, 8);
+        out->total = nc;
+        BYTE** cl = *(BYTE***)(w + WORLD_CITIZENS_OFFSET);
+        if (nc > 0 && cl && IsPointerLikeX64((uint64_t)(uintptr_t)cl)) {
+            long long tailStart = (nc > 24) ? (nc - 24) : 0;
+            for (long long i = 0; i < nc; ++i) {
+                BYTE* c = cl[i];
+                if (!c || !IsPointerLikeX64((uint64_t)(uintptr_t)c)) continue;
+                BYTE* home = *(BYTE* const*)(c + CIT_HOME_BUILDING_OFFSET);
+                int homeId = SafeReadBldIndexPtr(home);
+                int f71C = *(const int*)(c + CIT_INFANT_FLAG_OFFSET);
+                int f748 = *(const int*)(c + CIT_UNBORN_FLAG_OFFSET);
+                bool isForeign = (f71C != 0 || f748 != 0);
+                if (isForeign) {
+                    ++out->foreign;
+                } else {
+                    ++out->living;
+                    if (homeId < 0) ++out->homeless;
+                }
+                if (i >= tailStart && out->tailCount < 24) {
+                    DesyncCitRow& row = out->tail[out->tailCount++];
+                    row.idx = i;
+                    row.homeId = homeId;
+                    BYTE* curBld = *(BYTE* const*)(c + CIT_CUR_BLD_OFFSET);
+                    BYTE* destBld = *(BYTE* const*)(c + CIT_DEST_BLD_OFFSET);
+                    row.curBldId = SafeReadBldIndexPtr(curBld);
+                    row.destBldId = SafeReadBldIndexPtr(destBld);
+                    row.age = *(const float*)(c + CIT_AGE_OFFSET);
+                    row.flag71C = f71C;
+                    row.flag748 = f748;
+                    row.dorm = *(const BYTE*)(c + CIT_DORM_FLAG_OFFSET);
+                    memcpy(row.pos, c + CIT_POS_OFFSET, sizeof(row.pos));
+                }
+            }
+        }
+        ok = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        ok = false;
+    }
+    DiagLog_EndSafeSeh();
+    return ok;
+}
+
+static void LogDesyncCitizens(BYTE* w, unsigned long long tick)
+{
+    DesyncCitSnapshot snap = {};
+    if (!ReadDesyncCitizensSnapshot(w, &snap)) return;
+    Logf("republicmp  DESYNC_DUMP[cit_sum] t=%llu total=%lld living=%lld foreign=%lld homeless=%lld",
+         tick, snap.total, snap.living, snap.foreign, snap.homeless);
+    for (int i = 0; i < snap.tailCount; ++i) {
+        const DesyncCitRow& r = snap.tail[i];
+        Logf("republicmp  DESYNC_DUMP[cit] t=%llu i=%lld home=%d bld=%d dst=%d age=%.2f flags=(%d,%d,%u) pos=(%.2f,%.2f,%.2f)",
+             tick, r.idx, r.homeId, r.curBldId, r.destBldId, r.age, r.flag71C, r.flag748, r.dorm, r.pos[0], r.pos[1], r.pos[2]);
     }
 }
 
@@ -900,8 +1003,11 @@ void StateHash_LogDesyncBreakdown(const char* what, unsigned long long tick)
     if (what && (strstr(what, "bld") != nullptr || strstr(what, "buildings") != nullptr)) {
         LogDesyncBuildingsOrConstructions(w, WORLD_BUILDINGS_OFFSET, "bld", 256, true, tick);
     }
-    if (what && strstr(what, "constructions") != nullptr) {
+    if (what && (strstr(what, "con-progress") != nullptr || strstr(what, "constructions") != nullptr)) {
         LogDesyncBuildingsOrConstructions(w, WORLD_CONSTRUCTIONS_OFFSET, "con", 128, false, tick);
+    }
+    if (!what || strstr(what, "cit") != nullptr) {
+        LogDesyncCitizens(w, tick);
     }
     if (!what || strstr(what, "space") != nullptr) {
         LogDesyncSpace(w, tick);

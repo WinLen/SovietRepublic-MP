@@ -940,7 +940,7 @@ void Commands_ProbeEnd(size_t* recorded, size_t* replayed)
 // Remote Command Sound, Warning Banner & Notification Popup Isolation
 // ---------------------------------------------------------------------------
 
-typedef bool (__fastcall* PlaySound2DFn)(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5);
+typedef bool (__fastcall* PlaySound2DFn)(void* mgr, const char* name, unsigned char loop, float vol, const char* tag);
 typedef bool (__fastcall* PlaySound3DFn)(void* mgr, const char* name, const float* pos, unsigned char loop, float param5);
 typedef long long (__fastcall* CreatePopupWindowFn)(long long world, int kind, long long ptr, int subkind, long long p5,
                                                     int popupType, int stringId, long long p8, long long p9);
@@ -1089,10 +1089,10 @@ void Commands_EndRemoteReplayScope()
     }
 }
 
-bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5)
+bool Commands_OnPlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, const char* tag)
 {
     if (Commands_IsApplyingRemote()) return false;
-    return o_playSound2D ? o_playSound2D(mgr, name, loop, vol, p5) : true;
+    return o_playSound2D ? o_playSound2D(mgr, name, loop, vol, tag) : true;
 }
 
 bool Commands_OnPlaySound3D(void* mgr, const char* name, const float* pos, unsigned char loop, float param5)

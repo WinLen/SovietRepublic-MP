@@ -133,10 +133,22 @@ int g_mockPlaySound2DCalls = 0;
 int g_mockPlaySound3DCalls = 0;
 int g_mockCreatePopupCalls = 0;
 int g_mockRebuildNotifCalls = 0;
+char g_mockLastPlaySound2DName[128] = {};
+const char* g_mockLastPlaySound2DTag = nullptr;
+unsigned char g_mockLastPlaySound2DLoop = 0;
+float g_mockLastPlaySound2DVol = 0.0f;
 
-bool __fastcall MockOrig_PlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, unsigned char p5)
+bool __fastcall MockOrig_PlaySound2D(void* mgr, const char* name, unsigned char loop, float vol, const char* tag)
 {
-    (void)mgr; (void)name; (void)loop; (void)vol; (void)p5;
+    (void)mgr;
+    if (name) {
+        strncpy_s(g_mockLastPlaySound2DName, sizeof(g_mockLastPlaySound2DName), name, _TRUNCATE);
+    } else {
+        g_mockLastPlaySound2DName[0] = '\0';
+    }
+    g_mockLastPlaySound2DTag = tag;
+    g_mockLastPlaySound2DLoop = loop;
+    g_mockLastPlaySound2DVol = vol;
     ++g_mockPlaySound2DCalls;
     return true;
 }

@@ -7,7 +7,7 @@ $repDir    = Join-Path $tesmioDir "RepublicMP"
 $buildDir  = Join-Path $tesmioDir "build"
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [1/5] Building TesmioLoader & RepublicMP.dll (build.bat)" -ForegroundColor Cyan
+Write-Host " [1/6] Building TesmioLoader & RepublicMP.dll (build.bat)" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 & cmd.exe /c "`"$tesmioDir\build.bat`""
 if ($LASTEXITCODE -ne 0) {
@@ -26,7 +26,7 @@ if (-not (Test-Path $vcvars) -and (Test-Path $vswhere)) {
 }
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [2/5] Compiling & Running Unit Test Suite (republicmp_tests.exe)" -ForegroundColor Cyan
+Write-Host " [2/6] Compiling & Running Unit Test Suite (republicmp_tests.exe)" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
 # Remove any stale .obj files left from deleted legacy UI/monolith files
@@ -92,7 +92,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [3/5] Running MSVC C++ Static Code Analysis (/analyze)" -ForegroundColor Cyan
+Write-Host " [3/6] Running MSVC C++ Static Code Analysis (/analyze)" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
 $analyzeCmd = @"
@@ -180,10 +180,16 @@ cl /nologo /analyze:only /WX /W3 /EHsc /std:c++20 /utf-8 /MT ^
 
 $analyzeBat = Join-Path $buildDir "run_msvc_analyze.bat"
 Set-Content -Path $analyzeBat -Value $analyzeCmd -Encoding ASCII
-$analyzeOut = & cmd.exe /c "`"$analyzeBat`" 2>&1"
-$analyzeExit = $LASTEXITCODE
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $analyzeOut = & cmd.exe /c "`"$analyzeBat`" 2>&1"
+    $analyzeExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $prevEap
+}
 $analyzeOut | ForEach-Object { Write-Host $_ }
-Remove-Item -Path (Join-Path $repDir "*.nativecodeanalysis.xml") -Force -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $repDir "*.nativecodeanalysis.xml"), (Join-Path $repDir "*.tmp") -Force -ErrorAction SilentlyContinue
 $warns = $analyzeOut | Where-Object { $_ -match "warning C[0-9]+" }
 if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
     Write-Error "MSVC /analyze failed with exit code $analyzeExit and $($warns.Count) warning(s)"
@@ -192,7 +198,7 @@ if ($analyzeExit -ne 0 -or $warns.Count -gt 0) {
 Write-Host "[PASS] MSVC /analyze completed cleanly across all 73 compilation units (0 warnings)." -ForegroundColor Green
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [4/5] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
+Write-Host " [4/6] Running LLVM clang-tidy Static Analyzer" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
 $clangTidy = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-tidy.exe"
@@ -259,8 +265,14 @@ cd /d "$repDir"
 "@
     $tidyBat = Join-Path $buildDir "run_clang_tidy.bat"
     Set-Content -Path $tidyBat -Value $tidyCmd -Encoding ASCII
-    $tidyOut = & cmd.exe /c "`"$tidyBat`" 2>&1"
-    $tidyExit = $LASTEXITCODE
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $tidyOut = & cmd.exe /c "`"$tidyBat`" 2>&1"
+        $tidyExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
     $tidyOut | ForEach-Object { Write-Host $_ }
     if ($tidyExit -ne 0) {
         Write-Error "clang-tidy failed with exit code $tidyExit"
@@ -272,9 +284,10 @@ cd /d "$repDir"
 }
 
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host " [5/5] Running ub-mode Clean Code Gate (Crapper + Dryer + Dead Code)" -ForegroundColor Cyan
+Write-Host " [5/6] Running ub-mode Clean Code Gate (Crapper + Dryer + Dead Code)" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
 
+$env:PYTHONUTF8 = "1"
 & python "$tesmioDir\ub_check.py" --root "$repDir" --dry-threshold 0.80 --max-dups 0 --max-cc 60
 if ($LASTEXITCODE -ne 0) {
     Write-Error "ub-mode Clean Code Gate failed with exit code $LASTEXITCODE"
@@ -282,7 +295,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[PASS] ub-mode Clean Code Gate completed cleanly." -ForegroundColor Green
 
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host " [6/6] Verifying Binary, IAT, Hook & Register Contracts (verify_binary_contracts.py)" -ForegroundColor Cyan
+Write-Host "================================================================" -ForegroundColor Cyan
+
+& python "$tesmioDir\verify_binary_contracts.py"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Binary contract verification failed with exit code $LASTEXITCODE"
+    exit 1
+}
+Write-Host "[PASS] Binary contract verification completed cleanly." -ForegroundColor Green
+
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host " ALL CHECKS PASSED (Build + Unit Tests + MSVC /analyze + clang-tidy + ub-mode)" -ForegroundColor Green
+Write-Host " ALL CHECKS PASSED (Build + Unit Tests + MSVC /analyze + clang-tidy + ub-mode + Binary Contracts)" -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
 exit 0

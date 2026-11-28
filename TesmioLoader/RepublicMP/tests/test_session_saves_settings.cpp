@@ -419,7 +419,7 @@ static bool SubTest_Sound2DAnd3DDistanceHooks()
     const float farPos[3]  = { 2000.0f, 50.0f, 2000.0f }; // dist = 1414m > 250m
 
     // 1. Outside remote replay scope: 2D and both 3D sounds are forwarded
-    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "click", 0, 1.0f, 0));
+    TEST_CHECK(Commands_OnPlaySound2D(nullptr, "click", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
     TEST_CHECK(Commands_OnPlaySound3D(nullptr, "build_near", nearPos, 0, 1.0f));
     TEST_CHECK(g_mockPlaySound3DCalls == 1);
@@ -428,7 +428,7 @@ static bool SubTest_Sound2DAnd3DDistanceHooks()
 
     // 2. Inside remote replay scope: 2D sound is muted; 3D near (100m <= 250m) is played; 3D far (> 250m) is muted
     Commands_BeginRemoteReplayScope();
-    TEST_CHECK(!Commands_OnPlaySound2D(nullptr, "remote_click", 0, 1.0f, 0));
+    TEST_CHECK(!Commands_OnPlaySound2D(nullptr, "remote_click", 0, 1.0f, nullptr));
     TEST_CHECK(g_mockPlaySound2DCalls == 1);
 
     TEST_CHECK(Commands_OnPlaySound3D(nullptr, "remote_near", nearPos, 0, 1.0f));

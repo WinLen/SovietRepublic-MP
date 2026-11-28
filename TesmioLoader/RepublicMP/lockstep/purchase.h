@@ -74,3 +74,11 @@ BYTE* Purchase_FindVehicleTypeByScriptName(BYTE* world, const char* scriptName);
 // Normalizes path separators to '/', converts ASCII to lowercase, and strips leading "media_soviet/".
 void NormalizeVehicleScriptName(const char* src, char* out, size_t outSize);
 
+// Pure sound-key selection matching SOVIET64.exe v1.2.0.9 (0x852EE5..0x85302E).
+const char* Purchase_SelectSoundKey(unsigned kind, unsigned cat, bool isElectricRail,
+                                    bool isPropPlane, bool isTramTagged);
+
+// Test helpers: invoke PlayPurchaseSoundSafe / Replay directly in unit tests.
+void Purchase_PlaySoundForTest(BYTE* world, unsigned kind, BYTE* type);
+bool Purchase_ReplayForTest(const PurchaseMsg& m);
+
